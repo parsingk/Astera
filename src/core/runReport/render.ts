@@ -24,10 +24,12 @@ export interface ScrubContext {
 
 const PATH_BODY = '[^\\s"\'`<>|]*'
 const DRIVE_PATH = new RegExp(`(?<![\\w])[A-Za-z]:[\\\\/]${PATH_BODY}`, 'g')
+// A file:// url to a local path goes whole, before its drive or POSIX path is taken apart
+const FILE_URL = new RegExp(`file:\\/\\/\\/?${PATH_BODY}`, 'gi')
 const UNC_PATH = new RegExp(`\\\\\\\\[^\\s"'\`<>|]+`, 'g')
 const HOME_PATH = new RegExp(`~[\\\\/]${PATH_BODY}`, 'g')
 const POSIX_PATH = new RegExp(
-  `(?<=^|[\\s"'\`(\\[=,])\\/(?:Users|home|root|tmp|var|private|mnt|media|Volumes|opt|srv|usr|etc)\\/${PATH_BODY}`,
+  `(?<=^|[\\s"'\`(\\[=,:])\\/(?:Users|home|root|tmp|var|private|mnt|media|Volumes|opt|srv|usr|etc)\\/${PATH_BODY}`,
   'g'
 )
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
@@ -61,7 +63,7 @@ export function scrubText(text: string, ctx: ScrubContext): string {
       return relative === '' ? '.' : relative
     })
   }
-  out = out.replace(DRIVE_PATH, '…').replace(UNC_PATH, '…').replace(HOME_PATH, '…').replace(POSIX_PATH, '…')
+  out = out.replace(FILE_URL, '…').replace(DRIVE_PATH, '…').replace(UNC_PATH, '…').replace(HOME_PATH, '…').replace(POSIX_PATH, '…')
   out = out.replace(EMAIL, '…')
   const secrets = ctx.secrets
     .map((s) => s.trim())
@@ -334,5 +336,7 @@ export function reportSlack(r: RunReport, lang: Lang, o: { accounts?: ReadonlyMa
   // Task rows are cut first; only when none is left do the caveats beyond ten go (R7)
   const rows = largestFitting(r.tasks.length, (n) => build(n, r.caveats.length).length <= SLACK_POST_MAX)
   if (build(rows, r.caveats.length).length <= SLACK_POST_MAX) return build(rows, r.caveats.length)
-  return build(0, Math.min(SLACK_CAVEATS_KEPT, r.caveats.length))
+  // Still over: caveats beyond ten go, then more from the end until the post fits, the "and N more" line counted
+  const kept = largestFitting(Math.min(SLACK_CAVEATS_KEPT, r.caveats.length), (n) => build(0, n).length <= SLACK_POST_MAX)
+  return build(0, kept)
 }

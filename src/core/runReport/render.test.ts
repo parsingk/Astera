@@ -91,6 +91,13 @@ describe('the pull request version', () => {
     expect(scrubText('C:\\Users\\k\\a and \\\\srv\\share\\f and ~/notes', ctx)).toBe('… and … and …')
   })
 
+  it('takes a path after a colon and a file url whole, and keeps https links', () => {
+    expect(scrubText('cwd:/Users/kim/x', ctx)).toBe('cwd:…')
+    expect(scrubText('see file:///Users/kim/x now', ctx)).toBe('see … now')
+    expect(scrubText('see file:///C:/Users/kim/x now', ctx)).toBe('see … now')
+    expect(scrubText('see https://github.com/o/r/pull/7 and /api/users', ctx)).toBe('see https://github.com/o/r/pull/7 and /api/users')
+  })
+
   it('keeps a route in a title', () => {
     expect(scrubText('serve /api/users', ctx)).toBe('serve /api/users')
   })
@@ -235,6 +242,27 @@ describe('a long Run', () => {
     expect(slack).toContain(caveatLine(caveats[9], 'en'))
     expect(slack).not.toContain(caveatLine(caveats[10], 'en'))
     expect(slack).toContain('and 2 more')
+  })
+
+  it('cuts ten full-length caveats from the end until the post fits', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => ({
+      kind: 'forced' as const,
+      task: `Task ${i}`,
+      by: 'person' as const,
+      reason: `reason ${i} ${'x'.repeat(300)}`
+    }))
+    const r = report({
+      tasks,
+      caveats: ten,
+      interruptions: { limitWaits: 2, waitedMs: 65 * 60_000, switches: 1, restarts: 1 },
+      interventions: { answers: { person: 1, coordinator: 0, astera: 0, unknown: 0 }, forced: [{ task: 'Task 0', by: 'person' }], noPersonSteppedIn: false }
+    })
+    const slack = reportSlack(r, 'en', { accounts })
+    expect(slack.length).toBeLessThanOrEqual(SLACK_POST_MAX)
+    const kept = slack.split('\n').filter((l) => l.startsWith('• Task ') && l.includes('Reason:')).length
+    expect(kept).toBeGreaterThan(0)
+    expect(kept).toBeLessThan(10)
+    expect(slack).toContain(`and ${10 - kept} more caveats`)
   })
 
   it('cuts only the Task rows when the caveats fit', () => {
