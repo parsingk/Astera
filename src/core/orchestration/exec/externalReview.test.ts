@@ -20,6 +20,8 @@ import type { Account } from '../../types'
 import type { ProcLike } from '../../sessions/proc'
 import { readRangeDiff, trackedTreeState } from '../../git/changes'
 import { gitSync } from '../../worktrees/testRepo'
+import { externalReviewIo } from './externalReviewIo'
+import { sweepStaleSpecFiles } from './specFiles'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const AGENT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../acp/__fixtures__/fakeAgent.mjs')
@@ -102,6 +104,8 @@ interface RigOpts {
   agentArgs?: string[]
   /** Replaces `trees`: the folder's tracked state as the driver reads it */
   treeState?: ExternalReviewDeps['treeState']
+  /** The drivers' own file writes (externalReviewIo) instead of the rig's capture */
+  realIo?: boolean
 }
 
 function rig(o: RigOpts = {}) {
@@ -142,6 +146,7 @@ function rig(o: RigOpts = {}) {
   const history: OrchState[] = []
   const logs: string[] = []
   const acpLines: { path: string; line: string }[] = []
+  const pruned: string[] = []
   const repairs: string[] = []
   const handled: { cmd: string; args: Record<string, unknown> }[] = []
   const spawned: { file: string; args: string[]; env: Record<string, string | undefined> }[] = []
@@ -192,6 +197,8 @@ function rig(o: RigOpts = {}) {
     clientVersion: '0.0.0-test',
     writeFile: async (p, text) => void fs.writeFileSync(p, text),
     appendLog: (p, line) => void acpLines.push({ path: p, line }),
+    pruneReviewLogs: (d) => void pruned.push(d),
+    ...(o.realIo ? externalReviewIo((m) => logs.push(m)) : {}),
     treeState: o.treeState ?? (async () => trees[Math.min(treeCalls++, trees.length - 1)]),
     timeoutMs: o.timeoutMs ?? 20_000,
     pollMs: o.pollMs ?? 50,
@@ -239,6 +246,10 @@ function rig(o: RigOpts = {}) {
     spawned,
     repairs,
     acpLines,
+    pruned,
+    /** Where this review's transcript is kept (final fix wave C1) */
+    /** The review Dispatch may be gone (a failure removes it): its id is read from the states committed on the way */
+    logFile: (): string => path.join(dir, 'review-logs', `${taskId}-${history.flatMap((s) => s.dispatches).find((x) => x.review)!.id}.log`),
     reviewer,
     history,
     release: () => release(),
@@ -282,12 +293,49 @@ describe('createReviewStarter with an external reviewer', () => {
     // the agent's environment is the driver's without what Astera plants, plus NO_BROWSER
     expect(h.spawned[0].env).toMatchObject({ KEEP_ME: '1', NO_BROWSER: 'true' })
     expect(h.spawned[0].env).not.toHaveProperty('ASTERA_HOST_PIPE')
-    // the transcript is kept beside the spec file, each line with a time, and the prompt is not in it wholesale
+    // the transcript is kept in the review-logs folder beside the specs folder (final fix wave C1), each line with a time,
+    // and the prompt is not in it wholesale
     expect(h.acpLines.length).toBeGreaterThan(0)
     for (const l of h.acpLines) {
-      expect(l.path).toBe(`${specPath}.acp.log`)
+      expect(l.path).toBe(path.join(path.dirname(h.specsDir), 'review-logs', `${h.taskId}-${d.id}.log`))
       expect(l.line).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z /)
     }
+    // the old transcripts are pruned when a review starts
+    expect(h.pruned).toEqual([path.join(path.dirname(h.specsDir), 'review-logs')])
+  })
+
+  // Final fix wave C1: the Host's tick removes every file of an ended Dispatch beside its spec
+  it('keeps the transcript out of the specs folder, so the spec sweep leaves it', async () => {
+    const h = rig({ realIo: true, mode: 'no-verdict-twice', message: 'I am not sure yet.' })
+    await h.run()
+    const log = h.logFile()
+    expect(path.dirname(log)).not.toBe(h.specsDir)
+    expect(fs.readFileSync(log, 'utf8')).toContain('agent message:')
+    const removed = await sweepStaleSpecFiles({ dir: h.specsDir, state: h.state(), live: new Set() })
+    expect(removed.length).toBeGreaterThan(0)
+    expect(fs.existsSync(log)).toBe(true)
+    // every failure's Gate says where the transcript is, after the reason
+    expect(h.gateText()).toContain(`ended without a readable verdict: `)
+    expect(h.gateText()).toContain(` Transcript: ${log}`)
+  })
+
+  // Final fix wave C2: what the agent says reaches a Gate in one line of at most 300 characters
+  it.each([
+    ['a sign-in message', { mode: 'auth-required', agentArgs: ['--error-message'] }, 'needs a sign-in: '],
+    ['a protocol message', { mode: 'new-session-error', agentArgs: ['--error-message'] }, 'could not be used: '],
+    ['a violation title', { mode: 'edits-without-asking', agentArgs: ['--title'] }, 'changed a file without asking ('],
+    ['a stop reason', { mode: 'stop-reason', agentArgs: ['--stop-reason'] }, 'ended its turn with ']
+  ])('cuts %s to one line of 300 characters before it enters the Gate', async (_label, o, prefix) => {
+    const long = `first line\nsecond line ${'x'.repeat(400)}`
+    const h = rig({ mode: o.mode, agentArgs: [...o.agentArgs, long] })
+    await h.run()
+    const text = h.gateText()
+    expect(text).toContain(prefix)
+    const quoted = text.slice(text.indexOf(prefix) + prefix.length)
+    expect(quoted.startsWith('first line second line xxx')).toBe(true)
+    expect(text).not.toContain('x'.repeat(301))
+    expect(text).toContain('x'.repeat(250))
+    expect(text).not.toContain('first line\nsecond')
   })
 
   it('a rejected verdict in a convergence Run writes review.json, then opens a repair Dispatch', async () => {
@@ -376,8 +424,10 @@ describe('createReviewStarter with an external reviewer', () => {
     await h.run()
     expect(h.task().status).toBe('blocked')
     expect(h.gateText()).toContain(
-      'the external reviewer Fake Agent needs a sign-in: Gemini API key is missing or not configured.. Run fake-agent in a terminal once and sign in, then review again.'
+      // Final fix wave C3: one period, and no promise of "then review again"
+      "the external reviewer Fake Agent needs a sign-in: Gemini API key is missing or not configured. Sign in with that agent's own CLI in a terminal first."
     )
+    expect(h.gateText()).not.toMatch(/review again/)
     await gone(h.pid())
   })
 

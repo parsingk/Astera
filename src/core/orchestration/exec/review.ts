@@ -44,6 +44,8 @@ export interface ExternalReviewDeps {
   clientVersion: string
   writeFile(path: string, text: string): Promise<void>
   appendLog(path: string, line: string): void
+  /** Removes the old transcripts from their folder (externalReviewIo); called when a review starts. Never throws. */
+  pruneReviewLogs(dir: string): void
   treeState(cwd: string): Promise<string | null>
   /** Tests shorten these. */
   timeoutMs?: number

@@ -3,13 +3,22 @@
 // otherwise the mode's own default, so later tasks can reuse it. `--retry-message <text>` is the message of every turn after
 // the first in 'no-verdict-then-verdict'; `--record <file>` appends each received prompt text to <file>, one JSON string per line;
 // `--echo-env <NAME>` also appends `env <NAME>=<value>` there, once, when the first prompt arrives.
+// `--error-message <text>` replaces the error text of 'auth-required' and 'new-session-error'; `--title <text>` the tool
+// call's title in 'edits-without-asking'; `--stop-reason <text>` the stop reason of 'stop-reason'.
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const argv = process.argv.slice(2)
 const mode = argv[0] ?? 'approve'
+const option = (name) => {
+  const i = argv.indexOf(name)
+  return i >= 0 ? argv[i + 1] : undefined
+}
 const mi = argv.indexOf('--message')
 const message = mi >= 0 ? argv[mi + 1] : undefined
+const errorMessage = option('--error-message')
+const toolTitle = option('--title') ?? 'Edit b.txt'
+const stopReason = option('--stop-reason') ?? 'end_turn'
 const ri = argv.indexOf('--retry-message')
 const retryMessage = ri >= 0 ? argv[ri + 1] : undefined
 const ci = argv.indexOf('--record')
@@ -80,7 +89,7 @@ async function runPrompt(id) {
       return finish(id, message ?? 'read allowed')
     }
     case 'edits-without-asking':
-      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'edit', status: 'pending', title: 'Edit b.txt' })
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'edit', status: 'pending', title: toolTitle })
       update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'in_progress' })
       return // never answers: the client must abort the turn
     case 'hang-prompt':
@@ -92,6 +101,9 @@ async function runPrompt(id) {
       return
     case 'no-verdict-then-verdict':
       return finish(id, prompts === 1 ? (message ?? 'no verdict yet') : (retryMessage ?? message ?? 'verdict given'))
+    case 'stop-reason':
+      chunk(message ?? 'stopped')
+      return reply(id, { stopReason })
     case 'no-verdict-twice':
       return finish(id, message ?? 'no verdict yet')
     default:
@@ -110,7 +122,8 @@ function onRequest(msg) {
         authMethods: []
       })
     case 'session/new':
-      if (mode === 'auth-required') return fail(msg.id, -32000, 'Gemini API key is missing or not configured.')
+      if (mode === 'auth-required') return fail(msg.id, -32000, errorMessage ?? 'Gemini API key is missing or not configured.')
+      if (mode === 'new-session-error') return fail(msg.id, -32603, errorMessage ?? 'internal error')
       if (mode === 'auto-mode') {
         return reply(msg.id, {
           sessionId: 's1',

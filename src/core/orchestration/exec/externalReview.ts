@@ -34,6 +34,9 @@ export const EXTERNAL_OPEN_POLL_MS = 2_000
 /** The diff embedded in the reviewer's prompt is cut here. */
 export const EXTERNAL_DIFF_MAX_BYTES = 150_000
 const STDERR_IN_REASON = 600
+/** What the agent wrote (a sign-in message, a protocol message, a tool call's title, a stop reason) enters a Gate reason
+ *  as one line cut here (final fix wave C2). */
+const AGENT_TEXT_IN_REASON = 300
 /** One turn's message goes into the transcript cut here. */
 export const TRANSCRIPT_MESSAGE_MAX = 20_000
 
@@ -81,6 +84,12 @@ const firstLine = (text: string): string => text.split(/\r?\n/, 1)[0]
 const BODY_ISSUES_MAX = 20
 
 const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+/** Text the agent controls, as a Gate reason may carry it. */
+const agentWords = (text: string): string => oneLine(text).slice(0, AGENT_TEXT_IN_REASON)
+
+/** The folder of the review transcripts: beside the specs folder, not in it, since the spec sweep removes every file of an
+ *  ended Dispatch there within one Host tick and the transcript is read after the review ends (final fix wave C1). */
+export const reviewLogsDir = (specsDir: string): string => path.join(path.dirname(specsDir), 'review-logs')
 
 /** The summary, then one line per finding: `- [severity] title (file:line): description`, each part only when present. */
 function bodyWithIssues(summary: string, issues: ExternalVerdict['issues']): string {
@@ -131,7 +140,7 @@ export function createExternalReviews(c: {
     const { reviewer, taskId, cwd } = a
     const name = reviewer.name
     const specPath = path.join(c.specsDir, specFileName(taskId, d.id))
-    const logFile = `${specPath}.acp.log`
+    const logFile = path.join(reviewLogsDir(c.specsDir), `${taskId}-${d.id}.log`)
     const log = (line: string): void => {
       try {
         ext.appendLog(logFile, `${new Date().toISOString()} ${line}`)
@@ -180,7 +189,8 @@ export function createExternalReviews(c: {
       stop()
       if (self.silent) return
       log(`failed: ${reason}`)
-      const gated = await c.reviewGate.gateDispatch({ taskId, dispatchId: d.id, reason })
+      // The Dispatch and its spec go; the transcript stays, and the Gate says where (final fix wave C1)
+      const gated = await c.reviewGate.gateDispatch({ taskId, dispatchId: d.id, reason: `${reason} Transcript: ${logFile}` })
       if (!gated) c.log(`external review of task=${taskId} dispatch=${d.id} failed after its Dispatch was closed: ${reason}`)
     }
     const reasonOf = (e: unknown): string => {
@@ -188,19 +198,21 @@ export function createExternalReviews(c: {
       if (e instanceof AcpFailure) {
         switch (e.kind) {
           case 'sign-in':
-            return `the external reviewer ${name} needs a sign-in: ${e.message}. Run ${reviewer.command} in a terminal once and sign in, then review again.`
+            // Not "then review again": answering a review Gate sends the Task back to be worked on, and the Gate's own
+            // closing line says how to close the Task without that (final fix wave C3)
+            return `the external reviewer ${name} needs a sign-in: ${agentWords(e.message).replace(/\.+$/, '')}. Sign in with that agent's own CLI in a terminal first.`
           case 'exited':
             // A process that never had a pid was not started at all
             if (proc !== undefined && proc.pid === 0)
               return `the external reviewer ${name} could not be started: ${reviewer.command} was not found. Install it or correct the command in Settings.`
             return `the external reviewer ${name} stopped before giving a verdict (exit ${/exited with code (-?\d+)/.exec(e.message)?.[1] ?? '?'}): ${(e.stderrTail ?? '').slice(-STDERR_IN_REASON)}`
           case 'violation':
-            return `the external reviewer ${name} changed a file without asking (${e.message}). Its verdict is not used. Check the folder, and set the agent so that it asks before editing.`
+            return `the external reviewer ${name} changed a file without asking (${agentWords(e.message)}). Its verdict is not used. Check the folder, and set the agent so that it asks before editing.`
           default:
-            return `the external reviewer ${name} could not be used: ${e.message}`
+            return `the external reviewer ${name} could not be used: ${agentWords(e.message)}`
         }
       }
-      return `the external reviewer ${name} could not be used: ${e instanceof Error ? e.message : String(e)}`
+      return `the external reviewer ${name} could not be used: ${agentWords(e instanceof Error ? e.message : String(e))}`
     }
     /** This review still has something to answer: its Dispatch is open and its Task is still `reviewing`. */
     const live = (s: OrchState): boolean => isOpenIn(s, d.id) && s.tasks.find((t) => t.id === taskId)?.status === 'reviewing'
@@ -213,6 +225,11 @@ export function createExternalReviews(c: {
     try {
       // Nothing of the run's own is going yet, so a closed Dispatch is simply not started
       if (!isOpenIn(c.getState(), d.id)) return
+      try {
+        ext.pruneReviewLogs(reviewLogsDir(c.specsDir))
+      } catch (e) {
+        c.log(`external review transcripts could not be pruned: ${String(e)}`)
+      }
       const convergence = ((): boolean => {
         const s = c.getState()
         const t = s.tasks.find((x) => x.id === taskId)
@@ -260,10 +277,10 @@ export function createExternalReviews(c: {
       logTurn(turn)
       let verdict: ExternalVerdict | undefined
       for (let attempt = 0; verdict === undefined; attempt++) {
-        if (turn.stopReason !== 'end_turn') return await fail(`the external reviewer ${name} ended its turn with ${turn.stopReason}.`)
+        if (turn.stopReason !== 'end_turn') return await fail(`the external reviewer ${name} ended its turn with ${agentWords(turn.stopReason)}.`)
         const parsed = parseExternalVerdict(turn.text)
         if (parsed.ok) verdict = parsed.verdict
-        else if (attempt === 1) return await fail(`the external reviewer ${name} ended without a readable verdict: ${parsed.error}`)
+        else if (attempt === 1) return await fail(`the external reviewer ${name} ended without a readable verdict: ${agentWords(parsed.error)}`)
         else {
           log(`no readable verdict (${parsed.error}); asking once more`)
           turn = await session.prompt(VERDICT_RETRY_PROMPT)
