@@ -16,7 +16,7 @@ type Props = React.ComponentProps<typeof LifecycleField>
 /** The markup with its quotes as the mocked `t` wrote them. */
 const render = (over: Partial<Props> = {}): string =>
   renderToStaticMarkup(React.createElement(LifecycleField, { checked: false, onChange: () => {}, preflight: null, defaults: null, ...over })).replace(/&quot;/g, '"')
-const DEFAULTS = { autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+const DEFAULTS = { autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90, postRunReport: false }
 
 describe('LifecycleField', () => {
   it('off: the box and what it does, nothing about the folder', () => {
@@ -36,6 +36,10 @@ describe('LifecycleField', () => {
     expect(render({ checked: true, preflight: { kind: 'failed', message: 'down' } })).toContain('jobs.new.githubFailed {"message":"down"}')
     expect(render({ checked: true, defaults: DEFAULTS })).toContain('jobs.new.githubDefaults {"reruns":2,"minutes":90}')
     expect(render({ checked: true, defaults: { ...DEFAULTS, autoRerunInfrastructureFailures: false } })).toContain('jobs.new.githubDefaultsNoRerun {"minutes":90}')
+    // The run report's sentence only when the defaults the Job will take comment it
+    expect(render({ checked: true, defaults: DEFAULTS })).not.toContain('jobs.new.githubReportHint')
+    expect(render({ checked: true, defaults: { ...DEFAULTS, postRunReport: true } })).toContain('jobs.new.githubReportHint')
+    expect(render({ checked: true, defaults: 'runtime' })).not.toContain('jobs.new.githubReportHint')
     // A paired Runtime makes the Job with its own Settings, which this computer cannot read
     expect(render({ checked: true, defaults: 'runtime' })).toContain('jobs.new.githubDefaultsRuntime')
   })
@@ -85,7 +89,7 @@ describe('the folder check against the folder now', () => {
 
 describe('its words', () => {
   it('are in every language', () => {
-    const keys = ['github', 'githubHint', 'githubChecking', 'githubOk', 'githubRefused', 'githubFailed', 'githubHostOld', 'githubDefaults', 'githubDefaultsNoRerun', 'githubDefaultsRuntime']
+    const keys = ['github', 'githubHint', 'githubChecking', 'githubOk', 'githubRefused', 'githubFailed', 'githubHostOld', 'githubDefaults', 'githubDefaultsNoRerun', 'githubDefaultsRuntime', 'githubReportHint']
     for (const key of keys) for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[`jobs.new.${key}`], `${lang} ${key}`).toBeTruthy()
   })
 })

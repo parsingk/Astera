@@ -1176,6 +1176,8 @@ export const ko = {
     '이 멤버의 스레드 답장만 세션에 전달합니다. Slack에서 내 프로필 → ⋯ → “멤버 ID 복사”로 확인하세요.',
   'settings.slack.memberIdRequired':
     '⚠️ Member ID가 없어 스레드 답장이 아무에게서도 전달되지 않습니다. 본인 Member ID를 입력하세요.',
+  'settings.slack.runReports': 'Run 이 끝나면 요약 올리기',
+  'settings.slack.runReportsHint': '예약 실행을 포함한 모든 Run 의 요약을 채널에 바로 올립니다.',
   'settings.slack.modeBot': '봇 모드 — 세션마다 스레드 하나에 알림이 모입니다.',
   'settings.slack.modeWebhook': 'Webhook 단방향 — 봇 토큰과 채널 ID를 함께 채우면 세션별 스레드로 바뀝니다.',
   'settings.slack.modeOff': '전송 경로가 없어 알림이 나가지 않습니다. Webhook URL 또는 봇 토큰+채널 ID가 필요합니다.',
@@ -2564,6 +2566,7 @@ export const ko = {
   'jobs.new.githubDefaults': '코드 밖의 이유로 실패한 CI 는 최대 {reruns}번 다시 돌리고, CI 를 최대 {minutes}분 기다립니다 — 설정 › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'CI 를 스스로 다시 돌리지 않고, 최대 {minutes}분 기다립니다 — 설정 › GitHub',
   'jobs.new.githubDefaultsRuntime': '그 Runtime 의 설정 › GitHub 기본값을 따릅니다.',
+  'jobs.new.githubReportHint': 'Run 이 끝나면 요약을 PR 에 댓글로 남깁니다.',
   'github.settings.lifecycle.title': 'GitHub 까지 진행하는 Job',
   'github.settings.lifecycle.hint': '새 Job 이 만들어질 때 이 값을 가져가고, 그 뒤로는 바뀌지 않습니다.',
   'github.settings.lifecycle.autoRerun': '코드 밖의 이유로 실패한 CI 다시 돌리기',
@@ -2571,6 +2574,8 @@ export const ko = {
   'github.settings.lifecycle.ciWait': 'CI 를 기다리는 시간(분)',
   'github.settings.lifecycle.bounds': '재실행 {min}~{max}번, 기다리는 시간 {waitMin}~{waitMax}분.',
   'github.settings.lifecycle.invalid': '허용 범위를 벗어나 저장하지 않았습니다.',
+  'github.settings.lifecycle.postRunReport': 'Run 이 끝나면 PR 에 요약 댓글 남기기',
+  'github.settings.lifecycle.postRunReportHint': '이미 만든 Job 은 만들 때의 설정을 그대로 씁니다.',
   'jobs.new.create': '만들기',
   // 동시 실행 1 을 골랐는데 그 폴더에 이미 워커가 있을 때. 막지 않고 알려만 준다 —
   // 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다

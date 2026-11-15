@@ -937,6 +937,8 @@ export const es: Catalog = {
     'Solo las respuestas de este miembro en el hilo llegan a la sesión. En Slack: su perfil → ⋯ → «Copiar ID de miembro».',
   'settings.slack.memberIdRequired':
     '⚠️ Sin Member ID no se entrega la respuesta de nadie en el hilo. Escriba su propio Member ID.',
+  'settings.slack.runReports': 'Publicar un resumen cuando termine un Run',
+  'settings.slack.runReportsHint': 'Publica en el canal, fuera de los hilos, el resumen de todos los Runs, también los programados.',
   'settings.slack.modeBot': 'Modo bot: cada sesión reúne sus notificaciones en un mismo hilo.',
   'settings.slack.modeWebhook':
     'Webhook unidireccional: complete el token del bot y el ID de canal para pasar a un hilo por sesión.',
@@ -2187,6 +2189,7 @@ export const es: Catalog = {
   'jobs.new.githubDefaults': 'Repite la CI que falló por causas ajenas al código (como máximo {reruns}) y espera la CI hasta {minutes} minutos — Configuración › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'No repite la CI por su cuenta y la espera hasta {minutes} minutos — Configuración › GitHub',
   'jobs.new.githubDefaultsRuntime': 'Se aplican los valores de Configuración › GitHub de ese Runtime.',
+  'jobs.new.githubReportHint': 'Cuando termine el Run, se comentará su resumen en el pull request.',
   'github.settings.lifecycle.title': 'Jobs llevados hasta GitHub',
   'github.settings.lifecycle.hint': 'Un Job nuevo toma estos valores al crearse y los conserva.',
   'github.settings.lifecycle.autoRerun': 'Repetir la CI que falló por causas ajenas al código',
@@ -2194,6 +2197,8 @@ export const es: Catalog = {
   'github.settings.lifecycle.ciWait': 'Esperar la CI (minutos)',
   'github.settings.lifecycle.bounds': 'Repeticiones de {min} a {max}; la espera de {waitMin} a {waitMax} minutos.',
   'github.settings.lifecycle.invalid': 'Fuera del rango permitido, así que no se guardó.',
+  'github.settings.lifecycle.postRunReport': 'Comentar un resumen en el pull request cuando termine un Run',
+  'github.settings.lifecycle.postRunReportHint': 'Los Jobs creados antes conservan el ajuste con el que se crearon.',
   'jobs.new.create': 'Crear',
   'jobs.new.folderBusy': 'Ya hay un worker trabajando en esta carpeta — con límite 1 el worker de este trabajo también corre ahí, así que sus ediciones pueden mezclarse',
   'jobs.new.failed': 'No se pudo crear el trabajo',

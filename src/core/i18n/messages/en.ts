@@ -1116,6 +1116,8 @@ export const en: Record<keyof typeof ko, string> = {
     'Only this member’s thread replies reach a session. In Slack: your profile → ⋯ → “Copy member ID”.',
   'settings.slack.memberIdRequired':
     '⚠️ With no Member ID, nobody’s thread replies are delivered. Enter your own Member ID.',
+  'settings.slack.runReports': 'Post a summary when a Run ends',
+  'settings.slack.runReportsHint': 'Posts at channel level for every Run, scheduled ones included.',
   'settings.slack.modeBot': 'Bot mode — each session collects its notifications in one thread.',
   'settings.slack.modeWebhook':
     'Webhook, one-way — fill in both the bot token and channel ID to switch to per-session threads.',
@@ -2332,6 +2334,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.githubDefaults': 'Reruns CI that failed outside the code (at most {reruns}) and waits up to {minutes} minutes for CI — Settings › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'Does not rerun CI by itself, and waits up to {minutes} minutes for it — Settings › GitHub',
   'jobs.new.githubDefaultsRuntime': 'The Runtime\'s own Settings › GitHub defaults apply.',
+  'jobs.new.githubReportHint': 'When the Run ends, its summary is commented on the pull request.',
   'github.settings.lifecycle.title': 'Jobs carried through GitHub',
   'github.settings.lifecycle.hint': 'A new Job takes these values when it is made and keeps them.',
   'github.settings.lifecycle.autoRerun': 'Rerun CI that failed outside the code',
@@ -2339,6 +2342,8 @@ export const en: Record<keyof typeof ko, string> = {
   'github.settings.lifecycle.ciWait': 'Wait for CI (minutes)',
   'github.settings.lifecycle.bounds': 'Reruns {min} to {max}; the wait {waitMin} to {waitMax} minutes.',
   'github.settings.lifecycle.invalid': 'Outside the allowed range, so it was not saved.',
+  'github.settings.lifecycle.postRunReport': 'Comment a summary on the pull request when a Run ends',
+  'github.settings.lifecycle.postRunReportHint': 'Jobs made before keep the setting they were made with.',
   'jobs.new.create': 'Create',
   'jobs.new.folderBusy': 'A worker is already running in this folder — at a limit of 1 this job runs its worker there too, so their edits can mix',
   'jobs.new.failed': 'Could not create the job',

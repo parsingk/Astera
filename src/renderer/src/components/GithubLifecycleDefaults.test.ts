@@ -18,10 +18,16 @@ const render = (value = DEFAULTS): string =>
 describe('GithubLifecycleDefaultsView', () => {
   it('shows the three values, what they are for, and their bounds', () => {
     const html = render()
-    for (const k of ['title', 'hint', 'autoRerun', 'maxReruns', 'ciWait']) expect(html, k).toContain(`github.settings.lifecycle.${k}`)
+    for (const k of ['title', 'hint', 'autoRerun', 'maxReruns', 'ciWait', 'postRunReport', 'postRunReportHint']) expect(html, k).toContain(`github.settings.lifecycle.${k}`)
     expect(html).toContain('github.settings.lifecycle.bounds {"min":1,"max":10,"waitMin":10,"waitMax":1440}')
     expect(html).toMatch(/value="2"/)
     expect(html).toMatch(/value="90"/)
+  })
+
+  it('shows the run report comment as a checkbox that follows the saved value', () => {
+    const box = (html: string): string => html.split('github.settings.lifecycle.postRunReport</span>')[1].split('</label>')[0]
+    expect(box(render())).toMatch(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/)
+    expect(box(render({ ...DEFAULTS, postRunReport: false }))).not.toContain('checked=""')
   })
 
   it('greys the reruns limit while automatic reruns are off', () => {
@@ -37,6 +43,8 @@ describe('defaultsAfterInput', () => {
     expect(defaultsAfterInput(DEFAULTS, 'ciWaitMinutes', '10')).toEqual({ ...DEFAULTS, ciWaitMinutes: 10 })
     for (const raw of ['9', '1441']) expect(defaultsAfterInput(DEFAULTS, 'ciWaitMinutes', raw), raw).toBe(null)
     expect(defaultsAfterInput(DEFAULTS, 'autoRerunInfrastructureFailures', false)).toEqual({ ...DEFAULTS, autoRerunInfrastructureFailures: false })
+    expect(defaultsAfterInput(DEFAULTS, 'postRunReport', false)).toEqual({ ...DEFAULTS, postRunReport: false })
+    for (const raw of ['false', '0', '']) expect(defaultsAfterInput(DEFAULTS, 'postRunReport', raw), raw).toBe(null)
   })
 })
 
@@ -57,7 +65,7 @@ describe('inputOutcome', () => {
 
 describe('its words', () => {
   it('are in every language', () => {
-    for (const k of ['title', 'hint', 'autoRerun', 'maxReruns', 'ciWait', 'bounds', 'invalid'])
+    for (const k of ['title', 'hint', 'autoRerun', 'maxReruns', 'ciWait', 'bounds', 'invalid', 'postRunReport', 'postRunReportHint'])
       for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[`github.settings.lifecycle.${k}`], `${lang} ${k}`).toBeTruthy()
   })
 })

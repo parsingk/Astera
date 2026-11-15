@@ -926,6 +926,8 @@ export const ja: Catalog = {
     'このメンバーからのスレッド返信だけをセッションに転送します。Slack の自分のプロフィール → ⋯ →「メンバー ID をコピー」で確認してください。',
   'settings.slack.memberIdRequired':
     '⚠️ Member ID がないため、スレッド返信が誰からも転送されません。自分の Member ID を入力してください。',
+  'settings.slack.runReports': 'Run が終わったら要約を投稿する',
+  'settings.slack.runReportsHint': 'スケジュール実行を含むすべての Run の要約を、スレッドではなくチャンネルに直接投稿します。',
   'settings.slack.modeBot': 'ボットモード — セッションごとに1つのスレッドへ通知がまとまります。',
   'settings.slack.modeWebhook':
     'Webhook 片方向 — ボットトークンとチャンネル ID を両方入力するとセッションごとのスレッドに切り替わります。',
@@ -2163,6 +2165,7 @@ export const ja: Catalog = {
   'jobs.new.githubDefaults': 'コード以外の理由で失敗した CI を最大 {reruns} 回まで再実行し、CI を最大 {minutes} 分待ちます — 設定 › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'CI を自動では再実行せず、最大 {minutes} 分待ちます — 設定 › GitHub',
   'jobs.new.githubDefaultsRuntime': 'その Runtime の設定 › GitHub の既定値が使われます。',
+  'jobs.new.githubReportHint': 'Run が終わると、その要約がプルリクエストにコメントされます。',
   'github.settings.lifecycle.title': 'GitHub まで進める Job',
   'github.settings.lifecycle.hint': '新しい Job は作成時にこの値を受け取り、その後は変わりません。',
   'github.settings.lifecycle.autoRerun': 'コード以外の理由で失敗した CI を再実行する',
@@ -2170,6 +2173,8 @@ export const ja: Catalog = {
   'github.settings.lifecycle.ciWait': 'CI を待つ時間（分）',
   'github.settings.lifecycle.bounds': '再実行は {min}〜{max} 回、待ち時間は {waitMin}〜{waitMax} 分です。',
   'github.settings.lifecycle.invalid': '許容範囲外のため保存しませんでした。',
+  'github.settings.lifecycle.postRunReport': 'Run が終わったらプルリクエストに要約をコメントする',
+  'github.settings.lifecycle.postRunReportHint': 'すでに作成済みの Job は、作成時の設定のままです。',
   'jobs.new.create': '作る',
   'jobs.new.folderBusy': 'このフォルダーではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダーで回るため、互いの編集が混ざることがあります',
   'jobs.new.failed': '作業を作れませんでした',

@@ -3,7 +3,15 @@
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
 
-const koKeys = Object.keys(CATALOGS.ko.messages).filter((k) => k.startsWith('runReport.'))
+// The three switches live under their screens' own prefixes (Settings › GitHub, New Job, Settings › Slack)
+const SWITCH_KEYS = [
+  'github.settings.lifecycle.postRunReport',
+  'github.settings.lifecycle.postRunReportHint',
+  'jobs.new.githubReportHint',
+  'settings.slack.runReports',
+  'settings.slack.runReportsHint'
+]
+const koKeys = [...Object.keys(CATALOGS.ko.messages).filter((k) => k.startsWith('runReport.')), ...SWITCH_KEYS]
 
 describe('the Run report catalog', () => {
   it('has every runReport key in every language', () => {

@@ -11,6 +11,7 @@ type NumberField = 'maxInfrastructureReruns' | 'ciWaitMinutes'
 /** The defaults after one field's input, or null for input outside the bounds (not saved). */
 export function defaultsAfterInput(prev: GitHubLifecycleDefaults, field: Field, raw: string | boolean): GitHubLifecycleDefaults | null {
   if (field === 'autoRerunInfrastructureFailures') return typeof raw === 'boolean' ? { ...prev, autoRerunInfrastructureFailures: raw } : null
+  if (field === 'postRunReport') return typeof raw === 'boolean' ? { ...prev, postRunReport: raw } : null
   if (typeof raw !== 'string' || !/^\d+$/.test(raw.trim())) return null
   return exactGithubLifecycleDefaults({ ...prev, [field]: Number(raw.trim()) })
 }
@@ -79,6 +80,18 @@ export function GithubLifecycleDefaultsView(p: { value: GitHubLifecycleDefaults;
           }}
         />
       </label>
+      <label className="settings-row">
+        <span>{t('github.settings.lifecycle.postRunReport')}</span>
+        <input
+          type="checkbox"
+          checked={p.value.postRunReport}
+          onChange={(e) => {
+            setInvalid(false)
+            p.onChange({ ...p.value, postRunReport: e.target.checked })
+          }}
+        />
+      </label>
+      <span className="settings-hint">{t('github.settings.lifecycle.postRunReportHint')}</span>
       <label className="settings-row">
         <span>{t('github.settings.lifecycle.maxReruns')}</span>
         {numberInput('maxInfrastructureReruns', reruns, !p.value.autoRerunInfrastructureFailures, LIFECYCLE_RERUNS)}
