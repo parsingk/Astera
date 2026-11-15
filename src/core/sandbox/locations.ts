@@ -1,6 +1,7 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
-// list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
-// slashes, the one form both CLIs' settings and the Codex profile take on every OS.
+// list, the OS credential stores a CLI's own sandbox does not close by itself, and the agents' own login files (Claude
+// Code's `.credentials.json`, Codex's `auth.json`) of every account and of the two default folders. All paths come out
+// absolute with forward slashes, the one form both CLIs' settings and the Codex profile take on every OS.
 import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs'
 import { lstat, readdir } from 'node:fs/promises'
 
@@ -30,6 +31,27 @@ export function sensitiveEntries(platform: NodeJS.Platform, env: Record<string, 
 /** The E6 list's paths (sensitiveEntries). */
 export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string[] {
   return sensitiveEntries(platform, env, home).map((e) => e.path)
+}
+
+/** The file each agent keeps its login in, inside its config folder: Claude Code's `<CLAUDE_CONFIG_DIR>/.credentials.json`
+ *  and Codex's `<CODEX_HOME>/auth.json` (the files the login probes look at, accounts/loginStatus.ts). */
+export const AGENT_LOGIN_FILE = { claude: '.credentials.json', codex: 'auth.json' } as const
+
+/** The agents' login files as deny entries (sandbox design §6): `~/.claude/.credentials.json`, `~/.codex/auth.json` and
+ *  each account's `<configDir>/<its provider's file>`, an account with no provider being a Claude one (`Account.provider`,
+ *  core/types.ts). A sandboxed session's shell had these open (measured on Windows, 2026-11-16) and the sandbox allows
+ *  the network, so a command could send them out. Files, so a start leaves one out that is not there
+ *  (a logged-out account has none to protect, and Codex's Windows sandbox makes a missing deny path a folder). Only the
+ *  login file is named, not the folder: `.claude.json` and `config.toml` beside it are not credentials. Forward
+ *  slashes, each path once. One rule for every wiring (the app, the Host, both CLIs). */
+export function agentLoginEntries(o: { homeDir: string; accounts: readonly { provider?: 'claude' | 'codex'; configDir: string }[] }): DenyEntry[] {
+  const home = slashed(o.homeDir)
+  const paths = [
+    `${home}/.claude/${AGENT_LOGIN_FILE.claude}`,
+    `${home}/.codex/${AGENT_LOGIN_FILE.codex}`,
+    ...o.accounts.map((a) => `${slashed(a.configDir)}/${AGENT_LOGIN_FILE[a.provider ?? 'claude']}`)
+  ]
+  return [...new Set(paths)].map((path) => ({ path, kind: 'file' as const }))
 }
 
 /** The app's key (`<profile>/host/app.key`, core/host/hostKey.ts appKeyPath): what lets a process be the app to the

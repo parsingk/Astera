@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
+import { AGENT_LOGIN_FILE, agentLoginEntries, appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -457,5 +457,35 @@ describe('the other Hosts beside this one', () => {
     expect(await otherHostFolders('darwin', own, { entries })).toEqual([slashed(live)])
     // Without a uid to compare, the empty one is left out all the same
     expect(await otherHostFolders('linux', own, { uid: undefined, entries })).toEqual([slashed(live)])
+  })
+})
+
+describe('agentLoginEntries', () => {
+  // Backslashes are built, not typed, so no tool layer can fold them
+  const bs = String.fromCharCode(92)
+  it("names the two default login files and each account's own provider file, as files, once", () => {
+    expect(agentLoginEntries({ homeDir: `C:${bs}Users${bs}a`, accounts: [] })).toEqual([
+      { path: 'C:/Users/a/.claude/.credentials.json', kind: 'file' },
+      { path: 'C:/Users/a/.codex/auth.json', kind: 'file' }
+    ])
+    const entries = agentLoginEntries({
+      homeDir: '/h/',
+      accounts: [
+        { provider: 'claude', configDir: '/acc/one' },
+        { configDir: `${bs}acc${bs}two${bs}` }, // no provider: claude
+        { provider: 'codex', configDir: '/acc/three' },
+        { provider: 'codex', configDir: '/h/.codex' }, // the default folder again: once
+        { provider: 'claude', configDir: '/acc/one' }
+      ]
+    })
+    expect(entries.map((e) => e.path)).toEqual([
+      '/h/.claude/.credentials.json',
+      '/h/.codex/auth.json',
+      '/acc/one/.credentials.json',
+      '/acc/two/.credentials.json',
+      '/acc/three/auth.json'
+    ])
+    expect(entries.every((e) => e.kind === 'file')).toBe(true)
+    expect(AGENT_LOGIN_FILE).toEqual({ claude: '.credentials.json', codex: 'auth.json' })
   })
 })
