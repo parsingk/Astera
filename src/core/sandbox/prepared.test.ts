@@ -152,6 +152,19 @@ describe('the agents login files in a sandboxed Codex start', () => {
     expect(session).toContain(`"${missing}"="deny"`)
   })
 
+  // A path cmd.exe cannot carry is refused, as any named path is: fail closed. The reach is wider than one account, since the
+  // list is one for every Codex start of the profile, so the log line names the path for whoever has to rename the folder
+  it('refuses a sandboxed Codex start on Windows for an account folder holding a character cmd.exe cannot carry, naming the path in the log', () => {
+    const unsafe = 'C:/Users/t/.claude-R&D/.credentials.json'
+    const logged: string[] = []
+    expect(() =>
+      sessionSandboxArgs({ ...base('win32'), agentLogins: [{ path: unsafe, kind: 'file' }], links: null, log: (m) => logged.push(m) })
+    ).toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
+    expect(logged.join(' ')).toContain(unsafe)
+    // Off Windows nothing is launched through cmd.exe, so the same folder is only named
+    expect(deny(sessionSandboxArgs({ ...base('linux'), agentLogins: [{ path: unsafe, kind: 'file' }], links: null }))).toContain(`"${unsafe}"="deny"`)
+  })
+
   it('hands the readiness echo the very list the session gets', async () => {
     const root = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'astera-logins-')))
     try {
