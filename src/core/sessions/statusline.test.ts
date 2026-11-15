@@ -1236,6 +1236,56 @@ describe('StatusLineManager sandbox', () => {
     }
   })
 
+  // Sandbox design §6: the login files are chosen once, at the prepare, and carried by the scope the prepare keeps, so the
+  // twin the prepare wrote is the one the spawn finds even if a login file appeared or went in between (the start is not
+  // refused as 'not sandboxed'); a new choice sees the disk again, and is another twin
+  it('keeps the login files its prepare chose in the scope, so the spawn finds the twin the prepare wrote', async () => {
+    const base = (await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-chosen-')))).replace(/\\/g, '/')
+    try {
+      const home = `${base}/home`
+      await fs.mkdir(`${home}/proj`, { recursive: true })
+      await fs.mkdir(`${home}/a`, { recursive: true })
+      await fs.mkdir(`${home}/b`, { recursive: true })
+      const a = `${home}/a/.credentials.json`
+      const b = `${home}/b/.credentials.json`
+      await fs.writeFile(a, 'fake')
+      for (const platform of ['linux', 'win32'] as const) {
+        const mgr = new StatusLineManager(dir, 'node', () => {}, {
+          platform,
+          execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
+          ...(platform === 'win32' ? { findRuntime: async () => 'C:\\rt\\astera-host.exe' } : {}),
+          homeDir: home,
+          tmpDir: TMP[platform],
+          agentLogins: () => [{ path: a, kind: 'file' }, { path: b, kind: 'file' }]
+        })
+        await mgr.init()
+        const scope: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: `${home}/proj`, look: nodeLinkLook }
+        const chosen: SandboxScope = { ...scope, agentLogins: mgr.chooseAgentLogins(scope) }
+        expect(chosen.agentLogins, platform).toEqual([a])
+        expect(await mgr.ensureSandboxFiles(chosen), platform).toBe('ok')
+        await fs.writeFile(b, 'fake') // appears after the prepare
+        await fs.rm(a) // goes after the prepare
+        const boxed = mgr.spawnConfig('s1', account, { sandbox: chosen })
+        expect(boxed, platform).toMatchObject({ sandboxed: true })
+        expect(mgr.sandboxChatArgs(false, chosen), platform).not.toBeNull()
+        const twin = JSON.parse(await read(boxed.settingsFile))
+        expect(JSON.stringify(twin.permissions.deny), platform).toContain('/a/.credentials.json')
+        expect(JSON.stringify(twin.permissions.deny), platform).not.toContain('/b/.credentials.json')
+        // A new choice sees the disk as it is, and is a twin of its own
+        const again: SandboxScope = { ...scope, agentLogins: mgr.chooseAgentLogins(scope) }
+        expect(again.agentLogins, platform).toEqual([b])
+        expect(await mgr.ensureSandboxFiles(again), platform).toBe('ok')
+        const next = mgr.spawnConfig('s2', account, { sandbox: again })
+        expect(next.settingsFile, platform).not.toBe(boxed.settingsFile)
+        expect(JSON.stringify(JSON.parse(await read(next.settingsFile)).permissions.deny), platform).toContain('/b/.credentials.json')
+        await fs.writeFile(a, 'fake')
+        await fs.rm(b)
+      }
+    } finally {
+      await fs.rm(base, { recursive: true, force: true })
+    }
+  })
+
   // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places
   // its own environment names, so two scopes never share a file, and one prepared scope is no other's
   it('gives each scope its own twins, from its own layout and environment, and none to a scope not prepared', async () => {

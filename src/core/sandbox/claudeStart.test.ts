@@ -103,7 +103,7 @@ describe('claudeSandboxStart', () => {
     dirs.push(d)
     return d
   }
-  const rig = (o: { platform?: NodeJS.Platform; version?: string | null; files?: 'ok' | 'write-failed' | { linked: string[] }; configured?: string | null } = {}) => {
+  const rig = (o: { platform?: NodeJS.Platform; version?: string | null; files?: 'ok' | 'write-failed' | { linked: string[] }; configured?: string | null; choose?: () => string[] } = {}) => {
     const profileDir = temp()
     const tmpDir = temp()
     const home = temp()
@@ -121,7 +121,8 @@ describe('claudeSandboxStart', () => {
     const files = {
       ensureSandboxFiles: async (scope: SandboxScope) => (order.push('files'), scopes.push(scope), o.files ?? ('ok' as const)),
       sandboxChatArgs: (enforce: boolean, scope: SandboxScope) => (chatAsked.push({ enforce, scope }), ['--settings', enforce ? 'E.json' : 'S.json']),
-      sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] })
+      sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] }),
+      ...(o.choose ? { chooseAgentLogins: o.choose } : {})
     }
     const env = { HOME: home, GIT_CONFIG_GLOBAL: '/somewhere/.gitconfig' }
     const logged: string[] = []
@@ -171,6 +172,23 @@ describe('claudeSandboxStart', () => {
     const none = rig()
     await none.prepare()
     expect(readFileSync(gitExcludesFileOf(none.profileDir, 1000), 'utf8')).toBe(gitExcludesText(''))
+  })
+
+  // Sandbox design §6: the login files are chosen once at the prepare, handed to the twins' writer in the scope, and the scope
+  // the spawn asks for carries that same choice, whatever the disk says by then
+  it('chooses the login files once at the prepare and hands the same choice to the spawn scope', async () => {
+    let calls = 0
+    let current = ['/h/a/.credentials.json']
+    const r = rig({ choose: () => (calls++, [...current]) })
+    await r.prepare()
+    current = ['/h/b/.credentials.json']
+    expect(calls).toBe(1)
+    expect(r.scopes[0].agentLogins).toEqual(['/h/a/.credentials.json'])
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.agentLogins).toEqual(['/h/a/.credentials.json'])
+    expect(calls).toBe(1)
+    // A new prepare chooses again
+    await r.prepare()
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.agentLogins).toEqual(['/h/b/.credentials.json'])
   })
 
   it('writes no excludes file elsewhere than Linux, and on Windows no npm cache either', async () => {

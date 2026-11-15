@@ -104,6 +104,9 @@ export function claudeSandboxStart(o: {
     ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult>
     sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null
     sandboxPartOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
+    /** The agents' login files a scope's twin denies, chosen once here at the prepare (sandbox design §6): kept with the
+     *  prepared layout and carried by the scope the spawn gets. Absent, the twin chooses them itself each time. */
+    chooseAgentLogins?(scope: Pick<SandboxScope, 'look'>): string[]
   }
   /** The version check Enforce asks (cliVersion.ts), shared with it. */
   version: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
@@ -165,7 +168,8 @@ export function claudeSandboxStart(o: {
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
       const layout = await layoutFor(p.cwd)
-      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook })
+      const chosen = o.files.chooseAgentLogins?.({ look: o.linkLook })
+      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook, ...(chosen ? { agentLogins: chosen } : {}) })
       // Task E fix rounds 5 and 6 (rule E5): a named path through a link the session could change, through which srt
       // cannot keep the deny in force (StatusLineManager.refusesLinks says how, per OS; ensureSandboxFiles writes no twin)
       if (typeof written === 'object') {
@@ -184,12 +188,15 @@ export function claudeSandboxStart(o: {
         excludesWritten = await writeExcludes()
         if (!excludesWritten) o.log(`sandbox: the git excludes ${excludesFile} could not be written; git add -A may fail in the session`)
       }
-      layouts.keep(p.accountId, p.cwd, layout, now())
+      layouts.keep(p.accountId, p.cwd, layout, now(), [], null, false, (chosen ?? []).map((path) => ({ path, kind: 'file' as const })))
     },
     blocker,
     scopeOf: (accountId, cwd, env) => {
       const layout = layouts.layoutOf(accountId, cwd, now())
-      return layout === undefined ? undefined : { layout, env, cwd, look: o.linkLook }
+      if (layout === undefined) return undefined
+      // The login files the prepare chose, so the spawn's twin is the one the prepare wrote
+      const chosen = o.files.chooseAgentLogins ? layouts.agentLoginsOf(accountId, cwd, now()).map((e) => e.path) : null
+      return { layout, env, cwd, look: o.linkLook, ...(chosen ? { agentLogins: chosen } : {}) }
     },
     chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
     settingsOf: (scope) => o.files.sandboxPartOf(scope),

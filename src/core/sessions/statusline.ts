@@ -47,6 +47,10 @@ export interface SandboxScope {
   cwd?: string
   /** How the disk is read for those links (claudeSandboxStart's `linkLook`); null or absent, every path as given. */
   look?: LinkLook | null
+  /** The agents' login files the prepare chose for this scope (StatusLineManager.chooseAgentLogins), taken as they are:
+   *  the spawn then computes the same twin key the prepare wrote even if a login file appeared or went in between (sandbox
+   *  design §6). Absent, they are chosen from the manager's thunk and the disk each time (the measurement, tests). */
+  agentLogins?: readonly string[]
 }
 
 /** How many scopes a StatusLineManager keeps the twins of up to date: every settings rewrite rewrites them all. A scope
@@ -869,6 +873,23 @@ export class StatusLineManager {
 
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
+  /** The agents' login files a scope's twin denies (sandbox design §6): the wiring's entries (`agentLogins`), each only
+   *  if it is there now when the scope can look; a look that throws keeps the entry, and without a look (the measurement)
+   *  every entry stands as given. A prepare calls this once and keeps the result in the scope (`SandboxScope.agentLogins`),
+   *  so the spawn after it names the same files. */
+  chooseAgentLogins(scope: Pick<SandboxScope, 'look'>): string[] {
+    return this.agentLogins()
+      .filter((e) => {
+        if (!scope.look) return true
+        try {
+          return scope.look.lstat(e.path) !== null
+        } catch {
+          return true
+        }
+      })
+      .map((e) => e.path)
+  }
+
   /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
    *  round 5). With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and
    *  the read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them
@@ -877,20 +898,12 @@ export class StatusLineManager {
    *  logged-out account has no file to protect, and Codex's twin leaves a missing one out for the reasons prepared.ts
    *  gives; a look that throws keeps the entry. Without a look (the measurement), as given. */
   private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
-    const logins = this.agentLogins().filter((e) => {
-      if (!scope.look) return true
-      try {
-        return scope.look.lstat(e.path) !== null
-      } catch {
-        return true
-      }
-    })
     const denied = claudeSessionDenied({
       platform: this.platform,
       env: scope.env,
       homeDir: this.homeDir,
       appKeyFile: appKeyPath(this.userDataDir),
-      agentLogins: logins.map((e) => e.path)
+      agentLogins: scope.agentLogins ?? this.chooseAgentLogins(scope)
     })
     const npmCache = npmCacheOf(this.tmpDir)
     const look = scope.look
