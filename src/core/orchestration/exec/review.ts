@@ -37,7 +37,9 @@ export interface ExternalReviewDeps {
   /** The driver's own command door. 200 with body 'accepted' | 'alreadyReported' is success. */
   handle(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
   spawn: ProcFactory
-  baseEnv(): NodeJS.ProcessEnv
+  /** The environment an agent reviewing in `cwd` starts from, before agentChildEnv: the one the driver's checks start from
+   *  there, without what the person's Credentials list hides in that folder (final fix wave A3). */
+  env(cwd: string): NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>
   platform: NodeJS.Platform
   clientVersion: string
   writeFile(path: string, text: string): Promise<void>

@@ -195,12 +195,37 @@ export async function readFileDiff(
 }
 
 /** What an external reviewer must not change (external reviewers design 3.4): `git rev-parse HEAD` + '\n' +
- *  `git status --porcelain --untracked-files=no`, so a commit, a checkout or an edit to a tracked file changes the answer
- *  and a new untracked file does not. Null when `cwd` is not a repository or git fails. */
+ *  `git status --porcelain --untracked-files=no` + the sha256 of `git diff --binary HEAD`, so a commit, a checkout or an
+ *  edit to a tracked file changes the answer, a second edit of a file already modified included (its status line stays
+ *  ` M`; final fix wave A1), and a new untracked file does not. Null when `cwd` is not a repository or git fails. */
 export async function trackedTreeState(cwd: string): Promise<string | null> {
   const headRev = await git(['rev-parse', 'HEAD'], { cwd, timeoutMs: TIMEOUT_MS })
   if (!headRev.ok) return null
   const status = await git(['status', '--porcelain', '--untracked-files=no'], { cwd, timeoutMs: TIMEOUT_MS, trim: false })
   if (!status.ok) return null
-  return `${headRev.stdout}\n${status.stdout}`
+  const diff = await gitHashed(['diff', ...PLAIN, '--binary', '--end-of-options', 'HEAD', '--'], cwd)
+  if (diff === null) return null
+  return `${headRev.stdout}\n${status.stdout}\n${diff}`
+}
+
+/** The sha256 of git's output, hashed as it streams (a large diff is never held); null when git fails or times out. */
+function gitHashed(args: string[], cwd: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const hash = createHash('sha256')
+    let done = false
+    const finish = (r: string | null): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(r)
+    }
+    const child = spawn('git', args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    const timer = setTimeout(() => {
+      child.kill()
+      finish(null)
+    }, TIMEOUT_MS)
+    child.stdout.on('data', (b: Buffer) => hash.update(b))
+    child.on('error', () => finish(null))
+    child.on('close', (code) => finish(code === 0 ? hash.digest('hex') : null))
+  })
 }

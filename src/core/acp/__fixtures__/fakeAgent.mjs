@@ -1,7 +1,8 @@
 // A fake ACP agent for the client's tests: `node fakeAgent.mjs <mode> [--message <text>]`.
 // One mode per behavior (see the switch in runPrompt). The final message text is `--message` when given,
 // otherwise the mode's own default, so later tasks can reuse it. `--retry-message <text>` is the message of every turn after
-// the first in 'no-verdict-then-verdict'; `--record <file>` appends each received prompt text to <file>, one JSON string per line.
+// the first in 'no-verdict-then-verdict'; `--record <file>` appends each received prompt text to <file>, one JSON string per line;
+// `--echo-env <NAME>` also appends `env <NAME>=<value>` there, once, when the first prompt arrives.
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
@@ -13,6 +14,8 @@ const ri = argv.indexOf('--retry-message')
 const retryMessage = ri >= 0 ? argv[ri + 1] : undefined
 const ci = argv.indexOf('--record')
 const recordFile = ci >= 0 ? argv[ci + 1] : undefined
+const ei = argv.indexOf('--echo-env')
+const echoEnv = ei >= 0 ? argv[ei + 1] : undefined
 
 const send = (obj) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...obj }) + '\n')
 // `noisy` echoes numeric ids as strings, as some real agents do.
@@ -119,6 +122,7 @@ function onRequest(msg) {
       if (msg.params?.modeId === 'default') modeSet = true
       return reply(msg.id, {})
     case 'session/prompt':
+      if (recordFile && echoEnv && prompts === 0) appendFileSync(recordFile, JSON.stringify(`env ${echoEnv}=${process.env[echoEnv] ?? ''}`) + '\n')
       if (recordFile) appendFileSync(recordFile, JSON.stringify(msg.params?.prompt?.[0]?.text ?? '') + '\n')
       return void runPrompt(msg.id)
     default:

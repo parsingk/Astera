@@ -18,6 +18,8 @@ import { VERDICT_RETRY_PROMPT } from './externalVerdict'
 import type { ExternalReviewer, ReviewerSettings } from '../../settings/externalReviewers'
 import type { Account } from '../../types'
 import type { ProcLike } from '../../sessions/proc'
+import { trackedTreeState } from '../../git/changes'
+import { gitSync } from '../../worktrees/testRepo'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const AGENT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../acp/__fixtures__/fakeAgent.mjs')
@@ -86,12 +88,20 @@ interface RigOpts {
   pollMs?: number
   /** Replaces the real command handler's answer to the settle */
   settleAnswer?: { status: number; body: unknown }
+  /** Changes the state as the settle arrives, before it is answered */
+  beforeSettle?: (s: OrchState) => OrchState
   settingsThrow?: string
   /** Holds one await of the start until `release()`: the settings read, the path guard, or the review Dispatch's commit
    *  (the state is already changed when the commit is held, as a real store's is). `commitFails` rejects that commit. */
   hold?: 'settings' | 'path' | 'commit'
   commitFails?: boolean
   rangeDiff?: ReviewContext['rangeDiff']
+  /** Replaces the rig's environment: what the driver gives an agent in that folder */
+  env?: ExternalReviewDeps['env']
+  /** More arguments for the fake agent */
+  agentArgs?: string[]
+  /** Replaces `trees`: the folder's tracked state as the driver reads it */
+  treeState?: ExternalReviewDeps['treeState']
 }
 
 function rig(o: RigOpts = {}) {
@@ -166,6 +176,7 @@ function rig(o: RigOpts = {}) {
     },
     handle: async (cmd, args) => {
       handled.push({ cmd, args })
+      if (o.beforeSettle) state = o.beforeSettle(state)
       if (o.settleAnswer) return o.settleAnswer
       return handleCommand(deps, { sessionId: APP_CALLER }, cmd, args)
     },
@@ -176,12 +187,12 @@ function rig(o: RigOpts = {}) {
       if (proc.pid > 0) pids.add(proc.pid)
       return proc
     },
-    baseEnv: () => ({ PATH: process.env.PATH, ASTERA_HOST_PIPE: 'p', KEEP_ME: '1' }),
+    env: o.env ?? (() => ({ PATH: process.env.PATH, ASTERA_HOST_PIPE: 'p', KEEP_ME: '1' })),
     platform: process.platform,
     clientVersion: '0.0.0-test',
     writeFile: async (p, text) => void fs.writeFileSync(p, text),
     appendLog: (p, line) => void acpLines.push({ path: p, line }),
-    treeState: async () => trees[Math.min(treeCalls++, trees.length - 1)],
+    treeState: o.treeState ?? (async () => trees[Math.min(treeCalls++, trees.length - 1)]),
     timeoutMs: o.timeoutMs ?? 20_000,
     pollMs: o.pollMs ?? 50,
     resolve: async (r, platform) => {
@@ -189,7 +200,7 @@ function rig(o: RigOpts = {}) {
       return {
         ok: true,
         file: process.execPath,
-        args: [AGENT, o.mode ?? 'approve', '--message', o.message ?? APPROVED, ...(o.retryMessage ? ['--retry-message', o.retryMessage] : []), '--record', record]
+        args: [AGENT, o.mode ?? 'approve', '--message', o.message ?? APPROVED, ...(o.retryMessage ? ['--retry-message', o.retryMessage] : []), '--record', record, ...(o.agentArgs ?? [])]
       }
     }
   }
@@ -335,6 +346,24 @@ describe('createReviewStarter with an external reviewer', () => {
     await gone(h.pid())
   })
 
+  // Final fix wave A3: the agent starts from what the driver's checks start from in that folder (the Credentials list)
+  it('the agent gets the environment env(cwd) answers for the folder it reviews', async () => {
+    const asked: string[] = []
+    const h = rig({
+      agentArgs: ['--echo-env', 'REVIEW_MARK'],
+      env: async (cwd) => {
+        asked.push(cwd)
+        return { PATH: process.env.PATH, REVIEW_MARK: `for ${path.basename(cwd)}`, ASTERA_HOST_PIPE: 'p' }
+      }
+    })
+    await h.run()
+    expect(h.task().status).toBe('completed')
+    expect(asked).toEqual([h.implCwd])
+    expect(h.prompts()).toContain('env REVIEW_MARK=for tree')
+    expect(h.spawned[0].env).toMatchObject({ REVIEW_MARK: 'for tree', NO_BROWSER: 'true' })
+    expect(h.spawned[0].env).not.toHaveProperty('ASTERA_HOST_PIPE')
+  })
+
   it('a command that is not there makes a Gate', async () => {
     const h = rig({ reviewer: { command: 'astera-no-such-agent-cmd', args: ['--acp'] } })
     await h.run()
@@ -390,6 +419,48 @@ describe('createReviewStarter with an external reviewer', () => {
     expect(h2.task().status).toBe('completed')
   })
 
+  // Final fix wave A1: a second edit of a file the work already modified leaves `git status` as it was
+  it('a second edit of a file the work already modified, made while the reviewer ran, makes the changed-folder Gate', async () => {
+    let reads = 0
+    const h = rig({
+      treeState: async (cwd) => {
+        const s = await trackedTreeState(cwd)
+        // the reviewer's edit, between the read before it ran and the read after
+        if (reads++ === 0) fs.writeFileSync(path.join(cwd, 'a.txt'), 'three\n')
+        return s
+      }
+    })
+    gitSync(h.implCwd, ['init', '-q'])
+    gitSync(h.implCwd, ['config', 'user.email', 't@t'])
+    gitSync(h.implCwd, ['config', 'user.name', 't'])
+    gitSync(h.implCwd, ['config', 'core.autocrlf', 'false'])
+    fs.writeFileSync(path.join(h.implCwd, 'a.txt'), 'one\n')
+    gitSync(h.implCwd, ['add', '-A'])
+    gitSync(h.implCwd, ['commit', '-q', '-m', 'base'])
+    // the implementer's work: already modified when the review starts
+    fs.writeFileSync(path.join(h.implCwd, 'a.txt'), 'two\n')
+    await h.run()
+    expect(reads).toBe(2)
+    expect(h.task().status).toBe('blocked')
+    expect(h.gateText()).toContain(`files in ${h.implCwd} changed while the external reviewer Fake Agent ran. Its verdict is not used.`)
+    expect(h.handled).toEqual([])
+  }, 30_000)
+
+  it('a folder that could be read before the review and cannot be read after it counts as changed', async () => {
+    const h = rig({ trees: ['before', null] })
+    await h.run()
+    expect(h.task().status).toBe('blocked')
+    expect(h.gateText()).toContain(`files in ${h.implCwd} changed while the external reviewer Fake Agent ran. Its verdict is not used.`)
+    expect(h.handled).toEqual([])
+  })
+
+  it('a folder that could not be read before the review skips the check and says so in the log', async () => {
+    const h = rig({ trees: [null, 'after'] })
+    await h.run()
+    expect(h.task().status).toBe('completed')
+    expect(h.acpLines.map((l) => l.line).join('\n')).toMatch(/folder check skipped: the folder's tracked state could not be read before the review/)
+  })
+
   it('a folder that is not a repository skips the check', async () => {
     const h = rig({ trees: [null] })
     await h.run()
@@ -423,6 +494,35 @@ describe('createReviewStarter with an external reviewer', () => {
     const again = rig({ settleAnswer: { status: 200, body: 'alreadyReported' } })
     await again.run()
     expect(again.state().gates).toEqual([])
+  })
+
+  // Final fix wave A4: a person who moved the Task out of `reviewing` is not overruled by the review they left behind
+  it('a Task moved out of reviewing during a review ends it silently: the process is killed, no Gate, the Task untouched', async () => {
+    const h = rig({ mode: 'hang-prompt' })
+    await h.start({ taskId: h.taskId })
+    await until(() => h.prompts().length === 1, 'the agent to be mid-turn')
+    const pid = h.pid()
+    // what task-update does: the Task moves, the review Dispatch stays open
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === h.taskId ? { ...t, status: 'pending' as const } : t)) })
+    const before = h.state()
+    await Promise.race([h.start.externalIdle(), sleep(20_000).then(() => Promise.reject(new Error('not idle')))])
+    await gone(pid)
+    expect(h.state()).toBe(before)
+    expect(h.task().status).toBe('pending')
+    expect(h.state().gates).toEqual([])
+    expect(h.handled).toEqual([])
+  })
+
+  it('a settle refused after the Task left reviewing is dropped and logged, not gated', async () => {
+    const h = rig({
+      settleAnswer: { status: 409, body: { error: 'task is not reviewing: pending' } },
+      beforeSettle: (s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === h.taskId ? { ...t, status: 'pending' as const } : t)) })
+    })
+    await h.run()
+    expect(h.task().status).toBe('pending')
+    expect(h.state().gates).toEqual([])
+    expect(h.review()!.endedAt).toBeUndefined()
+    expect(h.logs.join('\n')).toContain('was refused after its Task left reviewing or its Dispatch closed; dropped')
   })
 
   it('with no reviewer chosen the automatic path runs and no child is spawned', async () => {

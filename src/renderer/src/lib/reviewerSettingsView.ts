@@ -1,10 +1,11 @@
 // The decisions of the Settings "Reviewer" group (external reviewers), apart from the component so they can be tested:
 // the renderer has no DOM test environment. Every value produced here survives the store's narrowing unchanged
 // (reviewerSettingsOf in core/settings/externalReviewers.ts): name trimmed, 1 to 40 characters, one line; command
-// trimmed, non-empty, one line; at most 20 args.
+// trimmed, non-empty, one line, not a relative path; at most 20 args.
 import type { ReviewerProbe } from '../../../core/acp/probeTypes'
 import {
   MAX_EXTERNAL_REVIEWERS,
+  isRelativeCommandPath,
   newExternalReviewerId,
   type ExternalReviewer,
   type ReviewerSettings
@@ -35,7 +36,7 @@ function cleaned(r: Fields): Fields | FieldError {
   const name = r.name.trim()
   const command = r.command.trim()
   if (!name || name.length > MAX_NAME_LENGTH || LINE_BREAK.test(name)) return { error: 'name' }
-  if (!command || LINE_BREAK.test(command) || r.args.length > MAX_ARGS) return { error: 'command' }
+  if (!command || LINE_BREAK.test(command) || isRelativeCommandPath(command) || r.args.length > MAX_ARGS) return { error: 'command' }
   return { name, command, args: [...r.args] }
 }
 

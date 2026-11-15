@@ -25,7 +25,7 @@ export async function probeReviewer(a: {
   try {
     const resolved = await (a.resolve ?? resolveAgentCommand)(a.reviewer, a.platform)
     if (!resolved.ok) return { ok: false, kind: 'protocol', message: resolved.error }
-    proc = a.spawn(resolved.file, resolved.args, { cwd: a.cwd, env: agentChildEnv(a.baseEnv) })
+    proc = a.spawn(resolved.file, resolved.args, { cwd: a.cwd, env: agentChildEnv(a.baseEnv, a.platform) })
     const session = await openAcpSession({ proc, cwd: a.cwd, clientVersion: a.clientVersion, log: () => {}, timeouts: a.timeouts })
     return { ok: true, agent: session.agent }
   } catch (e) {

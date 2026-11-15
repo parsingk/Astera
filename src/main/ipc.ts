@@ -3287,7 +3287,8 @@ export function registerIpc(
         settings: async () => core.appSettings.getReviewerSettings(),
         handle: (cmd, args) => orchHandleCommand(deps, { sessionId: UI_CALLER }, cmd, args),
         spawn: nodeProcFactory,
-        baseEnv: () => process.env,
+        // What the checks in that folder start from: the app's environment without what the Credentials list hides there
+        env: (cwd) => core.sessions.checkEnv(process.env, cwd).env,
         platform: process.platform,
         clientVersion: app.getVersion(),
         ...externalReviewIo(orchLog),

@@ -8,7 +8,8 @@
 // - Every end that is ours (verdict reached, timeout, violation, dispose, a closed Dispatch) calls `stop` first, so the
 //   exit that follows is a consequence and never a cause: the ACP client reads its own close() as intentional.
 // - A failure is a Gate keyed by this review's Dispatch (`gateDispatch`): it acts only while that Dispatch is still open.
-// - A Dispatch closed under the run, and a dispose, end it silently: the process is killed and nothing is recorded.
+// - A Dispatch closed under the run, a Task moved out of `reviewing`, and a dispose, end it silently: the process is killed
+//   and nothing is recorded.
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { AcpFailure, openAcpSession, type AcpSession } from '../../acp/client'
@@ -184,6 +185,8 @@ export function createExternalReviews(c: {
       }
       return `the external reviewer ${name} could not be used: ${e instanceof Error ? e.message : String(e)}`
     }
+    /** This review still has something to answer: its Dispatch is open and its Task is still `reviewing`. */
+    const live = (s: OrchState): boolean => isOpenIn(s, d.id) && s.tasks.find((t) => t.id === taskId)?.status === 'reviewing'
     /** A Dispatch other than this one worked in the folder during the review: open now, or ended after it began. */
     const othersWorked = (): boolean =>
       c.getState().dispatches.some(
@@ -211,10 +214,12 @@ export function createExternalReviews(c: {
       const resolved = await (ext.resolve ?? resolveAgentCommand)(reviewer, ext.platform)
       if (dropped()) return
       if (!resolved.ok) return await fail(`the external reviewer ${name} could not be started: ${resolved.error}`)
+      const baseEnv = await ext.env(cwd)
+      if (dropped()) return
 
       // The budget and the poll start with the process; both are cleared by `stop`, which every end calls
       try {
-        proc = ext.spawn(resolved.file, resolved.args, { cwd, env: agentChildEnv(ext.baseEnv()) })
+        proc = ext.spawn(resolved.file, resolved.args, { cwd, env: agentChildEnv(baseEnv, ext.platform) })
       } catch (e) {
         return await fail(`the external reviewer ${name} could not be started: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -222,8 +227,10 @@ export function createExternalReviews(c: {
         timedOut = true
         stop()
       }, timeoutMs)
+      // A Task a person moved out of `reviewing` (task-update) leaves this Dispatch open, and a verdict could only be
+      // refused and then gate the Task they moved: that ends the review as silently as a closed Dispatch (final fix wave A4)
       poll = setInterval(() => {
-        if (isOpenIn(c.getState(), d.id)) return
+        if (live(c.getState())) return
         abort(d.id, false)
       }, ext.pollMs ?? EXTERNAL_OPEN_POLL_MS)
 
@@ -255,7 +262,10 @@ export function createExternalReviews(c: {
 
       const after = await ext.treeState(cwd)
       if (dropped()) return
-      if (before !== null && after !== null && before !== after) {
+      // A folder that could be read before and cannot be read now has changed as surely as one that reads differently
+      // (final fix wave A1); one that could not be read before has nothing to compare with
+      if (before === null) log("folder check skipped: the folder's tracked state could not be read before the review (not a git repository, or git failed)")
+      else if (before !== after) {
         if (othersWorked()) log('folder check skipped: another Dispatch worked in the folder during the review')
         else return await fail(`files in ${cwd} changed while the external reviewer ${name} ran. Its verdict is not used.`)
       }
@@ -281,6 +291,14 @@ export function createExternalReviews(c: {
       if (reply.status === 200 && (reply.body === 'accepted' || reply.body === 'alreadyReported')) {
         log(`settled: ${String(reply.body)}`)
         return
+      }
+      // Read with no await before the Gate `fail` opens: a refusal because a person moved the Task, or the Dispatch closed,
+      // is theirs to have made, never a failure to put to them (final fix wave A4)
+      if (!live(c.getState())) {
+        log(`the verdict was refused (${errorText(reply.body)}) after the Task left reviewing or the Dispatch closed; nothing is recorded`)
+        return void c.log(
+          `external review of task=${taskId} dispatch=${d.id}: the verdict was refused after its Task left reviewing or its Dispatch closed; dropped: ${errorText(reply.body)}`
+        )
       }
       await fail(`the verdict of the external reviewer ${name} was refused: ${errorText(reply.body)}`)
     } catch (e) {

@@ -254,7 +254,7 @@ describe('trackedTreeState', { timeout: 30_000 }, () => {
       await write(repo, 'a.txt', 'one\n')
       commit(repo, 'base')
       const clean = (await trackedTreeState(repo))!
-      expect(clean).toBe(`${head(repo)}\n`)
+      expect(clean.startsWith(`${head(repo)}\n`)).toBe(true)
       await write(repo, 'new.txt', 'untracked\n')
       expect(await trackedTreeState(repo)).toBe(clean)
       await write(repo, 'a.txt', 'two\n')
@@ -262,7 +262,26 @@ describe('trackedTreeState', { timeout: 30_000 }, () => {
       expect(dirty).not.toBe(clean)
       expect(dirty).toContain(' M a.txt')
       commit(repo, 'next')
-      expect(await trackedTreeState(repo)).toBe(`${head(repo)}\n`)
+      const next = (await trackedTreeState(repo))!
+      expect(next.startsWith(`${head(repo)}\n`)).toBe(true)
+      expect(next).not.toBe(clean)
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  // Final fix wave A1: the status line of a file already modified does not change when it is edited again
+  it('changes when a tracked file that is already modified is edited again', async () => {
+    const repo = await makeRepo()
+    try {
+      await write(repo, 'a.txt', 'one\n')
+      commit(repo, 'base')
+      await write(repo, 'a.txt', 'two\n')
+      const first = (await trackedTreeState(repo))!
+      expect(await trackedTreeState(repo)).toBe(first)
+      await write(repo, 'a.txt', 'three\n')
+      const second = (await trackedTreeState(repo))!
+      expect(second).not.toBe(first)
     } finally {
       await fs.rm(repo, { recursive: true, force: true })
     }

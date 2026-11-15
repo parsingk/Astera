@@ -60,6 +60,14 @@ describe('reviewerSettingsOf', () => {
     for (const command of ['', '  ', 'a\nb', 'a\rb', null])
       expect(of([entry({ command })]).reviewers).toEqual([])
   })
+  // Final fix wave A2: a relative path would run a program from the reviewed folder
+  it('drops a command that is a relative path; keeps a bare name and an absolute path', () => {
+    const bs = String.fromCharCode(92)
+    for (const command of ['./agent', `.${bs}agent`, `bin${bs}agent`, 'bin/agent', '../agent'])
+      expect(of([entry({ command })]).reviewers).toEqual([])
+    for (const command of ['gemini', 'gemini.cmd', '/usr/local/bin/gemini', `C:${bs}npm${bs}gemini.cmd`, 'C:/npm/gemini', `${bs}${bs}server${bs}share${bs}agent.exe`])
+      expect(of([entry({ command })]).reviewers).toHaveLength(1)
+  })
   it('drops args that are not strings or are more than 20; keeps exactly 20', () => {
     expect(of([entry({ args: 'x' })]).reviewers).toEqual([])
     expect(of([entry({ args: ['a', 1] })]).reviewers).toEqual([])

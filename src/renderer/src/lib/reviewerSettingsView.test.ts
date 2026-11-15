@@ -40,7 +40,10 @@ describe('withReviewerAdded', () => {
     ['two-line name', { name: 'a\nb', command: 'x', args: [] as string[] }, 'name'],
     ['empty command', { name: 'A', command: '  ', args: [] as string[] }, 'command'],
     ['two-line command', { name: 'A', command: 'a\nb', args: [] as string[] }, 'command'],
-    ['21 args', { name: 'A', command: 'x', args: Array.from({ length: 21 }, () => 'a') }, 'command']
+    ['21 args', { name: 'A', command: 'x', args: Array.from({ length: 21 }, () => 'a') }, 'command'],
+    // Final fix wave A2: a relative path would run a program from the reviewed folder
+    ['a relative command path', { name: 'A', command: './agent', args: [] as string[] }, 'command'],
+    ['a relative command path with a backslash', { name: 'A', command: ['bin', 'agent'].join(String.fromCharCode(92)), args: [] as string[] }, 'command']
   ])('refuses %s', (_label, input, error) => {
     expect(withReviewerAdded(empty, input)).toEqual({ error })
   })
@@ -91,7 +94,8 @@ describe('withReviewerEdited', () => {
   })
   it.each([
     [{ name: '', command: 'x' }, 'name'],
-    [{ name: 'A', command: '' }, 'command']
+    [{ name: 'A', command: '' }, 'command'],
+    [{ name: 'A', command: 'tools/agent' }, 'command']
   ])('refuses %j', (over, error) => {
     expect(withReviewerEdited({ reviewers: [rv(1)], reviewBy: null }, { ...rv(1), ...over })).toEqual({ error })
   })

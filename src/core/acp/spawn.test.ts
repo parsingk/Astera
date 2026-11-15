@@ -7,10 +7,16 @@ describe('agentChildEnv', () => {
     const base: NodeJS.ProcessEnv = { PATH: '/bin', HOME: '/h', GEMINI_API_KEY: 'k', ELECTRON_RUN_AS_NODE: '1', ASTERA_HOST_PIPE: 'p', astera_host_x: '1' }
     for (const k of MANAGED_ENV_KEYS) base[k] = 'x'
     for (const k of INHERITED_AGENT_ENV_KEYS) base[k] = 'x'
-    const env = agentChildEnv(base)
+    const env = agentChildEnv(base, 'linux')
     expect(env).toEqual({ PATH: '/bin', HOME: '/h', GEMINI_API_KEY: 'k', NO_BROWSER: 'true' })
     expect(base.PATH).toBe('/bin')
     expect(base.ASTERA_CLI).toBe('x')
+  })
+  // Final fix wave A2: the reviewed folder must not decide which program a bare name runs
+  it('tells Windows not to look for a program in the current folder first, under one spelling of the name', () => {
+    const env = agentChildEnv({ PATH: 'C:/bin', nodefaultcurrentdirectoryinexepath: '0' }, 'win32')
+    expect(env).toEqual({ PATH: 'C:/bin', NoDefaultCurrentDirectoryInExePath: '1', NO_BROWSER: 'true' })
+    expect(agentChildEnv({ PATH: '/bin' }, 'darwin')).not.toHaveProperty('NoDefaultCurrentDirectoryInExePath')
   })
 })
 
@@ -44,6 +50,33 @@ describe('resolveAgentCommand', () => {
       exists: (p) => p === 'C:/Users/x/AppData/Roaming/npm/gemini.cmd'
     })
     expect(r).toEqual({ ok: true, file: 'cmd.exe', args: ['/d', '/c', 'call', 'C:/Users/x/AppData/Roaming/npm/gemini.cmd'] })
+  })
+  // Final fix wave A2: a relative path runs from the reviewed folder, which the reviewed work can write
+  it('refuses a command that is a relative path, on every platform, and keeps a bare name and an absolute path', async () => {
+    const bs = String.fromCharCode(92)
+    for (const command of ['./agent', `bin${bs}agent`, 'tools/agent'])
+      for (const platform of ['win32', 'linux'] as const) {
+        const r = await resolveAgentCommand({ command, args: [] }, platform, { ...noEnsure, resolve: (n) => n, exists: () => false })
+        expect(r).toEqual({ ok: false, error: expect.stringContaining('relative path') })
+      }
+    expect((await resolveAgentCommand({ command: '/usr/bin/agent', args: [] }, 'linux', noEnsure)).ok).toBe(true)
+    expect((await resolveAgentCommand({ command: `C:${bs}t${bs}agent.exe`, args: [] }, 'win32', { ...noEnsure, resolve: (n) => n })).ok).toBe(true)
+  })
+  // Measured: `--x=a&echo INJECTED` ran `echo` through a .cmd shim
+  it('refuses an argument cmd.exe cannot carry when the command goes through cmd.exe, and names the character', async () => {
+    const shim = { ...noEnsure, resolve: () => 'C:/npm/gemini.cmd' }
+    for (const [arg, ch] of [['--x=a&echo INJECTED', '&'], ['a|b', '|'], ['a<b', '<'], ['a>b', '>'], ['a^b', '^'], ['%PATH%', '%'], ['a!b', '!'], ['a"b', '"']])
+      expect(await resolveAgentCommand({ command: 'gemini', args: ['--acp', arg] }, 'win32', shim)).toEqual({
+        ok: false,
+        error: `this command runs through cmd.exe, which cannot carry ${ch} in an argument`
+      })
+    expect(await resolveAgentCommand({ command: 'gemini', args: ['a\nb'] }, 'win32', shim)).toEqual({
+      ok: false,
+      error: 'this command runs through cmd.exe, which cannot carry a line break in an argument'
+    })
+    // an .exe is not run through cmd.exe: the same argument is carried as it is
+    const exe = await resolveAgentCommand({ command: 'agent', args: ['--x=a&b'] }, 'win32', { ...noEnsure, resolve: () => 'C:/t/agent.exe' })
+    expect(exe).toEqual({ ok: true, file: 'C:/t/agent.exe', args: ['--x=a&b'] })
   })
   it('refuses a command line Windows cannot carry', async () => {
     const r = await resolveAgentCommand({ command: 'agent', args: ['x'.repeat(40_000)] }, 'win32', { ...noEnsure, resolve: () => 'C:/t/agent.exe' })

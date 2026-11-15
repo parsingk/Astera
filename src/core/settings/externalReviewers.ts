@@ -21,6 +21,14 @@ export const REVIEWER_PRESETS: readonly { key: 'gemini' | 'copilot' | 'opencode'
   { key: 'opencode', name: 'OpenCode', command: 'opencode', args: ['acp'] }
 ]
 
+/** A command that names a path relative to where it runs (`./agent`, `bin\agent`): the agent runs in the reviewed folder,
+ *  which the reviewed work can write, so such a command would let that work choose the program (final fix wave A2). A bare
+ *  name (looked up on PATH) and an absolute path (`/usr/bin/x`, `C:\x`, `\\server\share\x`) are not. */
+export function isRelativeCommandPath(command: string): boolean {
+  if (!/[\\/]/.test(command)) return false
+  return !(command.startsWith('/') || command.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(command))
+}
+
 function reviewerOf(raw: unknown): ExternalReviewer | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>
@@ -29,7 +37,7 @@ function reviewerOf(raw: unknown): ExternalReviewer | null {
   const name = o.name.trim()
   const command = o.command.trim()
   if (!name || name.length > MAX_NAME_LENGTH || LINE_BREAK.test(name)) return null
-  if (!command || LINE_BREAK.test(command)) return null
+  if (!command || LINE_BREAK.test(command) || isRelativeCommandPath(command)) return null
   if (!Array.isArray(o.args) || o.args.length > MAX_ARGS || !o.args.every((a) => typeof a === 'string')) return null
   return { id: o.id, name, command, args: [...(o.args as string[])] }
 }

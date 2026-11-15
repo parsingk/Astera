@@ -273,7 +273,8 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
             settings: () => readReviewerSettings(settingsPath),
             handle: d.handle,
             spawn: nodeProcFactory,
-            baseEnv: () => hostWorkerBaseEnv(d.env),
+            // What the checks in that folder start from: the Host's environment without what the Credentials list hides there
+            env: (cwd: string) => (d.checkEnv ? d.checkEnv(hostWorkerBaseEnv(d.env), cwd).env : hostWorkerBaseEnv(d.env)),
             platform: process.platform,
             clientVersion: 'host',
             ...externalReviewIo(log),
