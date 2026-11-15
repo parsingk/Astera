@@ -11324,3 +11324,43 @@ describe('agent profiles: a profile that runs without permission checks, by who 
     })
   })
 })
+
+describe('handleCommand — an external review Dispatch', () => {
+  const external = { id: 'ext_1a2b3c4d', name: 'Gemini' }
+  const world = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [{ id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'reviewing', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
+    dispatches: [
+      {
+        id: 'dsp_ext', taskId: 't1', provider: 'claude', accountId: '', sessionId: 'acp:1a2b3c4d', cwd: 'D:/p', specPath: '',
+        review: true, externalReviewer: external, startedAt: NOW, workerState: 'ready', retained: false
+      }
+    ]
+  })
+
+  it('worker-stop closes it and releases no session', async () => {
+    const released: string[] = []
+    const deps = makeDeps(world())
+    deps.releaseWorker = async ({ dispatchId }): Promise<void> => {
+      released.push(dispatchId)
+    }
+    const r = await call(deps, 'worker-stop', { dispatch: 'dsp_ext' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().dispatches[0].endedAt).toBeDefined()
+    expect(released).toEqual([])
+  })
+
+  it('worker-read answers the untracked sentence without asking the dep', async () => {
+    const deps = makeDeps(world())
+    let asked = 0
+    deps.readWorker = async (): Promise<string> => {
+      asked += 1
+      throw new Error('no app attached')
+    }
+    const r = await call(deps, 'worker-read', { dispatch: 'dsp_ext' })
+    expect(r).toEqual({ status: 200, body: { output: TAIL_UNTRACKED } })
+    expect(asked).toBe(0)
+  })
+})

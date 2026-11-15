@@ -25,7 +25,7 @@ import { applyPendingReports, readPendingReports, type QueuedReport } from '../c
 import { dispatchesHeldOnlyByReport, pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
 import { writeOffDispatch, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
-import { isPlaceholderSessionId } from '../core/orchestration/types'
+import { isExternalReviewSessionId, isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { ControllerKind, OrchCall, OrchCaller } from '../core/host/orchProtocol'
@@ -1755,7 +1755,8 @@ export function createHostOrch(a: {
       const st = store.get()
       const ids = new Set<string>()
       for (const d of st.dispatches)
-        if (!d.endedAt && !isPlaceholderSessionId(d.sessionId) && !isAlive(d.sessionId)) ids.add(d.sessionId)
+        if (!d.endedAt && !isPlaceholderSessionId(d.sessionId) && !isExternalReviewSessionId(d.sessionId) && !isAlive(d.sessionId))
+          ids.add(d.sessionId)
       for (const r of st.runs)
         if (r.coordinatorSessionId && !isAlive(r.coordinatorSessionId)) ids.add(r.coordinatorSessionId)
       return [...ids]

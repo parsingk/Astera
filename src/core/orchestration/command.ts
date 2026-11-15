@@ -855,8 +855,9 @@ const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => 
   return d ? { status: 409, body: { error: `the worker is still starting; try again in a moment (dispatch ${d.id})`, reason: 'still-starting' } } : null
 }
 /** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
- *  is a start that died: no pty was ever opened for it, so there is nothing to release. */
-const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId)
+ *  is a start that died: no pty was ever opened for it, so there is nothing to release. An external review
+ *  never had a session (its `acp:` id names no pty), so there is nothing to release either. */
+const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId) && !d.externalReviewer
 
 /** The Job's latest Run **while it still runs**, else undefined. `jobs run` refuses on it, and a fire
  *  skips on it (`run-spawn --unless-running`; the user's ruling of 2026-09-25 on U1): the same test in
@@ -4478,6 +4479,9 @@ export async function handleCommand(
     case 'worker-read': {
       const id = str(args.dispatch)
       if (!id) return bad('--dispatch is required')
+      // An external review has no pty and no tail. Answered here, before the dep, so the app and the Host say the
+      // same thing as for an unknown tail whether or not an app is attached (the Host would forward the read).
+      if (s.dispatches.find((x) => x.id === id)?.externalReviewer) return okBody({ output: TAIL_UNTRACKED })
       return okBody({
         output: await deps.readWorker({
           dispatchId: id,

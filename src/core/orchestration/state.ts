@@ -1541,6 +1541,8 @@ export function openReviewDispatch(
     sessionId: string
     cwd: string
     specPath: string
+    /** Set when an external reviewer, not a Claude/Codex session, does this review */
+    externalReviewer?: { id: string; name: string }
   },
   now: string
 ): Res<Dispatch> {
@@ -1571,6 +1573,7 @@ export function openReviewDispatch(
   // A lifecycle review reads the head Astera pushed (G5b): the verdict's merge-ready needs to know which
   const reviewHead = isLifecycleTask(task) ? s.runs.find((r) => r.id === task.runId)?.githubState?.lastPushedSha : undefined
   if (reviewHead !== undefined) dispatch.reviewHead = reviewHead
+  if (a.externalReviewer) dispatch.externalReviewer = { id: a.externalReviewer.id, name: a.externalReviewer.name }
   return ok({ ...s, dispatches: [...s.dispatches, dispatch] }, dispatch)
 }
 
@@ -1732,7 +1735,7 @@ export function applyReviewResult(
       repair: a.repair,
       lang,
       message: {
-        subject: `${dispatch.provider} review found ${blocking.length} blocking issue${blocking.length === 1 ? '' : 's'}`,
+        subject: `${dispatch.externalReviewer?.name ?? dispatch.provider} review found ${blocking.length} blocking issue${blocking.length === 1 ? '' : 's'}`,
         detail: `Blocking issues:\n${list}\n`
       }
     },
@@ -1852,6 +1855,24 @@ export const endedUnproven = (d: Dispatch, now: string): Dispatch => ({
   endedAt: now,
   workerState: 'outcome_unknown'
 })
+
+/** Closes (endedUnproven) every open review Dispatch with `externalReviewer` whose id is not in `owned` and, when
+ *  `startedBefore` is given, whose `startedAt` is before it. An external review lives in whichever process holds
+ *  its ACP child, so a Dispatch nobody owns after a restart can never be answered. Tasks are not touched. */
+export function closeOrphanedExternalReviews(
+  s: OrchState,
+  a: { owned: ReadonlySet<string>; startedBefore?: number },
+  now: string
+): { state: OrchState; closed: string[] } {
+  const closed: string[] = []
+  const dispatches = s.dispatches.map((d) => {
+    if (!d.externalReviewer || d.outcome || d.endedAt || a.owned.has(d.id)) return d
+    if (a.startedBefore !== undefined && !(Date.parse(d.startedAt) < a.startedBefore)) return d
+    closed.push(d.id)
+    return endedUnproven(d, now)
+  })
+  return closed.length === 0 ? { state: s, closed } : { state: { ...s, dispatches }, closed }
+}
 
 /** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.
  *
