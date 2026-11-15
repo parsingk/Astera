@@ -233,6 +233,8 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
     // Fix round 6: Claude's twins take the way to look from the scope each start hands them (claudeSandboxStart)
     expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog\n  \}\)/)
     expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    // The registered accounts plus the folders on the disk now, so an unregistered folder's login file is named too
+    expect(core).toContain('agentLoginEntries({ homeDir: os.homedir(), accounts: [...accounts.list(), ...agentAccountFolders(os.homedir())] })')
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
     expect(chat).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
   })
@@ -262,7 +264,7 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   })
   it('the Host names the agents login files from the last accounts list it read, for the twins, the checks and the chats', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
-    expect(spawner).toMatch(/const agentLogins = \(\): DenyEntry\[\] => agentLoginEntries\(\{ homeDir, accounts: lastAccounts \}\)/)
+    expect(spawner).toMatch(/const agentLogins = \(\): DenyEntry\[\] => agentLoginEntries\(\{ homeDir, accounts: \[\.\.\.lastAccounts, \.\.\.agentAccountFolders\(homeDir\)\] \}\)/)
     expect(spawner).toMatch(/\n      readOnly,\n      agentLogins\n    \}/)
     expect(spawner).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    sandboxWarn,\n/)
   })

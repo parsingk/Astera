@@ -55,7 +55,7 @@ import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry } from '../core/sandbox/locations'
+import { agentAccountFolders, agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry } from '../core/sandbox/locations'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -283,8 +283,9 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     resolve: presentOrNull
   })
   // The agents' login files a sandboxed session may not read (sandbox design §6): the default folders' and every registered
-  // account's, from the registry as it is when a start asks, since accounts come and go while the app runs
-  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir: os.homedir(), accounts: accounts.list() })
+  // account's plus every folder account detection would look at (agentAccountFolders: one nobody registered has a login
+  // file too), from the registry and the disk as they are when a start asks, since accounts come and go while the app runs
+  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir: os.homedir(), accounts: [...accounts.list(), ...agentAccountFolders(os.homedir())] })
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'

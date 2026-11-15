@@ -71,7 +71,7 @@ import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/co
 import { noteRolloutPath } from '../core/sessions/codexRolloutWatcher'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
-import { agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry, type LinkLook } from '../core/sandbox/locations'
+import { agentAccountFolders, agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry, type LinkLook } from '../core/sandbox/locations'
 import { claudeUsernsCheck, type SandboxWarnSink } from '../core/sandbox/startWarnings'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
@@ -387,8 +387,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The key that lets a process be the app to this Host, which a sandboxed session's profile denies (sandbox follow-ups,
   // item 1)
   const appKeyFile = appKeyPath(profileDir)
-  // The agents' login files (sandbox design §6): the default folders' and every account's, from the last list read
-  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir, accounts: lastAccounts })
+  // The agents' login files (sandbox design §6): every registered account's, from the last list read, plus every folder
+  // account detection would look at, found on the disk at each ask (agentAccountFolders). Before the first read of
+  // accounts.json the registered part is empty, so only the default folders and the folders in the usual places are named;
+  // the second part closes that gap for an account kept in them. An account registered with a configDir elsewhere is named
+  // from its first read on.
+  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir, accounts: [...lastAccounts, ...agentAccountFolders(homeDir)] })
   // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
   // Astera itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it was handed from
   // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download
