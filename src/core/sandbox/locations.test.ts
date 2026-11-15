@@ -512,6 +512,23 @@ describe('agentAccountFolders', () => {
     expect(found.filter((f) => f.startsWith('codex:')).sort()).toEqual(['codex:.codex', 'codex:.codex-accounts/c', 'codex:.codex-y'].sort())
   })
 
+  // A moved `~/.claude-accounts` is commonly a junction (off C:), and `Dirent.isDirectory()` is false for a link
+  it('follows a junction or symlink to a folder, and ignores one to a file', () => {
+    const h = home()
+    const elsewhere = home()
+    mkdirSync(path.join(elsewhere, 'moved', 'a'), { recursive: true })
+    mkdirSync(path.join(elsewhere, 'side'))
+    writeFileSync(path.join(elsewhere, 'file'), 'x')
+    const kind = process.platform === 'win32' ? 'junction' : 'dir'
+    symlinkSync(path.join(elsewhere, 'moved'), path.join(h, '.claude-accounts'), kind)
+    symlinkSync(path.join(elsewhere, 'side'), path.join(h, '.codex-side'), kind)
+    symlinkSync(path.join(elsewhere, 'file'), path.join(h, '.claude-link-to-file'), 'file')
+    const found = agentAccountFolders(h).map((f) => `${f.provider}:${slash(path.relative(h, f.configDir))}`)
+    expect(found).toContain('claude:.claude-accounts/a')
+    expect(found).toContain('codex:.codex-side')
+    expect(found).not.toContain('claude:.claude-link-to-file')
+  })
+
   it('gives only the default folders for a home that cannot be listed, and never throws', () => {
     const missing = path.join(os.tmpdir(), 'astera-no-such-home-xyz')
     expect(agentAccountFolders(missing).map((f) => f.provider)).toEqual(['claude', 'codex'])
