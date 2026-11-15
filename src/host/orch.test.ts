@@ -4999,6 +4999,39 @@ describe('How It Works at the commit points (E1 Task 3)', () => {
     expect(calls).toHaveLength(1)
   })
 
+  it('hands each finished Run to the poster once', async () => {
+    const ids = await seedOne()
+    const finished: string[] = []
+    // No understanding duty: the poster is handed the Run all the same.
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), runReports: { finished: (id) => void finished.push(id) } })
+    expect((await orch.call(done(ids))).status).toBe(200)
+    const runId = orch.state().runs[0].id
+    expect(finished).toEqual([runId])
+    // A later commit that changes nothing about the Run does not hand it over again.
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    expect((await orch.call({ cmd: 'state-put', args: { state: got.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(finished).toEqual([runId])
+  })
+
+  it('a state-put that finishes a Run hands it to the poster; a poster that throws leaves the commit landed', async () => {
+    const ids = await seedOne()
+    const finished: string[] = []
+    const orch = orchOver({
+      runReports: {
+        finished: (id) => {
+          finished.push(id)
+          throw new Error('poster boom')
+        }
+      }
+    })
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    const done2: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    logs = []
+    expect((await orch.call({ cmd: 'state-put', args: { state: done2, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(finished).toEqual([done2.runs[0].id])
+    expect(logs.some((l) => /poster boom/.test(l))).toBe(true)
+  })
+
   it('a commit with no finished Run calls nothing', async () => {
     await seed()
     const calls: Input[] = []

@@ -3007,7 +3007,8 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
-      return okBody({ runId: run.id, report: run.report ?? null })
+      const comment = run.githubState?.reportComment
+      return okBody({ runId: run.id, report: run.report ?? null, ...(comment ? { comment } : {}) })
     }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**

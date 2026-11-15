@@ -1,0 +1,122 @@
+// The Host comments a finished Run's report on its pull request (run report C2, R8): the comment is posted once and
+// edited after, never twice. Runs after the commit that finished the Run and catches everything, so a post never
+// touches the Run's outcome. Posts of one Run are chained, and each reads the state when its turn comes, so a second
+// finish sees the id the first post recorded.
+import type { Lang } from '../core/i18n'
+import type { GhRunner } from '../core/github/gh'
+import { postsRunReport } from '../core/github/lifecycle'
+import { editIssueComment, findReportComment, postPrComment } from '../core/github/prComment'
+import { repoOfBinding } from '../core/github/remote'
+import type { RunGitHubPatch } from '../core/github/runState'
+import type { OrchState } from '../core/orchestration/state'
+import { forPullRequest, reportMarkdown, RUN_REPORT_MARKER } from '../core/runReport/render'
+
+/** A failed post or edit is tried once more after this long (R8) */
+export const RUN_REPORT_RETRY_MS = 30_000
+
+export interface RunReportPoster {
+  /** Fire and forget: queued behind any earlier post of the same Run. Never throws. */
+  finished(runId: string): void
+  /** Settles when every queued post is done (tests, dispose). */
+  idle(): Promise<void>
+}
+
+const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+
+type Outcome = { ok: true; id: number; url: string } | { gone: true } | { ok: false; message: string }
+
+export function createRunReportPoster(a: {
+  state(): OrchState
+  gh: GhRunner
+  accounts(): Promise<readonly { id: string; label: string }[]>
+  record(args: { runId: string; patch: RunGitHubPatch }): Promise<{ status: number; body: unknown }>
+  slack: { postRunReport(text: string): Promise<string> } | null
+  lang(): Lang
+  log(m: string): void
+  retryAfterMs?: number
+}): RunReportPoster {
+  const retryAfterMs = a.retryAfterMs ?? RUN_REPORT_RETRY_MS
+  const chains = new Map<string, Promise<void>>()
+  const pending = new Set<Promise<void>>()
+
+  const record = async (runId: string, patch: RunGitHubPatch): Promise<void> => {
+    try {
+      const r = await a.record({ runId, patch })
+      if (r.status !== 200) a.log(`run report: recording the comment of ${runId} answered ${r.status}`)
+    } catch (err) {
+      a.log(`run report: recording the comment of ${runId} failed: ${String(err)}`)
+    }
+  }
+
+  const comment = async (runId: string): Promise<void> => {
+    const s = a.state()
+    const run = s.runs.find((r) => r.id === runId)
+    const report = run?.report
+    if (!run || !report) return
+    const job = s.jobs.find((j) => j.id === run.jobId)
+    const binding = run.githubState?.binding
+    const kept = run.githubState?.reportComment
+    if (!job || !postsRunReport(job.github) || !binding || kept?.gone) return
+    const repo = repoOfBinding(binding)
+    if (!repo) return
+
+    let labels: string[] = []
+    try {
+      labels = (await a.accounts()).map((x) => x.label)
+    } catch (err) {
+      a.log(`run report: the accounts could not be read, so none is scrubbed by label: ${String(err)}`)
+    }
+    const secrets = [...labels, ...labels.flatMap((l) => l.match(EMAIL) ?? [])]
+    const roots = [job.cwd, run.worktree].filter((p): p is string => typeof p === 'string' && p !== '')
+    const body = reportMarkdown(forPullRequest(report, { roots, secrets }), a.lang(), { audience: 'pull-request' })
+
+    const attempt = async (retrying: boolean): Promise<Outcome> => {
+      if (kept?.id !== undefined) {
+        const r = await editIssueComment(a.gh, job.cwd, repo, kept.id, body)
+        if (r.ok) return { ok: true, id: kept.id, url: kept.url ?? binding.url }
+        return r.kind === 'not-found' ? { gone: true } : { ok: false, message: r.message }
+      }
+      if (retrying) {
+        const f = await findReportComment(a.gh, job.cwd, repo, binding.number, RUN_REPORT_MARKER(runId))
+        if (!f.ok) return { ok: false, message: f.message }
+        if (f.found) return { ok: true, ...f.found }
+      }
+      const r = await postPrComment(a.gh, job.cwd, repo, binding.number, body)
+      return r.ok ? { ok: true, id: r.id, url: r.url } : { ok: false, message: r.message }
+    }
+
+    let out = await attempt(false)
+    if ('ok' in out && !out.ok) {
+      a.log(`run report: the comment of ${runId} failed (${out.message}), trying once more`)
+      if (retryAfterMs > 0) await new Promise((res) => setTimeout(res, retryAfterMs))
+      out = await attempt(true)
+    }
+    if ('gone' in out) {
+      a.log(`run report: the comment of ${runId} was deleted on GitHub, so it is not posted again`)
+      await record(runId, { reportComment: { gone: true } })
+    } else if (out.ok) {
+      await record(runId, { reportComment: { posted: { id: out.id, url: out.url } } })
+    } else {
+      a.log(`run report: the comment of ${runId} could not be posted: ${out.message}`)
+      await record(runId, { reportComment: { failed: out.message } })
+    }
+  }
+
+  return {
+    finished(runId) {
+      const prev = chains.get(runId) ?? Promise.resolve()
+      const next: Promise<void> = prev
+        .then(() => comment(runId))
+        .catch((err) => a.log(`run report: posting the report of ${runId} failed: ${String(err)}`))
+        .finally(() => {
+          pending.delete(next)
+          if (chains.get(runId) === next) chains.delete(runId)
+        })
+      chains.set(runId, next)
+      pending.add(next)
+    },
+    async idle() {
+      while (pending.size > 0) await Promise.all([...pending])
+    }
+  }
+}

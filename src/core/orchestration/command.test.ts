@@ -8671,6 +8671,14 @@ describe('handleCommand — runs-report', () => {
     expect((await call(makeDeps(world(false)), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: null })
   })
 
+  it("runs-report carries the comment's record", async () => {
+    const s = world(true)
+    const comment = { id: 123, url: 'https://github.com/o/r/pull/7#issuecomment-123', at: NOW }
+    const withComment: OrchState = { ...s, runs: [{ ...s.runs[0], githubState: { log: [], seq: 0, reportComment: comment } }] }
+    expect((await call(makeDeps(withComment), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: REPORT, comment })
+    expect((await call(makeDeps(world(true)), 'runs-report', { id: 'r1' }, '')).body).not.toHaveProperty('comment')
+  })
+
   it('runs get carries no report', async () => {
     expect((await call(makeDeps(world(true)), 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('report')
   })

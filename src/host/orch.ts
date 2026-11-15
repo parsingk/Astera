@@ -58,6 +58,7 @@ import type { HostSlackWiring } from './slackWiring'
 import type { McpHttpSupervisor } from './mcpHttp'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
+import type { RunReportPoster } from './runReportPost'
 import type { HostEventLog } from './eventLog'
 import { pollEvents } from './eventsPoll'
 import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
@@ -606,6 +607,9 @@ export function createHostOrch(a: {
    *  the app's `understanding-unit` and the app's and MCP's `understanding-regenerate`. Absent: this Host
    *  records no Run, and both calls answer 501. */
   understanding?: Pick<HostUnderstanding, 'onRunFinished' | 'onUnitClosed' | 'regenerate' | 'isWriter'> | null
+  /** The run report's posts (runReportPost.ts, run report C2): handed every Run a commit finishes, whether or not
+   *  `understanding` is set. Absent: no report is posted. */
+  runReports?: Pick<RunReportPoster, 'finished'>
   /** The agent app workspace (agent workspace design): `app-js` below the receipt line (plan ruling
    *  P2), and the app only `workspace-list`, `workspace-stop`, `workspace-close` and `workspace-size` above
    *  it. Absent: all five answer 501. */
@@ -684,7 +688,8 @@ export function createHostOrch(a: {
    *  command. Whether to record (writer, settings) is hostUnderstanding's to judge and log. */
   const recordFinishedRuns = (prev: OrchState, next: OrchState): void => {
     const understanding = a.understanding
-    if (!understanding) return
+    const runReports = a.runReports
+    if (!understanding && !runReports) return
     const failed = (runId: string, err: unknown): void => a.log(`understanding: recording run ${runId} failed on the Host: ${String(err)}`)
     let finished: ReturnType<typeof justFinished>
     try {
@@ -694,6 +699,15 @@ export function createHostOrch(a: {
       return
     }
     for (const { runId } of finished) {
+      // The run report goes to the pull request whether or not How It Works records (run report C2).
+      if (runReports) {
+        try {
+          runReports.finished(runId)
+        } catch (err) {
+          a.log(`run report: handing run ${runId} to the poster failed on the Host: ${String(err)}`)
+        }
+      }
+      if (!understanding) continue
       try {
         const input = runRecordInputOf(next, runId)
         if (input) void understanding.onRunFinished(input).catch((err) => failed(runId, err))
