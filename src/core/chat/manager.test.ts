@@ -1561,7 +1561,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[]; elevatedDefault?: ChatManagerDeps['codexElevatedDefault']; caps?: SessionCapabilities } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[]; agentLogins?: ChatManagerDeps['agentLogins']; elevatedDefault?: ChatManagerDeps['codexElevatedDefault']; caps?: SessionCapabilities } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({ linkLook: null,
@@ -1584,6 +1584,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       ...(o.excludes ? { codexExcludes: o.excludes } : {}),
       ...(o.appKeyFile ? { appKeyFile: o.appKeyFile } : {}),
       ...(o.readOnly ? { readOnly: o.readOnly } : {}),
+      ...(o.agentLogins ? { agentLogins: o.agentLogins } : {}),
       ...(o.elevatedDefault ? { codexElevatedDefault: o.elevatedDefault } : {}),
       ...(o.caps ? { capabilities: { get: () => o.caps ?? null, refresh: async () => {} } } : {}),
       // codex 0.160.0, the floor, unless a case says otherwise
@@ -1682,6 +1683,17 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       const profile = spawned[0].args.find((a) => a.startsWith('permissions='))!
       expect(profile, platform).toContain(`"${files[platform].replace(/\\/g, '/')}"="deny"`)
       expect(profile, platform).not.toContain('host.key')
+    }
+  })
+
+  // Sandbox design §6: as a terminal session's, the profile denies the agents' login files the wiring names, on every OS
+  it("a sandboxed chat's profile denies the agents' login files", async () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const cwd = repo()
+      const { manager, spawned } = rig(platform, { agentLogins: () => [{ path: '/acc/one/auth.json', kind: 'file' }] })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(spawned[0].args.find((a) => a.startsWith('permissions='))!, platform).toContain('"/acc/one/auth.json"="deny"')
     }
   })
 

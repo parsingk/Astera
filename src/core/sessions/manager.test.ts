@@ -2039,6 +2039,28 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // Sandbox design §6: the agents' login files are denied on every OS, and the thunk is asked at each prepare and spawn,
+  // so an account registered after the manager was built is denied at its next start
+  it("denies the agents' login files the wiring names now, on every OS", async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      let logins: { path: string; kind: 'file' }[] = [{ path: '/acc/one/.credentials.json', kind: 'file' }]
+      const argv: string[][] = []
+      const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, HOME[platform], undefined, daemon(true)),
+        100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, { ...checksFor(platform), agentLogins: () => logins })
+      manager.codexVersion = versionOf('0.160.0')
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const first = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+      expect(first, platform).toContain('"/acc/one/.credentials.json"="deny"')
+      expect(first, platform).not.toContain('/acc/two/auth.json')
+      logins = [...logins, { path: '/acc/two/auth.json', kind: 'file' }]
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(codexArgs(argv[1]).find((a) => a.startsWith('permissions='))!, platform).toContain('"/acc/two/auth.json"="deny"')
+    }
+  })
+
   // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a sandboxed
   // session's profile keeps that folder read-only on every OS, wherever the session's folder is; the app key in it stays
   // denied and the Host key readable

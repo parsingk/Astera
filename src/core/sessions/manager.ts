@@ -37,7 +37,7 @@ import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
 import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import type { CodexExcludes } from '../sandbox/gitExcludes'
-import type { LinkLook } from '../sandbox/locations'
+import type { DenyEntry, LinkLook } from '../sandbox/locations'
 import type { SandboxScope } from './statusline'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
@@ -120,6 +120,11 @@ export interface SpawnChecks {
    *  profile denies on every OS: it lets a process be the app to the Host (sandbox follow-ups, item 1). Absent, nothing is
    *  denied for it. */
   appKeyFile?: string | null
+  /** The agents' login files (`.credentials.json`, `auth.json`) of every account and the default folders
+   *  (core/sandbox/locations.ts agentLoginEntries, sandbox design §6), which a sandboxed Codex session's profile denies on
+   *  every OS, each only if it is there at the start. A thunk, since accounts come and go while the process runs; the Host
+   *  gives the list its own last prepare read. Absent, none is denied. */
+  agentLogins?: () => readonly DenyEntry[]
   /** The folders a sandboxed Codex session's profile keeps read-only on every OS: Astera's profile folder and every
    *  place Astera itself writes code or an installer to and runs unsandboxed (core/sandbox/locations.ts sandboxReadOnly,
    *  Task E and its fix round 1), built by the app and Host wiring. Absent, nothing is kept read-only. */
@@ -332,6 +337,7 @@ export class SessionManager {
       ready: this.checks.codexWindowsReady,
       hostSocketDir: this.checks.hostSocketDir ?? null,
       appKeyFile: this.checks.appKeyFile ?? null,
+      agentLogins: this.checks.agentLogins?.() ?? [],
       readOnly: this.checks.readOnly ?? [],
       version: this.codexVersion,
       // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
@@ -776,6 +782,7 @@ export class SessionManager {
       hostSocketDir: this.checks.hostSocketDir ?? null,
       otherHostDirs: otherHosts,
       appKeyFile: this.checks.appKeyFile ?? null,
+      agentLogins: this.checks.agentLogins?.() ?? [],
       readOnly: this.checks.readOnly ?? [],
       log: this.checks.log,
       links: this.checks.linkLook ? { cwd, look: this.checks.linkLook } : null
@@ -791,6 +798,7 @@ export class SessionManager {
       layout,
       env,
       appKeyFile: this.checks.appKeyFile ?? null,
+      agentLogins: this.checks.agentLogins?.() ?? [],
       readOnly: this.checks.readOnly ?? [],
       links: { cwd, look: this.checks.linkLook }
     })

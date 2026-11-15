@@ -26,7 +26,7 @@ import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import { PreparedLayouts, codexSessionLinks, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
-import type { LinkLook } from '../sandbox/locations'
+import type { DenyEntry, LinkLook } from '../sandbox/locations'
 import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
@@ -97,6 +97,9 @@ export interface ChatManagerDeps {
   /** The profile's app key file, which a sandboxed Codex chat's profile denies on every OS (SpawnChecks' twin). Absent,
    *  nothing is denied for it. */
   appKeyFile?: string | null
+  /** The agents' login files a sandboxed Codex chat's profile denies on every OS, each only if it is there at the start
+   *  (SpawnChecks' twin). Absent, none is denied. */
+  agentLogins?: () => readonly DenyEntry[]
   /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is
    *  kept read-only. */
   readOnly?: readonly string[]
@@ -305,6 +308,7 @@ export class ChatSessionManager {
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
       appKeyFile: this.deps.appKeyFile ?? null,
+      agentLogins: this.deps.agentLogins?.() ?? [],
       readOnly: this.deps.readOnly ?? [],
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
@@ -424,6 +428,7 @@ export class ChatSessionManager {
             hostSocketDir: this.deps.hostSocketDir ?? null,
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
             appKeyFile: this.deps.appKeyFile ?? null,
+            agentLogins: this.deps.agentLogins?.() ?? [],
             readOnly: this.deps.readOnly ?? [],
             log: this.deps.log,
             links: this.deps.linkLook ? { cwd: opts.cwd, look: this.deps.linkLook } : null
@@ -443,6 +448,7 @@ export class ChatSessionManager {
         layout,
         env: inherited,
         appKeyFile: this.deps.appKeyFile ?? null,
+        agentLogins: this.deps.agentLogins?.() ?? [],
         readOnly: this.deps.readOnly ?? [],
         links: { cwd: opts.cwd, look: this.deps.linkLook }
       }).length > 0
