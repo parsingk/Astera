@@ -25,6 +25,11 @@ export interface ReviewGate {
   /** The Run gates, asked before a reviewer is started, with the refusal already routed through
    *  `gate`. Answers whether it refused, so `startReview` can return on `true`. */
   refuseIfRunGated(a: { taskId: string }): Promise<boolean>
+  /** An external review's failure (external reviewers design 3.4 step 8): only when `dispatchId` is still an open review
+   *  Dispatch in the state read here, removes it and blocks the Task. Keyed by the Dispatch, not the Task, so a stale
+   *  review's failure cannot remove a newer review Dispatch of the same Task. No await before the check. Answers whether
+   *  it gated. */
+  gateDispatch(a: { taskId: string; dispatchId: string; reason: string }): Promise<boolean>
 }
 
 export function createReviewGate(deps: {
@@ -64,8 +69,24 @@ export function createReviewGate(deps: {
     await deps.setState(r.state)
   }
 
+  const gateDispatch: ReviewGate['gateDispatch'] = async ({ taskId, dispatchId, reason }) => {
+    const before = deps.getState()
+    const d = before.dispatches.find((x) => x.id === dispatchId)
+    if (!d || d.taskId !== taskId || !d.review || d.outcome || d.endedAt) return false
+    await deps.setState({ ...before, dispatches: before.dispatches.filter((x) => x.id !== dispatchId) })
+    // Read again: the commit above changed the state in memory, and `before` would bring the removed Dispatch back
+    const r = blockForReview(deps.getState(), { taskId, reason }, deps.now())
+    if (!r.ok) {
+      deps.log(`could not block task=${taskId} for review: ${r.error}`)
+      return false
+    }
+    await deps.setState(r.state)
+    return true
+  }
+
   return {
     gate,
+    gateDispatch,
     /**
      * **A reviewer is a session, so it asks the same question everything else that starts one asks**
      * (ruling F63). `runGatedForTask` is that question, shared with the recovery reconciler's

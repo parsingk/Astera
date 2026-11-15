@@ -14,6 +14,9 @@
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Account } from '../../types'
+import type { ProcFactory } from '../../sessions/proc'
+import { chosenReviewer, type ReviewerSettings } from '../../settings/externalReviewers'
+import type { resolveAgentCommand } from '../../acp/spawn'
 import type { OrchServerDeps } from '../command'
 import { checkConfigIdsOf, policyOf } from '../convergence'
 import { pickReviewer } from '../reviewer'
@@ -23,8 +26,29 @@ import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
 import { promptText, weakeningFindings } from '../../github/weakening'
 import type { RunGitHubState } from '../../github/lifecycle'
 import { createReviewGate } from './reviewGate'
+import { createExternalReviews, EXTERNAL_DIFF_MAX_BYTES } from './externalReview'
 import { startedSandboxKind, workRanSandboxed } from './checkSandbox'
 import type { StartedWorker } from '../command'
+
+/** What the review by an external agent needs from the process that drives (app or Host); see externalReview.ts. */
+export interface ExternalReviewDeps {
+  /** Throws when the settings file cannot be read: that becomes a Gate. */
+  settings(): Promise<ReviewerSettings>
+  /** The driver's own command door. 200 with body 'accepted' | 'alreadyReported' is success. */
+  handle(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  spawn: ProcFactory
+  baseEnv(): NodeJS.ProcessEnv
+  platform: NodeJS.Platform
+  clientVersion: string
+  writeFile(path: string, text: string): Promise<void>
+  appendLog(path: string, line: string): void
+  treeState(cwd: string): Promise<string | null>
+  /** Tests shorten these. */
+  timeoutMs?: number
+  pollMs?: number
+  /** Tests replace command resolution. */
+  resolve?: typeof resolveAgentCommand
+}
 
 export interface ReviewContext {
   getState(): OrchState
@@ -39,7 +63,18 @@ export interface ReviewContext {
   specsDir: string
   /** The whole diff of a range in a folder, capped (`readRangeDiff`): what a lifecycle review's weakening findings are
    *  read from (GitHub lifecycle G5a). Absent: no findings. */
-  rangeDiff?(cwd: string, base: string, head: string): Promise<{ diff: string; truncated: boolean } | null>
+  rangeDiff?(cwd: string, base: string, head: string, o?: { maxBytes?: number }): Promise<{ diff: string; truncated: boolean } | null>
+  /** Absent: every review is automatic, as before external reviewers. */
+  external?: ExternalReviewDeps
+}
+
+export type ReviewStarter = ((a: { taskId: string }) => Promise<void>) & {
+  /** Dispatch ids of the external reviews running in this process. */
+  externalInFlight(): ReadonlySet<string>
+  /** Kills every external review of this process and records nothing. Synchronous. */
+  disposeExternal(): void
+  /** Resolves when no external review is in flight (tests, and the Host's bounded waits). */
+  externalIdle(): Promise<void>
 }
 
 /** The Run's CI failures of the verification configuration (G5a, design §4.6), each check and head once, from the Run's
@@ -54,7 +89,7 @@ function configurationNotesOf(gs: RunGitHubState | undefined): string[] {
 
 /** OrchServerDeps.startReview 의 본문을 돌려준다. 돌려준 함수는 흘려보내는 쪽이 종단 .catch 를
  *  붙인다(ipc.ts 의 deps.startReview, validation.ts 의 onSettled). */
-export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) => Promise<void> {
+export function createReviewStarter(c: ReviewContext): ReviewStarter {
   /** 검토를 시작하지 못했을 때 Task 를 사람에게 넘기는 자리, 그리고 그중 넘기지 **않는** 하나의
    *  거절(ruling F37). 둘 다 reviewGate.ts 에 있다 — 여기의 화살표 함수는 부를 때 c 를 읽으므로,
    *  앱이 c 의 자리에 아직 정의되지 않은 deps 를 넘겨도 순서 문제는 없다(orchTails·repairDeps 와 같은 모양). */
@@ -64,6 +99,18 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
     now: () => c.now(),
     log: (m) => c.log(m)
   })
+  const externalReviews = c.external
+    ? createExternalReviews({
+        getState: () => c.getState(),
+        setState: (next) => c.setState(next),
+        now: () => c.now(),
+        log: (m) => c.log(m),
+        assertAllowedPath: (p) => c.assertAllowedPath(p),
+        specsDir: c.specsDir,
+        external: c.external,
+        reviewGate
+      })
+    : undefined
 
   /** 검토 세션 하나를 띄운다. 실패하는 모든 경로가 Gate 로 간다 — 조용히 통과시키면 "검토됨"과
    *  "검토 못 함"이 화면에서 같아진다. **한 갈래만 예외이고 그것은 실패가 아니다**: 이미 검토가
@@ -102,6 +149,26 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       if (cwd === undefined) return void (await gate(`the Run of task ${taskId} has no folder of its own to review in`))
       const base = lifecycle ? run?.git?.base : undefined
       const diff = base !== undefined ? { base, head: run?.githubState?.lastPushedSha ?? 'HEAD' } : undefined
+      // A reviewer registered in Settings (an external agent) needs no account, so this comes before the account lookup.
+      // None chosen: the automatic review below runs as it always has.
+      if (externalReviews && c.external) {
+        let settings: ReviewerSettings
+        try {
+          settings = await c.external.settings()
+        } catch (e) {
+          return void (await gate(`could not read the reviewer setting: ${e instanceof Error ? e.message : String(e)}`))
+        }
+        const reviewer = chosenReviewer(settings)
+        if (reviewer)
+          return void (await externalReviews.start({
+            taskId,
+            reviewer,
+            cwd,
+            implProvider: impl.provider,
+            buildPrompt: (p) => externalPromptOf(c, { taskId, cwd, ...p }),
+            gate
+          }))
+      }
       const accounts = await c.accounts()
       // core.ts 의 defaultAccountIdFor 와 같은 모양 — 로그인 조회는 계정마다 파일(또는 macOS 에서는
       // Keychain)을 읽으므로 순차로 돌리면 계정 수만큼 늘어난다. 같은 일을 하는 자리가 이미 있으니
@@ -271,5 +338,54 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
     }
   }
 
-  return startReview
+  return Object.assign(startReview, {
+    externalInFlight: (): ReadonlySet<string> => externalReviews?.inFlight() ?? new Set<string>(),
+    disposeExternal: (): void => externalReviews?.dispose(),
+    externalIdle: (): Promise<void> => externalReviews?.idle() ?? Promise.resolve()
+  })
+}
+
+/** The prompt of an external review (design 3.4 step 3): the automatic review's own, read from the state as it is now, with
+ *  the verdict asked for inline and the diff embedded, because that reviewer has no astera CLI and no shell to run git in. */
+async function externalPromptOf(c: ReviewContext, a: { taskId: string; cwd: string; dispatchId: string; resultPath?: string }): Promise<string> {
+  const st = c.getState()
+  const task = st.tasks.find((t) => t.id === a.taskId)
+  if (!task) throw new Error(`task ${a.taskId} is gone`)
+  const lifecycle = isLifecycleTask(task)
+  const run = st.runs.find((r) => r.id === task.runId)
+  const brief = lifecycle ? lifecycleBriefOf(st, task) : { title: task.title, spec: task.spec }
+  // A lifecycle Task: the Run's base to the head Astera pushed. Any other Task: from where its first attempt began to where
+  // its last one ended, when both are recorded and differ.
+  let range: { base: string; head: string } | undefined
+  if (lifecycle) {
+    if (run?.git?.base !== undefined) range = { base: run.git.base, head: run.githubState?.lastPushedSha ?? 'HEAD' }
+  } else {
+    const attempts = st.dispatches.filter((d) => d.taskId === a.taskId && !d.review).sort((x, y) => x.startedAt.localeCompare(y.startedAt))
+    const base = attempts.at(0)?.git?.base
+    const head = attempts.at(-1)?.git?.head
+    if (base !== undefined && head !== undefined && base !== head) range = { base, head }
+  }
+  const diffRead = range && c.rangeDiff ? await c.rangeDiff(a.cwd, range.base, range.head, { maxBytes: EXTERNAL_DIFF_MAX_BYTES }).catch(() => null) : null
+  // What can weaken a pull request's checks is read from the whole diff, not from the part the prompt carries
+  const wholeRead = lifecycle && range && c.rangeDiff ? await c.rangeDiff(a.cwd, range.base, range.head).catch(() => null) : null
+  const findings = wholeRead ? { ...weakeningFindings(wholeRead.diff), cut: wholeRead.truncated } : undefined
+  const current = c.getState().tasks.find((t) => t.id === a.taskId) ?? task
+  return buildReviewSpecFile({
+    title: brief.title,
+    spec: brief.spec,
+    taskId: a.taskId,
+    dispatchId: a.dispatchId,
+    implReport: current.result,
+    filesModified: current.filesModified,
+    validated: checkConfigIdsOf(current).length > 0,
+    knowledge: await knowledgeIn(a.cwd, c.log),
+    checks: current.checks,
+    previousIssues: current.reviewIssues,
+    ...(lifecycle ? { lifecycle: { ...(findings ? { findings } : {}), configurationNotes: configurationNotesOf(run?.githubState) } } : {}),
+    suspiciousFiles: current.suspiciousFiles,
+    policyChanged: current.policyChanged === true,
+    ...(a.resultPath !== undefined ? { resultPath: a.resultPath } : {}),
+    report: 'inline',
+    ...(diffRead ? { diffText: { text: diffRead.diff, truncated: diffRead.truncated } } : {})
+  })
 }

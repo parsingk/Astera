@@ -172,3 +172,41 @@ describe('createReviewGate', () => {
     })
   })
 })
+
+// An external review's failure is keyed by its Dispatch: a stale review's failure must not remove a newer one
+describe('createReviewGate.gateDispatch', () => {
+  it('gates and removes the open review Dispatch it names', async () => {
+    const r = rig(reviewUnderWay())
+    expect(await r.gate.gateDispatch({ taskId: 'tsk_1', dispatchId: 'dsp_rev', reason: 'the reviewer died' })).toBe(true)
+    expect(r.state().dispatches.map((d) => d.id)).toEqual(['dsp_impl'])
+    expect(r.state().tasks[0].status).toBe('blocked')
+    expect(r.state().gates[0].question).toContain('the reviewer died')
+  })
+
+  it('does nothing and answers false when the Dispatch has ended or is not there', async () => {
+    const s = reviewUnderWay()
+    const ended = {
+      ...s,
+      dispatches: s.dispatches.map((d) => (d.id === 'dsp_rev' ? { ...d, endedAt: NOW, outcome: 'succeeded' as const } : d))
+    }
+    const r1 = rig(ended)
+    expect(await r1.gate.gateDispatch({ taskId: 'tsk_1', dispatchId: 'dsp_rev', reason: 'x' })).toBe(false)
+    expect(r1.state()).toBe(ended)
+    const r2 = rig(s)
+    expect(await r2.gate.gateDispatch({ taskId: 'tsk_1', dispatchId: 'dsp_nope', reason: 'x' })).toBe(false)
+    expect(r2.state()).toBe(s)
+  })
+
+  it('leaves a newer open review Dispatch of the same Task alone when the named one is gone', async () => {
+    const s = reviewUnderWay()
+    const newer = {
+      ...s,
+      dispatches: [...s.dispatches.filter((d) => d.id !== 'dsp_rev'), dispatch({ id: 'dsp_rev2', taskId: 'tsk_1', review: true })]
+    }
+    const r = rig(newer)
+    expect(await r.gate.gateDispatch({ taskId: 'tsk_1', dispatchId: 'dsp_rev', reason: 'stale' })).toBe(false)
+    expect(r.state()).toBe(newer)
+    expect(r.state().dispatches.some((d) => d.id === 'dsp_rev2')).toBe(true)
+    expect(r.state().tasks[0].status).toBe('reviewing')
+  })
+})

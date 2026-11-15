@@ -1,12 +1,18 @@
 // A fake ACP agent for the client's tests: `node fakeAgent.mjs <mode> [--message <text>]`.
 // One mode per behavior (see the switch in runPrompt). The final message text is `--message` when given,
-// otherwise the mode's own default, so later tasks can reuse it.
+// otherwise the mode's own default, so later tasks can reuse it. `--retry-message <text>` is the message of every turn after
+// the first in 'no-verdict-then-verdict'; `--record <file>` appends each received prompt text to <file>, one JSON string per line.
+import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const argv = process.argv.slice(2)
 const mode = argv[0] ?? 'approve'
 const mi = argv.indexOf('--message')
 const message = mi >= 0 ? argv[mi + 1] : undefined
+const ri = argv.indexOf('--retry-message')
+const retryMessage = ri >= 0 ? argv[ri + 1] : undefined
+const ci = argv.indexOf('--record')
+const recordFile = ci >= 0 ? argv[ci + 1] : undefined
 
 const send = (obj) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...obj }) + '\n')
 // `noisy` echoes numeric ids as strings, as some real agents do.
@@ -82,7 +88,7 @@ async function runPrompt(id) {
       process.exit(3)
       return
     case 'no-verdict-then-verdict':
-      return finish(id, message ?? (prompts === 1 ? 'no verdict yet' : 'verdict given'))
+      return finish(id, prompts === 1 ? (message ?? 'no verdict yet') : (retryMessage ?? message ?? 'verdict given'))
     case 'no-verdict-twice':
       return finish(id, message ?? 'no verdict yet')
     default:
@@ -113,6 +119,7 @@ function onRequest(msg) {
       if (msg.params?.modeId === 'default') modeSet = true
       return reply(msg.id, {})
     case 'session/prompt':
+      if (recordFile) appendFileSync(recordFile, JSON.stringify(msg.params?.prompt?.[0]?.text ?? '') + '\n')
       return void runPrompt(msg.id)
     default:
       return fail(msg.id, -32601, 'method not found')
