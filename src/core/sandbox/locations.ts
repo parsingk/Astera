@@ -2,7 +2,7 @@
 // list, the OS credential stores a CLI's own sandbox does not close by itself, and the agents' own login files (Claude
 // Code's `.credentials.json`, Codex's `auth.json`) of every account and of the two default folders. All paths come out
 // absolute with forward slashes, the one form both CLIs' settings and the Codex profile take on every OS.
-import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync } from 'node:fs'
 import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -52,6 +52,47 @@ export function agentLoginEntries(o: { homeDir: string; accounts: readonly { pro
     ...o.accounts.map((a) => `${slashed(a.configDir)}/${AGENT_LOGIN_FILE[a.provider ?? 'claude']}`)
   ]
   return [...new Set(paths)].map((path) => ({ path, kind: 'file' as const }))
+}
+
+/** What agentAccountFolders reads of a folder: its entries' names and whether each is a folder. `readdirSync` with
+ *  `withFileTypes` is one. */
+type FolderList = (dir: string) => readonly { name: string; isDirectory(): boolean }[]
+
+/** The folders account detection looks at, for both providers, found on the disk now (sandbox design §6): `~/.claude`,
+ *  every sub-folder of `~/.claude-accounts`, every `~/.claude-*` folder, and the same three for `.codex`. It mirrors
+ *  `collectCandidateDirs` in accounts/detect.ts and its Codex twin in accounts/detectCodex.ts, minus their config marker
+ *  test (a folder with no login file is dropped by the start's presence rule). A login file in a folder nobody
+ *  registered (one made by `claude` or `codex` run by hand with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set) was readable to
+ *  a sandboxed session (measured on Windows, 2026-11-16), and the registry does not know it. The default folders are
+ *  always there; a folder that cannot be listed gives none of its children, never an exception.
+ *
+ *  Synchronous on purpose: the spawn that asks is synchronous, so it cannot await a listing, and it already looks at
+ *  paths under the home folder this way (`LinkLook`). The list must also be the one at THIS start: a list kept from an
+ *  earlier read would miss a folder made since. `list` is a test seam for the directory read. */
+export function agentAccountFolders(
+  homeDir: string,
+  list: FolderList = (dir) => readdirSync(dir, { withFileTypes: true })
+): { provider: 'claude' | 'codex'; configDir: string }[] {
+  const home = slashed(homeDir)
+  const entries = (dir: string): { name: string; isDirectory(): boolean }[] => {
+    try {
+      return [...list(dir)]
+    } catch {
+      return []
+    }
+  }
+  const top = entries(home)
+  return (['claude', 'codex'] as const).flatMap((provider) => {
+    const base = `.${provider}`
+    const folders = [`${home}/${base}`]
+    for (const entry of top) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === `${base}-accounts`) {
+        for (const sub of entries(`${home}/${entry.name}`)) if (sub.isDirectory()) folders.push(`${home}/${entry.name}/${sub.name}`)
+      } else if (entry.name.startsWith(`${base}-`)) folders.push(`${home}/${entry.name}`)
+    }
+    return folders.map((configDir) => ({ provider, configDir }))
+  })
 }
 
 /** The app's key (`<profile>/host/app.key`, core/host/hostKey.ts appKeyPath): what lets a process be the app to the

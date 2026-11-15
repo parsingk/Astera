@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { AGENT_LOGIN_FILE, agentLoginEntries, appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
+import { AGENT_LOGIN_FILE, agentAccountFolders, agentLoginEntries, appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -487,5 +487,61 @@ describe('agentLoginEntries', () => {
     ])
     expect(entries.every((e) => e.kind === 'file')).toBe(true)
     expect(AGENT_LOGIN_FILE).toEqual({ claude: '.credentials.json', codex: 'auth.json' })
+  })
+})
+
+describe('agentAccountFolders', () => {
+  const made: string[] = []
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const home = (): string => {
+    const h = mkdtempSync(path.join(os.tmpdir(), 'astera-acct-folders-'))
+    made.push(h)
+    return h
+  }
+  const slash = (p: string): string => p.split(path.sep).join('/')
+
+  it('lists the default folders, the accounts-root sub-folders and the dash siblings, for both providers', () => {
+    const h = home()
+    for (const d of ['.claude-accounts/a', '.claude-accounts/b', '.claude-x', '.codex-accounts/c', '.codex-y', 'other', '.claude-accounts-not']) mkdirSync(path.join(h, d), { recursive: true })
+    writeFileSync(path.join(h, '.claude-file'), 'not a folder')
+    writeFileSync(path.join(h, '.claude-accounts', 'loose.txt'), 'not a folder')
+    const found = agentAccountFolders(h).map((f) => `${f.provider}:${slash(path.relative(h, f.configDir))}`)
+    expect(found.filter((f) => f.startsWith('claude:')).sort()).toEqual(['claude:.claude', 'claude:.claude-accounts-not', 'claude:.claude-accounts/a', 'claude:.claude-accounts/b', 'claude:.claude-x'].sort())
+    expect(found.filter((f) => f.startsWith('codex:')).sort()).toEqual(['codex:.codex', 'codex:.codex-accounts/c', 'codex:.codex-y'].sort())
+  })
+
+  it('gives only the default folders for a home that cannot be listed, and never throws', () => {
+    const missing = path.join(os.tmpdir(), 'astera-no-such-home-xyz')
+    expect(agentAccountFolders(missing).map((f) => f.provider)).toEqual(['claude', 'codex'])
+    const throwing = (): never => {
+      throw new Error('EACCES')
+    }
+    expect(agentAccountFolders('/h', throwing)).toEqual([
+      { provider: 'claude', configDir: '/h/.claude' },
+      { provider: 'codex', configDir: '/h/.codex' }
+    ])
+  })
+})
+
+// The wirings' thunks (main/core.ts, host/spawner.ts) hand agentLoginEntries the registered accounts plus the folders on
+// the disk now, so a login file in a folder nobody registered is named too
+describe('agentLoginEntries over registered accounts and the folders found on the disk', () => {
+  it("names an unregistered folder's login file once, beside the registered one", () => {
+    const h = mkdtempSync(path.join(os.tmpdir(), 'astera-unreg-'))
+    try {
+      mkdirSync(path.join(h, '.claude-accounts', 'reg'), { recursive: true })
+      mkdirSync(path.join(h, '.claude-accounts', 'unreg'), { recursive: true })
+      mkdirSync(path.join(h, '.codex-side'), { recursive: true })
+      const reg = path.join(h, '.claude-accounts', 'reg').split(path.sep).join('/')
+      const paths = agentLoginEntries({ homeDir: h, accounts: [{ configDir: reg }, ...agentAccountFolders(h)] }).map((e) => e.path)
+      const at = (p: string) => `${h.split(path.sep).join('/')}/${p}`
+      expect(paths).toContain(at('.claude-accounts/unreg/.credentials.json'))
+      expect(paths).toContain(at('.codex-side/auth.json'))
+      expect(paths.filter((p) => p === at('.claude-accounts/reg/.credentials.json'))).toHaveLength(1)
+    } finally {
+      rmSync(h, { recursive: true, force: true })
+    }
   })
 })
