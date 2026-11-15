@@ -104,7 +104,12 @@ describe('args line', () => {
     ['  acp   --verbose ', ['acp', '--verbose']],
     ['--dir "C:\\My Projects\\x" --flag', ['--dir', 'C:\\My Projects\\x', '--flag']],
     ['--name="a b"', ['--name=a b']],
-    ['a "" b', ['a', '', 'b']]
+    ['a "" b', ['a', '', 'b']],
+    // A backslash is always a literal character, also right before a closing quote
+    ['--root "C:\\Program Files\\x\\" --acp', ['--root', 'C:\\Program Files\\x\\', '--acp']],
+    ['--root="C:\\a b\\"', ['--root=C:\\a b\\']],
+    // Two quotes in a row inside a quoted section are one quote
+    ['"say ""hi""" x', ['say "hi"', 'x']]
   ])('parses %j', (line, args) => {
     expect(argsOfLine(line)).toEqual(args)
   })
@@ -115,13 +120,25 @@ describe('args line', () => {
     [['--dir', 'C:\\My Projects\\x', '--flag']],
     [['a b', 'c', '']],
     [['--name=a b']],
-    [['say "hi"', 'x']]
+    [['say "hi"', 'x']],
+    [['C:\\Program Files\\x\\']],
+    [['a b\\', 'c']],
+    [['']],
+    [['--k=v w']],
+    [['\\\\server\\share\\dir with space\\']],
+    [['plain', '--acp']],
+    [['"']],
+    [['a\\"b']]
   ])('round trips %j', (args) => {
     expect(argsOfLine(lineOfArgs(args))).toEqual(args)
   })
 
   it('writes an arg with a space in quotes', () => {
     expect(lineOfArgs(['a b', 'c'])).toBe('"a b" c')
+  })
+
+  it('leaves a plain arg and a backslash path without spaces unquoted', () => {
+    expect(lineOfArgs(['--acp', 'C:\\tools\\agent.cmd'])).toBe('--acp C:\\tools\\agent.cmd')
   })
 })
 

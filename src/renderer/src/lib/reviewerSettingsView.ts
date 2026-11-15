@@ -59,8 +59,10 @@ export function withReviewerEdited(s: ReviewerSettings, r: ExternalReviewer): Re
   return { ...s, reviewers: s.reviewers.map((x) => (x.id === r.id ? { id: r.id, ...c } : x)) }
 }
 
-/** The args line the person edits: spaces split, "double quotes" keep a part whole (and may begin in the middle of a
- *  part, as in --name="a b"), a backslash before a quote makes the quote itself. An empty pair of quotes is an empty arg. */
+/** The args line the person edits. Whitespace separates args. A double-quoted section groups (its quotes are removed)
+ *  and may sit anywhere in an arg, as in --root="C:\a b\". Inside a quoted section two double quotes in a row are
+ *  one literal double quote. A backslash is always itself and escapes nothing, so a Windows path may end in one before
+ *  its closing quote. A quoted section alone is an empty arg; an unterminated quote runs to the end of the line. */
 export function argsOfLine(line: string): string[] {
   const args: string[] = []
   let cur = ''
@@ -68,12 +70,13 @@ export function argsOfLine(line: string): string[] {
   let quoted = false
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]
-    if (ch === '\\' && line[i + 1] === '"') {
-      cur += '"'
-      has = true
-      i++
-    } else if (ch === '"') {
-      quoted = !quoted
+    if (ch === '"') {
+      if (quoted && line[i + 1] === '"') {
+        cur += '"'
+        i++
+      } else {
+        quoted = !quoted
+      }
       has = true
     } else if (!quoted && /\s/.test(ch)) {
       if (has) args.push(cur)
@@ -88,14 +91,11 @@ export function argsOfLine(line: string): string[] {
   return args
 }
 
-/** The inverse of argsOfLine: an arg with a space, a quote or nothing in it is written in quotes. (An arg that ends in
- *  a backslash and holds a space is the one shape that does not survive: its backslash would meet the closing quote.) */
+/** The inverse of argsOfLine: an arg that is empty or holds whitespace or a double quote is wrapped in double quotes, each
+ *  inner double quote doubled; any other arg is written as it is. Every string without a line break round trips. */
 export function lineOfArgs(args: string[]): string {
   return args
-    .map((a) => {
-      const escaped = a.replace(/"/g, '\\"')
-      return a === '' || /\s/.test(a) ? `"${escaped}"` : escaped
-    })
+    .map((a) => (a === '' || /[\s"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
     .join(' ')
 }
 
