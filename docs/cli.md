@@ -370,6 +370,14 @@ run panel when Astera opens, and stopping it there stops it in the Host. A Host 
 replaced while a check runs does not count that check as failed. The next Host starts it again in a
 `--convergence` Job, and otherwise opens a question about it.
 
+**A review can be done by an external reviewer.** When the person chose one in Settings (a third-party ACP agent such as
+Gemini CLI), every `--review` goes to it instead of the other provider's model, and the Host runs it too, with Astera closed.
+It never falls back to the other provider: a review it cannot finish opens a question. When the Host runs Jobs (the normal
+case), closing Astera does not touch a running external review. A review in flight is lost when the process that runs it
+goes away (the Host restarting or being replaced, or Astera quitting where Astera itself runs Jobs): a `--convergence` Job
+runs it again, and otherwise a question is opened. `worker-read` on such a review answers that it has no terminal output
+and that its transcript is in the `review-logs` folder of the profile.
+
 **A plugin's completion check that could not be made opens a question.** A `plugin:<id>` check is asked
 of the plugin rather than run in a terminal. A failure goes to the repair loop with the plugin's findings,
 as a run configuration's does. A check the plugin could not make (`error`: a service down, a token
@@ -938,6 +946,9 @@ before the update. The Host reads them in every mode from what Claude and Codex 
 transcript and its sub-agents' files, a chat's stream, a Codex rollout) and keeps them in `token-totals.json` in the
 profile until the run is deleted. Each is left out when the Host read none, such as for a session the app ran without a
 Host. MCP's `get_task` carries the Task's own `tokens`. What they cost in money is not shown.
+
+MCP's `get_task` lists the Task's attempts. The attempt of a review by an external reviewer carries `externalReviewer`
+with its `id` and `name`; its `provider` is the implementer's and its `accountId` is empty.
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such

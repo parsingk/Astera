@@ -223,3 +223,12 @@ describe('a check that could not be made', () => {
     })
   })
 })
+
+describe('nodeMetaOf: an external review', () => {
+  it('names the reviewer in place of the provider', () => {
+    expect(nodeMetaOf(task({ provider: 'claude', externalReviewer: { id: 'ext_0a0b0c0d', name: 'Gemini CLI' } }))).toEqual({ kind: 'external-reviewer', name: 'Gemini CLI' })
+  })
+  it('names the provider when there is no reviewer', () => {
+    expect(nodeMetaOf(task({ provider: 'claude' }))).toEqual({ kind: 'provider', provider: 'claude' })
+  })
+})

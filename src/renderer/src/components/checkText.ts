@@ -7,6 +7,7 @@ import { formatRunDuration } from '../../../core/run/duration'
 import { PLUGIN_CHECK_PREFIX } from '../../../core/orchestration/pluginChecks'
 import type { CheckPluginRow } from '../lib/orchDoor'
 import { statusLabel } from './pluginsText'
+import { reviewerChipName } from '../lib/reviewerSettingsView'
 
 export type Translate = (key: MessageKey, params?: MessageParams) => string
 
@@ -103,6 +104,8 @@ export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
       return t(m.unavailable ? 'jobs.convergence.node.unavailable' : 'jobs.convergence.node.failed', { name: m.name })
     case 'provider':
       return m.provider
+    case 'external-reviewer':
+      return reviewerChipName(m.name)
     case 'none':
       return undefined
     default: {

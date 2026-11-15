@@ -1284,3 +1284,23 @@ describe('snapshotFor cost', () => {
     expect(r0.tasks.find((t) => t.id === 't0_1')?.gate?.id).toBe('g0')
   })
 })
+
+describe('snapshotFor: an external review is the open Dispatch', () => {
+  it('keeps provider set (the UI reads it as a Dispatch being open) and adds the reviewer', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'reviewing')]),
+      dispatches: [{ ...dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z'), review: true, accountId: '', externalReviewer: { id: 'ext_0a0b0c0d', name: 'Gemini CLI' } }]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+    expect(t.provider).toBe('claude')
+    expect(t.externalReviewer).toEqual({ id: 'ext_0a0b0c0d', name: 'Gemini CLI' })
+  })
+  it('has no reviewer on an ordinary open Dispatch', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z')]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+    expect('externalReviewer' in t).toBe(false)
+  })
+})

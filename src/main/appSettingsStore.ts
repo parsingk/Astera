@@ -23,6 +23,7 @@ import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
 import { mcpAccessOf } from '../core/settings/mcpAccess'
 import { mcpSessionsOf } from '../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../core/settings/mcpGithubWrite'
+import { EMPTY_REVIEWER_SETTINGS, reviewerSettingsOf, type ReviewerSettings } from '../core/settings/externalReviewers'
 import { githubLifecycleDefaultsOf, type GitHubLifecycleDefaults } from '../core/github/lifecycleDefaults'
 import { GITHUB_LIFECYCLE_DEFAULTS } from '../core/github/lifecycle'
 import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
@@ -132,6 +133,9 @@ export class AppSettingsStore {
   private githubLifecycle: GitHubLifecycleDefaults = { ...GITHUB_LIFECYCLE_DEFAULTS }
   /** MCP over HTTP (MCP HTTP design §2). Off by default; written only while a field differs from its default. */
   private mcpHttp: McpHttpSettings = mcpHttpOf(undefined)
+  /** The registered external reviewers and the chosen one (`externalReviewers`, `reviewBy`). Empty means the built-in
+   *  review; written only while it is not empty. The Host reads the file (readReviewerSettings). */
+  private reviewerSettings: ReviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
   /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
@@ -213,6 +217,8 @@ export class AppSettingsStore {
       this.githubLifecycle = githubLifecycleDefaultsOf((parsed as { githubLifecycle?: unknown }).githubLifecycle)
       // The same function the Host's readMcpHttp uses, so the two cannot differ.
       this.mcpHttp = mcpHttpOf((parsed as { mcpHttp?: unknown }).mcpHttp)
+      // The same function the Host's readReviewerSettings uses, so the two cannot differ.
+      this.reviewerSettings = reviewerSettingsOf(parsed)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -265,6 +271,7 @@ export class AppSettingsStore {
         this.mcpGithubWrite = false
         this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS }
         this.mcpHttp = mcpHttpOf(undefined)
+        this.reviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         this.defaultSessionKind = 'terminal'
@@ -303,6 +310,8 @@ export class AppSettingsStore {
       // The narrower side too (G7a final review M4): the file may have said "do not rerun", and the Host reads this one
       this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false }
       this.mcpHttp = mcpHttpOf(undefined)
+      // The narrower side too: no external reviewer, so every review stays the built-in one.
+      this.reviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.defaultSessionKind = 'terminal'
@@ -427,6 +436,18 @@ export class AppSettingsStore {
   async setAgentPermissionMode(mode: AgentPermissionMode): Promise<void> {
     this.agentPermissionMode = mode
     await this.persist()
+  }
+
+  getReviewerSettings(): ReviewerSettings {
+    return { reviewers: this.reviewerSettings.reviewers.map((r) => ({ ...r, args: [...r.args] })), reviewBy: this.reviewerSettings.reviewBy }
+  }
+
+  /** The Host reads the file when a Task is reviewed (readReviewerSettings), so saving it is the whole effect.
+   *  Narrowed here too, and the narrowed value is returned: the file holds only what the Host would read back. */
+  async setReviewerSettings(v: ReviewerSettings): Promise<ReviewerSettings> {
+    this.reviewerSettings = reviewerSettingsOf({ externalReviewers: v?.reviewers, reviewBy: v?.reviewBy })
+    await this.persist()
+    return this.getReviewerSettings()
   }
 
   getMcpAccess(): McpAccess {
@@ -620,6 +641,8 @@ export class AppSettingsStore {
       mcpGithubWrite?: true
       githubLifecycle?: GitHubLifecycleDefaults
       mcpHttp?: McpHttpSettings
+      externalReviewers?: ReviewerSettings['reviewers']
+      reviewBy?: string
       terminalFont?: TerminalFont
       theme?: ThemeId
       defaultSessionKind?: SessionKind
@@ -660,6 +683,8 @@ export class AppSettingsStore {
     if (JSON.stringify(this.githubLifecycle) !== JSON.stringify(githubLifecycleDefaultsOf(undefined))) data.githubLifecycle = { ...this.githubLifecycle }
     const h = this.mcpHttp
     if (h.enabled || h.lan || h.port !== MCP_HTTP_DEFAULT_PORT || h.hosts.length > 0) data.mcpHttp = h
+    if (this.reviewerSettings.reviewers.length > 0) data.externalReviewers = this.reviewerSettings.reviewers
+    if (this.reviewerSettings.reviewBy !== null) data.reviewBy = this.reviewerSettings.reviewBy
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)

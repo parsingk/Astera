@@ -202,6 +202,7 @@ function jobTaskOf(
       : {}),
     openGates: open.length,
     ...(running ? { provider: running.provider, startedAt: running.startedAt } : {}),
+    ...(running?.externalReviewer ? { externalReviewer: running.externalReviewer } : {}),
     ...(openEntry
       ? {
           waiting: {

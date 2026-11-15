@@ -1,4 +1,6 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type { ReviewerSettings } from './settings/externalReviewers'
+import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
@@ -562,6 +564,9 @@ export interface JobTask {
    *  does not count — the sidebar's rows are the running ones, and this is the field that badge draws
    *  from. */
   provider?: Provider
+  /** The open Dispatch is a review by an external reviewer. `provider` stays set (it is the implementer's, and the UI reads
+   *  it as "a Dispatch is open"), so a surface that draws the provider draws this name instead. */
+  externalReviewer?: { id: string; name: string }
   /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
   startedAt?: string
   /** 지금 멈춰 있으면 그 계정과 정지 사유, 그리고 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에
@@ -638,8 +643,11 @@ export interface JobEvent {
   /** 펼쳤을 때 보이는 본문. 없을 수 있다 */
   body?: string
   outcome?: Outcome
-  /** kind === 'dispatch-started' 일 때만 */
+  /** kind === 'dispatch-started' 일 때만. 외부 검토자의 검토 Dispatch 에는 없다 — 그 Dispatch 의 provider 는
+   *  구현자의 것이라 이름이 아니다(externalReviewer) */
   provider?: Provider
+  /** 외부 검토자가 한 검토의 dispatch-started 일 때만 — provider 자리에 그 이름이 선다 */
+  externalReviewer?: { id: string; name: string }
   /** 재시도로 뜬 워커인가 (Dispatch.retryOf) */
   retry?: boolean
   /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
@@ -1518,6 +1526,11 @@ export interface CoreApi {
     // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
     getAgentPermissionMode(): Promise<AgentPermissionMode>
     setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    // External reviewers registered and the one chosen (spec 3.1). The set returns the narrowed value it stored.
+    getReviewerSettings(): Promise<ReviewerSettings>
+    setReviewerSettings(next: ReviewerSettings): Promise<ReviewerSettings>
+    // Initialize and session/new against a registered reviewer's command, in a temporary folder (spec section 4, Test).
+    testExternalReviewer(reviewer: { command: string; args: string[] }): Promise<ReviewerProbe>
     // What an MCP client may do through `astera mcp serve`. See McpAccess.
     getMcpAccess(): Promise<McpAccess>
     setMcpAccess(v: McpAccess): Promise<void>

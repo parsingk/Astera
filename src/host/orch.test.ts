@@ -3524,7 +3524,7 @@ describe('Host-local spawn (S2)', () => {
   const noChecks = (): HostChecks => ({
     startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
     repairTargetFor: vi.fn(() => null), repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'en' as const),
-    stopValidation: vi.fn(() => false), stopForeignValidations: vi.fn(async () => 0), checking: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'en' as const),
+    stopValidation: vi.fn(() => false), stopForeignValidations: vi.fn(async () => 0), closeOrphanedExternalReviews: vi.fn(async () => {}), dispose: vi.fn(), checking: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'en' as const),
     accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false), settleHandedOff: vi.fn(async () => {})
   })
   /** R10's fixture: a --validate Task whose Host-spawned worker has just reported, with no app. */
@@ -4014,6 +4014,15 @@ describe('the Host handles exits (S2)', () => {
     expect(orch.orphanedSessions(isAlive)).toEqual([])
     await orch.ready()
     expect(orch.orphanedSessions(isAlive)).toEqual(['ses_dead'])
+  })
+
+  it('orphanedSessions leaves an external review acp: id out', async () => {
+    const { state } = withDispatches(['ses_dead', 'acp:1a2b3c4d'])
+    await write(state)
+    // acp: is "alive" for the load cleanup, so the Dispatch stays open and only orphanedSessions can leave it out
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_dead', 'acp:1a2b3c4d']) })
+    await orch.ready()
+    expect(orch.orphanedSessions(() => false)).toEqual(['ses_dead'])
   })
 
   it('orphanedSessions reads the state an app pushed, with no load of its own', async () => {

@@ -117,3 +117,16 @@ describe('taskDetailOf', () => {
     expect('openQuestionId' in taskDetailOf(stateWith([task('t1')]), 't1')!).toBe(false)
   })
 })
+
+describe('taskDetailOf: an external review attempt', () => {
+  it('adds the reviewer and keeps the existing fields', () => {
+    const s = stateWith(
+      [task('t1')],
+      [dispatch('d1', 't1', { review: true, accountId: '', externalReviewer: { id: 'ext_0a0b0c0d', name: 'Gemini CLI' } })]
+    )
+    expect(taskDetailOf(s, 't1')!.attempts[0]).toMatchObject({ provider: 'codex', accountId: '', review: true, externalReviewer: { id: 'ext_0a0b0c0d', name: 'Gemini CLI' } })
+  })
+  it('has no externalReviewer key on an ordinary attempt', () => {
+    expect('externalReviewer' in taskDetailOf(stateWith([task('t1')], [dispatch('d1', 't1')]), 't1')!.attempts[0]).toBe(false)
+  })
+})

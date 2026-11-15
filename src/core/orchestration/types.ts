@@ -137,6 +137,12 @@ export const isGitHubGateKind = (k: string | null | undefined): k is GitHubGateK
 export const placeholderSessionId = (): string => `pending:${newId('p').slice(2, 10)}`
 export const isPlaceholderSessionId = (id: string): boolean => id.startsWith('pending:')
 
+/** An external review (a third-party agent over ACP) has no terminal session. Its Dispatch carries a made-up
+ *  `acp:<8 hex>` sessionId so the one-open-Dispatch-per-session rule still holds. Not a `pending:` placeholder:
+ *  `isPlaceholderSessionId` keeps meaning only that. */
+export const EXTERNAL_REVIEW_SESSION_PREFIX = 'acp:'
+export const isExternalReviewSessionId = (id: string): boolean => id.startsWith(EXTERNAL_REVIEW_SESSION_PREFIX)
+
 /** A repository this app has been used in. **The project is a registered thing now, not a path the
  *  app infers every time** (docs/2026-09-21-job-run-split-and-projects-design.md §6): the public CLI
  *  has to name one in a way that survives being typed into a script, and a path is not that.
@@ -611,6 +617,12 @@ export interface Dispatch {
    *  names (GitHub lifecycle G5b). Merge-ready needs it to be the PR's head; the Host records `git.head` only after the
    *  Dispatch ended, too late for the verdict. */
   reviewHead?: string
+  /** Who really reviewed, when this review Dispatch was an external reviewer's (a third-party agent over ACP) and
+   *  not the built-in Claude/Codex cross-review: a snapshot of the registered reviewer's id and name when it opened,
+   *  so a later rename or removal does not change the record. Such a Dispatch has no terminal session: `sessionId`
+   *  is `acp:<8 hex>`, `provider` is the implementer's and `accountId` is `''`, and nothing shows them. Absent for
+   *  every other Dispatch. */
+  externalReviewer?: { id: string; name: string }
   /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
    *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
   repair?: RepairReason

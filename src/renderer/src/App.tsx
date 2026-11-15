@@ -65,6 +65,7 @@ import { forgetDrafts } from './components/conversation/drafts'
 import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
 import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resumeRun, type ActionUi } from './lib/jobActions'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
+import { ReviewerSettings } from './components/ReviewerSettings'
 import { GithubSettings } from './components/GithubSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
@@ -5228,6 +5229,8 @@ export default function App(): React.JSX.Element {
                         재시작을 건너 살아남게 하는 것이라 위 칸과 한 갈래이고, 재개 전략은 그것이
                         켜질 때 함께 움직인다(spec §3). 그 둘이 한 컴포넌트인 이유는 그 파일에 있다. */}
                     <ResumeStrategySettings />
+                    {/* 검토자 — 검토를 요청한 Task 를 누가 검토하는가. 자동(상대 쪽 모델) 또는 등록한 외부 검토자 */}
+                    <ReviewerSettings />
                     {/* Agent browser — same settings-row/settings-hint/label shape and the same
                         optimistic-update-then-revert as the two above. Off by default: it installs a
                         skill into every account and starts the local server. */}

@@ -104,7 +104,9 @@ export function forPullRequest(report: RunReport, ctx: ScrubContext): RunReport 
       ...task,
       title: s(task.title),
       checks: task.checks.map((c) => ({ ...c, name: s(c.name) })),
-      ...(task.review ? { review: { ...task.review, blocking: task.review.blocking.map(s) } } : {}),
+      ...(task.review
+        ? { review: { ...task.review, blocking: task.review.blocking.map(s), ...(task.review.reviewedBy ? { reviewedBy: task.review.reviewedBy.map(s) } : {}) } }
+        : {}),
       ...(task.override ? { override: { ...task.override, reason: s(task.override.reason) } } : {})
     })),
     interventions: { ...report.interventions, forced: report.interventions.forced.map((f) => ({ ...f, task: s(f.task) })) },
@@ -205,6 +207,7 @@ export function reviewLine(rv: RunReportReview, lang: Lang): string {
   const parts = [t(lang, rv.passed ? 'runReport.review.passed' : 'runReport.review.notPassed', { rounds: rv.rounds })]
   if (rv.blocking.length > 0) parts.push(t(lang, 'runReport.review.blocking', { titles: rv.blocking.map(oneLine).join(SEP[lang]) }))
   if (rv.fileToolsOnly) parts.push(t(lang, 'runReport.review.fileToolsOnly'))
+  if (rv.reviewedBy && rv.reviewedBy.length > 0) parts.push(t(lang, 'runReport.review.by', { names: rv.reviewedBy.map(oneLine).join(SEP[lang]) }))
   return parts.join(' ')
 }
 

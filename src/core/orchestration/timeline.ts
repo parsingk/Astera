@@ -108,8 +108,9 @@ function collect(
       sourceId: d.id,
       taskId: d.taskId,
       taskTitle: titleOf.get(d.taskId),
-      summary: d.provider,
-      provider: d.provider,
+      // 외부 검토자의 검토는 provider 가 구현자의 것이라 이름 대신 검토자를 싣는다
+      summary: d.externalReviewer ? d.externalReviewer.name : d.provider,
+      ...(d.externalReviewer ? { externalReviewer: d.externalReviewer } : { provider: d.provider }),
       ...(d.retryOf ? { retry: true } : {}),
       ...(d.review ? { review: true } : {}),
       // 설계 §3(V2). `review` 와 나란히, 같은 이유로 — 자동 수정이 도는 Task 는 구현 하나에 수리

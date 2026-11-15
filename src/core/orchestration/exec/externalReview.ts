@@ -1,0 +1,442 @@
+// The review of a Task by an external agent spoken to over ACP (external reviewers design 3.4 to 3.6). Built by
+// createReviewStarter for the app and for the Host alike: everything that differs between the two processes arrives
+// through ReviewContext, as it does for the automatic review.
+//
+// Rules that hold in every path below, because a review here is a detached run with a timer, a poll, an exit event and a
+// dispose that can interleave:
+// - `setState` is never given a state read before an await: the state is read again right before each commit.
+// - Every end that is ours (verdict reached, timeout, violation, dispose, a closed Dispatch) calls `stop` first, so the
+//   exit that follows is a consequence and never a cause: the ACP client reads its own close() as intentional.
+// - A failure is a Gate keyed by this review's Dispatch (`gateDispatch`): it acts only while that Dispatch is still open.
+// - A Dispatch closed under the run, and a dispose, end it silently: the process is killed and nothing is recorded.
+// - A Task moved out of `reviewing` ends it too, and the run closes its own Dispatch as unproven (`closeMoved`) and nothing
+//   else: no Gate, no settle, the Task untouched. Left open, that Dispatch would refuse the Task's next start.
+import path from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { AcpFailure, killOnce, openAcpSession, type AcpSession } from '../../acp/client'
+import { agentChildEnv, resolveAgentCommand } from '../../acp/spawn'
+import { isSamePath } from '../../files/tree'
+import type { ProcLike } from '../../sessions/proc'
+import type { ExternalReviewer } from '../../settings/externalReviewers'
+import { policyOf } from '../convergence'
+import { endedUnproven, openReviewDispatch, workSandboxed, type OrchState } from '../state'
+import { EXTERNAL_REVIEW_SESSION_PREFIX, type Dispatch } from '../types'
+import type { Provider } from '../../providers/meta'
+import { specFileName } from './coordinator'
+import { workRanSandboxed } from './checkSandbox'
+import { parseExternalVerdict, VERDICT_RETRY_PROMPT, type ExternalVerdict } from './externalVerdict'
+import type { ReviewGate } from './reviewGate'
+import type { ExternalReviewDeps } from './review'
+
+/** The whole budget of one external review, from the spawn. */
+export const EXTERNAL_REVIEW_TIMEOUT_MS = 20 * 60_000
+/** How often a running review checks that its Dispatch is still open. */
+export const EXTERNAL_OPEN_POLL_MS = 2_000
+/** The diff embedded in the reviewer's prompt is cut here. */
+export const EXTERNAL_DIFF_MAX_BYTES = 150_000
+const STDERR_IN_REASON = 600
+/** What the agent wrote (a sign-in message, a protocol message, a tool call's title, a stop reason) enters a Gate reason
+ *  as one line cut here (final fix wave C2). */
+const AGENT_TEXT_IN_REASON = 300
+/** One turn's message goes into the transcript cut here. */
+export const TRANSCRIPT_MESSAGE_MAX = 20_000
+
+export interface ExternalReviewStart {
+  taskId: string
+  reviewer: ExternalReviewer
+  cwd: string
+  /** The implementer's provider: recorded on the Dispatch only because the type requires one. */
+  implProvider: Provider
+  /** The prompt, once the Dispatch (and so its id) exists. `resultPath` is given in a convergence Run only. */
+  buildPrompt(a: { dispatchId: string; resultPath?: string }): Promise<string>
+  /** A failure before any review Dispatch exists (reviewGate.gate). */
+  gate(reason: string): Promise<void>
+}
+
+export interface ExternalReviews {
+  start(a: ExternalReviewStart): Promise<void>
+  inFlight(): ReadonlySet<string>
+  dispose(): void
+  /** Whether `dispose` has been called: a disposed driver starts no more external reviews. */
+  disposed(): boolean
+  idle(): Promise<void>
+}
+
+interface Running {
+  /** Resolves `done`; called once the review is out of `running`. */
+  release(): void
+  /** Set by an end that records nothing (dispose, a closed Dispatch): every later commit is dropped. */
+  silent: boolean
+  stop(): void
+  done: Promise<void>
+}
+
+/** Thrown at a checkpoint once the run has been stopped. */
+const STOPPED = new Error('stopped')
+
+const isOpenIn = (s: OrchState, dispatchId: string): boolean => {
+  const d = s.dispatches.find((x) => x.id === dispatchId)
+  return d !== undefined && !d.outcome && !d.endedAt
+}
+
+const firstLine = (text: string): string => text.split(/\r?\n/, 1)[0]
+
+/** At most this many findings are written into a settle's body. */
+const BODY_ISSUES_MAX = 20
+
+const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+/** Text the agent controls, as a Gate reason may carry it. */
+const agentWords = (text: string): string => oneLine(text).slice(0, AGENT_TEXT_IN_REASON)
+
+/** The folder of the review transcripts: beside the specs folder, not in it, since the spec sweep removes every file of an
+ *  ended Dispatch there within one Host tick and the transcript is read after the review ends (final fix wave C1). */
+export const reviewLogsDir = (specsDir: string): string => path.join(path.dirname(specsDir), 'review-logs')
+
+/** The summary, then one line per finding: `- [severity] title (file:line): description`, each part only when present. */
+function bodyWithIssues(summary: string, issues: ExternalVerdict['issues']): string {
+  if (issues.length === 0) return summary
+  const lines = issues.slice(0, BODY_ISSUES_MAX).map((i) => {
+    const where = i.file ? ` (${i.file}${i.line !== undefined ? `:${i.line}` : ''})` : ''
+    const what = i.description ? `: ${oneLine(i.description)}` : ''
+    return `- [${i.severity}] ${oneLine(i.title)}${where}${what}`
+  })
+  if (issues.length > BODY_ISSUES_MAX) lines.push(`and ${issues.length - BODY_ISSUES_MAX} more`)
+  return `${summary}\n\n${lines.join('\n')}`
+}
+
+const errorText = (body: unknown): string => {
+  if (typeof body === 'string') return body
+  const e = (body as { error?: unknown } | null)?.error
+  return typeof e === 'string' ? e : JSON.stringify(body)
+}
+
+export function createExternalReviews(c: {
+  getState(): OrchState
+  setState(next: OrchState): Promise<void>
+  now(): string
+  log(m: string): void
+  assertAllowedPath(p: string): Promise<string>
+  specsDir: string
+  external: ExternalReviewDeps
+  reviewGate: ReviewGate
+}): ExternalReviews {
+  const ext = c.external
+  const running = new Map<string, Running>()
+  let disposed = false
+  /** Takes a review out of `running` and releases whoever waits for it (`idle`). */
+  const unregister = (id: string, self: Running): void => {
+    if (running.get(id) === self) running.delete(id)
+    self.release()
+  }
+
+  /** The one way a review ends without recording anything. */
+  const abort = (dispatchId: string, record: false): void => {
+    const r = running.get(dispatchId)
+    if (!r || record) return
+    r.silent = true
+    r.stop()
+  }
+
+  async function run(d: Dispatch, a: ExternalReviewStart, self: Running): Promise<void> {
+    const { reviewer, taskId, cwd } = a
+    const name = reviewer.name
+    const specPath = path.join(c.specsDir, specFileName(taskId, d.id))
+    const logFile = path.join(reviewLogsDir(c.specsDir), `${taskId}-${d.id}.log`)
+    const log = (line: string): void => {
+      try {
+        ext.appendLog(logFile, `${new Date().toISOString()} ${line}`)
+      } catch {
+        // a transcript that cannot be written is not a reason to end the review
+      }
+    }
+    const timeoutMs = ext.timeoutMs ?? EXTERNAL_REVIEW_TIMEOUT_MS
+    let proc: ProcLike | undefined
+    let session: AcpSession | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let poll: ReturnType<typeof setInterval> | undefined
+    let stopped = false
+    let timedOut = false
+    /** Set by the poll when it ends the run because the Task left `reviewing` while this Dispatch was open. */
+    let movedAway = false
+
+    /** The agent's message is kept in the transcript: once the Dispatch is gone nothing else shows what it said. */
+    const logTurn = (turn: { stopReason: string; text: string }): void => {
+      const cut = turn.text.length > TRANSCRIPT_MESSAGE_MAX
+      log(`turn ended: ${turn.stopReason}`)
+      const kept = cut ? turn.text.slice(0, TRANSCRIPT_MESSAGE_MAX) : turn.text
+      const marker = cut ? `\n[message cut at ${TRANSCRIPT_MESSAGE_MAX} characters, ${turn.text.length - TRANSCRIPT_MESSAGE_MAX} more not kept]` : ''
+      log(`agent message:\n${kept}${marker}`)
+    }
+
+    /** Ends the run on purpose and kills the process. Idempotent; synchronous. */
+    const stop = (): void => {
+      stopped = true
+      if (timer !== undefined) clearTimeout(timer)
+      if (poll !== undefined) clearInterval(poll)
+      timer = poll = undefined
+      session?.close()
+      proc?.kill()
+    }
+    self.stop = stop
+    const checkpoint = (): void => {
+      if (stopped) throw STOPPED
+    }
+    /** After an end of ours that follows a verdict: nothing is recorded for a Dispatch that is not open any more. */
+    const dropped = (): boolean => {
+      if (self.silent) return true
+      if (isOpenIn(c.getState(), d.id)) return false
+      log('the Dispatch is not open any more; nothing is recorded')
+      return true
+    }
+    /** The one record a moved Task's review makes (follow-up R1): its own Dispatch ended as unproven, as the orphan close
+     *  writes it, and only while it is still open and its Task still is not `reviewing`. Read and committed with no await
+     *  between. A disposed driver records nothing. */
+    const closeMoved = async (why: string): Promise<void> => {
+      if (disposed) return
+      const s = c.getState()
+      const x = s.dispatches.find((y) => y.id === d.id)
+      if (!x || x.outcome || x.endedAt || s.tasks.find((t) => t.id === taskId)?.status === 'reviewing') return
+      await c.setState({ ...s, dispatches: s.dispatches.map((y) => (y.id === d.id ? endedUnproven(y, c.now()) : y)) })
+      log(`the Task left reviewing (${why}); this review's Dispatch is closed as unproven`)
+      c.log(`external review of task=${taskId} dispatch=${d.id}: the Task left reviewing (${why}); its Dispatch is closed as unproven`)
+    }
+    /** How a silent end finishes: nothing, unless the poll ended it for a moved Task. */
+    const endSilently = async (): Promise<void> => {
+      if (movedAway) await closeMoved('seen by the poll')
+    }
+    const fail = async (reason: string): Promise<void> => {
+      stop()
+      if (self.silent) return await endSilently()
+      // A failure that lands before the poll saw a moved Task is not put to the person who moved it (follow-up R3)
+      if (c.getState().tasks.find((t) => t.id === taskId)?.status !== 'reviewing') {
+        log(`failed after the Task left reviewing, so no Gate: ${reason}`)
+        return await closeMoved(`the review then failed: ${agentWords(reason)}`)
+      }
+      log(`failed: ${reason}`)
+      // The Dispatch and its spec go; the transcript stays, and the Gate says where (final fix wave C1)
+      const gated = await c.reviewGate.gateDispatch({ taskId, dispatchId: d.id, reason: `${reason} Transcript: ${logFile}` })
+      if (!gated) c.log(`external review of task=${taskId} dispatch=${d.id} failed after its Dispatch was closed: ${reason}`)
+    }
+    const reasonOf = (e: unknown): string => {
+      if (timedOut) return `the external reviewer ${name} did not finish in ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes.`
+      if (e instanceof AcpFailure) {
+        switch (e.kind) {
+          case 'sign-in':
+            // Not "then review again": answering a review Gate sends the Task back to be worked on, and the Gate's own
+            // closing line says how to close the Task without that (final fix wave C3)
+            return `the external reviewer ${name} needs a sign-in: ${agentWords(e.message).replace(/\.+$/, '')}. Sign in with that agent's own CLI in a terminal first.`
+          case 'exited':
+            // A process that never had a pid was not started at all
+            if (proc !== undefined && proc.pid === 0)
+              return `the external reviewer ${name} could not be started: ${reviewer.command} was not found. Install it or correct the command in Settings.`
+            return `the external reviewer ${name} stopped before giving a verdict (exit ${/exited with code (-?\d+)/.exec(e.message)?.[1] ?? '?'}): ${(e.stderrTail ?? '').slice(-STDERR_IN_REASON)}`
+          case 'violation':
+            return `the external reviewer ${name} changed a file without asking (${agentWords(e.message)}). Its verdict is not used. Check the folder, and set the agent so that it asks before editing.`
+          default:
+            return `the external reviewer ${name} could not be used: ${agentWords(e.message)}`
+        }
+      }
+      return `the external reviewer ${name} could not be used: ${agentWords(e instanceof Error ? e.message : String(e))}`
+    }
+    /** This review still has something to answer: its Dispatch is open and its Task is still `reviewing`. */
+    const live = (s: OrchState): boolean => isOpenIn(s, d.id) && s.tasks.find((t) => t.id === taskId)?.status === 'reviewing'
+    /** A Dispatch other than this one worked in the folder during the review: open now, or ended after it began. */
+    const othersWorked = (): boolean =>
+      c.getState().dispatches.some(
+        (x) => x.id !== d.id && isSamePath(x.cwd, cwd) && ((!x.outcome && !x.endedAt) || (x.endedAt !== undefined && x.endedAt > d.startedAt))
+      )
+
+    try {
+      // Nothing of the run's own is going yet, so a closed Dispatch is simply not started
+      if (!isOpenIn(c.getState(), d.id)) return
+      try {
+        ext.pruneReviewLogs(reviewLogsDir(c.specsDir))
+      } catch (e) {
+        c.log(`external review transcripts could not be pruned: ${String(e)}`)
+      }
+      const convergence = ((): boolean => {
+        const s = c.getState()
+        const t = s.tasks.find((x) => x.id === taskId)
+        return t !== undefined && policyOf(s, t) !== null
+      })()
+      const resultPath = `${specPath}.review.json`
+      const prompt = await a.buildPrompt({ dispatchId: d.id, ...(convergence ? { resultPath } : {}) })
+      await ext.writeFile(specPath, prompt)
+      if (dropped()) return
+      const latest = c.getState()
+      await c.setState({ ...latest, dispatches: latest.dispatches.map((x) => (x.id === d.id ? { ...x, specPath } : x)) })
+      log(`prompt: ${firstLine(prompt).slice(0, 200)} (${prompt.length} characters)`)
+
+      const before = await ext.treeState(cwd)
+      if (dropped()) return
+      const resolved = await (ext.resolve ?? resolveAgentCommand)(reviewer, ext.platform)
+      if (dropped()) return
+      if (!resolved.ok) return await fail(`the external reviewer ${name} could not be started: ${resolved.error}`)
+      const baseEnv = await ext.env(cwd)
+      if (dropped()) return
+
+      // The budget and the poll start with the process; both are cleared by `stop`, which every end calls
+      try {
+        // Killed once, however many ends call `stop` and whatever the session's close did before (final fix wave D2)
+        proc = killOnce(ext.spawn(resolved.file, resolved.args, { cwd, env: agentChildEnv(baseEnv, ext.platform) }))
+      } catch (e) {
+        return await fail(`the external reviewer ${name} could not be started: ${e instanceof Error ? e.message : String(e)}`)
+      }
+      timer = setTimeout(() => {
+        timedOut = true
+        stop()
+      }, timeoutMs)
+      // A Task a person moved out of `reviewing` (task-update) leaves this Dispatch open, and a verdict could only be
+      // refused and then gate the Task they moved: that ends the review as silently as a closed Dispatch (final fix wave A4)
+      poll = setInterval(() => {
+        const s = c.getState()
+        if (live(s)) return
+        // Open but its Task moved: the end closes the Dispatch (follow-up R1). Closed: nothing is recorded.
+        if (isOpenIn(s, d.id)) movedAway = true
+        abort(d.id, false)
+      }, ext.pollMs ?? EXTERNAL_OPEN_POLL_MS)
+
+      session = await openAcpSession({ proc, cwd, clientVersion: ext.clientVersion, log })
+      checkpoint()
+      log(`agent: ${session.agent.title ?? session.agent.name ?? 'unknown'} ${session.agent.version ?? ''}`.trimEnd())
+
+      let turn = await session.prompt(prompt)
+      checkpoint()
+      logTurn(turn)
+      let verdict: ExternalVerdict | undefined
+      for (let attempt = 0; verdict === undefined; attempt++) {
+        if (turn.stopReason !== 'end_turn') return await fail(`the external reviewer ${name} ended its turn with ${agentWords(turn.stopReason)}.`)
+        const parsed = parseExternalVerdict(turn.text)
+        if (parsed.ok) verdict = parsed.verdict
+        else if (attempt === 1) return await fail(`the external reviewer ${name} ended without a readable verdict: ${agentWords(parsed.error)}`)
+        else {
+          log(`no readable verdict (${parsed.error}); asking once more`)
+          turn = await session.prompt(VERDICT_RETRY_PROMPT)
+          checkpoint()
+          logTurn(turn)
+        }
+      }
+
+      // The verdict is in: the process has nothing more to say and is ended before anything is judged. The exit that
+      // follows is not read as a failure (`stop` marks the end first), and the budget and the poll are over.
+      stop()
+      log(`verdict: ${verdict.outcome}, ${verdict.issues.length} issue(s)`)
+
+      const after = await ext.treeState(cwd)
+      if (dropped()) return
+      // A folder that could be read before and cannot be read now has changed as surely as one that reads differently
+      // (final fix wave A1); one that could not be read before has nothing to compare with
+      if (before === null) log("folder check skipped: the folder's tracked state could not be read before the review (not a git repository, or git failed)")
+      else if (before !== after) {
+        if (othersWorked()) log('folder check skipped: another Dispatch worked in the folder during the review')
+        else return await fail(`files in ${cwd} changed while the external reviewer ${name} ran. Its verdict is not used.`)
+      }
+
+      if (convergence) {
+        await ext.writeFile(resultPath, JSON.stringify({ issues: verdict.issues }))
+        if (dropped()) return
+      }
+      const summary = verdict.summary
+      let reply: { status: number; body: unknown }
+      try {
+        reply = await ext.handle('send', {
+          type: 'worker_done',
+          taskId,
+          dispatchId: d.id,
+          outcome: verdict.outcome === 'approved' ? 'succeeded' : 'failed',
+          subject: summary.trim() === '' ? verdict.outcome : firstLine(summary.trim()).slice(0, 120),
+          // Outside a convergence Run no review.json is read, so the findings travel in the body (final fix wave B4)
+          body: convergence ? summary : bodyWithIssues(summary, verdict.issues)
+        })
+      } catch (e) {
+        reply = { status: 500, body: { error: e instanceof Error ? e.message : String(e) } }
+      }
+      if (reply.status === 200 && (reply.body === 'accepted' || reply.body === 'alreadyReported')) {
+        log(`settled: ${String(reply.body)}`)
+        return
+      }
+      // Read with no await before the Gate `fail` opens: a refusal because a person moved the Task, or the Dispatch closed,
+      // is theirs to have made, never a failure to put to them (final fix wave A4)
+      if (!live(c.getState())) {
+        log(`the verdict was refused (${errorText(reply.body)}) after the Task left reviewing or the Dispatch closed; no Gate`)
+        c.log(
+          `external review of task=${taskId} dispatch=${d.id}: the verdict was refused after its Task left reviewing or its Dispatch closed; dropped: ${errorText(reply.body)}`
+        )
+        // A Dispatch still open under a moved Task is closed (follow-up R1); a closed one is left as it is
+        return await closeMoved('its verdict was refused')
+      }
+      await fail(`the verdict of the external reviewer ${name} was refused: ${errorText(reply.body)}`)
+    } catch (e) {
+      // A dispose or a closed Dispatch records nothing, a moved Task closes the Dispatch; the stop they made is what
+      // rejected the pending call
+      if (self.silent) return await endSilently()
+      await fail(reasonOf(e))
+    } finally {
+      stop()
+    }
+  }
+
+  return {
+    async start(a) {
+      if (disposed) return void c.log(`external review of task=${a.taskId} not started: this driver has been disposed`)
+      // **A read of the state is not carried across an await** (review.ts says why): this one is used before the next one
+      const st = c.getState()
+      const task = st.tasks.find((t) => t.id === a.taskId)
+      if (task?.status !== 'reviewing') return
+      if (workRanSandboxed(st, task) || workSandboxed(st, task))
+        return void (await a.gate(
+          `this task's work ran in a sandbox, and the external reviewer ${a.reviewer.name} cannot be sandboxed. Set the reviewer to Automatic in Settings, or complete the task by hand.`
+        ))
+      await c.assertAllowedPath(a.cwd)
+      if (disposed) return void c.log(`external review of task=${a.taskId} not started: this driver was disposed while it began`)
+      const fresh = c.getState()
+      if (fresh.tasks.find((t) => t.id === a.taskId)?.status !== 'reviewing') return
+      const opened = openReviewDispatch(
+        fresh,
+        {
+          taskId: a.taskId,
+          provider: a.implProvider,
+          accountId: '',
+          sessionId: `${EXTERNAL_REVIEW_SESSION_PREFIX}${randomBytes(4).toString('hex')}`,
+          cwd: a.cwd,
+          specPath: '',
+          externalReviewer: { id: a.reviewer.id, name: a.reviewer.name }
+        },
+        c.now()
+      )
+      // `dispatch already open` is not a failure (reviewGate.onOpenRefused says why)
+      if (!opened.ok) return void (await c.reviewGate.onOpenRefused({ taskId: a.taskId, error: opened.error }))
+      // Registered before the commit: the Dispatch is visible in the state as soon as the commit changes it, so it must
+      // be counted as in flight (and reachable by a dispose) from then on. The id is known synchronously.
+      const id = opened.value.id
+      let release: () => void = () => {}
+      const self: Running = { silent: false, stop: () => {}, release: () => release(), done: new Promise<void>((r) => (release = r)) }
+      running.set(id, self)
+      try {
+        await c.setState(opened.state)
+      } catch (e) {
+        unregister(id, self)
+        throw e
+      }
+      if (disposed || self.silent) {
+        // Disposed during the commit: the Dispatch stays open for the next driver, and nothing of ours runs for it
+        unregister(id, self)
+        return void c.log(`external review of task=${a.taskId} dispatch=${id} not run: this driver was disposed during its commit`)
+      }
+      c.log(`external review started task=${a.taskId} reviewer=${a.reviewer.name} dispatch=${opened.value.id}`)
+      // The rest runs detached; whatever it throws ends in a Gate or in the log, never in the caller
+      void run(opened.value, a, self)
+        .catch((e) => c.log(`external review of task=${a.taskId} dispatch=${id} ended with an error: ${String(e)}`))
+        .finally(() => unregister(id, self))
+    },
+    inFlight: () => new Set(running.keys()),
+    disposed: () => disposed,
+    dispose() {
+      disposed = true
+      for (const id of [...running.keys()]) abort(id, false)
+    },
+    async idle() {
+      while (running.size > 0) await Promise.all([...running.values()].map((r) => r.done))
+    }
+  }
+}

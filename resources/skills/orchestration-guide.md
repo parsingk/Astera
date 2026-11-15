@@ -108,7 +108,7 @@ different provider judges it.
 | `reviewing` | `completed` | the reviewer reports `worker_done --outcome succeeded` |
 | `reviewing` | `failed` | the reviewer reports `worker_done --outcome failed`, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) this edge is reached the same restricted way as `validating` → `failed` above |
 | `reviewing` | `dispatched` | **convergence Runs only** (section 11). The review found a blocking issue and Astera opened a repair Dispatch, through `openRepairDispatch` |
-| `reviewing` | `blocked` | the review cannot run at all (no other provider has a usable account, or the reviewer dies without reporting) — a Gate opens automatically. Same convergence additions as `validating` → `blocked` above |
+| `reviewing` | `blocked` | the review cannot run at all (no other provider has a usable account, the external reviewer chosen in Settings fails, or the reviewer dies without reporting) — a Gate opens automatically. Same convergence additions as `validating` → `blocked` above |
 | `failed` | `dispatched` | `worker-start --retry-of <dsp>` (fewer than 3 consecutive failures) |
 | `failed` | (terminal) | 3 consecutive failures — circuit break, no further retries |
 
@@ -183,6 +183,10 @@ spends quota** — attaching it to a Task like a one-line documentation fix is t
 - **The app picks the reviewer, on a provider other than the implementer's.** A Task built on `claude`
   is never reviewed by `claude`. If no other provider has a logged-in, usable account, the Task goes to
   `blocked` behind a Gate instead of silently skipping the review.
+  **Unless the person chose an external reviewer in Settings**: then a third-party agent (Gemini CLI,
+  Copilot CLI, OpenCode or another ACP agent) reviews every Task with `--review`, whatever the implementer's
+  provider. It reads only, and it never falls back to the other provider: if it cannot give a verdict the Task
+  goes to `blocked` behind a Gate for a person. Work that ran in a sandbox is not given to an external reviewer.
 - **Validation runs first.** A Task with both `--validate` and `--review` only reaches `reviewing` once
   the validation has passed (section 2's table) — the reviewer is not asked to re-judge whether the code
   compiles or the tests run.
