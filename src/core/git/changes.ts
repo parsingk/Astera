@@ -193,3 +193,14 @@ export async function readFileDiff(
   const at = cut.lastIndexOf('\n')
   return { diff: at < 0 ? '' : cut.slice(0, at + 1), truncated: true }
 }
+
+/** What an external reviewer must not change (external reviewers design 3.4): `git rev-parse HEAD` + '\n' +
+ *  `git status --porcelain --untracked-files=no`, so a commit, a checkout or an edit to a tracked file changes the answer
+ *  and a new untracked file does not. Null when `cwd` is not a repository or git fails. */
+export async function trackedTreeState(cwd: string): Promise<string | null> {
+  const headRev = await git(['rev-parse', 'HEAD'], { cwd, timeoutMs: TIMEOUT_MS })
+  if (!headRev.ok) return null
+  const status = await git(['status', '--porcelain', '--untracked-files=no'], { cwd, timeoutMs: TIMEOUT_MS, trim: false })
+  if (!status.ok) return null
+  return `${headRev.stdout}\n${status.stdout}`
+}

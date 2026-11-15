@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import {
   OrchCoordinator,
@@ -1461,5 +1462,43 @@ describe('OrchCoordinator.startWorker: an agent profile', () => {
     await co.startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
     expect(deps.spawned[0]).toMatchObject({ agentProfileId: 'ap_open', sandbox: true })
     expect(deps.spawned[1]).not.toHaveProperty('sandbox')
+  })
+})
+
+// External reviewers (design 3.4 step 3): an agent spoken to over ACP has no astera CLI, so its review spec asks for the
+// verdict in its final message and carries the diff itself.
+describe('buildReviewSpecFile, report: inline', () => {
+  const base = { title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: true }
+  const inline = (o: Record<string, unknown> = {}): string => buildReviewSpecFile({ ...base, report: 'inline', ...o })
+
+  it('leaves the output without report byte for byte what it was', () => {
+    const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+    const a = buildReviewSpecFile({ ...base, implReport: 'R', filesModified: ['a.ts'], resultPath: 'C:/x/spec.md.review.json' })
+    const b = buildReviewSpecFile({ ...base, validated: false, diff: { base: 'b1', head: 'h1' } })
+    // Hashes of the two outputs captured before `report` existed
+    expect(sha(a)).toBe('00ad3f550cd4ba5a80ab80366479e15e41632fa9848d930ab7422763402aebca')
+    expect(sha(b)).toBe('e9038153d90064b713ce13370db18f777b10893cbce78e5fae186d13e4921cba')
+  })
+
+  it('says nothing of the astera CLI, a result file or a command to run', () => {
+    const s = inline({ resultPath: 'C:/x/spec.md.review.json', diff: { base: 'b1', head: 'h1' } })
+    expect(s).not.toMatch(/astera send|ASTERA_CLI|review\.json|resultPath|Reporting obligation|Structured verdict|git diff/)
+    expect(s).not.toContain(SANDBOXED_LINE_NOTE)
+    expect(s).toContain('## Your verdict')
+    expect(s).toContain('"outcome": "approved" | "rejected"')
+    expect(s).toMatch(/Do not change any file and do not run any command/)
+  })
+
+  it('puts the diff text in a fence, and says when it was cut', () => {
+    const s = inline({ diffText: { text: 'diff --git a/x b/x\n+y\n', truncated: false } })
+    expect(s).toContain('## The diff')
+    expect(s).toContain('```diff\ndiff --git a/x b/x\n+y\n\n```')
+    expect(s).not.toMatch(/was cut/)
+    expect(inline({ diffText: { text: 'd', truncated: true } })).toMatch(/was cut/)
+  })
+
+  it('says no diff is attached when there is none', () => {
+    expect(inline()).toContain('No diff is attached. Read the files listed above.')
+    expect(inline()).not.toContain('## The diff')
   })
 })
