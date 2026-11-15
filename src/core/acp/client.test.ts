@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import { nodeProcFactory } from '../sessions/nodeProcFactory'
 import type { ProcLike } from '../sessions/proc'
-import { openAcpSession, AcpFailure, type AcpSession } from './client'
+import { openAcpSession, AcpFailure, SET_MODE_TIMEOUT_MS, TURN_TEXT_MAX, type AcpSession } from './client'
 
 const FAKE = fileURLToPath(new URL('./__fixtures__/fakeAgent.mjs', import.meta.url))
 
@@ -134,6 +134,61 @@ describe('openAcpSession over a scripted process', () => {
     })
     const s = await openAcpSession({ proc, cwd: '.', clientVersion: '1', log: (l) => logs.push(l) })
     expect(logs.some((l) => l.includes('set_mode') && l.includes('cannot switch'))).toBe(true)
+    s.close()
+  })
+
+  // Final fix wave D2: a set_mode that never answers must not hold the review until its whole budget is spent
+  it('gives session/set_mode 30 s, then logs the timeout and goes on to the prompt', async () => {
+    expect(SET_MODE_TIMEOUT_MS).toBe(30_000)
+    const logs: string[] = []
+    const { proc, written, killed } = scripted((m) => {
+      if (m.method === 'initialize') return INIT
+      if (m.method === 'session/new') return { sessionId: 's9', modes: { currentModeId: 'auto', availableModes: [{ id: 'default' }] } }
+      return { stopReason: 'end_turn' }
+    })
+    const write = proc.write
+    proc.write = (line) => {
+      // never answer set_mode
+      if (JSON.parse(line).method !== 'session/set_mode') write(line)
+    }
+    const s = await bounded(openAcpSession({ proc, cwd: '.', clientVersion: '1', log: (l) => logs.push(l), timeouts: { setModeMs: 100 } }))
+    expect(logs.some((l) => l.includes('session/set_mode') && l.includes('did not answer'))).toBe(true)
+    expect(killed()).toBe(0)
+    await expect(s.prompt('go')).resolves.toEqual({ stopReason: 'end_turn', text: '' })
+    expect(written.at(-1)).toMatchObject({ method: 'session/prompt' })
+    s.close()
+  })
+
+  it('keeps at most 2,000,000 characters of a turn, its tail', async () => {
+    expect(TURN_TEXT_MAX).toBe(2_000_000)
+    let cb: (line: string) => void = () => {}
+    const say = (msg: Record<string, unknown>): void => cb(JSON.stringify({ jsonrpc: '2.0', ...msg }))
+    const chunk = (text: string): void => say({ method: 'session/update', params: { sessionId: 's9', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } })
+    const proc: ProcLike = {
+      pid: 1,
+      onLine: (c) => {
+        cb = c
+      },
+      onExit: () => {},
+      write: (line) => {
+        const m = JSON.parse(line) as { id?: number; method: string }
+        if (m.id === undefined) return
+        setImmediate(() => {
+          if (m.method === 'initialize') return say({ id: m.id, result: INIT })
+          if (m.method === 'session/new') return say({ id: m.id, result: { sessionId: 's9' } })
+          for (let i = 0; i < 5; i++) chunk('A'.repeat(500_000))
+          chunk('B'.repeat(10))
+          chunk('the verdict')
+          say({ id: m.id, result: { stopReason: 'end_turn' } })
+        })
+      },
+      kill: () => {}
+    }
+    const s = await openAcpSession({ proc, cwd: '.', clientVersion: '1', log: () => {} })
+    const turn = await bounded(s.prompt('x'))
+    expect(turn.text.length).toBe(2_000_000)
+    expect(turn.text.endsWith(`${'B'.repeat(10)}the verdict`)).toBe(true)
+    expect(turn.text.startsWith('A')).toBe(true)
     s.close()
   })
 

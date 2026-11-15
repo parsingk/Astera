@@ -105,6 +105,49 @@ describe('createJsonRpcPeer', () => {
     expect(m.out).toEqual([])
   })
 
+  // Final fix wave D1: third-party input reaches these on the Host's thread
+  it('a notification handler that throws does not break the next line, and the throw is logged', async () => {
+    const m = memory()
+    const logs: string[] = []
+    const peer = createJsonRpcPeer(m.t, { log: (l) => logs.push(l) })
+    peer.onNotification(() => {
+      throw new Error('handler broke')
+    })
+    const a = peer.request('a', {})
+    expect(() => m.feed(JSON.stringify({ jsonrpc: '2.0', method: 'n', params: {} }))).not.toThrow()
+    m.feed(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'still here' }))
+    await expect(a).resolves.toBe('still here')
+    expect(logs.join('\n')).toContain('handler broke')
+  })
+
+  it('an answer whose send throws, and whose error answer throws too, is logged and leaves nothing unhandled', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (e: unknown): void => void unhandled.push(e)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const logs: string[] = []
+      let cb: (line: string) => void = () => {}
+      const peer = createJsonRpcPeer(
+        {
+          write: () => {
+            throw new Error('pipe closed')
+          },
+          onLine: (c) => {
+            cb = c
+          }
+        },
+        { log: (l) => logs.push(l) }
+      )
+      peer.onRequest(() => 'ok')
+      expect(() => cb(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'm' }))).not.toThrow()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(unhandled).toEqual([])
+      expect(logs.join('\n')).toContain('pipe closed')
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
   it('notify writes a message with no id', () => {
     const m = memory()
     createJsonRpcPeer(m.t).notify('n', { a: 1 })

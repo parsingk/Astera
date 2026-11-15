@@ -10,6 +10,10 @@ export const ACP_PROTOCOL_VERSION = 1
 
 const INITIALIZE_TIMEOUT_MS = 120_000
 const NEW_SESSION_TIMEOUT_MS = 60_000
+/** A set_mode that does not answer is logged and the review goes on, as any failure of that call does (final fix wave D2). */
+export const SET_MODE_TIMEOUT_MS = 30_000
+/** One turn's collected message is kept to this many characters, its tail: the verdict is at the end (final fix wave D2). */
+export const TURN_TEXT_MAX = 2_000_000
 const SIGN_IN_CODE = -32000
 const METHOD_NOT_FOUND = -32601
 
@@ -39,13 +43,32 @@ function obj(v: unknown): Record<string, unknown> | undefined {
 }
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
+/** `p` whose kill acts once, however often it is called (final fix wave D2): the session's close, the runner's stop and a
+ *  probe's cleanup all kill, and each kill of a process tree starts a taskkill on Windows. */
+export function killOnce(p: ProcLike): ProcLike {
+  let killed = false
+  return {
+    get pid() {
+      return p.pid
+    },
+    onLine: (cb) => p.onLine(cb),
+    onExit: (cb) => p.onExit(cb),
+    write: (line, by) => p.write(line, by),
+    kill: () => {
+      if (killed) return
+      killed = true
+      p.kill()
+    }
+  }
+}
+
 export async function openAcpSession(a: {
   proc: ProcLike
   cwd: string
   clientVersion: string
   /** The transcript sink: one line per call, no payloads of unknown notifications. */
   log(line: string): void
-  timeouts?: { initializeMs?: number; newSessionMs?: number }
+  timeouts?: { initializeMs?: number; newSessionMs?: number; setModeMs?: number }
 }): Promise<AcpSession> {
   const { proc, log } = a
   const peer = createJsonRpcPeer({ write: (l) => proc.write(l), onLine: (cb) => void proc.onLine(cb) }, { log })
@@ -54,8 +77,19 @@ export async function openAcpSession(a: {
   let terminal: AcpFailure | null = null
   let ended = false
   let sessionId = ''
-  /** The message being collected, or null while no prompt is in flight. */
-  let turnText: string[] | null = null
+  /** The message being collected, or null while no prompt is in flight; `size` is the characters held in `parts`. */
+  let turnText: { parts: string[]; size: number } | null = null
+  /** Adds a chunk; past twice the cap the parts are joined and cut to the cap's tail, so an agent that never stops talking
+   *  costs at most that much (final fix wave D2). */
+  const collect = (t: { parts: string[]; size: number }, chunk: string): void => {
+    t.parts.push(chunk)
+    t.size += chunk.length
+    if (t.size > 2 * TURN_TEXT_MAX) {
+      const kept = t.parts.join('').slice(-TURN_TEXT_MAX)
+      t.parts = [kept]
+      t.size = kept.length
+    }
+  }
   const calls = new Map<string, { kind?: string; title?: string }>()
 
   function end(failure: AcpFailure | null, kill: boolean): void {
@@ -106,7 +140,7 @@ export async function openAcpSession(a: {
     const kind = str(u.sessionUpdate)
     if (kind === 'agent_message_chunk') {
       const c = obj(u.content)
-      if (turnText && c?.type === 'text' && typeof c.text === 'string') turnText.push(c.text)
+      if (turnText && c?.type === 'text' && typeof c.text === 'string') collect(turnText, c.text)
     } else if (kind === 'tool_call' || kind === 'tool_call_update') onToolCall(u)
     else log(`session/update ${(kind ?? 'unknown').slice(0, 60)}`)
   })
@@ -148,7 +182,8 @@ export async function openAcpSession(a: {
     const available = Array.isArray(modes?.availableModes) ? modes.availableModes : []
     if (modes?.currentModeId !== 'default' && available.some((m) => obj(m)?.id === 'default')) {
       try {
-        await call('session/set_mode', { sessionId, modeId: 'default' })
+        // Not through `call`: a timeout there ends the session, and this call's failures, a timeout included, only log
+        await peer.request('session/set_mode', { sessionId, modeId: 'default' }, { timeoutMs: a.timeouts?.setModeMs ?? SET_MODE_TIMEOUT_MS })
       } catch (e) {
         if (terminal) throw terminal
         log(`session/set_mode default failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -158,10 +193,11 @@ export async function openAcpSession(a: {
     return {
       agent,
       async prompt(text) {
-        turnText = []
+        const collected = { parts: [] as string[], size: 0 }
+        turnText = collected
         try {
           const r = obj(await call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }))
-          return { stopReason: str(r?.stopReason) ?? 'unknown', text: turnText.join('') }
+          return { stopReason: str(r?.stopReason) ?? 'unknown', text: collected.parts.join('').slice(-TURN_TEXT_MAX) }
         } catch (e) {
           if (e instanceof AcpFailure) throw e
           throw new AcpFailure('protocol', e instanceof Error ? e.message : String(e))

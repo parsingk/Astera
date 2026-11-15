@@ -12,7 +12,7 @@
 //   and nothing is recorded.
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { AcpFailure, openAcpSession, type AcpSession } from '../../acp/client'
+import { AcpFailure, killOnce, openAcpSession, type AcpSession } from '../../acp/client'
 import { agentChildEnv, resolveAgentCommand } from '../../acp/spawn'
 import { isSamePath } from '../../files/tree'
 import type { ProcLike } from '../../sessions/proc'
@@ -253,7 +253,8 @@ export function createExternalReviews(c: {
 
       // The budget and the poll start with the process; both are cleared by `stop`, which every end calls
       try {
-        proc = ext.spawn(resolved.file, resolved.args, { cwd, env: agentChildEnv(baseEnv, ext.platform) })
+        // Killed once, however many ends call `stop` and whatever the session's close did before (final fix wave D2)
+        proc = killOnce(ext.spawn(resolved.file, resolved.args, { cwd, env: agentChildEnv(baseEnv, ext.platform) }))
       } catch (e) {
         return await fail(`the external reviewer ${name} could not be started: ${e instanceof Error ? e.message : String(e)}`)
       }

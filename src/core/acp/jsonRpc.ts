@@ -51,6 +51,8 @@ export function createJsonRpcPeer(t: LineTransport, o: { log?(m: string): void }
 
   const send = (msg: Record<string, unknown>): void => t.write(JSON.stringify({ jsonrpc: '2.0', ...msg }))
 
+  const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
   const answer = async (id: unknown, method: string, params: unknown): Promise<void> => {
     try {
       const result = await requestHandler(method, params)
@@ -59,6 +61,13 @@ export function createJsonRpcPeer(t: LineTransport, o: { log?(m: string): void }
       if (e instanceof JsonRpcError) send({ id, error: { code: e.code, message: e.message, ...(e.data !== undefined ? { data: e.data } : {}) } })
       else send({ id, error: { code: INTERNAL_ERROR, message: e instanceof Error ? e.message : 'internal error' } })
     }
+  }
+
+  // The other side's lines arrive on the driver's thread (the Host's own): nothing they cause may escape the line
+  // callback, neither a handler's throw nor a send that fails, in the answer or in the error answer after it (final fix
+  // wave D1)
+  const answerSafely = (id: unknown, method: string, params: unknown): void => {
+    answer(id, method, params).catch((e: unknown) => o.log?.(`could not answer ${method.slice(0, 60)}: ${messageOf(e)}`))
   }
 
   t.onLine((line) => {
@@ -75,8 +84,14 @@ export function createJsonRpcPeer(t: LineTransport, o: { log?(m: string): void }
     const m = msg as Record<string, unknown>
     const hasId = m.id !== undefined && m.id !== null
     if (typeof m.method === 'string') {
-      if (hasId) void answer(m.id, m.method, m.params)
-      else notificationHandler(m.method, m.params)
+      if (hasId) answerSafely(m.id, m.method, m.params)
+      else {
+        try {
+          notificationHandler(m.method, m.params)
+        } catch (e) {
+          o.log?.(`a ${m.method.slice(0, 60)} notification could not be handled: ${messageOf(e)}`)
+        }
+      }
       return
     }
     if (!hasId) return

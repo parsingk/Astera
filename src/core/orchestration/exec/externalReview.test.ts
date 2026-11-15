@@ -147,6 +147,7 @@ function rig(o: RigOpts = {}) {
   const logs: string[] = []
   const acpLines: { path: string; line: string }[] = []
   const pruned: string[] = []
+  const kills: number[] = []
   const repairs: string[] = []
   const handled: { cmd: string; args: Record<string, unknown> }[] = []
   const spawned: { file: string; args: string[]; env: Record<string, string | undefined> }[] = []
@@ -190,6 +191,12 @@ function rig(o: RigOpts = {}) {
       spawned.push({ file, args, env: opts.env })
       // A process that never started has pid 0, and signalling 0 would signal this test's whole process group
       if (proc.pid > 0) pids.add(proc.pid)
+      // Every kill is counted: each one of a process tree starts a taskkill (final fix wave D2)
+      const kill = proc.kill
+      proc.kill = () => {
+        kills.push(proc.pid)
+        kill()
+      }
       return proc
     },
     env: o.env ?? (() => ({ PATH: process.env.PATH, ASTERA_HOST_PIPE: 'p', KEEP_ME: '1' })),
@@ -244,6 +251,7 @@ function rig(o: RigOpts = {}) {
     startWorker,
     handled,
     spawned,
+    kills,
     repairs,
     acpLines,
     pruned,
@@ -697,6 +705,18 @@ describe('createReviewStarter with an external reviewer', () => {
     expect(h.review()!.endedAt).toBeUndefined()
     expect(h.handled).toEqual([])
     expect(h.start.externalInFlight().size).toBe(0)
+  })
+
+  // Final fix wave D2: however many ends call stop, the process is killed once
+  it.each([
+    ['a verdict', {}],
+    ['a file changed without asking', { mode: 'edits-without-asking' }],
+    ['a timeout', { mode: 'hang-prompt', timeoutMs: 600 }]
+  ])('kills the agent once after %s', async (_label, o) => {
+    const h = rig(o)
+    await h.run()
+    await gone(h.pid())
+    expect(h.kills).toEqual([h.pid()])
   })
 
   // Review Focus 1: the kill that follows a verdict is ours

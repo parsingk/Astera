@@ -96,8 +96,8 @@ async function runPrompt(id) {
       chunk('partial')
       return
     case 'exit-mid-turn':
-      process.stderr.write('agent crashed: out of memory\n')
-      process.exit(3)
+      // Exits only once the write has been handed over, so the stderr tail a test reads cannot lose the race (final fix wave D3)
+      process.stderr.write('agent crashed: out of memory\n', () => process.exit(3))
       return
     case 'no-verdict-then-verdict':
       return finish(id, prompts === 1 ? (message ?? 'no verdict yet') : (retryMessage ?? message ?? 'verdict given'))
