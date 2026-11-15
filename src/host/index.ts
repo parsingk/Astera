@@ -95,7 +95,7 @@ import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
-import { readAccountEntries, readAccountsFile } from '../core/accounts/accountsFile'
+import { readAccountEntries } from '../core/accounts/accountsFile'
 import { providerOf } from '../core/providers/meta'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { announceChatProc, createHostSessionStarter } from './sessionCreate'
@@ -1217,7 +1217,7 @@ async function main(): Promise<void> {
   runReportPoster = createRunReportPoster({
     state: () => orch.state(),
     gh: hostGh,
-    accounts: async () => (await readAccountsFile(path.join(profileDir, 'accounts.json'))).map((x) => ({ id: x.id, label: x.label })),
+    accounts: async () => (await readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying)).map((x) => ({ id: x.id, label: x.label })),
     record: (args) => orch.handle('runs-github-record', args),
     slack: null,
     lang: () => (wiring ? wiring.checks.langNow() : 'en'),

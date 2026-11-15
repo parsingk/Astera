@@ -70,26 +70,27 @@ export function createRunReportPoster(a: {
     const roots = [job.cwd, run.worktree].filter((p): p is string => typeof p === 'string' && p !== '')
     const body = reportMarkdown(forPullRequest(report, { roots, secrets }), a.lang(), { audience: 'pull-request' })
 
-    const attempt = async (retrying: boolean): Promise<Outcome> => {
+    // With no id kept, the PR's comments are searched for the marker before every post: a post that landed but was
+    // never recorded (a timeout, a Host that left, a failed record) is found, not doubled (C2). A failed search is a
+    // failed attempt, never a blind post.
+    const attempt = async (): Promise<Outcome> => {
       if (kept?.id !== undefined) {
         const r = await editIssueComment(a.gh, job.cwd, repo, kept.id, body)
         if (r.ok) return { ok: true, id: kept.id, url: kept.url ?? binding.url }
         return r.kind === 'not-found' ? { gone: true } : { ok: false, message: r.message }
       }
-      if (retrying) {
-        const f = await findReportComment(a.gh, job.cwd, repo, binding.number, RUN_REPORT_MARKER(runId))
-        if (!f.ok) return { ok: false, message: f.message }
-        if (f.found) return { ok: true, ...f.found }
-      }
+      const f = await findReportComment(a.gh, job.cwd, repo, binding.number, RUN_REPORT_MARKER(runId))
+      if (!f.ok) return { ok: false, message: f.message }
+      if (f.found) return { ok: true, ...f.found }
       const r = await postPrComment(a.gh, job.cwd, repo, binding.number, body)
       return r.ok ? { ok: true, id: r.id, url: r.url } : { ok: false, message: r.message }
     }
 
-    let out = await attempt(false)
+    let out = await attempt()
     if ('ok' in out && !out.ok) {
       a.log(`run report: the comment of ${runId} failed (${out.message}), trying once more`)
       if (retryAfterMs > 0) await new Promise((res) => setTimeout(res, retryAfterMs))
-      out = await attempt(true)
+      out = await attempt()
     }
     if ('gone' in out) {
       a.log(`run report: the comment of ${runId} was deleted on GitHub, so it is not posted again`)

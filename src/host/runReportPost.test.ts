@@ -14,7 +14,7 @@ const WT = '/Users/someone/work/wt-run'
 const BINDING: GitHubBinding = { repository: 'o/r', number: 7, url: 'https://github.com/o/r/pull/7', baseBranch: 'main', headBranch: 'run', createdByAstera: true, boundAt: T0 }
 const COMMENT_URL = 'https://github.com/o/r/pull/7#issuecomment-123'
 
-const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean; title?: string } = {}): OrchState => {
+const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean; title?: string; commentError?: boolean } = {}): OrchState => {
   const s: OrchState = {
     ...emptyState(),
     jobs: [{ id: 'job_1', objective: 'Ship it', cwd: '/repo', github: { postRunReport: o.postRunReport ?? true } } as never],
@@ -26,7 +26,7 @@ const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean
         createdAt: T0,
         endedAt: END,
         worktree: WT,
-        ...(o.binding === false ? {} : { githubState: { binding: BINDING, log: [], seq: 0 } })
+        ...(o.binding === false ? {} : { githubState: { binding: BINDING, log: [], seq: 0, ...(o.commentError ? { reportComment: { error: 'gh: timeout', at: T0 } } : {}) } })
       } as never
     ],
     tasks: [{ id: 't1', runId: 'run_1', title: o.title ?? 'Do it', spec: '', deps: [], status: 'completed', createdAt: T0, updatedAt: END } as never]
@@ -74,8 +74,8 @@ describe('createRunReportPoster', () => {
     const r = rig()
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post'])
-    expect(bodyOf(r.calls[0]).startsWith(RUN_REPORT_MARKER('run_1'))).toBe(true)
+    expect(r.calls.map(kind)).toEqual(['find', 'post'])
+    expect(bodyOf(r.calls[1]).startsWith(RUN_REPORT_MARKER('run_1'))).toBe(true)
     expect(comment(r.state())?.id).toBe(123)
   })
 
@@ -85,8 +85,8 @@ describe('createRunReportPoster', () => {
     await r.poster.idle()
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post', 'edit'])
-    expect(r.calls[1].join(' ')).toContain('issues/comments/123')
+    expect(r.calls.map(kind)).toEqual(['find', 'post', 'edit'])
+    expect(r.calls[2].join(' ')).toContain('issues/comments/123')
     expect(comment(r.state())?.id).toBe(123)
   })
 
@@ -103,11 +103,11 @@ describe('createRunReportPoster', () => {
     r.poster.finished('run_1')
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post', 'edit'])
+    expect(r.calls.map(kind)).toEqual(['find', 'post', 'edit'])
   })
 
   it('a deleted comment is not posted again', async () => {
-    const r = rig({ answer: (args) => (args[0] === 'pr' ? ok(COMMENT_URL) : fail('gh: Not Found (HTTP 404)')) })
+    const r = rig({ answer: (args) => (args[0] === 'pr' ? ok(COMMENT_URL) : args.includes('PATCH') ? fail('gh: Not Found (HTTP 404)') : ok('')) })
     r.poster.finished('run_1')
     await r.poster.idle()
     r.poster.finished('run_1')
@@ -118,7 +118,7 @@ describe('createRunReportPoster', () => {
     r.poster.finished('run_1')
     await r.poster.idle()
     expect(r.calls.length).toBe(n)
-    expect(r.calls.map(kind)).toEqual(['post', 'edit'])
+    expect(r.calls.map(kind)).toEqual(['find', 'post', 'edit'])
   })
 
   it('a failure is retried once, then recorded', async () => {
@@ -126,7 +126,7 @@ describe('createRunReportPoster', () => {
     const tasksBefore = JSON.stringify(r.state().tasks)
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post', 'find', 'post'])
+    expect(r.calls.map(kind)).toEqual(['find', 'post', 'find', 'post'])
     expect(comment(r.state())?.error).toMatch(/boom/)
     expect(comment(r.state())?.id).toBeUndefined()
     expect(JSON.stringify(r.state().tasks)).toBe(tasksBefore)
@@ -135,12 +135,39 @@ describe('createRunReportPoster', () => {
   })
 
   it('a retry finds a post that landed', async () => {
-    const r = rig({ answer: (args) => (args[0] === 'pr' ? fail('gh: timeout exceeded') : ok(`123 ${COMMENT_URL}\n`)) })
+    let finds = 0
+    const r = rig({ answer: (args) => (args[0] === 'pr' ? fail('gh: timeout exceeded') : args.includes('--paginate') && finds++ > 0 ? ok(`123 ${COMMENT_URL}\n`) : ok('')) })
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post', 'find'])
+    expect(r.calls.map(kind)).toEqual(['find', 'post', 'find'])
     expect(comment(r.state())?.id).toBe(123)
     expect(comment(r.state())?.error).toBeUndefined()
+  })
+
+  it('a Run whose earlier post was recorded as failed finds the comment that landed', async () => {
+    const r = rig({ state: world({ commentError: true }), answer: (args) => (args.includes('--paginate') ? ok(`123 ${COMMENT_URL}\n`) : ok('')) })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.calls.map(kind)).toEqual(['find'])
+    expect(comment(r.state())?.id).toBe(123)
+    expect(comment(r.state())?.error).toBeUndefined()
+  })
+
+  it('a post from a Host that left is found, not posted again', async () => {
+    const r = rig({ answer: (args) => (args.includes('--paginate') ? ok(`123 ${COMMENT_URL}\n`) : ok('')) })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.calls.map(kind)).toEqual(['find'])
+    expect(comment(r.state())?.id).toBe(123)
+  })
+
+  it('a lookup that fails twice never posts blind', async () => {
+    const r = rig({ answer: (args) => (args.includes('--paginate') ? fail('gh: boom') : ok(COMMENT_URL)) })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.calls.map(kind)).toEqual(['find', 'find'])
+    expect(comment(r.state())?.error).toMatch(/boom/)
+    expect(comment(r.state())?.id).toBeUndefined()
   })
 
   it('a failed edit is retried as an edit', async () => {
@@ -156,7 +183,7 @@ describe('createRunReportPoster', () => {
     await r.poster.idle()
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post', 'edit', 'edit'])
+    expect(r.calls.map(kind)).toEqual(['find', 'post', 'edit', 'edit'])
     expect(comment(r.state())?.error).toBeUndefined()
   })
 
@@ -192,7 +219,8 @@ describe('createRunReportPoster', () => {
     })
     r.poster.finished('run_1')
     await r.poster.idle()
-    const body = bodyOf(r.calls[0])
+    const body = bodyOf(r.calls.find((c) => kind(c) === 'post')!)
+    expect(body.length).toBeGreaterThan(20)
     expect(body).not.toContain('Work Account')
     expect(body).not.toContain(WT)
     expect(body).not.toContain('someone')
@@ -206,7 +234,7 @@ describe('createRunReportPoster', () => {
     })
     r.poster.finished('run_1')
     await r.poster.idle()
-    expect(r.calls.map(kind)).toEqual(['post'])
+    expect(r.calls.map(kind)).toEqual(['find', 'post'])
     expect(r.logs.some((l) => /accounts/.test(l))).toBe(true)
   })
 })
