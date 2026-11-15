@@ -122,8 +122,9 @@ export interface SpawnChecks {
   appKeyFile?: string | null
   /** The agents' login files (`.credentials.json`, `auth.json`) of every account and the default folders
    *  (core/sandbox/locations.ts agentLoginEntries, sandbox design §6), which a sandboxed Codex session's profile denies on
-   *  every OS, each only if it is there at the start. A thunk, since accounts come and go while the process runs; the Host
-   *  gives the list its own last prepare read. Absent, none is denied. */
+   *  every OS, each only if it is there when the prepare looks (prepareCodexSandbox chooses once, and the spawn names that
+   *  choice). A thunk, since accounts come and go while the process runs: the app reads its registry and the Host reads
+   *  `accounts.json`, each with the account folders found on the disk, at every ask. Absent, none is denied. */
   agentLogins?: () => readonly DenyEntry[]
   /** The folders a sandboxed Codex session's profile keeps read-only on every OS: Astera's profile folder and every
    *  place Astera itself writes code or an installer to and runs unsandboxed (core/sandbox/locations.ts sandboxReadOnly,

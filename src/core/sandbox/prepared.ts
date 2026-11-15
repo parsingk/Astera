@@ -172,9 +172,10 @@ export interface SessionLinks {
 }
 
 /** What a sandboxed Codex start names, and the links that left an entry as given (Task E fix round 5): the E6 list, the
- *  OS credential store, the app key and the read-only folders each where namedPathFor puts it for this session; the
- *  Host socket folders as they are (already named in both macOS spellings). Without `links`, codexSessionDenied's list
- *  and the read-only folders as given. */
+ *  OS credential store, the app key, the agents' login files (the ones there, unless the prepare already chose them:
+ *  `agentLoginsChosen`) and the read-only folders each where namedPathFor puts it for this session; the Host socket
+ *  folders as they are (already named in both macOS spellings). Without `links`, codexSessionDenied's list and the
+ *  read-only folders as given. */
 function codexNamedEntries(o: {
   platform: NodeJS.Platform
   homeDir: string

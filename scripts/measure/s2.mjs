@@ -57,14 +57,17 @@ export const s2SetNames = (platform) => S2_SETS.filter((s) => s.platforms === un
 /** What a sandboxed Codex session may not read: E6, the OS credential store its sandbox leaves open (the macOS
  *  keychains, the Linux session bus), on macOS and Linux the folder a Host's socket is in (`hostDir`), and on every OS
  *  the profile's app key (`appKeyFile`). The list a session's start builds (prepared.ts codexSessionDenied, which
- *  sessionSandboxArgs denies), so what is measured is what a start hands Codex. */
+ *  sessionSandboxArgs denies), so what is measured is what a start hands Codex, except the agents' login files
+ *  (`agentLogins`, locations.ts agentLoginEntries), which this list leaves out: the measurement's home holds no
+ *  `.credentials.json` or `auth.json` of any account to name (unit tests cover them, prepared.test.ts). */
 export const codexDenied = (platform, env, home, hostDir = null, appKeyFile = null) =>
   codexSessionDenied({ platform, env, homeDir: home, hostSocketDir: hostDir, appKeyFile })
 
 /** What a sandboxed Claude session may not read: E6, the OS credential store (the macOS keychains; the Linux session
  *  bus, which srt blocks with every Unix socket anyway, inventory §22.3) and the profile's app key (`appKeyFile`). The
  *  list a Claude start builds (claudeSettings.ts claudeSessionDenied, which StatusLineManager's twins deny), so what is
- *  measured is what a start hands Claude. */
+ *  measured is what a start hands Claude, except the agents' login files (`agentLogins`), left out here for the reason
+ *  codexDenied gives: the measurement's home has none. */
 export const claudeDenied = (platform, env, home, appKeyFile = null) => claudeSessionDenied({ platform, env, homeDir: home, appKeyFile })
 
 /** What a sandboxed session of either CLI may not write (locations.ts sandboxReadOnly), the one builder every start and

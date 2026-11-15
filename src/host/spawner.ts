@@ -195,7 +195,7 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  follow-ups, item 1). */
   appKeyFile?: string | null
   /** The agents' login files of every registered account and the default folders, which a sandboxed session's profile
-   *  denies on every OS, terminal or chat, each only if it is there at the start (sandbox design §6, locations.ts
+   *  denies on every OS, terminal or chat, each only if it is there when the prepare looks (sandbox design §6, locations.ts
    *  agentLoginEntries): `accounts.json` as it is at the ask, and the folders account detection would look at. */
   agentLogins?: () => readonly DenyEntry[]
   /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix

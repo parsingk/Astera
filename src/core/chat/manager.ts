@@ -97,7 +97,7 @@ export interface ChatManagerDeps {
   /** The profile's app key file, which a sandboxed Codex chat's profile denies on every OS (SpawnChecks' twin). Absent,
    *  nothing is denied for it. */
   appKeyFile?: string | null
-  /** The agents' login files a sandboxed Codex chat's profile denies on every OS, each only if it is there at the start
+  /** The agents' login files a sandboxed Codex chat's profile denies on every OS, each only if it is there when the prepare looks
    *  (SpawnChecks' twin). Absent, none is denied. */
   agentLogins?: () => readonly DenyEntry[]
   /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is

@@ -9,7 +9,8 @@ const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 /** One place a sandboxed session may not read, and whether it names a file or a folder (Task E fix round 6): Codex's
  *  Windows sandbox makes a missing deny-read path a folder, which is harmless for a folder and breaks the program that
- *  later wants a file there (core/sandbox/prepared.ts leaves a missing file out on Windows). Said where each list is
+ *  later wants a file there (core/sandbox/prepared.ts leaves a missing E6 file out on Windows, and an agent's login file on
+ *  every OS, presentAgentLogins). Said where each list is
  *  built, so a new entry is classed too. */
 export interface DenyEntry {
   path: string

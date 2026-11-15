@@ -540,7 +540,7 @@ export class StatusLineManager {
       readOnly?: readonly string[]
       /** The agents' login files a sandboxed Claude twin denies (sandbox design §6): a thunk, since accounts come and go
        *  while the process runs, built by the app and Host wiring (agentLoginEntries). Each is named only if it is there
-       *  at the start, when the scope can look (sandboxNamed). Default: none. */
+       *  when the prepare looks, if the scope can (chooseAgentLogins). Default: none. */
       agentLogins?: () => readonly DenyEntry[]
     } = {}
   ) {
@@ -838,7 +838,7 @@ export class StatusLineManager {
    * The sandbox (sandbox design §6): writes, for the scope of a sandboxed Claude start (SandboxScope: its folder's git
    * layout and the environment its session is built from), a twin of each settings file a session can be pointed at
    * (plain, hooks, observe, observe hooks, enforce, enforce hooks, as far as each has been built), the same JSON with
-   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store, with this profile folder kept
+   * Claude's sandbox added and the deny rules for the E6 list, the OS credential store and the agents' login files (those there when the prepare chose), with this profile folder kept
    * from being written (claudeSandboxSettings), and the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
    * scope are in a folder of their own, `sandbox-settings/<hash>`, named by what its sandbox holds, so sessions in
    * different repositories, or of accounts whose environment names another bus, never read each other's, and two starts
