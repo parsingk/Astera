@@ -2209,6 +2209,41 @@ describe('the sandbox at spawn', () => {
     })
   })
 
+  // Sandbox design §6: the agents' login files are chosen once, at the prepare, and the spawn names exactly those: a login
+  // file that appears or goes between the two changes nothing (the readiness echo ran under the prepare's list), and a new
+  // prepare picks the change up
+  it('names the login files the prepare chose at the spawn, whatever changed on the disk in between', async () => {
+    const base = realpathSync.native(repo()).split(path.sep).join('/')
+    const home = `${base}/home`
+    mkdirSync(`${home}/a`, { recursive: true })
+    mkdirSync(`${home}/b`, { recursive: true })
+    const a = `${home}/a/auth.json`
+    const b = `${home}/b/auth.json`
+    writeFileSync(a, 'fake')
+    const cwd = repo()
+    for (const platform of ['linux', 'win32'] as const) {
+      const argv: string[][] = []
+      const env = platform === 'win32' ? { Path: 'C:\\Windows', APPDATA: `${home}/AppData/Roaming` } : { ...BASE.linux }
+      const manager = new SessionManager((_f, args) => (argv.push(args as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
+        100, 20, home, undefined, [], env, { ...checksFor(platform), linkLook: nodeLinkLook, agentLogins: () => [{ path: a, kind: 'file' }, { path: b, kind: 'file' }] })
+      manager.codexVersion = versionOf('0.160.0')
+      const profileOf = (i: number): string => codexArgs(argv[i]).find((x) => x.startsWith('permissions='))!
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      writeFileSync(b, 'fake') // appears after the prepare
+      rmSync(a) // goes after the prepare
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(profileOf(0), platform).toContain(`"${a}"="deny"`)
+      expect(profileOf(0), platform).not.toContain(`"${b}"`)
+      // A new prepare sees the disk as it is now
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(profileOf(1), platform).toContain(`"${b}"="deny"`)
+      expect(profileOf(1), platform).not.toContain(`"${a}"`)
+      writeFileSync(a, 'fake')
+      rmSync(b)
+    }
+  })
+
   // Task E fix round 6 (Important): Codex's Windows sandbox makes a missing deny-read path a folder before it denies it
   // (windows-sandbox-rs/src/deny_read_acl.rs:58-76 at rust-v0.160.0), so a missing ~/.git-credentials became an empty
   // folder where git's credential store wants a file. On Windows a file entry that is not there at the start is left out;

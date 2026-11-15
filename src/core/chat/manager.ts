@@ -319,7 +319,7 @@ export class ChatSessionManager {
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
     // the copy of the person's git excludes for its environment, and the home's elevated default for its warning (Task P)
-    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault)
+    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault, prepared.agentLogins)
   }
 
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
@@ -428,7 +428,8 @@ export class ChatSessionManager {
             hostSocketDir: this.deps.hostSocketDir ?? null,
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
             appKeyFile: this.deps.appKeyFile ?? null,
-            agentLogins: this.deps.agentLogins?.() ?? [],
+            agentLogins: this.sandboxLayouts.agentLoginsOf(opts.account.id, opts.cwd, Date.now()),
+            agentLoginsChosen: true,
             readOnly: this.deps.readOnly ?? [],
             log: this.deps.log,
             links: this.deps.linkLook ? { cwd: opts.cwd, look: this.deps.linkLook } : null
@@ -448,7 +449,8 @@ export class ChatSessionManager {
         layout,
         env: inherited,
         appKeyFile: this.deps.appKeyFile ?? null,
-        agentLogins: this.deps.agentLogins?.() ?? [],
+        agentLogins: this.sandboxLayouts.agentLoginsOf(opts.account.id, opts.cwd, Date.now()),
+        agentLoginsChosen: true,
         readOnly: this.deps.readOnly ?? [],
         links: { cwd: opts.cwd, look: this.deps.linkLook }
       }).length > 0

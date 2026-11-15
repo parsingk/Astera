@@ -356,7 +356,7 @@ export class SessionManager {
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
     // the copy of the person's git excludes for its environment, and the home's elevated default for its warning (Task P)
-    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault)
+    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault, prepared.agentLogins)
   }
 
   /** The environment a Task's check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
@@ -405,11 +405,11 @@ export class SessionManager {
       if (layout === undefined) throw sandboxUnavailable('not-prepared')
       const env = this.envFor(a.account)
       if (this.hiding) applyHiding(env, this.hiding.get(a.cwd), platform)
-      if (platform === 'linux' && this.checks.linkLook !== null && this.codexLinksFor(layout, env, a.cwd).length > 0) {
+      if (platform === 'linux' && this.checks.linkLook !== null && this.codexLinksFor(layout, env, a.cwd, this.sandboxLayouts.agentLoginsOf(a.account.id, a.cwd, now)).length > 0) {
         this.checks.log(`sandbox: a path the check's sandbox names goes through a link in ${a.cwd}, so Codex would refuse every command; the check is refused`)
         throw sandboxUnavailable('linked-path')
       }
-      const profile = appServerSandboxArgs(this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(a.account.id, a.cwd, now), a.cwd))
+      const profile = appServerSandboxArgs(this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(a.account.id, a.cwd, now), a.cwd, this.sandboxLayouts.agentLoginsOf(a.account.id, a.cwd, now)))
       const mark = platform === 'win32' ? CHECK_STARTED_MARK : undefined
       const cmd = buildCodexSandboxCommand(platform, profile, checkShell(platform, a.command, os.tmpdir(), mark))
       fitsOnTheLine(platform, cmd)
@@ -597,13 +597,13 @@ export class SessionManager {
     // The sandbox's profile: the places it may not read come from the environment the session actually starts with (its
     // APPDATA, its session bus), so they are read after the hiding above
     const sandboxArgs = sandboxedCodex
-      ? this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, this.checks.now()), opts.cwd)
+      ? this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, this.checks.now()), opts.cwd, this.sandboxLayouts.agentLoginsOf(opts.account.id, opts.cwd, this.checks.now()))
       : undefined
     // Task E fix rounds 2, 3 and 5: what the sandbox will not do here, in the info and the note beside the kind, for the tab
     // to show above the terminal (a line in the pty's stream would sit behind the CLI's alternate screen). On Linux a
     // named path through a link in the work folder makes Codex refuse every command (sessionSandboxArgs)
     const linkInWorkFolder =
-      sandboxedCodex && this.checks.platform === 'linux' && this.checks.linkLook !== null && this.codexLinksFor(layout, env, opts.cwd).length > 0
+      sandboxedCodex && this.checks.platform === 'linux' && this.checks.linkLook !== null && this.codexLinksFor(layout, env, opts.cwd, this.sandboxLayouts.agentLoginsOf(opts.account.id, opts.cwd, this.checks.now())).length > 0
     const sandboxWarnings = sandboxed
       ? startWarningsFor(this.sandboxWarn, {
           provider: providerOf(opts.account),
@@ -773,7 +773,7 @@ export class SessionManager {
 
   /** A sandboxed Codex session's `-a never` and permission profile (sessionSandboxArgs, core/sandbox/prepared.ts), with a
    *  win32 path cmd.exe cannot carry refused; `otherHosts` are the other Hosts' folders its prepare found. */
-  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>, otherHosts: readonly string[], cwd: string): string[] {
+  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>, otherHosts: readonly string[], cwd: string, agentLogins: readonly DenyEntry[]): string[] {
     return sessionSandboxArgs({
       platform: this.checks.platform,
       homeDir: this.homeDir,
@@ -782,7 +782,8 @@ export class SessionManager {
       hostSocketDir: this.checks.hostSocketDir ?? null,
       otherHostDirs: otherHosts,
       appKeyFile: this.checks.appKeyFile ?? null,
-      agentLogins: this.checks.agentLogins?.() ?? [],
+      agentLogins,
+      agentLoginsChosen: true,
       readOnly: this.checks.readOnly ?? [],
       log: this.checks.log,
       links: this.checks.linkLook ? { cwd, look: this.checks.linkLook } : null
@@ -790,7 +791,7 @@ export class SessionManager {
   }
 
   /** The links in a sandboxed Codex session's writable folders its named paths go through (Task E fix round 5). */
-  private codexLinksFor(layout: GitLayout | null, env: Record<string, string | undefined>, cwd: string): string[] {
+  private codexLinksFor(layout: GitLayout | null, env: Record<string, string | undefined>, cwd: string, agentLogins: readonly DenyEntry[]): string[] {
     if (!this.checks.linkLook) return []
     return codexSessionLinks({
       platform: this.checks.platform,
@@ -798,7 +799,8 @@ export class SessionManager {
       layout,
       env,
       appKeyFile: this.checks.appKeyFile ?? null,
-      agentLogins: this.checks.agentLogins?.() ?? [],
+      agentLogins,
+      agentLoginsChosen: true,
       readOnly: this.checks.readOnly ?? [],
       links: { cwd, look: this.checks.linkLook }
     })
