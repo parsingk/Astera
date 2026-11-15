@@ -9,7 +9,7 @@
 // own minus what its start added, D4), the pty factory (the Host's registry, plus `pty-opened`), and
 // worktrees (the Host's own registry, Host S3 §3.1) — the fork behind `--worktree new` and the three
 // `OrchServerDeps` this file no longer answers by refusing.
-import { existsSync, promises as fs } from 'node:fs'
+import { existsSync, promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { comparablePath } from '../core/files/tree'
@@ -196,7 +196,7 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   appKeyFile?: string | null
   /** The agents' login files of every registered account and the default folders, which a sandboxed session's profile
    *  denies on every OS, terminal or chat, each only if it is there at the start (sandbox design §6, locations.ts
-   *  agentLoginEntries): the list this Host's last read of `accounts.json` gave. */
+   *  agentLoginEntries): `accounts.json` as it is at the ask, and the folders account detection would look at. */
   agentLogins?: () => readonly DenyEntry[]
   /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix
    *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
@@ -370,8 +370,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     return null
   }
   const { profileDir, platform, homeDir, registry, log } = d
-  // Every read of `accounts.json` here is kept as the last list this Host saw: a spawn's own prepare has just read it, so
-  // the agents' login files its sandbox denies are those of the accounts it saw (agentLogins, below)
+  // Every read of `accounts.json` through this spawner is kept as the last list it saw: the fallback of the agents' login
+  // files (agentLogins, below) when the file cannot be read at the moment a start asks
   let lastAccounts: Account[] = []
   const readAccountsFile = d.readAccounts ?? readAccountEntries
   const readAccounts = async (file: string): Promise<Account[]> => (lastAccounts = await readAccountsFile(file))
@@ -387,12 +387,23 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The key that lets a process be the app to this Host, which a sandboxed session's profile denies (sandbox follow-ups,
   // item 1)
   const appKeyFile = appKeyPath(profileDir)
-  // The agents' login files (sandbox design §6): every registered account's, from the last list read, plus every folder
-  // account detection would look at, found on the disk at each ask (agentAccountFolders). Before the first read of
-  // accounts.json the registered part is empty, so only the default folders and the folders in the usual places are named;
-  // the second part closes that gap for an account kept in them. An account registered with a configDir elsewhere is named
-  // from its first read on.
-  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir, accounts: [...lastAccounts, ...agentAccountFolders(homeDir)] })
+  // The agents' login files (sandbox design §6): every registered account's, plus every folder account detection would look
+  // at, both as they are when a start asks. accounts.json is read here, synchronously, at each ask (the file is small, and
+  // the spawn that asks is synchronous and already looks at the disk this way): the Host's start paths do not all read it
+  // through this spawner (`sessions create` has its own reader), so no list kept from an earlier read can be trusted to be
+  // current or even to exist. When the read or the parse fails, the last list any path through this spawner read stands
+  // in. The folders are found on the disk by agentAccountFolders, so an account kept in the usual places is named even
+  // before anything was read.
+  const registeredAccounts = (): { provider?: 'claude' | 'codex'; configDir: string }[] => {
+    try {
+      const list = (JSON.parse(readFileSync(path.join(profileDir, 'accounts.json'), 'utf8')) as { accounts?: unknown }).accounts
+      if (!Array.isArray(list)) return lastAccounts
+      return list.filter((a): a is Account => typeof (a as { configDir?: unknown })?.configDir === 'string')
+    } catch {
+      return lastAccounts
+    }
+  }
+  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir, accounts: [...registeredAccounts(), ...agentAccountFolders(homeDir)] })
   // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
   // Astera itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it was handed from
   // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download

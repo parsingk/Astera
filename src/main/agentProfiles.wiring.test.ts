@@ -262,9 +262,9 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
     expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    linkLook: a\.spawner\.linkLook,\n/)
     expect(hostChats).toMatch(/\n    linkLook: d\.linkLook,\n/)
   })
-  it('the Host names the agents login files from the last accounts list it read, for the twins, the checks and the chats', () => {
+  it('the Host names the agents login files from accounts.json as it is at the ask (spawner.test.ts runs it), for the twins, the checks and the chats', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
-    expect(spawner).toMatch(/const agentLogins = \(\): DenyEntry\[\] => agentLoginEntries\(\{ homeDir, accounts: \[\.\.\.lastAccounts, \.\.\.agentAccountFolders\(homeDir\)\] \}\)/)
+    expect(spawner).toMatch(/const agentLogins = \(\): DenyEntry\[\] => agentLoginEntries\(\{ homeDir, accounts: \[\.\.\.registeredAccounts\(\), \.\.\.agentAccountFolders\(homeDir\)\] \}\)/)
     expect(spawner).toMatch(/\n      readOnly,\n      agentLogins\n    \}/)
     expect(spawner).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    sandboxWarn,\n/)
   })

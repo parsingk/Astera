@@ -1476,3 +1476,37 @@ describe('enforceWarm', () => {
     expect(warmed.sort()).toEqual(['hooks', 'version:claude'])
   })
 })
+
+// Sandbox design §6: the Host names the agents' login files from accounts.json as it is when a start asks, not from
+// whichever code path happened to read it last. A Host that has read nothing yet still denies a registered account's login
+// file, even where the account's folder is outside the places account detection looks at.
+describe('createHostSpawner, the agents login files', () => {
+  const slashed = (p: string): string => p.split(path.sep).join('/')
+  const neverRead = (): Promise<never> => Promise.reject(new Error('this Host never read accounts.json'))
+
+  it('names a registered account outside the usual places before any read of accounts.json, and one registered since', async () => {
+    const outside = path.join(dir, 'agents', 'work')
+    writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'w', label: 'work', configDir: outside, color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ readAccounts: neverRead })
+    const paths = (): string[] => h.spawner!.agentLogins!().map((e) => e.path)
+    expect(paths()).toContain(`${slashed(outside)}/auth.json`)
+    // An account registered afterwards is there at the next ask, with no spawn in between
+    const later = path.join(dir, 'agents', 'later')
+    writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'w', label: 'work', configDir: outside, color: '#888', createdAt: NOW, provider: 'codex' },
+      { id: 'l', label: 'later', configDir: later, color: '#888', createdAt: NOW, provider: 'claude' }
+    ] }))
+    expect(paths()).toContain(`${slashed(later)}/.credentials.json`)
+  })
+
+  it('falls back to the last list it read when accounts.json cannot be read, and never throws', async () => {
+    const outside = path.join(dir, 'agents', 'kept')
+    const h = rig({ readAccounts: async () => [{ id: 'k', label: 'k', configDir: outside, color: '#888', createdAt: NOW, provider: 'codex' }] })
+    // The last read came from a spawner path (here the wrapped reader the Host's operations use)
+    await h.spawner!.accountName!('k')
+    writeFileSync(path.join(profile, 'accounts.json'), '{ not json')
+    expect(h.spawner!.agentLogins!().map((e) => e.path)).toContain(`${slashed(outside)}/auth.json`)
+  })
+})
