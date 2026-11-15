@@ -18,6 +18,9 @@ const SLACK_CAVEATS_KEPT = 10
 export interface ScrubContext {
   /** Absolute paths whose inside is shown repo-relative: the Run's worktrees and the project folders */
   roots: string[]
+  /** Folders taken whole with whatever path follows, after the roots: the home folder and the profile folder, whose name
+   *  may hold a space the path patterns below stop at */
+  prefixes: string[]
   /** Account labels and anything else Astera knows that must not leave the machine */
   secrets: string[]
 }
@@ -36,7 +39,7 @@ const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
 // A GitHub user or team, not part of an email, a word or a path
 const MENTION = /(?<![\w@/.\-])@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\/[A-Za-z0-9_.-]*[A-Za-z0-9_])?)/g
 const SECRET_MIN = 3
-/** A caveat's free text (a forced completion's reason) is cut here, in every rendering */
+/** A caveat's free text (a forced completion's reason) is cut here (cutCaveatText) */
 export const CAVEAT_TEXT_MAX = 300
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -50,8 +53,8 @@ function rootPattern(root: string): RegExp | null {
   return new RegExp(`${source}(?:[\\\\/](${PATH_BODY})|(?![\\w-]|\\.\\w))`, flags)
 }
 
-/** One free text of the report, made safe to leave the machine, in this order: roots to repo-relative paths, any other
- *  absolute path to an ellipsis, email addresses, then the secrets as whole words. */
+/** One free text of the report, made safe to leave the machine, in this order: roots to repo-relative paths, the
+ *  prefixes and any other absolute path to an ellipsis, email addresses, then the secrets as whole words. */
 export function scrubText(text: string, ctx: ScrubContext): string {
   let out = text
   const roots = [...ctx.roots].sort((a, b) => b.length - a.length)
@@ -62,6 +65,10 @@ export function scrubText(text: string, ctx: ScrubContext): string {
       const relative = (rest ?? '').replace(/\\/g, '/')
       return relative === '' ? '.' : relative
     })
+  }
+  for (const prefix of [...ctx.prefixes].sort((a, b) => b.length - a.length)) {
+    const re = rootPattern(prefix)
+    if (re) out = out.replace(re, '…')
   }
   out = out.replace(FILE_URL, '…').replace(DRIVE_PATH, '…').replace(UNC_PATH, '…').replace(HOME_PATH, '…').replace(POSIX_PATH, '…')
   out = out.replace(EMAIL, '…')
@@ -77,13 +84,22 @@ export function scrubText(text: string, ctx: ScrubContext): string {
     .join('')
 }
 
-/** The report as the pull request comment may show it: no cost (D2), every free text scrubbed. The PR's own url stays. */
+/** `<` and `>` outside code spans as entities: GitHub would read `<!--` in one field and `-->` in another as a comment
+ *  hiding what lies between, and `Array<T>` as a tag */
+const escapeAngles = (text: string): string =>
+  text
+    .split(/(`[^`]*`)/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/</g, '&lt;').replace(/>/g, '&gt;')))
+    .join('')
+
+/** The report as the pull request comment may show it: no cost (D2), no Job name (its objective may say more than the
+ *  pull request should), every free text cut where it is cut, then scrubbed and escaped. The PR's own url stays. */
 export function forPullRequest(report: RunReport, ctx: ScrubContext): RunReport {
-  const s = (text: string): string => scrubText(text, ctx)
+  const s = (text: string): string => escapeAngles(scrubText(text, ctx))
   const { cost: _cost, ...rest } = report
   return {
     ...rest,
-    job: s(report.job),
+    job: '',
     tasks: report.tasks.map((task) => ({
       ...task,
       title: s(task.title),
@@ -95,11 +111,13 @@ export function forPullRequest(report: RunReport, ctx: ScrubContext): RunReport 
     caveats: report.caveats.map((c): RunReportCaveat => {
       switch (c.kind) {
         case 'forced':
-          return { ...c, task: s(c.task), reason: s(c.reason) }
+          // Cut before the scrub wraps a mention in a code span, so the cut never lands inside one
+          return { ...c, task: s(c.task), reason: s(cutCaveatText(c.reason)) }
         case 'ci-skipped':
           return c
-        case 'check-skipped':
         case 'outside-sandbox':
+          return { ...c, task: s(c.task), checks: c.checks.map(s) }
+        case 'check-skipped':
         case 'unstable':
           return { ...c, task: s(c.task), check: s(c.check) }
         default:
@@ -119,7 +137,9 @@ const SEP: Record<Lang, string> = { ko: ', ', en: ', ', ja: '、', es: ', ' }
 
 /** A free text on one line: a title with a line break must not break a list row */
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
-const cutText = (s: string): string => {
+/** A caveat's free text on one line, cut at CAVEAT_TEXT_MAX: by the builder, and again (a no-op on a cut text) by the
+ *  pull request version before it scrubs */
+export const cutCaveatText = (s: string): string => {
   const one = oneLine(s)
   return one.length > CAVEAT_TEXT_MAX ? `${one.slice(0, CAVEAT_TEXT_MAX)}…` : one
 }
@@ -135,13 +155,18 @@ function duration(ms: number, lang: Lang): string {
   return t(lang, 'runReport.duration.hourMin', { h, m })
 }
 
+/** The outcome, naming the Run by its Job and ordinal, or by its ordinal alone when the report holds no Job name (the
+ *  pull request version) */
 export function outcomeLine(r: RunReport, lang: Lang): string {
   const ms = Date.parse(r.endedAt) - Date.parse(r.startedAt)
-  return t(lang, r.outcome === 'completed' ? 'runReport.outcome.completed' : 'runReport.outcome.failed', {
-    job: oneLine(r.job),
-    ordinal: r.ordinal,
-    duration: duration(Number.isFinite(ms) ? ms : 0, lang)
-  })
+  const params = { job: oneLine(r.job), ordinal: r.ordinal, duration: duration(Number.isFinite(ms) ? ms : 0, lang) }
+  if (r.job === '') return t(lang, r.outcome === 'completed' ? 'runReport.outcome.completedUnnamed' : 'runReport.outcome.failedUnnamed', params)
+  return t(lang, r.outcome === 'completed' ? 'runReport.outcome.completed' : 'runReport.outcome.failed', params)
+}
+
+/** When the Run started and ended, each worded by `at`: the card and its Copy pass the reader's own clock format */
+export function timesLine(r: RunReport, lang: Lang, at: (iso: string) => string): string {
+  return t(lang, 'runReport.times', { start: at(r.startedAt), end: at(r.endedAt) })
 }
 
 export function githubLine(r: RunReport, lang: Lang): string {
@@ -150,12 +175,16 @@ export function githubLine(r: RunReport, lang: Lang): string {
   const parts: string[] = []
   if (g.pr) parts.push(t(lang, 'runReport.github.pr', { number: g.pr.number, url: g.pr.url }))
   if (g.ci) parts.push(t(lang, key(`runReport.github.ci.${g.ci.verdict}`), { sha: shortSha(g.ci.sha) }))
+  // The failed rounds the CI check's history counts, repaired or not: a failed Run's last round may be one of them
   if (g.ciFailedRounds > 0) {
-    parts.push(t(lang, g.ciFailedAtLeast ? 'runReport.github.ciRepairsAtLeast' : 'runReport.github.ciRepairs', { count: g.ciFailedRounds }))
+    parts.push(t(lang, g.ciFailedAtLeast ? 'runReport.github.ciFailedAtLeast' : 'runReport.github.ciFailed', { count: g.ciFailedRounds }))
   }
-  if (g.reruns.astera + g.reruns.person > 0) {
-    parts.push(t(lang, g.reruns.atLeast ? 'runReport.github.rerunsAtLeast' : 'runReport.github.reruns', { astera: g.reruns.astera, person: g.reruns.person }))
-  }
+  // Only who reran it; nothing at all when no one did
+  const { astera, person, atLeast } = g.reruns
+  const times = (count: number): string => (atLeast ? t(lang, 'runReport.atLeast', { count }) : String(count))
+  if (astera > 0 && person > 0) parts.push(t(lang, 'runReport.github.rerunsBoth', { astera: times(astera), person: times(person) }))
+  else if (astera > 0) parts.push(t(lang, 'runReport.github.rerunsAstera', { astera: times(astera) }))
+  else if (person > 0) parts.push(t(lang, 'runReport.github.rerunsPerson', { person: times(person) }))
   if (g.mergeReady) parts.push(t(lang, 'runReport.github.mergeReady', { sha: shortSha(g.mergeReady.headSha) }))
   else if (g.withheld) parts.push(t(lang, 'jobs.github.invalidated', { reason: t(lang, key(`jobs.github.reason.${g.withheld}`)) }) + DOT[lang])
   else parts.push(t(lang, 'runReport.github.notReady'))
@@ -181,17 +210,25 @@ export function reviewLine(rv: RunReportReview, lang: Lang): string {
 
 const groupWord = (g: ActorGroup, lang: Lang): string => t(lang, key(`runReport.group.${g}`))
 
+/** A Task as the report names it: the lifecycle Task's title is stored in one language (lifecycleTask.ts), so it is
+ *  named in the reader's, as the app's graph names it (taskTitleOf); any other Task by its own title */
+const taskName = (title: string, lifecycle: true | undefined, lang: Lang): string => (lifecycle ? t(lang, 'jobs.lifecycle.title') : oneLine(title))
+
 export function taskLine(task: RunReportTask, lang: Lang): string {
-  const parts = [t(lang, 'runReport.task.statusIs', { status: t(lang, key(`runReport.task.status.${task.status}`)) })]
-  parts.push(t(lang, 'runReport.task.attempts', { count: task.attempts }))
-  if (task.repairs.check + task.repairs.review > 0) parts.push(t(lang, 'runReport.task.repairs', task.repairs))
+  const parts = [t(lang, key(`runReport.task.status.${task.status}`))]
+  // The lifecycle Task is Astera's own carrying: it has a Dispatch only for a repair, which its repairs say
+  if (!task.lifecycle) parts.push(task.attempts > 0 ? t(lang, 'runReport.task.attempts', { count: task.attempts }) : t(lang, 'runReport.task.noWorker'))
+  const { check, review } = task.repairs
+  if (check > 0 && review > 0) parts.push(t(lang, 'runReport.task.repairsBoth', { check, review }))
+  else if (check > 0) parts.push(t(lang, 'runReport.task.repairsCheck', { check }))
+  else if (review > 0) parts.push(t(lang, 'runReport.task.repairsReview', { review }))
   if (task.grantedExtra > 0) parts.push(t(lang, 'runReport.task.extra', { count: task.grantedExtra }))
   // Nothing absent reads as passed (§4.2): a Task nothing looked at says so
   if (task.checks.length === 0) parts.push(t(lang, task.review ? 'runReport.task.noCheckList' : 'runReport.task.noChecks'))
   for (const c of task.checks) parts.push(checkLine(c, lang))
   if (task.review) parts.push(reviewLine(task.review, lang))
   if (task.override) parts.push(t(lang, 'runReport.task.forced', { group: groupWord(task.override.by, lang) }))
-  return `${oneLine(task.title)}: ${parts.join(' ')}`
+  return `${taskName(task.title, task.lifecycle, lang)}: ${parts.join(' ')}`
 }
 
 export function interruptionsLine(r: RunReport, lang: Lang): string {
@@ -208,7 +245,7 @@ const GROUPS: ActorGroup[] = ['person', 'coordinator', 'astera', 'unknown']
 export function interventionsLine(r: RunReport, lang: Lang): string {
   const { answers, forced, noPersonSteppedIn } = r.interventions
   const parts: string[] = []
-  if (GROUPS.some((g) => answers[g] > 0)) parts.push(t(lang, 'runReport.interventions.answers', answers))
+  for (const g of GROUPS) if (answers[g] > 0) parts.push(t(lang, key(`runReport.interventions.answered.${g}`), { count: answers[g] }))
   if (forced.length > 0) {
     const groups = GROUPS.map((g) => ({ g, n: forced.filter((f) => f.by === g).length }))
       .filter((x) => x.n > 0)
@@ -221,20 +258,21 @@ export function interventionsLine(r: RunReport, lang: Lang): string {
 }
 
 export function caveatLine(c: RunReportCaveat, lang: Lang): string {
+  if (c.kind === 'ci-skipped') return t(lang, 'runReport.caveat.ci-skipped')
+  const task = taskName(c.task, c.lifecycle, lang)
   switch (c.kind) {
     case 'forced':
-      return t(lang, 'runReport.caveat.forced', { task: oneLine(c.task), by: groupWord(c.by, lang), reason: cutText(c.reason) })
-    case 'ci-skipped':
-      return t(lang, 'runReport.caveat.ci-skipped')
-    case 'check-skipped':
+      return t(lang, 'runReport.caveat.forced', { task, by: groupWord(c.by, lang), reason: oneLine(c.reason) })
     case 'outside-sandbox':
+      return t(lang, 'runReport.caveat.outside-sandbox', { task, checks: c.checks.map(oneLine).join(SEP[lang]) })
+    case 'check-skipped':
     case 'unstable':
-      return t(lang, key(`runReport.caveat.${c.kind}`), { task: oneLine(c.task), check: oneLine(c.check) })
+      return t(lang, key(`runReport.caveat.${c.kind}`), { task, check: oneLine(c.check) })
     case 'suspicious-files':
-      return t(lang, 'runReport.caveat.suspicious-files', { task: oneLine(c.task), count: c.count })
+      return t(lang, 'runReport.caveat.suspicious-files', { task, count: c.count })
     case 'review-outside-sandbox':
     case 'policy-changed':
-      return t(lang, key(`runReport.caveat.${c.kind}`), { task: oneLine(c.task) })
+      return t(lang, key(`runReport.caveat.${c.kind}`), { task })
   }
 }
 
@@ -274,13 +312,15 @@ function largestFitting(max: number, fits: (n: number) => boolean): number {
 export function reportMarkdown(
   r: RunReport,
   lang: Lang,
-  o: { audience: 'app' | 'pull-request'; accounts?: ReadonlyMap<string, string> }
+  o: { audience: 'app' | 'pull-request'; accounts?: ReadonlyMap<string, string>; at?: (iso: string) => string }
 ): string {
   const pr = o.audience === 'pull-request'
   const build = (taskRows: number, caveatRows = r.caveats.length): string => {
     const blocks: string[] = []
     if (pr) blocks.push(RUN_REPORT_MARKER(r.runId))
     blocks.push(`**${outcomeLine(r, lang)}**`)
+    // The comment carries its own time on GitHub
+    if (!pr) blocks.push(timesLine(r, lang, o.at ?? ((iso) => new Date(iso).toLocaleString(lang))))
     const github = githubLine(r, lang)
     if (github) blocks.push(github)
     blocks.push(t(lang, 'runReport.asOf'))

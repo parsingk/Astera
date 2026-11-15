@@ -82,12 +82,83 @@ describe('buildRunReport', () => {
       { kind: 'forced', task: 'Task t1', by: 'person', reason: 'ship' },
       { kind: 'check-skipped', task: 'Task t1', check: 'a' },
       { kind: 'ci-skipped' },
-      { kind: 'outside-sandbox', task: 'Task t1', check: 'b' },
+      { kind: 'outside-sandbox', task: 'Task t1', checks: ['b'] },
       { kind: 'review-outside-sandbox', task: 'Task t1' },
       { kind: 'policy-changed', task: 'Task t1' },
       { kind: 'suspicious-files', task: 'Task t1', count: 2 },
       { kind: 'unstable', task: 'Task t1', check: 'c' }
     ])
+  })
+
+  it('groups the checks that ran outside the sandbox per Task, and puts what let work past a check first', () => {
+    const gh: RunGitHubState = { ciOverride: { sha: 'x', at: T0 }, log: [], seq: 0 }
+    const t1 = task('t1', {
+      validateConfigIds: ['a', 'b', 'c'],
+      checks: [check('a', 'passed', { outsideSandbox: true, unstable: true }), check('b', 'passed', { outsideSandbox: true }), check('c', 'passed')],
+      reviewFileToolsOnly: true
+    })
+    const t2 = task('t2', {
+      validateConfigIds: ['d'],
+      checks: [check('d', 'not-run', { skipped: true })],
+      completionOverride: { reason: 'ship', at: T0 },
+      completionOverrideBy: 'coordinator'
+    })
+    const r = report({ ...world({ tasks: [t1, t2], github: true }), runs: [run({ githubState: gh })] })
+    expect(r.caveats).toEqual([
+      { kind: 'forced', task: 'Task t2', by: 'coordinator', reason: 'ship' },
+      { kind: 'check-skipped', task: 'Task t2', check: 'd' },
+      { kind: 'ci-skipped' },
+      { kind: 'outside-sandbox', task: 'Task t1', checks: ['a', 'b'] },
+      { kind: 'review-outside-sandbox', task: 'Task t1' },
+      { kind: 'unstable', task: 'Task t1', check: 'a' }
+    ])
+  })
+
+  it('marks the lifecycle Task and the caveats that name it', () => {
+    const life = task('t1', {
+      kind: 'lifecycle',
+      title: 'GitHub 전달',
+      validateConfigIds: ['lint'],
+      checks: [check('lint', 'not-run', { skipped: true })],
+      completionOverride: { reason: 'r', at: T0 }
+    })
+    const r = report(world({ tasks: [life] }))
+    expect(r.tasks[0].lifecycle).toBe(true)
+    expect(r.caveats.map((c) => ('lifecycle' in c ? c.lifecycle : undefined))).toEqual([true, true])
+  })
+
+  it('a forced completion with no group recorded reads unknown', () => {
+    const r = report(world({ tasks: [task('t1', { completionOverride: { reason: 'r', at: T0 } })] }))
+    expect(r.tasks[0].override).toEqual({ reason: 'r', by: 'unknown' })
+    expect(r.interventions.forced).toEqual([{ task: 'Task t1', by: 'unknown' }])
+    expect(r.caveats).toEqual([{ kind: 'forced', task: 'Task t1', by: 'unknown', reason: 'r' }])
+    expect(r.interventions.noPersonSteppedIn).toBe(false)
+  })
+
+  it('stores a forced completion’s reason cut at 300 characters, on one line', () => {
+    const r = report(world({ tasks: [task('t1', { completionOverride: { reason: `${'r'.repeat(200)}\n\n${'s'.repeat(800)}`, at: T0 }, completionOverrideBy: 'person' })] }))
+    const c = r.caveats[0]
+    expect(c.kind === 'forced' && c.reason).toBe(`${'r'.repeat(200)} ${'s'.repeat(99)}…`)
+  })
+
+  it('names the Job on one line, cut at 60 characters', () => {
+    const s = world({})
+    const long = report({ ...s, jobs: [{ ...s.jobs[0], objective: `First line\n\nand ${'w'.repeat(500)}` } as never] })
+    expect(long.job).toBe(`First line and ${'w'.repeat(44)}…`)
+    expect(report(s).job).toBe('Ship it')
+  })
+
+  it('lists the Tasks in the order they were made, without a lifecycle Task a later one superseded (R11)', () => {
+    const tasks = [
+      task('t3', { createdAt: at(30) }),
+      task('t1', { createdAt: at(10) }),
+      task('t5', { kind: 'lifecycle', title: 'later carrying', createdAt: at(50) }),
+      task('t4', { kind: 'lifecycle', title: 'earlier carrying', status: 'failed', createdAt: at(40) }),
+      task('t2', { createdAt: at(20) })
+    ]
+    const r = report(world({ tasks }))
+    expect(r.tasks.map((t) => t.title)).toEqual(['Task t1', 'Task t2', 'Task t3', 'later carrying'])
+    expect(r.outcome).toBe('completed')
   })
 
   it('merge-ready names its head', () => {

@@ -32,6 +32,8 @@ export function createRunReportPoster(a: {
   record(args: { runId: string; patch: RunGitHubPatch }): Promise<{ status: number; body: unknown }>
   /** The Host's Slack wiring (null when it has none): asked once per finish, never retried */
   slack: { postRunReport(text: string): Promise<string> } | null
+  /** Folders no path in the comment may show any part of: the home folder and the profile folder (ScrubContext) */
+  prefixes: readonly string[]
   lang(): Lang
   log(m: string): void
   retryAfterMs?: number
@@ -64,7 +66,7 @@ export function createRunReportPoster(a: {
     const labels = (await accounts()).map((x) => x.label)
     const secrets = [...labels, ...labels.flatMap((l) => l.match(EMAIL) ?? [])]
     const roots = [job.cwd, run.worktree].filter((p): p is string => typeof p === 'string' && p !== '')
-    const body = reportMarkdown(forPullRequest(report, { roots, secrets }), a.lang(), { audience: 'pull-request' })
+    const body = reportMarkdown(forPullRequest(report, { roots, prefixes: [...a.prefixes], secrets }), a.lang(), { audience: 'pull-request' })
 
     // With no id kept, the PR's comments are searched for the marker before every post: a post that landed but was
     // never recorded (a timeout, a Host that left, a failed record) is found, not doubled (C2). A failed search is a

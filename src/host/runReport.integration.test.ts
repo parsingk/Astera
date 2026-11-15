@@ -78,6 +78,7 @@ async function rig(o: { postRunReport: boolean; binding: boolean; slackAnswer?: 
     accounts: async () => [],
     record: (args) => orch.handle('runs-github-record', args),
     slack: { postRunReport: async (text) => (slackTexts.push(text), o.slackAnswer ?? 'posted') },
+    prefixes: [os.homedir(), dir],
     lang: () => 'en',
     log: () => {},
     retryAfterMs: 0
@@ -100,14 +101,14 @@ describe('the Host posts the run report', () => {
     await r.finish()
     const first = r.orch.state().runs[0].report
     expect(first?.outcome).toBe('completed')
-    expect(first?.caveats).toContainEqual({ kind: 'forced', task: expect.any(String), by: 'person', reason: REASON })
+    expect(first?.caveats).toContainEqual({ kind: 'forced', task: expect.any(String), lifecycle: true, by: 'person', reason: REASON })
 
     r.setClock(LATER)
     await r.update({ status: 'ready' })
     await r.finish()
     const second = r.orch.state().runs[0].report
     expect(second?.endedAt).not.toBe(first?.endedAt)
-    expect(second?.caveats).toContainEqual({ kind: 'forced', task: expect.any(String), by: 'person', reason: REASON })
+    expect(second?.caveats).toContainEqual({ kind: 'forced', task: expect.any(String), lifecycle: true, by: 'person', reason: REASON })
 
     expect(r.ghCalls.map(kind)).toEqual(['find', 'post', 'edit'])
     expect(r.ghCalls[2].join(' ')).toContain('comments/123')

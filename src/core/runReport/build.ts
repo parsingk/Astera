@@ -3,11 +3,12 @@
 import { checkConfigIdsOf, repairCountIn, reviewRoundIn } from '../orchestration/convergence'
 import { outcomeOf, runEndOf, tasksOwnedBy, withoutSupersededLifecycle } from '../orchestration/running'
 import { jobOf, type OrchState } from '../orchestration/state'
-import { jobNameOf } from '../orchestration/jobName'
+import { jobName } from '../findings/make'
 import { runTokensOf, type SpentTokens } from '../orchestration/publicViews'
 import { HISTORY_MAX, type ActorGroup, type Dispatch, type Task } from '../orchestration/types'
 import { GITHUB_CI_CHECK, RERUNS_MAX } from '../github/lifecycle'
 import { mergeReadyHolds } from '../github/view'
+import { cutCaveatText } from './render'
 import {
   RUN_REPORT_VERSION,
   type RunReport,
@@ -17,6 +18,12 @@ import {
   type RunReportReview,
   type RunReportTask
 } from './types'
+
+const FIRST_CAVEATS: readonly RunReportCaveat['kind'][] = ['forced', 'check-skipped', 'ci-skipped']
+const caveatRank = (c: RunReportCaveat): number => {
+  const i = FIRST_CAVEATS.indexOf(c.kind)
+  return i === -1 ? FIRST_CAVEATS.length : i
+}
 
 const reviewOf = (task: Task, ds: readonly Dispatch[]): RunReportReview | undefined => {
   const reviews = ds.filter((d) => d.review === true)
@@ -136,17 +143,22 @@ export function buildRunReport(s: OrchState, runId: string, o: { spent?: readonl
 
   const ciSkipped = gs?.ciOverride !== undefined || gs?.mergeReady?.ciOverride === 'no-ci'
   const caveats: RunReportCaveat[] = []
+  if (ciSkipped) caveats.push({ kind: 'ci-skipped' })
   for (const t of tasks) {
     const checks = checksOf(t)
-    if (t.completionOverride) caveats.push({ kind: 'forced', task: t.title, by: t.completionOverrideBy ?? 'unknown', reason: t.completionOverride.reason })
-    for (const c of checks) if (c.skipped) caveats.push({ kind: 'check-skipped', task: t.title, check: c.name })
-    if (ciSkipped && !caveats.some((c) => c.kind === 'ci-skipped')) caveats.push({ kind: 'ci-skipped' })
-    for (const c of checks) if (c.outsideSandbox) caveats.push({ kind: 'outside-sandbox', task: t.title, check: c.name })
-    if (t.reviewFileToolsOnly) caveats.push({ kind: 'review-outside-sandbox', task: t.title })
-    if (t.policyChanged) caveats.push({ kind: 'policy-changed', task: t.title })
-    if (t.suspiciousFiles?.length) caveats.push({ kind: 'suspicious-files', task: t.title, count: t.suspiciousFiles.length })
-    for (const c of checks) if (c.unstable) caveats.push({ kind: 'unstable', task: t.title, check: c.name })
+    const ref = { task: t.title, ...(t.kind === 'lifecycle' ? { lifecycle: true as const } : {}) }
+    if (t.completionOverride)
+      caveats.push({ kind: 'forced', ...ref, by: t.completionOverrideBy ?? 'unknown', reason: cutCaveatText(t.completionOverride.reason) })
+    for (const c of checks) if (c.skipped) caveats.push({ kind: 'check-skipped', ...ref, check: c.name })
+    const outside = checks.filter((c) => c.outsideSandbox).map((c) => c.name)
+    if (outside.length > 0) caveats.push({ kind: 'outside-sandbox', ...ref, checks: outside })
+    if (t.reviewFileToolsOnly) caveats.push({ kind: 'review-outside-sandbox', ...ref })
+    if (t.policyChanged) caveats.push({ kind: 'policy-changed', ...ref })
+    if (t.suspiciousFiles?.length) caveats.push({ kind: 'suspicious-files', ...ref, count: t.suspiciousFiles.length })
+    for (const c of checks) if (c.unstable) caveats.push({ kind: 'unstable', ...ref, check: c.name })
   }
+  // What let the work past a check comes first, in this order, then the rest in Task order (a stable sort)
+  caveats.sort((a, b) => caveatRank(a) - caveatRank(b))
 
   const accountIds: string[] = []
   const see = (id: string | undefined): void => {
@@ -163,7 +175,8 @@ export function buildRunReport(s: OrchState, runId: string, o: { spent?: readonl
   return {
     version: RUN_REPORT_VERSION,
     runId,
-    job: job ? jobNameOf(job) : '',
+    // On one line, cut at 60 as the run record names it: a Job with no ticket title is named by its whole objective
+    job: job ? jobName(job) : '',
     ordinal: run.ordinal,
     outcome,
     startedAt: run.createdAt,

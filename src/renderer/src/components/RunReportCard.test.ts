@@ -2,9 +2,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { caveatLine, taskLine } from '../../../core/runReport/render'
+import { caveatLine, taskLine, timesLine } from '../../../core/runReport/render'
 import { RUN_REPORT_VERSION, type RunReport, type RunReportCaveat } from '../../../core/runReport/types'
 import { RunReportCard } from './RunReportCard'
+import { localTime } from './findingsText'
 
 vi.mock('../i18n/I18nProvider', () => ({ useI18n: () => ({ t: (k: string, p?: Record<string, string>) => (p ? `${k} ${Object.values(p).join('|')}` : k), lang: 'en' }) }))
 
@@ -14,7 +15,7 @@ const caveats: RunReportCaveat[] = [
   { kind: 'forced', task: 'Fix login', by: 'person', reason: 'CI was flaky' },
   { kind: 'check-skipped', task: 'Fix login', check: 'unit' },
   { kind: 'ci-skipped' },
-  { kind: 'outside-sandbox', task: 'Fix login', check: 'e2e' },
+  { kind: 'outside-sandbox', task: 'Fix login', checks: ['e2e'] },
   { kind: 'review-outside-sandbox', task: 'Fix login' },
   { kind: 'policy-changed', task: 'Fix login' },
   { kind: 'suspicious-files', task: 'Fix login', count: 2 },
@@ -67,6 +68,24 @@ describe('RunReportCard', () => {
   it('shows the comment error when set, and not otherwise', () => {
     expect(draw(report, { error: 'gh said no', at: 'x' })).toContain('runReport.card.commentFailed')
     expect(draw(report)).not.toContain('runReport.card.commentFailed')
+  })
+  it('shows a commit as code, with no backtick left in its text', () => {
+    const sha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+    const html = draw({
+      ...report,
+      github: {
+        pr: { number: 7, url: 'https://github.com/o/r/pull/7' },
+        ci: { verdict: 'passed', sha },
+        ciFailedRounds: 0,
+        reruns: { astera: 0, person: 0 },
+        mergeReady: { headSha: sha }
+      }
+    })
+    expect(html).toContain('<code>a1b2c3d</code>')
+    expect(html).not.toContain('`')
+  })
+  it('shows when the Run started and ended in the reader’s clock format', () => {
+    expect(draw(report)).toContain(escape(timesLine(report, 'en', localTime)))
   })
   it('shows the accounts used by label, the id when unknown, and no token number', () => {
     const html = draw(report)

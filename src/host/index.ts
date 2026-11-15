@@ -1220,6 +1220,7 @@ async function main(): Promise<void> {
     accounts: async () => (await readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying)).map((x) => ({ id: x.id, label: x.label })),
     record: (args) => orch.handle('runs-github-record', args),
     slack: slackWiring,
+    prefixes: [os.homedir(), profileDir],
     lang: () => (wiring ? wiring.checks.langNow() : 'en'),
     log: (m) => log.write(m)
   })

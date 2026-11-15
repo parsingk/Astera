@@ -13,6 +13,7 @@ const END = '2026-11-15T10:00:00.000Z'
 const WT = '/Users/someone/work/wt-run'
 const BINDING: GitHubBinding = { repository: 'o/r', number: 7, url: 'https://github.com/o/r/pull/7', baseBranch: 'main', headBranch: 'run', createdByAstera: true, boundAt: T0 }
 const COMMENT_URL = 'https://github.com/o/r/pull/7#issuecomment-123'
+const HOME = 'C:\\Users\\John Smith'
 
 const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean; title?: string; commentError?: boolean } = {}): OrchState => {
   const s: OrchState = {
@@ -59,6 +60,7 @@ function rig(o: { slack?: { postRunReport(text: string): Promise<string> }; stat
       return { status: 200, body: {} }
     },
     slack: o.slack ?? null,
+    prefixes: [HOME],
     lang: () => 'en',
     log: (m) => logs.push(m),
     retryAfterMs: 0
@@ -224,6 +226,15 @@ describe('createRunReportPoster', () => {
     expect(body).not.toContain('Work Account')
     expect(body).not.toContain(WT)
     expect(body).not.toContain('someone')
+  })
+
+  it('the body carries no part of a home folder with a space in its name', async () => {
+    const r = rig({ state: world({ title: `Read ${HOME}\\notes\\a.md first` }) })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    const body = bodyOf(r.calls.find((c) => kind(c) === 'post')!)
+    expect(body).toContain('Read … first')
+    expect(body).not.toContain('Smith')
   })
 
   it('an accounts read that fails is logged and the post goes on', async () => {

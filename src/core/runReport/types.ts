@@ -52,19 +52,30 @@ export interface RunReportGitHub {
   withheld?: GitHubInvalidatedReason
 }
 
+/** A caveat's Task: its title, and `lifecycle` when it is the Run's lifecycle Task, whose stored title is in one language
+ *  and is named in the reader's */
+interface CaveatTask {
+  task: string
+  lifecycle?: true
+}
+
 export type RunReportCaveat =
-  | { kind: 'forced'; task: string; by: ActorGroup; reason: string }
-  | { kind: 'check-skipped'; task: string; check: string }
+  /** `reason` on one line, cut at 300 characters when the report is built */
+  | ({ kind: 'forced'; by: ActorGroup; reason: string } & CaveatTask)
+  | ({ kind: 'check-skipped'; check: string } & CaveatTask)
   | { kind: 'ci-skipped' }
-  | { kind: 'outside-sandbox'; task: string; check: string }
-  | { kind: 'review-outside-sandbox'; task: string }
-  | { kind: 'policy-changed'; task: string }
-  | { kind: 'suspicious-files'; task: string; count: number }
-  | { kind: 'unstable'; task: string; check: string }
+  /** One per Task, every check of it that ran outside the sandbox */
+  | ({ kind: 'outside-sandbox'; checks: string[] } & CaveatTask)
+  | ({ kind: 'review-outside-sandbox' } & CaveatTask)
+  | ({ kind: 'policy-changed' } & CaveatTask)
+  | ({ kind: 'suspicious-files'; count: number } & CaveatTask)
+  | ({ kind: 'unstable'; check: string } & CaveatTask)
 
 export interface RunReport {
   version: typeof RUN_REPORT_VERSION
   runId: string
+  /** The Job's name on one line, cut at 60 characters; empty in the pull request version, which names the Run by its
+   *  ordinal only */
   job: string
   ordinal: number
   outcome: 'completed' | 'failed'
