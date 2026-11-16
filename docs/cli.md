@@ -1329,12 +1329,14 @@ names them (`hiddenEnv`: names only, never a value), which the completion block 
 timed out twice opens a question whose words name them. A value a check needs can be given on purpose in its run
 configuration's `env`, which is laid over that environment; inside `codex sandbox` the account's
 `shell_environment_policy` still decides what reaches the command, as it does for a session's commands. A reviewer of
-such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows,
-which has none, depends on what put the work in the sandbox. For work a profile's sandbox switch sandboxed, it starts
-as a sandboxed profile's Claude Code session does there, with its file tools kept out of the login folders and its
-shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block) says the review ran with file-tool
-protection only. For a Job or Task a sandboxed session made, it is refused with `SANDBOX_UNAVAILABLE: no-sandbox
-claude`, as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
+such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows
+starts as a sandboxed Claude Code session does there: when its shell can run in Codex's sandbox (a Codex account's
+Windows sandbox set up), it starts sandboxed and the Task is not marked. Without that route, it depends on what put the
+work in the sandbox. For work a profile's sandbox switch sandboxed, it starts with deny rules only, its file tools kept
+out of the login folders and its shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block)
+says the review ran with file-tool protection only. For a Job or Task a sandboxed session made, it is refused with
+`SANDBOX_UNAVAILABLE` and the reason's own code (`cli-missing codex`, `windows-setup codex <account>`, `no-sandbox
+claude`, …), as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
 loader, its JVM proxy agent) out of `app.asar`, and Astera hands srt their unpacked paths.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
