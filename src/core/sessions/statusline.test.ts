@@ -30,7 +30,7 @@ import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
 import { SHELL_BOOT_FILE, SHELL_BOOT_SCRIPT, SHELL_WRAP_FILE, claudeShellEnv, shellWrapScript, type ClaudeShellPlan } from '../sandbox/claudeShell'
-import { WIN32_PROCESS_LINE_MAX } from './windowsExecutable'
+import { WIN32_PROCESS_LINE_MAX, windowsCommandLineLength } from './windowsExecutable'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -1595,6 +1595,57 @@ describe('StatusLineManager sandbox', () => {
     expect(mgr.sandboxShellWrapFile(scope)).toBeNull()
     expect(existsSync(path.join(dir, SANDBOX_TWINS_DIR))).toBe(false)
   })
+
+  // Task 3 review M3: the measured launch at the limit. A line of exactly WIN32_PROCESS_LINE_MAX characters is accepted, as
+  // fitsWindowsCommandLine accepts one; a codex that is not an `.exe` (an npm sh shim, which launches a longer line
+  // through node) keeps a margin of 512
+  it('accepts a launch of exactly the limit and refuses one longer, with a margin for a codex that is not an .exe', async () => {
+    const launchOf = (plan: Omit<ClaudeShellPlan, 'bootFile'>): number =>
+      windowsCommandLineLength(plan.codex, ['sandbox', ...plan.args, '--', plan.bash, path.join(dir, SANDBOX_TWINS_DIR, '0'.repeat(16), SHELL_BOOT_FILE).replace(/\\/g, '/')])
+    const sized = (codex: string, n: number): Omit<ClaudeShellPlan, 'bootFile'> => {
+      const base = { ...PLAN, codex, args: ['-c', 'x='] }
+      return { ...base, args: ['-c', `x=${'a'.repeat(n - launchOf(base))}`] }
+    }
+    for (const [codex, max] of [['C:/tools/codex.exe', WIN32_PROCESS_LINE_MAX], ['C:/npm/codex', WIN32_PROCESS_LINE_MAX - 512]] as const) {
+      const mgr = managerOn('win32')
+      await mgr.init()
+      const fits = sized(codex, max)
+      expect(launchOf(fits), codex).toBe(max)
+      expect(await mgr.ensureSandboxFiles(shellScope(fits)), codex).toBe('ok')
+      const over = sized(codex, max + 1)
+      expect(launchOf(over), codex).toBe(max + 1)
+      expect(await mgr.ensureSandboxFiles(shellScope(over)), codex).toBe('command-too-long')
+    }
+  })
+
+  // Task 3 review M4: the folder's key covers the scripts' text too, so an app and a Host of two Astera versions never
+  // write different scripts into one folder. The wrapper's text is taken with an empty boot file, its place being the
+  // folder itself
+  it('keys a route folder by the scripts the folder holds too', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    const scope = shellScope()
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const part = builder('win32', scope)
+    const key = createHash('sha256')
+      .update(JSON.stringify({ ...part, shell: PLAN, scripts: [shellWrapScript({ ...PLAN, bootFile: '' }), SHELL_BOOT_SCRIPT] }))
+      .digest('hex')
+      .slice(0, 16)
+    expect(path.basename(folderOf(mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile))).toBe(key)
+  })
+
+  // Test gap from the Task 3 review: the twins of a scope without the route never carry `env`, even after a scope with
+  // the same part and the route was written (they are in different folders)
+  it('gives the twins of a scope without the route no env after one with it was written', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    expect(await mgr.ensureSandboxFiles(shellScope())).toBe('ok')
+    const plain = scopeOn('win32', null)
+    expect(await mgr.ensureSandboxFiles(plain)).toBe('ok')
+    for (const o of VARIANTS) expect(JSON.parse(await read(mgr.spawnConfig('s1', account, { ...o, sandbox: plain }).settingsFile)).env, JSON.stringify(o)).toBeUndefined()
+    for (const enforce of [false, true]) expect(JSON.parse(await read(mgr.sandboxChatArgs(enforce, plain)![1])).env).toBeUndefined()
+  })
 })
 
 // Sandbox follow-ups, item 3: `<profile>/sandbox-settings/<hash>/` folders were never removed. A Host's start removes the
@@ -1667,6 +1718,17 @@ describe('pruneSandboxTwins', () => {
     expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
     for (const p of [odd, mixed, path.join(mixed, 'keep.txt'), nested, path.join(nested, 'inner'), aFile, link, beside, path.join(outside, 'astera-settings-sandbox.json')])
       expect(await present(p), p).toBe(true)
+  })
+
+  // Task 3 review M1: a folder with the shell route holds its two scripts beside the twins, and is pruned like any other;
+  // any other script still keeps the whole folder
+  it('removes an old folder with the shell route, its wrapper and boot script with it', async () => {
+    const route = await folder('0123456789abcdef', 31 * DAY, { 'astera-settings-sandbox.json': '{}', [SHELL_WRAP_FILE]: '#!/bin/bash\n', [SHELL_BOOT_FILE]: '#!/bin/bash\n' })
+    const other = await folder('fedcba9876543210', 31 * DAY, { 'astera-settings-sandbox.json': '{}', [SHELL_WRAP_FILE]: '#!/bin/bash\n', 'other.sh': '#!/bin/bash\n' })
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual(['0123456789abcdef'])
+    expect(await present(route)).toBe(false)
+    expect(await present(path.join(other, 'other.sh'))).toBe(true)
+    expect(await present(path.join(other, SHELL_WRAP_FILE))).toBe(true)
   })
 
   it('does nothing, and says nothing, with no twins folder at all', async () => {

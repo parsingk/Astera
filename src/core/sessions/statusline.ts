@@ -81,8 +81,9 @@ const TWINS_FOLDER = /^[0-9a-f]{16}$/
  * Removes the scopes' twins folders (`<profile>/sandbox-settings/<hash>/`) not written for `maxAgeMs` that no live
  * session uses (`inUse`, by folder name), and returns the names removed (sandbox follow-ups, item 3). Written means the
  * newest of the folder's own time, which every sandboxed start stamps (writeTwinsOf), and its twins'. **Nothing else is
- * touched**: only a real folder (not a link) whose name is a scope's hash, holding nothing but twins (`.json` files),
- * each removed by name and then the empty folder; any other entry keeps the whole folder. Never throws.
+ * touched**: only a real folder (not a link) whose name is a scope's hash, holding nothing but twins (`.json` files) and
+ * the shell route's two scripts (SHELL_WRAP_FILE, SHELL_BOOT_FILE; Task 3 review M1), each removed by name and then the
+ * empty folder; any other entry keeps the whole folder. Never throws.
  */
 export async function pruneSandboxTwins(o: {
   profileDir: string
@@ -107,7 +108,7 @@ export async function pruneSandboxTwins(o: {
       const st = await fs.lstat(dir)
       if (!st.isDirectory() || st.isSymbolicLink()) continue
       const entries = await fs.readdir(dir, { withFileTypes: true })
-      if (entries.some((e) => !e.isFile() || !e.name.endsWith('.json'))) {
+      if (entries.some((e) => !e.isFile() || !(e.name.endsWith('.json') || e.name === SHELL_WRAP_FILE || e.name === SHELL_BOOT_FILE))) {
         o.log?.(`sandbox twins: ${name} holds more than twins — left as it is`)
         continue
       }
@@ -467,13 +468,20 @@ type ShellPlan = Omit<ClaudeShellPlan, 'bootFile'>
 const slashed = (p: string): string => p.replace(/\\/g, '/')
 
 /** The name of a scope's twins folder: a hash of what its sandbox holds, and with the shell route (claude shell sandbox
- *  design D7) of the whole plan too, so two scopes never share a wrapper. Without the route, the hash of the part alone,
- *  as before the route existed. */
+ *  design D7) of the whole plan and the scripts' text too, so two scopes never share a wrapper, and an app and a Host
+ *  of two Astera versions never write different scripts into one folder (Task 3 review M4). The wrapper's text is taken
+ *  with an empty boot file, whose place is the folder itself. Without the route, the hash of the part alone, as before
+ *  the route existed. */
 const sandboxKeyOf = (part: SandboxPart, shell?: ShellPlan): string =>
   createHash('sha256')
-    .update(JSON.stringify(shell ? { ...part, shell } : part))
+    .update(JSON.stringify(shell ? { ...part, shell, scripts: [shellWrapScript({ ...shell, bootFile: '' }), SHELL_BOOT_SCRIPT] } : part))
     .digest('hex')
     .slice(0, 16)
+
+/** How much shorter than WIN32_PROCESS_LINE_MAX the wrapper's codex launch must be when the codex is not an `.exe`: an
+ *  npm sh shim runs `node <...>/codex.js <args>`, which launches the vendor codex.exe by a longer path, so the lines
+ *  Windows is handed are longer than the measured one by roughly 100 to 150 characters (Task 3 review M3). */
+const SHIM_LINE_MARGIN = 512
 
 /** A settings file's sandbox twin: the same JSON with Claude's sandbox added and the deny rules after any it already has,
  *  and with the shell route the wrapper `wrapFile` in its `env` (withShellEnv, D7). */
@@ -886,7 +894,8 @@ export class StatusLineManager {
    * whole plan, also gets the wrapper (SHELL_WRAP_FILE, shellWrapScript with the boot script beside it) and the boot
    * script (SHELL_BOOT_FILE), written first, and every twin of the scope names the wrapper in its `env` (withShellEnv).
    * A script that cannot be written answers 'write-failed'. A plan whose launch, `<codex> sandbox <args> -- <bash>
-   * <boot script>`, is longer than CreateProcess carries (WIN32_PROCESS_LINE_MAX) could never run a command: nothing is
+   * <boot script>`, is longer than CreateProcess carries (WIN32_PROCESS_LINE_MAX, less SHIM_LINE_MARGIN for a codex that
+   * is not an `.exe`) could never run a command: nothing is
    * written for it, and it answers 'command-too-long'. Without the route every byte is as before it existed.
    */
   async ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult> {
@@ -898,8 +907,11 @@ export class StatusLineManager {
     if (shell) {
       const p = shell
       const launch = windowsCommandLineLength(slashed(p.codex), ['sandbox', ...p.args, '--', slashed(p.bash), slashed(this.bootFileOf(key))])
-      if (launch > WIN32_PROCESS_LINE_MAX) {
-        this.log(`sandbox: the shell wrapper's codex launch is ${launch} characters, longer than Windows carries (${WIN32_PROCESS_LINE_MAX}); no wrapper is written`)
+      // A line of exactly the limit is accepted, as fitsWindowsCommandLine accepts one; a codex that is not an `.exe`
+      // keeps SHIM_LINE_MARGIN for the longer lines its shim launches
+      const max = WIN32_PROCESS_LINE_MAX - (/\.exe$/i.test(p.codex) ? 0 : SHIM_LINE_MARGIN)
+      if (launch > max) {
+        this.log(`sandbox: the shell wrapper's codex launch is ${launch} characters, longer than Windows carries for it (${max}); no wrapper is written`)
         return 'command-too-long'
       }
     }
