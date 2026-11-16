@@ -38,9 +38,11 @@ const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
  *
  * Inside, the command and its folder travel to the boot script in environment variables, not arguments: MSYS rewrites
  * arguments to a native program (`/c/x` to `C:\x`) and the variable carried 100 000 characters whole (spec M4). The MSYS
- * switches are set for the codex launch only, so the `-c` values and paths reach codex as written; the boot script takes
- * them off again. Paths bash runs or enters are forward-slashed; the `-c` values and the codex home are left as given,
- * since only codex reads them. Not `exec` for codex: the measured prototype waited and exited with its code (spec M6).
+ * switches are set for the codex launch only, so the `-c` values and paths reach codex as written; the session's own
+ * values travel in `ASTERA_SBX_MSYS_NO_PATHCONV` and `ASTERA_SBX_MSYS2_ARG_CONV_EXCL` (empty for unset, `s` and the
+ * value for set, so a set-but-empty one stays set) and the boot script puts them back. Paths bash runs or enters are
+ * forward-slashed; the `-c` values and the codex home are left as given, since only codex reads them. Not `exec` for
+ * codex: the measured prototype waited and exited with its code (spec M6).
  */
 export function shellWrapScript(plan: ClaudeShellPlan): string {
   const marks = TOOL_MARKS.map((m) => `*${sq(m)}*`).join('|')
@@ -59,6 +61,8 @@ export function shellWrapScript(plan: ClaudeShellPlan): string {
     'export ASTERA_SBX_SCRIPT="${1-}"',
     'export ASTERA_SBX_CWD="$PWD"',
     'export ASTERA_SBX_CODEX_HOME="${CODEX_HOME-}"',
+    'export ASTERA_SBX_MSYS_NO_PATHCONV="${MSYS_NO_PATHCONV+s$MSYS_NO_PATHCONV}"',
+    'export ASTERA_SBX_MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL+s$MSYS2_ARG_CONV_EXCL}"',
     home,
     `cd ${root} || { echo "astera sandbox: cannot enter "${root} >&2; exit 125; }`,
     `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' ${codex}`,
@@ -68,28 +72,41 @@ export function shellWrapScript(plan: ClaudeShellPlan): string {
 }
 
 /** The boot script `codex sandbox` runs under Git Bash (D3): it takes the wrapper's variables back out, puts the
- *  session's own CODEX_HOME back (unset when it was empty), enters the command's folder (126 and a line when the
- *  sandbox's account cannot) and evaluates the command as `bash -c` would have. */
+ *  session's own CODEX_HOME and MSYS switches back (CODEX_HOME unset when it was empty), enters the command's folder
+ *  (126 and a line when the sandbox's account cannot) and runs the command as `exec -a bash "$BASH" -c`, so it gets
+ *  `bash -c` exactly: `$0` is `bash`, bash's own errors read `bash: line 1: ...`, and none of this script's variables
+ *  (kept unexported, even under an inherited allexport) reach it. Costs one more bash start inside the sandbox. */
 export const SHELL_BOOT_SCRIPT = [
   '#!/bin/bash',
   "# Astera: runs inside Codex's sandbox, the command Claude Code built in the folder it was started in.",
-  'unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL',
   '__astera_s="${ASTERA_SBX_SCRIPT-}"',
   '__astera_d="${ASTERA_SBX_CWD-}"',
   '__astera_h="${ASTERA_SBX_CODEX_HOME-}"',
-  'unset ASTERA_SBX_SCRIPT ASTERA_SBX_CWD ASTERA_SBX_CODEX_HOME',
+  '__astera_n="${ASTERA_SBX_MSYS_NO_PATHCONV-}"',
+  '__astera_e="${ASTERA_SBX_MSYS2_ARG_CONV_EXCL-}"',
+  'export -n __astera_s __astera_d __astera_h __astera_n __astera_e',
+  'unset ASTERA_SBX_SCRIPT ASTERA_SBX_CWD ASTERA_SBX_CODEX_HOME ASTERA_SBX_MSYS_NO_PATHCONV ASTERA_SBX_MSYS2_ARG_CONV_EXCL',
+  'unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL',
+  'if [ -n "$__astera_n" ]; then export MSYS_NO_PATHCONV="${__astera_n#s}"; fi',
+  'if [ -n "$__astera_e" ]; then export MSYS2_ARG_CONV_EXCL="${__astera_e#s}"; fi',
   'if [ -n "$__astera_h" ]; then export CODEX_HOME="$__astera_h"; else unset CODEX_HOME; fi',
   'cd "$__astera_d" || { echo "astera sandbox: cannot enter $__astera_d" >&2; exit 126; }',
-  'unset __astera_d __astera_h',
-  'eval "$__astera_s"',
+  'exec -a bash "$BASH" -c "$__astera_s"',
   ''
 ].join('\n')
 
-/** The two switches a session with the route starts with (D7), in its settings twin's `env` and its environment: the
- *  wrapper, forward-slashed for the bash that runs it, and the PowerShell tool off, since the prefix does not cover it
- *  (spec M7). */
+/** What the settings twin pins beside the two switches (review finding 3): bash runs the script named in `BASH_ENV`
+ *  (and `ENV` in POSIX mode) before the wrapper's first line, outside the sandbox, and a project settings file's `env`
+ *  could name one. A settings `env` value set to "" cancels the variable, and the twin's `env` wins over the project's
+ *  files (code.claude.com/docs/en/settings). */
+export const SHELL_PINNED_ENV: Record<string, string> = { BASH_ENV: '', ENV: '' }
+
+/** What a session with the route starts with (D7), in its settings twin's `env` and its environment: the wrapper,
+ *  forward-slashed for the bash that runs it, the PowerShell tool off, since the prefix does not cover it (spec M7), and
+ *  SHELL_PINNED_ENV. Claude Code quotes the prefix itself: a wrapper path with a space works in a real session
+ *  (measured 2026-11-16, Claude Code 2.1.325), so the path is not quoted here. */
 export function claudeShellEnv(wrapFile: string): Record<string, string> {
-  return { CLAUDE_CODE_SHELL_PREFIX: slashed(wrapFile), CLAUDE_CODE_USE_POWERSHELL_TOOL: '0' }
+  return { CLAUDE_CODE_SHELL_PREFIX: slashed(wrapFile), CLAUDE_CODE_USE_POWERSHELL_TOOL: '0', ...SHELL_PINNED_ENV }
 }
 
 /** The codex bash can run by its absolute path (D4.3): an `.exe` as it is; for an npm `.cmd` or `.bat` shim the sh shim

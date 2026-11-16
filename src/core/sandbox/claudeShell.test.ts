@@ -11,6 +11,7 @@ import { findGitBash } from '../sessions/gitBash'
 import {
   SHELL_BOOT_FILE,
   SHELL_BOOT_SCRIPT,
+  SHELL_PINNED_ENV,
   SHELL_WRAP_FILE,
   TOOL_MARKS,
   bashRunnable,
@@ -65,8 +66,14 @@ describe('shellWrapScript text', () => {
 })
 
 describe('claudeShellEnv', () => {
-  it('names the wrapper, forward-slashed, and turns the PowerShell tool off', () => {
-    expect(claudeShellEnv(`C:${BS}p q${BS}shell-wrap.sh`)).toEqual({ CLAUDE_CODE_SHELL_PREFIX: 'C:/p q/shell-wrap.sh', CLAUDE_CODE_USE_POWERSHELL_TOOL: '0' })
+  it('names the wrapper, forward-slashed, turns the PowerShell tool off and pins the bash start-up scripts empty', () => {
+    expect(SHELL_PINNED_ENV).toEqual({ BASH_ENV: '', ENV: '' })
+    expect(claudeShellEnv(`C:${BS}p q${BS}shell-wrap.sh`)).toEqual({
+      CLAUDE_CODE_SHELL_PREFIX: 'C:/p q/shell-wrap.sh',
+      CLAUDE_CODE_USE_POWERSHELL_TOOL: '0',
+      BASH_ENV: '',
+      ENV: ''
+    })
   })
 })
 
@@ -194,6 +201,14 @@ describe.runIf(gitBash !== null)('the wrapper through Git Bash', () => {
     expect(k.codexCalls()).toBe(0)
   })
 
+  // Any non-empty value counts as set, whitespace too; an empty argument passes on and runs nothing
+  it('passes a hook on with a whitespace CLAUDE_PROJECT_DIR, and an empty argument with it set', () => {
+    const k = kit()
+    expect(k.run(['echo direct'], { env: { ...baseEnv(), CLAUDE_PROJECT_DIR: ' ' } })).toMatchObject({ out: 'direct\n', code: 0 })
+    expect(k.run([''], { env: withProject() })).toMatchObject({ out: '', err: '', code: 0 })
+    expect(k.codexCalls()).toBe(0)
+  })
+
   it('sends a hook-shaped command to codex when CLAUDE_PROJECT_DIR is not set, or set empty', () => {
     const k = kit()
     expect(k.run(['echo hook']).out).toBe('hook\n')
@@ -243,6 +258,18 @@ describe.runIf(gitBash !== null)('the wrapper through Git Bash', () => {
     expect(k.codexEnv()).toMatchObject({ noPathConv: '1', argConvExcl: '*' })
   })
 
+  // A session may set them for itself (people set MSYS_NO_PATHCONV=1 globally for docker): the command inside gets them
+  // as `bash -c` outside would, set, set empty or unset, while codex always gets the wrapper's own (review finding 2)
+  it("gives the command the session's own MSYS switches, set, set empty or unset", () => {
+    const show = 'echo "${MSYS_NO_PATHCONV-u}|${MSYS2_ARG_CONV_EXCL-u}|${ASTERA_SBX_MSYS_NO_PATHCONV-u}|${ASTERA_SBX_MSYS2_ARG_CONV_EXCL-u}"'
+    const k = kit()
+    expect(k.run([shaped(show, `${k.dir}/cwd-out`)], { env: { ...baseEnv(), MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '' } }).out).toBe('1||u|u\n')
+    expect(k.codexEnv()).toMatchObject({ noPathConv: '1', argConvExcl: '*' })
+    expect(k.run([shaped(show, `${k.dir}/cwd-out`)], { env: { ...baseEnv(), MSYS_NO_PATHCONV: '', MSYS2_ARG_CONV_EXCL: '/c/x;--y' } }).out).toBe('|/c/x;--y|u|u\n')
+    expect(k.run([shaped(show, `${k.dir}/cwd-out`)]).out).toBe('u|u|u|u\n')
+    expect(k.codexEnv()).toMatchObject({ noPathConv: '1', argConvExcl: '*' })
+  })
+
   it("gives codex the plan's CODEX_HOME and the command the session's own, set or unset", () => {
     const show = 'echo "${CODEX_HOME-unset}"'
     const k = kit({ codexHome: 'C:/codex home/acct' })
@@ -267,7 +294,7 @@ describe.runIf(gitBash !== null)('the wrapper through Git Bash', () => {
   it("exits 125 with a line on stderr when the session's folder cannot be entered, without starting codex", () => {
     const k = kit()
     rmSync(k.root, { recursive: true, force: true })
-    const r = k.run(['echo no'], { cwd: k.dir })
+    const r = k.run([shaped('echo no', `${k.dir}/cwd-out`)], { cwd: k.dir })
     expect(r.code).toBe(125)
     expect(r.err).toContain('astera')
     expect(r.out).toBe('')
@@ -297,8 +324,21 @@ describe.runIf(gitBash !== null)('the wrapper through Git Bash', () => {
     pipeline: `printf 'b\\na\\n' | sort | tr a-z A-Z; echo "rc=\${PIPESTATUS[0]}"`,
     long8k: long(8000),
     long20k: long(20000),
-    long30k: long(30000)
+    long30k: long(30000),
+    // bash itself writes the error, naming $0 and the line, and the command sees what `bash -c` would (review finding 1)
+    shellError: `nosuchcmd_zz; echo "$0"`,
+    shellState: `echo "$-|\${BASH_SOURCE[0]-none}|\${BASH_ARGV0-none}|\${__astera_s-none}|\${__astera_d-none}|\${__astera_h-none}"`
   }
+
+  it('gives a command that is not in the tool shape exactly what `bash -c` gives, errors included', () => {
+    const k = kit()
+    for (const cmd of [payloads.shellError, payloads.shellState, 'echo "$(declare -p | grep -c __astera)"']) {
+      const d = spawnSync(k.bash, ['-c', 'bash -c "$T_ARG0"'], { cwd: `${k.root}/sub`, env: { ...baseEnv(), T_WRAP: k.wrapFile, T_ARG0: cmd }, encoding: 'utf8', windowsHide: true, timeout: 60_000 })
+      const w = k.run([cmd])
+      expect({ out: w.out, err: w.err, code: w.code }, cmd).toEqual({ out: d.stdout, err: d.stderr, code: d.status })
+    }
+    expect(k.codexCalls()).toBe(3)
+  })
   it('passes the measured payloads through unchanged', { timeout: 120_000 }, () => {
     expect(payloads.backslash).toContain(BS)
     const k = kit()
