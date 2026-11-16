@@ -221,10 +221,12 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           boxed = await c.sandboxedCheck({ provider: sandbox.provider, accountId: sandbox.accountId, cwd, command, env })
         } catch (e) {
           // A session manager's refusal (`SANDBOX_UNAVAILABLE: <code>`, unavailable.ts) in a check's words, for the question it
-          // opens, naming the account by its name (fix round 2)
+          // opens, naming the account by its name (fix round 2); a Claude check on Windows in its route's words (final
+          // review M5)
           const raw = e instanceof Error ? e.message : String(e)
           const name = await (async () => (await c.accountName?.(sandbox.accountId)) ?? null)().catch(() => null)
-          const said = checkRefusalMessage(raw, (id) => (id === sandbox.accountId ? name : null))
+          const claudeOnWindows = sandbox.provider === 'claude' && (c.platform ?? process.platform) === 'win32'
+          const said = checkRefusalMessage(raw, (id) => (id === sandbox.accountId ? name : null), claudeOnWindows)
           boxed = { unavailable: said ? t(lang, said.key, said.params) : raw }
         }
         if ('unavailable' in boxed) return { unavailable: boxed.unavailable, name: config.name }

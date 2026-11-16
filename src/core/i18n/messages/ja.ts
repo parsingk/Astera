@@ -2003,6 +2003,8 @@ export const ja: Catalog = {
   'jobs.checks.sandbox.commandTooLong': 'チェックのコマンドとサンドボックスのプロファイルを合わせると Windows のコマンドラインに収まらないため、チェックをサンドボックスの中で実行できません。チェックのコマンドを短くするか、このリポジトリのワークツリーを減らせば実行できます。',
   'jobs.checks.sandbox.settingsWriteFailed': 'サンドボックスの設定ファイルを書けなかったため、チェックをサンドボックスに入れられず、外でも実行しませんでした。Astera のプロファイルフォルダーに書き込めるか確かめてから、チェックをやり直してください。',
   'jobs.checks.sandbox.noSandbox': 'ここでは {cli} 向けにチェックをサンドボックスに入れられなかったため、サンドボックスの外では実行しませんでした。このチェックなしで進めるか、Task を失敗にしてください。',
+  'jobs.checks.sandbox.noSandboxClaudeWindows': 'この Task の Claude Code ワーカーがシェルを動かした Codex のサンドボックスにチェックを入れられなかったため、サンドボックスの外では実行しませんでした。それには Git Bash と、Windows サンドボックスを設定した Codex アカウント（設定 › エージェントプロファイル）が必要です。足りないものを用意してからチェックをやり直すか、このチェックなしで進めるか、Task を失敗にしてください。',
+  'jobs.checks.sandbox.commandTooLongClaudeWindows': 'このフォルダーのサンドボックスのプロファイルが Windows のコマンドラインに収まらないため、この Task の Claude Code ワーカーがシェルを動かした Codex のサンドボックスでチェックを実行できません。このリポジトリのワークツリーが多いかパスが長いとプロファイルが長くなります。ワークツリーを減らすか、リポジトリのパスを短くすれば実行できます。',
   'jobs.checks.sandbox.runtimeMissing': '{cli} がサンドボックスを作るランタイムがここでコマンドを実行できないため(Linux では bubblewrap、socat、ripgrep が必要です)、チェックをサンドボックスの外では実行しませんでした。足りないものは Astera のログにあります: インストールしてから、チェックをやり直してください。',
   'jobs.checks.sandbox.usernsRestricted': 'Ubuntu の bubblewrap 用 AppArmor プロファイルがここで {cli} のサンドボックスのコマンド実行を妨げるため、チェックをサンドボックスの外では実行しませんでした。bubblewrap にユーザー名前空間を許す AppArmor プロファイルがあれば動きます(サンドボックスランタイムの README の Ubuntu の項)。そのあとチェックをやり直してください。',
   'jobs.checks.sandbox.failed': 'チェックが始まる前にサンドボックスが止まりました({detail})。コードの失敗ではなく、チェックをサンドボックスの外でも実行していません。チェックをやり直してください。繰り返す場合は、このチェックに残した出力と Astera のログに理由があります。',

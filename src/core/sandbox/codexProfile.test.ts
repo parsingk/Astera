@@ -247,6 +247,30 @@ describe('checkRefusalMessage', () => {
       expect(checkRefusalMessage(`Error: SANDBOX_UNAVAILABLE: ${code}`, nameOf), code).toEqual(params ? { key, params } : { key })
   })
 
+  // Final review M5: a Claude check on Windows is refused by its shell route's prepare (claude shell sandbox design D5,
+  // D10). `no-sandbox claude` there is no Git Bash, no Codex account or another reason, and `command-too-long` the
+  // sandbox's profile for the folder, so each says what would help; a Codex check's, and a Claude check's elsewhere, keep
+  // their words
+  it('words a Claude check on Windows by what would help, and leaves every other check’s words as they were', () => {
+    const claudeWin = (code: string) => checkRefusalMessage(`Error: SANDBOX_UNAVAILABLE: ${code}`, nameOf, true)
+    expect(claudeWin('no-sandbox claude')).toEqual({ key: 'jobs.checks.sandbox.noSandboxClaudeWindows' })
+    expect(claudeWin('command-too-long')).toEqual({ key: 'jobs.checks.sandbox.commandTooLongClaudeWindows' })
+    // The route's codes with their own words keep them
+    expect(claudeWin('windows-setup codex acc1')).toEqual({ key: 'jobs.checks.sandbox.windowsSetup', params: { account: 'Work' } })
+    expect(claudeWin('cli-missing codex')).toEqual({ key: 'jobs.checks.sandbox.cliMissing', params: { cli: 'Codex' } })
+    // Not a Claude check on Windows: as before
+    for (const asked of [false, undefined]) {
+      expect(checkRefusalMessage('SANDBOX_UNAVAILABLE: no-sandbox claude', nameOf, asked)).toEqual({ key: 'jobs.checks.sandbox.noSandbox', params: { cli: 'Claude Code' } })
+      expect(checkRefusalMessage('SANDBOX_UNAVAILABLE: command-too-long', nameOf, asked)).toEqual({ key: 'jobs.checks.sandbox.commandTooLong' })
+    }
+    // What they say: Git Bash and where a Codex account's Windows sandbox is set up; the profile, not the check's command
+    const en = CATALOGS.en.messages as Record<string, string>
+    expect(en['jobs.checks.sandbox.noSandboxClaudeWindows']).toContain('Git Bash')
+    expect(en['jobs.checks.sandbox.noSandboxClaudeWindows']).toContain('Settings › Agent profiles')
+    expect(en['jobs.checks.sandbox.commandTooLongClaudeWindows']).toContain('worktrees')
+    expect(en['jobs.checks.sandbox.commandTooLongClaudeWindows']).not.toContain('shorter check command')
+  })
+
   it('leaves a refusal no check meets in a start’s words, and what is not a refusal alone', () => {
     expect(checkRefusalMessage('SANDBOX_UNAVAILABLE: codex-daemon codex', nameOf)).toEqual(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: codex-daemon codex'))
     expect(checkRefusalMessage('spawn codex ENOENT', nameOf)).toBeNull()

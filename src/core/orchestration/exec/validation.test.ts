@@ -58,6 +58,8 @@ interface RigOpts {
   sandboxedCheck?: ValidationContext['sandboxedCheck']
   /** What every run printed; nothing when left out */
   output?: string
+  /** ValidationContext's platform; this process's when left out */
+  platform?: NodeJS.Platform
 }
 
 function rig(o: RigOpts = {}) {
@@ -166,7 +168,8 @@ function rig(o: RigOpts = {}) {
     ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {}),
     ...(o.checkEnv ? { checkEnv: o.checkEnv } : {}),
     ...(o.accountName ? { accountName: o.accountName } : {}),
-    ...(o.sandboxedCheck ? { sandboxedCheck: o.sandboxedCheck } : {})
+    ...(o.sandboxedCheck ? { sandboxedCheck: o.sandboxedCheck } : {}),
+    ...(o.platform ? { platform: o.platform } : {})
   }
   const validation = createTaskValidation(ctx)
 
@@ -913,6 +916,23 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     await vi.waitFor(() => expect(refused.task().status).toBe('blocked'))
     expect(refused.runsStarted()).toBe(0)
     expect(refused.task().checks?.[0]?.summary).toContain('Codex account cx-1')
+  })
+
+  // Final review M5: a Claude check on Windows refused by its route's prepare says what would help; a Codex check on
+  // Windows, and a Claude check elsewhere, keep their words
+  it("a Claude check on Windows refused for its route says what would help, and only there", async () => {
+    const refuse = (code: string) => async () => Promise.reject(new Error(`SANDBOX_UNAVAILABLE: ${code}`))
+    const summary = async (o: RigOpts): Promise<string | undefined> => {
+      const h = rig({ sandboxKind: 'sandbox', ...o })
+      h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+      await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+      expect(h.runsStarted()).toBe(0)
+      return h.task().checks?.[0]?.summary
+    }
+    expect(await summary({ provider: 'claude', platform: 'win32', sandboxedCheck: refuse('no-sandbox claude') })).toBe(t('en', 'jobs.checks.sandbox.noSandboxClaudeWindows'))
+    expect(await summary({ provider: 'claude', platform: 'win32', sandboxedCheck: refuse('command-too-long') })).toBe(t('en', 'jobs.checks.sandbox.commandTooLongClaudeWindows'))
+    expect(await summary({ provider: 'codex', platform: 'win32', sandboxedCheck: refuse('command-too-long') })).toBe(t('en', 'jobs.checks.sandbox.commandTooLong'))
+    expect(await summary({ provider: 'claude', platform: 'linux', sandboxedCheck: refuse('no-sandbox claude') })).toBe(t('en', 'jobs.checks.sandbox.noSandbox', { cli: 'Claude Code' }))
   })
 
   it('an unsandboxed Task check starts from the hidden environment too (Q5), and is not marked', async () => {

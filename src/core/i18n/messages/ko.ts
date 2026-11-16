@@ -2405,6 +2405,8 @@ export const ko = {
   'jobs.checks.sandbox.commandTooLong': '검사 명령과 sandbox 프로필을 합치면 Windows 명령줄에 들어가지 않아서 검사를 sandbox 안에서 돌릴 수 없습니다. 검사 명령을 줄이거나 이 저장소의 워크트리를 줄이면 돌 수 있습니다.',
   'jobs.checks.sandbox.settingsWriteFailed': 'sandbox 설정 파일을 쓸 수 없어서 검사를 sandbox 에 넣지 못했고, 밖에서 돌리지도 않았습니다. Astera 프로필 폴더에 쓸 수 있는지 확인한 뒤 검사를 다시 돌리세요.',
   'jobs.checks.sandbox.noSandbox': '여기서는 {cli} 용 검사를 sandbox 에 넣을 수 없어서, 검사를 sandbox 밖에서 돌리지 않았습니다. 이 검사 없이 진행하거나 Task 를 실패로 표시하세요.',
+  'jobs.checks.sandbox.noSandboxClaudeWindows': '이 Task 의 Claude Code 워커가 셸을 돌린 Codex sandbox 에 검사를 넣지 못해서, 검사를 sandbox 밖에서 돌리지 않았습니다. 그러려면 Git Bash 와 Windows sandbox 를 설정한 Codex 계정(설정 › 에이전트 프로필)이 있어야 합니다. 빠진 것을 갖춘 뒤 검사를 다시 돌리거나, 이 검사 없이 진행하거나 Task 를 실패로 표시하세요.',
+  'jobs.checks.sandbox.commandTooLongClaudeWindows': '이 폴더의 sandbox 프로필이 Windows 명령줄에 들어가지 않아서, 이 Task 의 Claude Code 워커가 셸을 돌린 Codex sandbox 에서 검사를 돌릴 수 없습니다. 이 저장소의 워크트리가 많거나 경로가 길면 프로필이 길어집니다. 워크트리를 줄이거나 저장소 경로를 짧게 하면 돌 수 있습니다.',
   'jobs.checks.sandbox.runtimeMissing': '{cli} 가 sandbox 를 짓는 런타임이 여기서 명령을 돌릴 수 없어서(Linux 에서는 bubblewrap, socat, ripgrep 이 필요합니다) 검사를 sandbox 밖에서 돌리지 않았습니다. 무엇이 없는지는 Astera 로그에 있습니다: 설치한 뒤 검사를 다시 돌리세요.',
   'jobs.checks.sandbox.usernsRestricted': 'Ubuntu 의 bubblewrap AppArmor 프로필이 여기서 {cli} sandbox 의 명령 실행을 막아서, 검사를 sandbox 밖에서 돌리지 않았습니다. bubblewrap 에 user namespace 를 허용하는 AppArmor 프로필이 있으면 돕니다(sandbox 런타임 README 의 Ubuntu 항목). 그 뒤 검사를 다시 돌리세요.',
   'jobs.checks.sandbox.failed': '검사가 시작되기 전에 sandbox 가 멈췄습니다({detail}). 코드의 실패가 아니고, 검사를 sandbox 밖에서 돌리지도 않았습니다. 검사를 다시 돌리세요. 되풀이되면 이 검사에 남긴 출력과 Astera 로그에 이유가 있습니다.',
