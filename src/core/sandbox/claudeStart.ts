@@ -431,7 +431,9 @@ export function claudeSandboxStart(o: {
           o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook, ...(chosen ? { agentLogins: chosen } : {}), ...(shell ? { shell } : {}) })
         let written = await ensure(decided?.on ? shellScopeOf(decided.route, p.env) : undefined)
         // The twins' folder decides where the boot script goes, so only the writer can measure the wrapper's launch: one
-        // longer than Windows carries could never run a command, so the route is off and the twins are written without it
+        // longer than Windows carries could never run a command, so the route is off and the twins are written without it.
+        // A start that must be sandboxed is refused with `command-too-long`, the code D5 names for this reason; the
+        // decision's `why` is `other`, whose warning is `claudeShellUnavailable` (D9), the log naming the cause
         if (written === 'command-too-long') {
           decided = shellOff(p.cwd, 'other', sandboxUnavailable('command-too-long').message, "the wrapper's codex launch is longer than a Windows command line (command-too-long)")
           if (p.required === true) throw new Error(decided.refusal)

@@ -695,6 +695,20 @@ describe("the route for Claude's shell on Windows", () => {
     expect(r.asked).toHaveLength(5)
   })
 
+  // Task 3 review test gap: the not-ready answer is remembered for its own Codex home only
+  it('remembers a home not ready for that home only, and asks of another', async () => {
+    const o: Rig = { readiness: 'not-set-up' }
+    const r = rig(o)
+    await r.prepare()
+    expect(r.asked).toHaveLength(1)
+    o.readiness = 'ready'
+    r.codexEnv.CODEX_HOME = path.join(r.home, '.codex-accounts', 'other')
+    await r.prepare()
+    expect(r.asked).toHaveLength(2)
+    expect(r.asked[1].codexHome).toBe(r.codexEnv.CODEX_HOME)
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+  })
+
   // Task 2 review M8: with a real look, the plan and the readiness echo name the guards the same way (namedPathFor)
   it('names the guards identically in the plan and the readiness echo when the disk is looked at', async () => {
     const r = rig({ look: nodeLinkLook })
