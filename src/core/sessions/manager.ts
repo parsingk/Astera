@@ -399,9 +399,15 @@ export class SessionManager {
    * - Claude, macOS and Linux: srt with the settings the session's twin holds (srtCheck.ts), through the runner the wiring
    *   gives (`checkRunner`), prepared as its start is (claudeSandboxStart.prepare). Refused where srt cannot run a
    *   command here, and where Ubuntu's AppArmor profile confines bubblewrap (every command would fail there).
-   * - Claude, Windows: no sandbox; never asked (the check runs as today, said on its result).
+   * - Claude, Windows (claude shell sandbox design D10): asked only for workers whose shell ran in Codex's sandbox (their
+   *   attempts recorded `sandbox`; deny-only ones run their check as today, said on its result). Prepared as such a start
+   *   is, as one that must be sandboxed (claudeSandboxStart.prepare with `required`), so the route is decided for that folder
+   *   now and its absence refuses in the reason's words; with it, `codex sandbox` as a Codex check above, through the same
+   *   runner and mark, with the scope's own profile (`shell.plan.args`, D6), the scope's environment (D8) and CODEX_HOME
+   *   set to the borrowed account's home (absent for the ambient one). The check's shell is cmd.exe (checkShell), never the
+   *   wrapper, which only Claude Code runs.
    * Rejects with `SANDBOX_UNAVAILABLE: <code>` (unavailable.ts) when the sandbox cannot be put around the check (rule E5):
-   * the check is then not run. `runner`: the launch goes through Astera's check runner (srt, and Codex on Windows), which
+   * the check is then not run. `runner`: the launch goes through Astera's check runner (srt, and Codex's sandbox on Windows), which
    * says when it could not put the check in the sandbox and takes its reason file's name out of the check's environment
    * (fix round 4).
    */
@@ -431,6 +437,33 @@ export class SessionManager {
       fitsOnTheLine(platform, runner)
       return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env }, runner: true }
     }
+    if (platform === 'win32') {
+      // Asked before anything is prepared, as for a Codex check: without the runner no Windows check starts
+      if (!this.claudeSandbox || !this.codexCheckRunner) throw sandboxUnavailable('no-check-runner')
+      const inherited = this.envFor(a.account)
+      // The route decided for this folder now, as a start that must be sandboxed decides it (D4): without one the prepare
+      // rejects with the reason's refusal (D5), which the check's question words
+      const { bash } = await this.checks.gitBash.search(inherited)
+      await this.claudeSandbox.prepare({ accountId: a.account.id, cwd: a.cwd, env: inherited, gitBash: inherited.CLAUDE_CODE_GIT_BASH_PATH || bash, required: true })
+      const env = { ...inherited }
+      if (this.hiding) applyHiding(env, this.hiding.get(a.cwd), platform)
+      const shell = this.claudeSandbox.scopeOf(a.account.id, a.cwd, env)?.shell
+      if (shell === undefined) {
+        const state = this.claudeSandbox.shellOf(a.account.id, a.cwd)
+        throw state.on ? sandboxUnavailable('not-prepared') : new Error(state.refusal)
+      }
+      // The plan's codex is the one bash runs: an npm install's sh shim, which Node cannot start, runs as its `.cmd`
+      const codexFile = /\.exe$/i.test(shell.plan.codex) ? shell.plan.codex : ['.cmd', '.bat'].map((ext) => shell.plan.codex + ext).find((f) => existsSync(f))
+      if (codexFile === undefined) throw sandboxUnavailable('cli-missing codex')
+      const cmd = buildCodexSandboxCommand(platform, [...shell.plan.args], checkShell(platform, a.command, os.tmpdir(), CHECK_STARTED_MARK), () => codexFile)
+      fitsOnTheLine(platform, cmd)
+      Object.assign(env, shell.env)
+      if (shell.plan.codexHome === null) delete env.CODEX_HOME
+      else env.CODEX_HOME = shell.plan.codexHome
+      const runner = this.codexCheckRunner.launch(cmd)
+      fitsOnTheLine(platform, runner)
+      return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env }, runner: true }
+    }
     if (sandboxKindOf('claude', platform) !== 'sandbox') throw sandboxUnavailable('no-sandbox claude')
     // A process without the runner, or without Claude's sandbox settings, cannot put a check in it; running again will not
     // change that (fix round 2), unlike a sandbox not yet ready
@@ -442,7 +475,7 @@ export class SessionManager {
       throw sandboxUnavailable('runtime-missing claude')
     }
     const inherited = this.envFor(a.account)
-    // macOS and Linux only (Windows is refused above), where no Git Bash is asked
+    // macOS and Linux only (Windows is handled above), where no Git Bash is asked
     await this.claudeSandbox.prepare({ accountId: a.account.id, cwd: a.cwd, env: inherited, gitBash: null })
     const scope = this.claudeSandbox.scopeOf(a.account.id, a.cwd, inherited)
     if (scope === undefined) throw sandboxUnavailable('not-prepared')

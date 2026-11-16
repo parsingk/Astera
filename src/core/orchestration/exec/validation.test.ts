@@ -709,7 +709,7 @@ describe('createTaskValidation — a lifecycle round that is no longer needed', 
 // account (the wiring builds the launch from the session manager's own builders); every check starts from the environment
 // the Credentials list's hiding leaves (Q5); a sandbox that cannot be put around a check is a question to a person, never a
 // silent run outside it nor the code's failure (E5); a Docker check of a sandboxed Task is refused (Q4); and Claude Code
-// on Windows, which has no sandbox, runs its checks as today and says so (Q1).
+// on Windows with deny rules only runs its checks as today and says so (Q1).
 describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', () => {
   const hidden = (cwd: string): NodeJS.ProcessEnv => ({ PATH: '/bin', HIDDEN_FOR: cwd })
   /** ValidationContext.checkEnv: the hidden environment, and the names the hiding took from it (fix round 2) */
@@ -892,6 +892,27 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     expect(sandboxedCheck).not.toHaveBeenCalled()
     expect(h.task().status).toBe('completed')
     expect(h.task().checks?.[0]).toMatchObject({ status: 'passed', outsideSandbox: true })
+  })
+
+  // Claude shell sandbox design D10: a Claude worker on Windows whose shell ran in Codex's sandbox recorded `sandbox`, so its
+  // check is asked of the session manager as that Claude account and runs through what it builds (Codex's sandbox through
+  // the runner), not outside; its refusal is a question in a check's words, naming the borrowed Codex account
+  it("Claude Code on Windows with its shell in Codex's sandbox: the check runs in the sandbox as that Claude account (D10)", async () => {
+    const asked: Parameters<NonNullable<ValidationContext['sandboxedCheck']>>[0][] = []
+    const launch = { file: 'C:\\Astera\\Astera.exe', args: ['C:\\Astera\\sandbox-check.js', '--codex', 'C:/tools/codex.exe', 'sandbox'] }
+    const h = rig({ sandboxKind: 'sandbox', provider: 'claude', checkEnv: hiding, sandboxedCheck: async (a) => (asked.push(a), { launch, env: { ...a.env }, runner: true }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(asked).toEqual([{ provider: 'claude', accountId: 'accA', cwd: h.cwd, command: opts.command, env: hidden(h.cwd) }])
+    expect(opts.launch).toEqual(launch)
+    await h.finish(0)
+    expect(h.task().status).toBe('completed')
+    expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
+    const refused = rig({ sandboxKind: 'sandbox', provider: 'claude', checkEnv: hiding, sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex cx-1')) })
+    refused.validation.startValidation({ taskId: refused.taskId, cwd: refused.cwd })
+    await vi.waitFor(() => expect(refused.task().status).toBe('blocked'))
+    expect(refused.runsStarted()).toBe(0)
+    expect(refused.task().checks?.[0]?.summary).toContain('Codex account cx-1')
   })
 
   it('an unsandboxed Task check starts from the hidden environment too (Q5), and is not marked', async () => {
