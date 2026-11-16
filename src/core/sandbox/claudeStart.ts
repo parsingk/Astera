@@ -44,8 +44,10 @@ export interface ShellCodex {
 
 /** The account the shell borrows, as the app and the Host both pick it (claudeSandboxStart `shellCodex`): the default
  *  Codex account (defaultAccountIdOf, the earliest registered one that is logged in; the rule behind the app's default
- *  badge), with `envOf`, the environment its sessions start with. A login check that fails counts as logged out. Null
- *  when no Codex account is logged in. */
+ *  badge), else, when none is logged in, the earliest registered Codex account (the same order, ties kept in the list's
+ *  order), with `envOf`, the environment its sessions start with. A login is not needed: `codex sandbox` asks none, and
+ *  the elevated setup lives in the account's home (Task 4 review M1). A login check that fails counts as logged out.
+ *  Null only when no Codex account is registered. */
 export async function shellCodexOf(o: {
   accounts: readonly Account[]
   loggedIn: (a: Account) => Promise<boolean>
@@ -54,7 +56,7 @@ export async function shellCodexOf(o: {
   const codex = o.accounts.filter((a) => providerOf(a) === 'codex')
   const ids = new Set<string>()
   await Promise.all(codex.map(async (a) => ((await o.loggedIn(a).catch(() => false)) ? ids.add(a.id) : undefined)))
-  const id = defaultAccountIdOf('codex', codex, ids)
+  const id = defaultAccountIdOf('codex', codex, ids) ?? defaultAccountIdOf('codex', codex, new Set(codex.map((a) => a.id)))
   const account = id === null ? undefined : codex.find((a) => a.id === id)
   return account ? { account: { id: account.id }, env: o.envOf(account) } : null
 }
@@ -221,7 +223,7 @@ export function claudeSandboxStart(o: {
   // reads as that step failing, so a wiring without them starts as before the route existed
   /** The default Codex account and the environment its sessions start with (its CODEX_HOME is the home the sandbox runs
    *  under); null when no Codex account is registered (shellCodexOf). Asked at each prepare, which awaits it: the app and
-   *  the Host ask whether each Codex account is logged in. */
+   *  the Host ask whether each Codex account is logged in, to prefer one that is. */
   shellCodex?: () => ShellCodex | null | Promise<ShellCodex | null>
   /** Whether that account's Windows sandbox is set up (prepareCodexSandbox `ready`). */
   codexReady?: CodexWindowsReady

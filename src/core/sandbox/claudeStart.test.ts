@@ -786,10 +786,21 @@ describe('shellCodexOf', () => {
     expect(asked.sort()).toEqual(['cx-early', 'cx-late', 'cx-out'])
   })
 
-  it('answers null when no Codex account is logged in, a login check that fails counting as logged out', async () => {
+  // Task 4 review M1: `codex sandbox` needs no login, and the elevated setup lives in the home, so a Codex account that
+  // is logged out is still borrowed when none is logged in: the first registered one
+  it('borrows the first registered Codex account when none is logged in, a login check that fails counting as logged out', async () => {
+    const envOf = (a: { configDir: string }) => ({ CODEX_HOME: a.configDir })
+    expect(await shellCodexOf({ accounts: [acc('cl', 'claude', '2026-01-01T00:00:00Z'), acc('cx', 'codex', '2026-01-01T00:00:00Z')], loggedIn: async () => false, envOf })).toEqual({
+      account: { id: 'cx' },
+      env: { CODEX_HOME: 'C:/accts/cx' }
+    })
+    const two = [acc('cx-late', 'codex', '2026-03-01T00:00:00Z'), acc('cx-early', 'codex', '2026-02-01T00:00:00Z'), acc('cx-same', 'codex', '2026-02-01T00:00:00Z')]
+    expect((await shellCodexOf({ accounts: two, loggedIn: async () => { throw new Error('unreadable') }, envOf }))?.account.id).toBe('cx-early')
+  })
+
+  it('answers null only when no Codex account is registered', async () => {
     const envOf = () => ({})
     expect(await shellCodexOf({ accounts: [acc('cl', 'claude', '2026-01-01T00:00:00Z')], loggedIn: async () => true, envOf })).toBeNull()
-    expect(await shellCodexOf({ accounts: [acc('cx', 'codex', '2026-01-01T00:00:00Z')], loggedIn: async () => { throw new Error('unreadable') }, envOf })).toBeNull()
     expect(await shellCodexOf({ accounts: [], loggedIn: async () => true, envOf })).toBeNull()
   })
 })
