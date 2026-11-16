@@ -1494,7 +1494,7 @@ describe('StatusLineManager sandbox', () => {
   })
 
   // Claude shell sandbox D1, D7: with the route, the scope's folder holds the wrapper and its boot script, and every twin
-  // of the scope, terminal and chat, names the wrapper in its `env` with the PowerShell tool off and BASH_ENV, ENV pinned
+  // of the scope, terminal and chat, names the wrapper in its `env` with the PowerShell tool off and SHELL_PINNED_ENV pinned
   const PLAN: Omit<ClaudeShellPlan, 'bootFile'> = {
     codex: 'C:/tools/codex.exe',
     codexHome: 'C:\\Users\\t\\.codex-accounts\\cx',

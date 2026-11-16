@@ -3,7 +3,7 @@
 // through Git Bash against a fake codex: a bash script that records its arguments, folder and environment, then runs what
 // follows `--` as `codex sandbox` would.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -59,6 +59,20 @@ describe('shellWrapScript text', () => {
     for (const word of ['C:/c/codex.exe', 'C:/g/bash.exe', 'C:/w', 'C:/p/boot.sh', `C:${BS}h`, value]) expect(text, word).toContain(sq(word))
   })
 
+  // Fix round I1, M7: the guard is made after the cd and before the launch; the pass-through runs "$BASH", not PATH's bash
+  it('makes .claude between entering the folder and the codex launch, and passes on through "$BASH"', () => {
+    const lines = shellWrapScript(plan()).split('\n')
+    const cd = lines.findIndex((l) => l.startsWith('cd '))
+    const guard = lines.findIndex((l) => l.includes('mkdir .claude'))
+    const launch = lines.findIndex((l) => l.startsWith('MSYS_NO_PATHCONV=1 '))
+    expect(cd).toBeGreaterThan(-1)
+    expect(guard).toBeGreaterThan(cd)
+    expect(launch).toBeGreaterThan(guard)
+    expect(lines[guard]).toMatch(/exit 125/)
+    expect(lines).toContain('    *) exec "$BASH" -c "$1" ;;')
+    expect(lines.join('\n')).not.toMatch(/exec bash /)
+  })
+
   it('unsets CODEX_HOME for codex when the plan has no home', () => {
     expect(shellWrapScript(plan({ codexHome: null }))).toContain('unset CODEX_HOME')
     expect(shellWrapScript(plan())).not.toContain('unset CODEX_HOME')
@@ -66,13 +80,15 @@ describe('shellWrapScript text', () => {
 })
 
 describe('claudeShellEnv', () => {
-  it('names the wrapper, forward-slashed, turns the PowerShell tool off and pins the bash start-up scripts empty', () => {
-    expect(SHELL_PINNED_ENV).toEqual({ BASH_ENV: '', ENV: '' })
+  it('names the wrapper, forward-slashed, turns the PowerShell tool off and pins what bash reads before the wrapper empty', () => {
+    expect(SHELL_PINNED_ENV).toEqual({ BASH_ENV: '', ENV: '', SHELLOPTS: '', BASHOPTS: '' })
     expect(claudeShellEnv(`C:${BS}p q${BS}shell-wrap.sh`)).toEqual({
       CLAUDE_CODE_SHELL_PREFIX: 'C:/p q/shell-wrap.sh',
       CLAUDE_CODE_USE_POWERSHELL_TOOL: '0',
       BASH_ENV: '',
-      ENV: ''
+      ENV: '',
+      SHELLOPTS: '',
+      BASHOPTS: ''
     })
   })
 })
@@ -115,6 +131,7 @@ const baseEnv = (): Record<string, string> => {
 const FAKE_CODEX = (dir: string): string => `#!/bin/bash
 d=${sq(dir)}
 printf x >> "$d/codex.calls"
+if [ -e .claude ]; then printf y; else printf n; fi >> "$d/codex.claude"
 pwd -W > "$d/codex.cwd"
 for a in "$@"; do printf '%s\\0' "$a"; done > "$d/codex.args"
 printf '%s\\n' "\${CODEX_HOME-<unset>}" "\${MSYS_NO_PATHCONV-<unset>}" "\${MSYS2_ARG_CONV_EXCL-<unset>}" > "$d/codex.env"
@@ -136,6 +153,8 @@ interface Kit {
   wrapFile: string
   run(args: string[], o?: { cwd?: string; env?: Record<string, string>; input?: string }): { out: string; err: string; code: number | null }
   codexCalls(): number
+  /** One letter per codex start: whether the session's folder held a `.claude` when it started (y or n). */
+  codexSawClaude(): string
   codexArgs(): string[]
   codexCwd(): string
   codexEnv(): { home: string; noPathConv: string; argConvExcl: string }
@@ -171,6 +190,7 @@ function kit(over: Partial<ClaudeShellPlan> = {}): Kit {
       return { out: r.stdout, err: r.stderr, code: r.status }
     },
     codexCalls: () => read('codex.calls').length,
+    codexSawClaude: () => read('codex.claude'),
     codexArgs: () => read('codex.args').split('\0').slice(0, -1),
     codexCwd: () => read('codex.cwd').trim(),
     codexEnv: () => {
@@ -299,6 +319,81 @@ describe.runIf(gitBash !== null)('the wrapper through Git Bash', () => {
     expect(r.err).toContain('astera')
     expect(r.out).toBe('')
     expect(k.codexCalls()).toBe(0)
+  })
+
+  // Spec D6 (fix round I1): a route that is on never runs a command with nothing to hold. The wrapper makes the session
+  // folder's `.claude` again before each launch when it is gone (another start's cleanup, a person deleting it)
+  it('makes a missing .claude in the session folder before codex starts, and only for a launch', () => {
+    const k = kit()
+    const claude = `${k.root}/.claude`
+    expect(k.run(['echo direct'], { env: withProject() }).out).toBe('direct\n')
+    expect(existsSync(claude)).toBe(false)
+    expect(k.run([shaped('echo hi', `${k.dir}/cwd-out`)])).toMatchObject({ out: 'hi\n', code: 0 })
+    expect(k.codexSawClaude()).toBe('y')
+    expect(statSync(claude).isDirectory()).toBe(true)
+    expect(readdirSync(claude)).toEqual([])
+    // Gone again between two commands: made again
+    rmSync(claude, { recursive: true })
+    expect(k.run([shaped('echo again', `${k.dir}/cwd-out`)]).out).toBe('again\n')
+    expect(k.codexSawClaude()).toBe('yy')
+  })
+
+  it('leaves a .claude that is there, a folder or a file, as it is', () => {
+    const k = kit()
+    mkdirSync(`${k.root}/.claude`)
+    writeFileSync(`${k.root}/.claude/settings.json`, '{"a":1}')
+    expect(k.run([shaped('echo hi', `${k.dir}/cwd-out`)]).out).toBe('hi\n')
+    expect(readdirSync(`${k.root}/.claude`)).toEqual(['settings.json'])
+    expect(readFileSync(`${k.root}/.claude/settings.json`, 'utf8')).toBe('{"a":1}')
+    const f = kit()
+    writeFileSync(`${f.root}/.claude`, 'x')
+    expect(f.run([shaped('echo hi', `${f.dir}/cwd-out`)]).out).toBe('hi\n')
+    expect(statSync(`${f.root}/.claude`).isFile()).toBe(true)
+    expect(readFileSync(`${f.root}/.claude`, 'utf8')).toBe('x')
+    expect(k.codexSawClaude() + f.codexSawClaude()).toBe('yy')
+  })
+
+  // A `.claude` that cannot be made: a dangling junction (or link) by that name, which `[ -e ]` reads as missing and
+  // mkdir cannot replace. The command is refused before codex starts
+  it('exits 125 with a line on stderr, without starting codex, when .claude cannot be made', () => {
+    const k = kit()
+    symlinkSync(`${k.dir}/nowhere`, `${k.root}/.claude`, 'junction')
+    const r = k.run([shaped('echo no', `${k.dir}/cwd-out`)])
+    expect(r.code).toBe(125)
+    expect(r.err).toContain('astera sandbox')
+    expect(r.err).toContain('.claude')
+    expect(r.out).toBe('')
+    expect(k.codexCalls()).toBe(0)
+  })
+
+  // Spec D7 (fix round M7): the pass-through runs the bash that runs the wrapper, never one found on PATH, which a
+  // project settings file could point at the work folder
+  it('passes a hook on to the bash running the wrapper, not to a bash found on PATH', () => {
+    const k = kit()
+    mkdirSync(`${k.dir}/planted`)
+    writeFileSync(`${k.dir}/planted/bash`, '#!/bin/sh\necho planted\n')
+    // PATH in bash's own form: a `C:/` entry would split at its colon
+    const r = spawnSync(k.bash, ['-c', 'PATH="$(cygpath -u "$T_PLANT"):$PATH"; command -v bash >&2; "$T_WRAP" "$T_ARG0"'], {
+      cwd: `${k.root}/sub`,
+      env: { ...withProject(), T_WRAP: k.wrapFile, T_PLANT: `${k.dir}/planted`, T_ARG0: 'echo direct' },
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60_000
+    })
+    // The plant is what PATH finds, so a pass-through that looked bash up would print `planted`
+    expect(r.stderr.trim()).toMatch(/\/planted\/bash$/)
+    expect({ out: r.stdout, code: r.status }).toEqual({ out: 'direct\n', code: 0 })
+    expect(k.codexCalls()).toBe(0)
+  })
+
+  // What the twin pins (SHELL_PINNED_ENV) reaches the wrapper's bash as set and empty: both branches still run normally
+  it('runs both branches normally with every pinned variable set to the empty string', () => {
+    const k = kit()
+    const pinned = { ...SHELL_PINNED_ENV }
+    expect(Object.keys(pinned).sort()).toEqual(['BASHOPTS', 'BASH_ENV', 'ENV', 'SHELLOPTS'])
+    expect(k.run(['echo direct'], { env: { ...withProject(), ...pinned } })).toMatchObject({ out: 'direct\n', err: '', code: 0 })
+    expect(k.run([shaped('echo inside', `${k.dir}/cwd-out`)], { env: { ...baseEnv(), ...pinned } })).toMatchObject({ out: 'inside\n', err: '', code: 0 })
+    expect(k.codexCalls()).toBe(1)
   })
 
   it("the boot script exits 126 with a line on stderr when the command's folder cannot be entered", () => {

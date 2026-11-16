@@ -34,7 +34,15 @@ const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
  * The wrapper (D2, D3). It passes its argument straight on only when CLAUDE_PROJECT_DIR is set and not empty (Claude Code
  * sets it for hooks, the status line and MCP startup, not for tool commands) AND the argument holds no TOOL_MARKS AND it
  * got exactly one argument (Claude Code passes one, spec M1). Everything else runs inside the sandbox: a future Claude
- * Code that changes either half of the tool shape still lands inside, which is the fail-closed rule.
+ * Code that changes either half of the tool shape still lands inside, which is the fail-closed rule. The pass-through
+ * runs `"$BASH"`, the bash running the wrapper, never a `bash` looked up on PATH, which a project settings file's `env`
+ * could point at the work folder (Task 3 review M7).
+ *
+ * Before each launch, in the session's folder, the wrapper makes `.claude` again when nothing by that name is there
+ * (`[ -e ]`), since the profile holds it read-only only while it exists (spec D6, M8) and another start's cleanup or a
+ * person may have removed it since the prepare made it (Task 3 review I1). One that cannot be made refuses the command
+ * with a line and 125, codex never started: a route that is on never runs a command with nothing to hold. A `.claude`
+ * that is there, a folder or a file, is left as it is.
  *
  * Inside, the command and its folder travel to the boot script in environment variables, not arguments: MSYS rewrites
  * arguments to a native program (`/c/x` to `C:\x`) and the variable carried 100 000 characters whole (spec M4). The MSYS
@@ -55,7 +63,7 @@ export function shellWrapScript(plan: ClaudeShellPlan): string {
     'if [ "$#" -eq 1 ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then',
     '  case "$1" in',
     `    ${marks}) ;;`,
-    '    *) exec bash -c "$1" ;;',
+    '    *) exec "$BASH" -c "$1" ;;',
     '  esac',
     'fi',
     'export ASTERA_SBX_SCRIPT="${1-}"',
@@ -65,6 +73,7 @@ export function shellWrapScript(plan: ClaudeShellPlan): string {
     'export ASTERA_SBX_MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL+s$MSYS2_ARG_CONV_EXCL}"',
     home,
     `cd ${root} || { echo "astera sandbox: cannot enter "${root} >&2; exit 125; }`,
+    `[ -e .claude ] || mkdir .claude 2>/dev/null || [ -e .claude ] || { echo "astera sandbox: cannot make "${root}"/.claude, which the sandbox holds read-only" >&2; exit 125; }`,
     `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' ${codex}`,
     'exit $?',
     ''
@@ -95,11 +104,12 @@ export const SHELL_BOOT_SCRIPT = [
   ''
 ].join('\n')
 
-/** What the settings twin pins beside the two switches (review finding 3): bash runs the script named in `BASH_ENV`
- *  (and `ENV` in POSIX mode) before the wrapper's first line, outside the sandbox, and a project settings file's `env`
- *  could name one. A settings `env` value set to "" cancels the variable, and the twin's `env` wins over the project's
- *  files (code.claude.com/docs/en/settings). */
-export const SHELL_PINNED_ENV: Record<string, string> = { BASH_ENV: '', ENV: '' }
+/** What the settings twin pins beside the two switches (review finding 3, Task 3 review M7; spec D7): bash reads all
+ *  four before the wrapper's first line, outside the sandbox: it runs the script named in `BASH_ENV` (and `ENV` in
+ *  POSIX mode), and turns on the options `SHELLOPTS` and `BASHOPTS` name (`xtrace` with a `PS4` holding `$(...)` runs
+ *  that). A project settings file's `env` could set any of them; a settings `env` value set to "" cancels the
+ *  variable, and the twin's `env` wins over the project's files (spec M10, code.claude.com/docs/en/settings). */
+export const SHELL_PINNED_ENV: Record<string, string> = { BASH_ENV: '', ENV: '', SHELLOPTS: '', BASHOPTS: '' }
 
 /** What a session with the route starts with (D7), in its settings twin's `env` and its environment: the wrapper,
  *  forward-slashed for the bash that runs it, the PowerShell tool off, since the prefix does not cover it (spec M7), and
