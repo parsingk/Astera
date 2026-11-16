@@ -522,11 +522,18 @@ describe('agentAccountFolders', () => {
     const kind = process.platform === 'win32' ? 'junction' : 'dir'
     symlinkSync(path.join(elsewhere, 'moved'), path.join(h, '.claude-accounts'), kind)
     symlinkSync(path.join(elsewhere, 'side'), path.join(h, '.codex-side'), kind)
-    symlinkSync(path.join(elsewhere, 'file'), path.join(h, '.claude-link-to-file'), 'file')
+    // A file symlink needs a privilege on Windows (EPERM without developer mode): without it that one assertion is skipped
+    let fileLinked = true
+    try {
+      symlinkSync(path.join(elsewhere, 'file'), path.join(h, '.claude-link-to-file'), 'file')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err
+      fileLinked = false
+    }
     const found = agentAccountFolders(h).map((f) => `${f.provider}:${slash(path.relative(h, f.configDir))}`)
     expect(found).toContain('claude:.claude-accounts/a')
     expect(found).toContain('codex:.codex-side')
-    expect(found).not.toContain('claude:.claude-link-to-file')
+    if (fileLinked) expect(found).not.toContain('claude:.claude-link-to-file')
   })
 
   it('gives only the default folders for a home that cannot be listed, and never throws', () => {

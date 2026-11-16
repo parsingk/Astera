@@ -1501,12 +1501,23 @@ describe('createHostSpawner, the agents login files', () => {
     expect(paths()).toContain(`${slashed(later)}/.credentials.json`)
   })
 
-  it('falls back to the last list it read when accounts.json cannot be read, and never throws', async () => {
-    const outside = path.join(dir, 'agents', 'kept')
-    const h = rig({ readAccounts: async () => [{ id: 'k', label: 'k', configDir: outside, color: '#888', createdAt: NOW, provider: 'codex' }] })
-    // The last read came from a spawner path (here the wrapped reader the Host's operations use)
+  it('uses accounts.json while it reads, and the last list its operations read when it is damaged or missing, never throwing', async () => {
+    const kept = path.join(dir, 'agents', 'kept')
+    const onDisk = path.join(dir, 'agents', 'on-disk')
+    const h = rig({ readAccounts: async () => [{ id: 'k', label: 'k', configDir: kept, color: '#888', createdAt: NOW, provider: 'codex' }] })
+    // The last read came from a spawner operation (the wrapped reader), and says `kept`
     await h.spawner!.accountName!('k')
+    const paths = (): string[] => h.spawner!.agentLogins!().map((e) => e.path)
+    // While the file reads, it is the file that counts, not what the operations last read
+    writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'd', label: 'd', configDir: onDisk, color: '#888', createdAt: NOW, provider: 'codex' }] }))
+    expect(paths()).toContain(`${slashed(onDisk)}/auth.json`)
+    expect(paths()).not.toContain(`${slashed(kept)}/auth.json`)
+    // Damaged: the last list stands in
     writeFileSync(path.join(profile, 'accounts.json'), '{ not json')
-    expect(h.spawner!.agentLogins!().map((e) => e.path)).toContain(`${slashed(outside)}/auth.json`)
+    expect(paths()).toContain(`${slashed(kept)}/auth.json`)
+    expect(paths()).not.toContain(`${slashed(onDisk)}/auth.json`)
+    // Missing: the same
+    await fs.rm(path.join(profile, 'accounts.json'))
+    expect(paths()).toContain(`${slashed(kept)}/auth.json`)
   })
 })

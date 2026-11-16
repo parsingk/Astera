@@ -871,8 +871,6 @@ export class StatusLineManager {
     return this.sandboxNamed(scope)
   }
 
-  /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
-   *  person's home. */
   /** The agents' login files a scope's twin denies (sandbox design §6): the wiring's entries (`agentLogins`), each only
    *  if it is there now when the scope can look; a look that throws keeps the entry, and without a look (the measurement)
    *  every entry stands as given. A prepare calls this once and keeps the result in the scope (`SandboxScope.agentLogins`),
@@ -890,11 +888,12 @@ export class StatusLineManager {
       .map((e) => e.path)
   }
 
-  /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
+  /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
+   *  person's home. The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
    *  round 5). With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and
    *  the read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them
    *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. The agents' login
-   *  files (sandbox design §6) are named on every OS only if they are there at the start, when the scope can look: a
+   *  files (sandbox design §6) are named on every OS only if they are there when the prepare chose them (chooseAgentLogins, kept in the scope), if the scope can look: a
    *  logged-out account has no file to protect, and Codex's twin leaves a missing one out for the reasons prepared.ts
    *  gives; a look that throws keeps the entry. Without a look (the measurement), as given. */
   private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
