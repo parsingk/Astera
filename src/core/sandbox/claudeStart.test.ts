@@ -12,10 +12,13 @@ import {
   gitExcludesFileOf,
   gitExcludesText
 } from './claudeStart'
-import { npmCacheOf } from './codexProfile'
+import { appServerSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
 import { gitLayoutOf } from './gitLayout'
 import type { SandboxScope } from '../sessions/statusline'
 import { sandboxRefusalMessage } from './unavailable'
+import { sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from './prepared'
+import type { LinkLook } from './locations'
+import type { Readiness } from './windowsReadiness'
 
 // srt 0.0.79's own lists, as Task 2 measured them (inventory §23.4, scripts/measure/s2.mjs)
 const SRT_LINES = [
@@ -281,5 +284,248 @@ describe('claudeSandboxStart', () => {
     expect(r.order).not.toContain('files')
     expect(r.logged.join(' ')).toMatch(/git layout/)
     expect(r.start.scopeOf('acc-1', cwd, r.sessionEnv)).toBeUndefined()
+  })
+})
+
+/** The `"<path>"="<access>"` entries of a permission profile's `-c permissions=…` value outside its `:workspace_roots`. */
+const profileEntries = (args: readonly string[], access: 'deny' | 'read' | 'write'): string[] => {
+  const profile = (args.find((a) => a.startsWith('permissions=')) ?? '').replace(/":workspace_roots"=\{[^}]*\}/, '')
+  return [...profile.matchAll(/"((?:[^"\\]|\\.)*)"="(deny|read|write)"/g)].filter((m) => m[2] === access).map((m) => JSON.parse(`"${m[1]}"`) as string)
+}
+
+// Claude shell sandbox design D4 to D6: on Windows each sandboxed Claude start's prepare asks whether the shell can run in
+// a Codex account's sandbox, in D4's order, and keeps the answer for the spawn. No codex runs: readiness, version and the
+// codex path are fakes; the profile comes from prepareCodexSandbox, the code a sandboxed Codex start uses
+describe("the route for Claude's shell on Windows", () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const temp = (): string => {
+    const d = mkdtempSync(path.join(os.tmpdir(), 'astera-claude-shell-'))
+    dirs.push(d)
+    return d
+  }
+  const slashed = (p: string): string => p.replace(/\\/g, '/')
+
+  type Rig = {
+    platform?: NodeJS.Platform
+    gitBash?: string | null
+    account?: boolean
+    exe?: string | null
+    exists?: (p: string) => boolean
+    codexVersion?: string | null | 'missing'
+    readiness?: Readiness
+    look?: LinkLook | null
+  }
+  const rig = (o: Rig = {}) => {
+    const profileDir = temp()
+    const tmpDir = temp()
+    const home = temp()
+    const cwd = temp()
+    mkdirSync(path.join(cwd, '.git'))
+    const order: string[] = []
+    const scopes: SandboxScope[] = []
+    const asked: Parameters<CodexWindowsReady>[0][] = []
+    const logged: string[] = []
+    const codexHome = path.join(home, '.codex-accounts', 'cx')
+    const codexEnv = { CODEX_HOME: codexHome, TEMP: tmpDir, TMP: tmpDir, APPDATA: path.join(home, 'AppData', 'Roaming') }
+    const login = path.join(home, '.claude', '.credentials.json')
+    mkdirSync(path.dirname(login), { recursive: true })
+    writeFileSync(login, '')
+    const readOnly = [slashed(profileDir)]
+    const appKeyFile = path.join(profileDir, 'host', 'app.key')
+    const claudeVersion = Object.assign((cli: 'claude') => (order.push(`version ${cli}`), '2.1.325'), { warm: async (cli: 'claude') => void order.push(`warm ${cli}`) })
+    const codexVersion = Object.assign(
+      (cli: 'codex') => (order.push(`version ${cli}`), o.codexVersion === 'missing' ? undefined : o.codexVersion === undefined ? '0.160.0' : o.codexVersion),
+      { warm: async (cli: 'codex') => void order.push(`warm ${cli}`) }
+    ) as CodexVersionProbe
+    const start = claudeSandboxStart({
+      linkLook: o.look ?? null,
+      platform: o.platform ?? 'win32',
+      profileDir,
+      homeDir: home,
+      env: {},
+      tmpDir,
+      files: {
+        ensureSandboxFiles: async (scope: SandboxScope) => (order.push('files'), scopes.push(scope), 'ok' as const),
+        sandboxChatArgs: () => ['--settings', 'S.json'],
+        sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] })
+      },
+      version: claudeVersion,
+      uid: 1000,
+      runGit: async () => null,
+      log: (m) => logged.push(m),
+      shellCodex: () => (order.push('account'), o.account === false ? null : { account: { id: 'cx-1' }, env: codexEnv }),
+      codexReady: async (a) => (order.push('ready'), asked.push(a), o.readiness ?? 'ready'),
+      codexVersion,
+      codexExe: () => (order.push('exe'), o.exe === undefined ? 'C:/tools/codex.exe' : o.exe),
+      codexExcludes: async () => 'C:/t/astera-excludes',
+      appKeyFile,
+      readOnly,
+      agentLogins: () => [{ path: login, kind: 'file' as const }],
+      ...(o.exists ? { exists: o.exists } : {})
+    })
+    const sessionEnv = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }
+    const prepare = (over: { required?: boolean } = {}) =>
+      start.prepare({ accountId: 'acc-1', cwd, env: sessionEnv, gitBash: o.gitBash === undefined ? 'E:/programs/Git/bin/bash.exe' : o.gitBash, ...over })
+    return { start, prepare, cwd, home, tmpDir, profileDir, codexHome, codexEnv, sessionEnv, login, readOnly, appKeyFile, order, scopes, asked, logged }
+  }
+
+  it('runs the shell in the Codex account’s sandbox, under the Codex session’s profile with the work folder’s guards', async () => {
+    const r = rig()
+    writeFileSync(path.join(r.cwd, '.mcp.json'), '{}')
+    mkdirSync(path.join(r.cwd, '.vscode'))
+    await r.prepare()
+    const layout = await gitLayoutOf(r.cwd)
+    const guards = [`${slashed(r.cwd)}/.claude`, `${slashed(r.cwd)}/.mcp.json`, `${slashed(r.cwd)}/.vscode`]
+    // The same builders a Codex session of that account in this folder gets, with the guards as more read-only paths
+    const expected = appServerSandboxArgs(
+      sessionSandboxArgs({
+        platform: 'win32',
+        homeDir: r.home,
+        layout,
+        env: r.codexEnv,
+        appKeyFile: r.appKeyFile,
+        agentLogins: [{ path: r.login, kind: 'file' }],
+        agentLoginsChosen: true,
+        readOnly: [...r.readOnly, ...guards],
+        links: null
+      })
+    )
+    const scope = r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)
+    expect(scope?.shell?.plan).toEqual({ codex: 'C:/tools/codex.exe', codexHome: r.codexHome, bash: 'E:/programs/Git/bin/bash.exe', root: r.cwd, args: expected })
+    expect(scope?.shell?.accountId).toBe('cx-1')
+    expect(profileEntries(expected, 'read')).toEqual([...r.readOnly, ...guards])
+    expect(expected).toContain('windows.sandbox="elevated"')
+    // D8: what a sandboxed Codex session's environment gets on Windows, numbered after the session's own GIT_CONFIG entries
+    expect(scope?.shell?.env).toEqual(codexSandboxEnv({ platform: 'win32', layout, tmpDir: r.tmpDir, env: r.sessionEnv, excludesFile: 'C:/t/astera-excludes' }))
+    expect(scope?.shell?.env.GIT_CONFIG_KEY_1).toBe('safe.directory')
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    // The twins are written for the scope with the route, so its wrapper goes beside them (Task 3)
+    expect(r.scopes[0].shell?.plan).toEqual(scope?.shell?.plan)
+    expect(r.order.indexOf('ready')).toBeLessThan(r.order.indexOf('files'))
+    // Readiness asked of the borrowed account's home, under the very profile
+    expect(r.asked).toHaveLength(1)
+    expect(r.asked[0].codexHome).toBe(r.codexHome)
+    expect(profileEntries(r.asked[0].profile ?? [], 'read')).toEqual([...r.readOnly, ...guards])
+    // Another account was not prepared
+    expect(r.start.scopeOf('acc-2', r.cwd, r.sessionEnv)).toBeUndefined()
+  })
+
+  // Spec M8: a read entry holds only for a path that is there, so `.claude` is made first; one already there is left alone
+  it('makes an empty .claude when it is missing and leaves one that is there as it is', async () => {
+    const r = rig()
+    await r.prepare()
+    expect(nodeFs.statSync(path.join(r.cwd, '.claude')).isDirectory()).toBe(true)
+    expect(nodeFs.readdirSync(path.join(r.cwd, '.claude'))).toEqual([])
+    const there = rig()
+    mkdirSync(path.join(there.cwd, '.claude'))
+    writeFileSync(path.join(there.cwd, '.claude', 'settings.json'), '{"a":1}')
+    const mkdir = vi.spyOn(nodeFs.promises, 'mkdir')
+    try {
+      await there.prepare()
+      expect(mkdir.mock.calls.map((c) => slashed(String(c[0])))).not.toContain(`${slashed(there.cwd)}/.claude`)
+    } finally {
+      mkdir.mockRestore()
+    }
+    expect(readFileSync(path.join(there.cwd, '.claude', 'settings.json'), 'utf8')).toBe('{"a":1}')
+    // A .claude that cannot be made: the route is off (`other`), the start goes on with the deny rules
+    const cannot = rig()
+    const failing = vi.spyOn(nodeFs.promises, 'mkdir').mockImplementation(async (p) => {
+      if (slashed(String(p)).endsWith('/.claude')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' })
+      return undefined
+    })
+    try {
+      await cannot.prepare()
+    } finally {
+      failing.mockRestore()
+    }
+    expect(cannot.start.shellOf('acc-1', cannot.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: no-sandbox claude' })
+    expect(cannot.asked).toEqual([])
+  })
+
+  // D4's order, the first that fails is the reason; D5: without `required` the start goes on with the deny rules, and with
+  // it the start is refused in the reason's own words before any twin is written
+  const reasons: Array<{ name: string; rig: Rig; why: string; refusal: string; codexAsked: boolean }> = [
+    { name: 'no Git Bash', rig: { gitBash: null, account: false, exe: null }, why: 'no-git-bash', refusal: 'no-sandbox claude', codexAsked: false },
+    { name: 'no Codex account', rig: { account: false, exe: null }, why: 'no-codex-account', refusal: 'no-sandbox claude', codexAsked: false },
+    { name: 'no codex', rig: { exe: null, codexVersion: '0.1.0' }, why: 'no-codex', refusal: 'cli-missing codex', codexAsked: false },
+    { name: 'a codex .cmd with no sh shim beside it', rig: { exe: 'C:/npm/codex.cmd', exists: () => false }, why: 'no-codex', refusal: 'cli-missing codex', codexAsked: false },
+    { name: 'a codex whose version is not there', rig: { codexVersion: 'missing' }, why: 'no-codex', refusal: 'cli-missing codex', codexAsked: false },
+    { name: 'an old codex', rig: { codexVersion: '0.159.0', readiness: 'not-set-up' }, why: 'codex-too-old', refusal: 'cli-too-old codex 0.159.0 0.160.0', codexAsked: false },
+    { name: 'a codex whose version cannot be read', rig: { codexVersion: null }, why: 'codex-too-old', refusal: 'cli-version-unknown codex', codexAsked: false },
+    { name: 'a Windows sandbox not set up', rig: { readiness: 'not-set-up' }, why: 'not-set-up', refusal: 'windows-setup codex cx-1', codexAsked: true },
+    { name: 'a Windows sandbox Codex could not be asked about', rig: { readiness: 'check-failed' }, why: 'check-failed', refusal: 'windows-check-failed codex cx-1', codexAsked: true }
+  ]
+  for (const c of reasons) {
+    it(`keeps the route off for ${c.name}, and refuses a start that must be sandboxed in its words`, async () => {
+      const r = rig(c.rig)
+      await r.prepare()
+      expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: c.why, refusal: `SANDBOX_UNAVAILABLE: ${c.refusal}` })
+      const scope = r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)
+      expect(scope).toBeDefined()
+      expect(scope?.shell).toBeUndefined()
+      expect(r.scopes[0].shell).toBeUndefined()
+      expect(r.asked.length > 0).toBe(c.codexAsked)
+      expect(r.logged.join('\n')).toContain(c.why)
+      // Nothing is made in the work folder before the codex is known to be one the sandbox was measured on
+      if (!c.codexAsked) expect(existsSync(path.join(r.cwd, '.claude'))).toBe(false)
+      const f = rig(c.rig)
+      await expect(f.prepare({ required: true })).rejects.toThrow(new RegExp(`^SANDBOX_UNAVAILABLE: ${c.refusal.replace(/\./g, '\\.')}$`))
+      expect(f.order).not.toContain('files')
+      expect(f.start.scopeOf('acc-1', f.cwd, f.sessionEnv)).toBeUndefined()
+    })
+  }
+
+  it('asks in D4’s order: Git Bash, the account, the codex path, its version, then the readiness', async () => {
+    const r = rig()
+    await r.prepare()
+    const asks = r.order.filter((s) => ['account', 'exe', 'version codex', 'ready'].includes(s))
+    expect(asks.slice(0, 3)).toEqual(['account', 'exe', 'version codex'])
+    expect(asks.at(-1)).toBe('ready')
+    const noBash = rig({ gitBash: null })
+    await noBash.prepare()
+    expect(noBash.order).not.toContain('account')
+  })
+
+  it('takes an npm .cmd shim’s sh shim beside it as the codex bash runs', async () => {
+    const r = rig({ exe: 'C:/npm/codex.cmd', exists: (p) => p === 'C:/npm/codex' || existsSync(p) })
+    await r.prepare()
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell?.plan.codex).toBe('C:/npm/codex')
+  })
+
+  // A named path through a link the session could change (prepareCodexSandbox refuses it): another reason, said in the log
+  it('keeps the route off for a guard through a link inside the work folder, as `other`', async () => {
+    const look: LinkLook = {
+      lstat: (p) => ({ isSymbolicLink: () => /\/\.claude$/.test(slashed(p)) }),
+      readlink: () => 'C:/elsewhere',
+      realpath: (p) => p
+    }
+    const r = rig({ look })
+    mkdirSync(path.join(r.cwd, '.claude'))
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: no-sandbox claude' })
+    expect(r.logged.join('\n')).toMatch(/linked-path/)
+    await expect(rig({ look }).prepare({ required: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+  })
+
+  it('decides nothing off Windows: no codex is asked, the scope has no route, and nothing is made in the folder', async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      const r = rig({ platform })
+      await r.prepare({ required: true })
+      expect(r.order.filter((s) => ['account', 'exe', 'version codex', 'warm codex', 'ready'].includes(s))).toEqual([])
+      expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeUndefined()
+      expect(r.scopes[0].shell).toBeUndefined()
+      expect(existsSync(path.join(r.cwd, '.claude'))).toBe(false)
+    }
+  })
+
+  // The spawn takes what the prepare kept, never a new look: a later prepare that loses the route says so
+  it('answers what the last prepare decided, and nothing for a folder never prepared', async () => {
+    const r = rig()
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    expect(r.start.shellOf('acc-2', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
   })
 })

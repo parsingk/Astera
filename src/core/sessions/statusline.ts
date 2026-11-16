@@ -17,6 +17,7 @@ import { claudeSandboxSettings, claudeSessionDenied, claudeWritableFolders, type
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
+import type { ClaudeShellPlan } from '../sandbox/claudeShell'
 import { namedPaths, profileReadOnly, type DenyEntry, type LinkLook } from '../sandbox/locations'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
@@ -51,6 +52,11 @@ export interface SandboxScope {
    *  the spawn then computes the same twin key the prepare wrote even if a login file appeared or went in between (sandbox
    *  design §6). Absent, they are chosen from the manager's thunk and the disk each time (the measurement, tests). */
   agentLogins?: readonly string[]
+  /** Windows: the route the prepare found for the session's shell, Codex's sandbox (claude shell sandbox design D4,
+   *  claudeStart.ts): the wrapper's plan without its boot file's place, which the twins' folder decides; `env`, what a
+   *  sandboxed Codex session's environment gets on Windows (codexSandboxEnv, D8); `accountId`, the Codex account whose
+   *  sandbox it borrows. Absent: no route, and the twins hold the deny rules only. Never set off Windows. */
+  shell?: { plan: Omit<ClaudeShellPlan, 'bootFile'>; env: Record<string, string>; accountId: string }
 }
 
 /** How many scopes a StatusLineManager keeps the twins of up to date: every settings rewrite rewrites them all. A scope
