@@ -73,6 +73,9 @@ export type CoverageNote =
   | 'web-search-and-shell-text'
   | 'interactive-input'
   | 'runtime-measured'
+  // No row uses it since Claude Code's shell route into Codex's sandbox (2026-11-16, claude shell sandbox design D12:
+  // the Claude Windows row reads `via-codex`). Kept, with its phrase and its four catalog lines, until the person
+  // decides whether to remove it (final review M7)
   | 'file-tools-only'
   | 'via-codex'
   | 'bus-path-only'
