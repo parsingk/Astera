@@ -31,6 +31,7 @@ export const COVERAGE_NOTE_PHRASES: Record<CoverageNote, MessageKey> = {
   'interactive-input': 'audit.coverageNote.interactive-input',
   'runtime-measured': 'audit.coverageNote.runtime-measured',
   'file-tools-only': 'audit.coverageNote.file-tools-only',
+  'via-codex': 'audit.coverageNote.via-codex',
   'bus-path-only': 'audit.coverageNote.bus-path-only'
 }
 

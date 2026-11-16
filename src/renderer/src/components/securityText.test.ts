@@ -219,12 +219,14 @@ describe('securityText', () => {
     expect(sandboxRowLabel(row('claude', 'darwin'), ko)).toBe('Claude macOS')
     expect(sandboxRowLabel(row('claude', 'linux'), en)).toBe('Claude Linux')
     const cells = (r: SandboxCoverageRow, t: typeof en) => SANDBOX_CLASSES.map((c) => sandboxCellText(r.classes[c], t))
-    expect(cells(row('claude', 'win32'), en)).toEqual(['Not blocked', 'Partly (file tools only)', 'Not blocked', 'Allowed'])
+    const viaCodex = 'Blocked (when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up)'
+    expect(cells(row('claude', 'win32'), en)).toEqual([viaCodex, viaCodex, viaCodex, 'Allowed'])
     // Final fix pass (minor 5): every cell Claude's sandbox enforces says it was measured on the runtime
     expect(cells(row('claude', 'darwin'), en)).toEqual(['Blocked (measured on the runtime)', 'Blocked (measured on the runtime)', 'Blocked (measured on the runtime)', 'Allowed'])
     expect(cells(row('codex', 'linux'), ko)).toEqual(['막음', '막음', '막음 (세션 bus가 파일 경로일 때)', '허용'])
     expect(cells(row('codex', 'darwin'), ko)).toEqual(['막음', '막음', '막음', '허용'])
-    expect(cells(row('claude', 'win32'), ko)).toEqual(['안 막음', '일부 (파일 도구만)', '안 막음', '허용'])
+    const viaCodexKo = '막음 (셸이 Codex sandbox 안에 있을 때. Windows sandbox를 설정한 Codex 계정이 필요합니다)'
+    expect(cells(row('claude', 'win32'), ko)).toEqual([viaCodexKo, viaCodexKo, viaCodexKo, '허용'])
     expect(sandboxCellText(row('claude', 'linux').classes.stores, ko)).toBe('막음 (런타임으로 측정)')
     // A level or note this side does not know (a newer Host's) is shown as it was named
     expect(sandboxCellText({ level: 'sealed' as 'none', note: 'later' as 'file-tools-only' }, en)).toBe('sealed (later)')
@@ -245,19 +247,19 @@ describe('securityText', () => {
   // Task 8 fix round 1: what the table cannot say in a cell. Outside the login folders the home stays readable (spec §6),
   // and Claude Code's shell on Windows is not restricted, said beside its row
   it('says under the table that the home stays readable, and beside the Claude Windows row that its shell is not restricted', () => {
-    expect(sandboxTableCaption(en)).toBe("Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code's sandboxing docs); the agent's own commands run inside it.")
-    expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.')
+    expect(sandboxTableCaption(en)).toBe("Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session on macOS and Linux, commands the person types with `!` usually run outside the sandbox (see Claude Code’s sandboxing docs); on Windows they run inside it when the shell is in Codex’s sandbox. The agent’s own commands run inside it.")
+    expect(sandboxTableCaption(ko)).toBe("로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. macOS와 Linux의 Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). Windows에서는 셸이 Codex sandbox 안에 있으면 안에서 실행됩니다. 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.")
     // Task E fix rounds 2 and 3: beside the Claude Linux row, that on Ubuntu 25.04 and later its shell commands fail
     // under AppArmor's bubblewrap profile
     expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual([
-      'Windows: the shell is not restricted',
+      "Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. The PowerShell tool is off in such a session. A missing .mcp.json can still be made by the shell.",
       null,
       "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
       null,
       null,
       null
     ])
-    expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe('Windows: 셸은 제한 없음')
+    expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe("Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 이 세션에서는 PowerShell 도구가 꺼집니다. 없는 .mcp.json은 셸이 만들 수 있습니다.")
   })
 
   // Task 8 fix round 1: what the sandbox lets through (the network) is not drawn in the green that reads as "covered"

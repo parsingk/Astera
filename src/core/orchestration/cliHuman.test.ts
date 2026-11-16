@@ -939,12 +939,12 @@ describe('humanFor — audit and policies', () => {
       'codex Linux'
     ])
     // Task 8 fix round 1: beside the Claude Windows row, that its shell is not restricted
-    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed', 'Windows: the shell is not restricted'])
+    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['enforced (when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up)', 'enforced (when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up)', 'enforced (when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up)', 'allowed', "Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. The PowerShell tool is off in such a session. A missing .mcp.json can still be made by the shell."])
     // Final fix pass (minor 5): every cell Claude's sandbox enforces on macOS and Linux says it was measured on the runtime
     expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'allowed'])
     expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
     // And under it, that the home stays readable outside the login folders
-    expect(block.slice(7)).toEqual(["Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code's sandboxing docs); the agent's own commands run inside it."])
+    expect(block.slice(7)).toEqual(["Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session on macOS and Linux, commands the person types with `!` usually run outside the sandbox (see Claude Code’s sandboxing docs); on Windows they run inside it when the shell is in Codex’s sandbox. The agent’s own commands run inside it."])
     // A Host that does not answer it prints the rules and the coverage as before
     expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
   })

@@ -278,7 +278,7 @@ describe('the sandbox switch', () => {
       'settings.agentProfiles.sandboxHint.limits'
     ])
     expect(en('settings.agentProfiles.sandbox')).toBe('Run in the sandbox')
-    expect(en('settings.agentProfiles.sandboxHint.claude')).toContain('Windows: the shell is not restricted')
+    expect(en('settings.agentProfiles.sandboxHint.claude')).toContain('Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up')
   })
 
   it('shows readiness only for a stored profile with the sandbox on, on Windows, with a Codex account', () => {

@@ -37,14 +37,14 @@ describe('SANDBOX_COVERAGE', () => {
       expect(cell('claude', os, 'sensitive'), os).toEqual({ level: 'enforced', note: 'runtime-measured' })
       expect(cell('claude', os, 'stores'), os).toEqual({ level: 'enforced', note: 'runtime-measured' })
     }
-    // Claude on Windows has no sandbox: only its file tools are kept out of the folders holding logins
-    expect(cell('claude', 'win32', 'write')).toEqual({ level: 'none' })
-    expect(cell('claude', 'win32', 'sensitive')).toEqual({ level: 'partial', note: 'file-tools-only' })
-    expect(cell('claude', 'win32', 'stores')).toEqual({ level: 'none' })
+    // Claude on Windows: Claude Code has no sandbox, its shell runs in Codex's when a Codex account's Windows sandbox is
+    // set up (measured 2026-11-16, Windows 11, Claude Code 2.1.325, codex-cli 0.160.0); every cell says so
+    for (const c of ['write', 'sensitive', 'stores'] as const)
+      expect(cell('claude', 'win32', c), c).toEqual({ level: 'enforced', note: 'via-codex' })
   })
 
   // Task 8 fix round 1: said with the table, under it and beside the Claude Windows row
-  it('says that the home stays readable outside the login folders, and that Claude Code’s shell on Windows is not restricted', () => {
+  it('says that the home stays readable outside the login folders, and says beside the Claude Windows row when its shell is in Codex’s sandbox', () => {
     expect(SANDBOX_TABLE_CAPTION).toBe('settings.security.sandboxCoverage.homeReadable')
     // Task E fix rounds 2 and 3: the Linux Claude row says its shell commands fail on Ubuntu 25.04 and later
     expect(SANDBOX_COVERAGE.map((r) => sandboxRowCaption(r))).toEqual([

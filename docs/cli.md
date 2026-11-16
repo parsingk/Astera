@@ -1283,8 +1283,9 @@ shell-mode commands too" and "A Linux session with `CLAUDE_CODE_SUBPROCESS_ENV_S
 shell-mode commands included". Seen on a Mac, 2026-10-29: a profile folder write typed with `!` succeeded.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
-`worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
-`SANDBOX_UNAVAILABLE: no-sandbox claude` rather than run without one. Nor does a sandboxed session hand work to what
+`worker-start`. On Windows a Claude Code start is sandboxed when its shell can run in Codex's sandbox (a Codex
+account whose Windows sandbox is set up); otherwise it is refused with the reason's code (`SANDBOX_UNAVAILABLE: no-sandbox claude`,
+`cli-missing codex`, `windows-setup codex <account>`, …) rather than run without one. Nor does a sandboxed session hand work to what
 runs outside the sandbox: from inside one, typing into a session that is not sandboxed (`sessions send`, a
 `worker-start --terminal` into it, a `reply` its worker reads) is refused with 5 and
 `SANDBOX_UNAVAILABLE: outside-sandbox session <id>`, running a Job no sandboxed session made (`run-start`, `jobs run`,
@@ -1528,7 +1529,7 @@ still read your files and OS stores, git and Docker hand their stored logins to 
 your shell startup files set can come back in the commands an agent runs through a shell. Astera does not search the
 machine for credentials. Doctor then says, one line each and for every OS whatever this machine is, what an agent
 profile's sandbox does for Codex and for Claude Code (`Sandbox, Codex on Windows: …`; Claude Code on Windows is a
-warning, since its shell is not restricted there), that a sandboxed Claude Code session's git on Linux reads an excludes
+warning, since its shell is not restricted there unless Codex's sandbox runs it), that a sandboxed Claude Code session's git on Linux reads an excludes
 file of Astera's so `git add -A` works, and the sandbox's limits: `curl` fails TLS inside a sandboxed Codex session on
 Windows, `gh` inside cannot use your login (GitHub work goes through Astera), pushes from inside stay with the Host on
 Windows, a chain keeps the sandbox state it started with, a worktree a sandboxed Codex session adds itself has a
@@ -1578,9 +1579,9 @@ blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runt
 not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
 is `partial` with the note `file-tools-only`. Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
 session bus by its file path, and a bus on an abstract socket is not denied. `--human` prints it as a table of its own,
-headed `sandbox`, under the other, with "Windows: the shell is not restricted" beside the Claude Code Windows row and,
+headed `sandbox`, under the other, with "Windows: the shell runs in Codex's sandbox when a Codex account's Windows sandbox is set up …" beside the Claude Code Windows row and,
 under the table, that outside the login folders the home folder stays readable inside the sandbox. Settings › Security
-& Access shows the same two lines. The tab of a sandboxed session shows a marker; for Claude Code on Windows it says
+& Access shows the same two lines. The tab of a sandboxed session shows a marker; for a Claude Code session on Windows whose shell is not in Codex's sandbox it says
 there is no sandbox, only deny rules for the file tools (the session's `sandboxKind` is `deny-only`, else `sandbox`).
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
@@ -1679,7 +1680,7 @@ or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` hold
   find the conversation that came before.
 - `sandboxed: true` and `sandboxKind`, when the session runs in its agent CLI's own sandbox (its agent
   profile's sandbox switch, or a sandboxed session asked for it). `sandboxKind` is `sandbox`, the CLI's
-  own sandbox, or `deny-only`: Claude Code on Windows has none, so only its file tools are kept from the
+  own sandbox, or `deny-only`: Claude Code on Windows without Codex's sandbox for its shell, so only its file tools are kept from the
   denied places and its shell is not restricted. Both are left out for a session outside the sandbox.
   `--human` prints them as a column before the title: `sandbox`, `deny-only`, or `-`.
 - `sources`, where the Host reads each fact of the session: `status`, `prompt`, `usage` and

@@ -112,7 +112,7 @@ const SANDBOX_LINES: { level: 'ok' | 'warn'; text: string }[] = [
   },
   {
     level: 'warn',
-    text: `Sandbox, Claude Code on Windows: Claude Code has no sandbox here; the switch adds deny rules that keep its file tools out of ${LOGIN_FOLDERS} and from changing Astera’s profile folder, and its shell is not restricted.`
+    text: `Sandbox, Claude Code on Windows: Claude Code has no sandbox of its own here. With a Codex account whose Windows sandbox is set up, the shell runs in Codex’s sandbox and the PowerShell tool is off; without one, the switch adds deny rules that keep its file tools out of ${LOGIN_FOLDERS} and from changing Astera’s profile folder, and its shell is not restricted.`
   },
   {
     level: 'ok',
