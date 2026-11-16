@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import {
   DOCTOR_ARGV,
+  READINESS_RUN_MS,
   READY_MARKER,
   SETUP_ARGV,
   codexWindowsReadiness,
@@ -229,6 +230,19 @@ describe('runCodex', () => {
     const exited = runCodex({}, 1, ((_f: string, _a: string[], _o: unknown, cb: (err: Error | null, out: string, e: string) => void) =>
       cb(Object.assign(new Error('Command failed'), { code: 3 }), 'o', 'e')) as unknown as Parameters<typeof runCodex>[2])
     expect(await exited(DOCTOR_ARGV, {})).toEqual({ code: 3, out: 'o', err: 'e' })
+  })
+
+  // Claude shell sandbox design §5: `codex doctor --json` took 25 to 43 s on a Codex home with months of sessions
+  // (2026-11-16), past the 30 s it was given, so a run left at its default now waits two minutes
+  it('waits two minutes by default', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const exec = ((_f: string, _a: string[], opts: Record<string, unknown>, cb: (err: Error | null, out: string, err2: string) => void) => {
+      seen.push(opts)
+      cb(null, '', '')
+    }) as unknown as Parameters<typeof runCodex>[2]
+    await runCodex({}, undefined, exec)(DOCTOR_ARGV, {})
+    expect(READINESS_RUN_MS).toBe(120_000)
+    expect(seen[0]).toMatchObject({ timeout: 120_000 })
   })
 })
 
