@@ -2982,6 +2982,24 @@ describe('the sandbox at spawn, for Claude', () => {
     expect(gone.logged.join('\n')).toContain(GONE_BASH)
   })
 
+  // Task 4 review M7: the route's values are written after everything else Astera adds, so an earlier writer (here the
+  // shared extensions' env) cannot set the prefix, a start-up script or CLAUDE_PROJECT_DIR for the session
+  it('on win32 with the shell route, its values win over an earlier writer of the same names', async () => {
+    const r = await rig('win32', '2.1.310', {}, {})
+    const planted = { CLAUDE_CODE_SHELL_PREFIX: 'C:/evil/prefix.sh', BASH_ENV: 'C:/evil/env.sh', SHELLOPTS: 'xtrace', CLAUDE_PROJECT_DIR: 'C:\\planted', CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' }
+    r.manager.capabilities = {
+      get: () => ({ context: { kind: 'implicit', accounts: [account.id], policyMode: 'compatibility', executionMode: 'managed' }, args: [], env: planted, given: [], gatewayGrant: [], skipped: [] }),
+      refresh: async () => {}
+    }
+    const cwd = repoIn()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    expect(r.manager.spawn({ account, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+    const scope = r.manager.claudeSandbox!.scopeOf(account.id, cwd, {})!
+    const env = r.spawned[0].env ?? {}
+    expect(env).toMatchObject(claudeShellEnv(r.statusLine.sandboxShellWrapFile(scope)!))
+    expect(env).not.toHaveProperty('CLAUDE_PROJECT_DIR')
+  })
+
   it('on win32 with the shell route, refuses a twin handed out without the wrapper', async () => {
     const r = await rig('win32', '2.1.310', {}, {})
     const cwd = repoIn()

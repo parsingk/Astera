@@ -2036,7 +2036,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     const GONE_BASH = 'D:\\OldGit\\bin\\bash.exe'
     /** Claude shell sandbox design D4, faked (no codex runs): the default Codex account, its readiness, version and path. */
     type Route = { gitBash?: boolean; account?: boolean; readiness?: Readiness }
-    const claudeRig = async (o: { version?: string; mode?: 'enforce'; platform?: 'linux' | 'win32'; route?: Route; env?: Record<string, string> } = {}) => {
+    const claudeRig = async (o: { version?: string; mode?: 'enforce'; platform?: 'linux' | 'win32'; route?: Route; env?: Record<string, string>; capsEnv?: Record<string, string> } = {}) => {
       const platform = o.platform ?? 'linux'
       const profileDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-sbx-'))
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-tmp-'))
@@ -2085,7 +2085,14 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
               },
               enforce: { args: () => statusLine.enforceChatArgs(), blocker: () => null }
             }
-          : {})
+          : o.capsEnv
+            ? {
+                capabilities: {
+                  get: () => ({ context: { kind: 'implicit' as const, accounts: [claudeAccount.id], policyMode: 'compatibility' as const, executionMode: 'managed' as const }, args: [], env: o.capsEnv!, given: [], gatewayGrant: [], skipped: [] }),
+                  refresh: async () => {}
+                }
+              }
+            : {})
       })
       return { manager, spawned, handles, statusLine, profileDir, tmpDir, claudeSandbox, gitBash }
     }
@@ -2125,6 +2132,37 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       await gone.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
       expect(gone.manager.spawn({ account: claudeAccount, cwd, sandbox: true })).toMatchObject({ sandboxKind: 'deny-only', sandboxWarnings: ['claudeShellUnavailable'] })
       expect(gone.claudeSandbox.shellOf(claudeAccount.id, cwd)).toMatchObject({ on: false, why: 'no-git-bash' })
+    })
+
+    // Task 4 review M7: the route's values are written after everything else Astera adds, so an earlier writer (here the
+    // shared extensions' env) cannot set the prefix, a start-up script or CLAUDE_PROJECT_DIR for the chat
+    it('on Windows with the shell route, its values win over an earlier writer of the same names', async () => {
+      const cwd = repo()
+      const planted = { CLAUDE_CODE_SHELL_PREFIX: 'C:/evil/prefix.sh', BASH_ENV: 'C:/evil/env.sh', SHELLOPTS: 'xtrace', CLAUDE_PROJECT_DIR: 'C:\\planted', CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' }
+      const r = await claudeRig({ platform: 'win32', route: {}, capsEnv: planted })
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      expect(r.manager.spawn({ account: claudeAccount, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+      const scope = r.claudeSandbox.scopeOf(claudeAccount.id, cwd, {})!
+      const env = r.spawned[0].opts.env
+      expect(env).toMatchObject(claudeShellEnv(r.statusLine.sandboxShellWrapFile(scope)!))
+      expect(env).not.toHaveProperty('CLAUDE_PROJECT_DIR')
+    })
+
+    // Task 4 review M7: the chat's one --settings is the twin of the scope with the route, which names the wrapper; when the
+    // wrapper could not be written into that twin's folder, no twin is handed out and the chat is refused
+    it('on Windows with the shell route, a chat whose twin folder lost its wrapper is refused', async () => {
+      const cwd = repo()
+      const r = await claudeRig({ platform: 'win32', route: {} })
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      const scope = r.claudeSandbox.scopeOf(claudeAccount.id, cwd, { ...BASE.win32 })!
+      const wrap = r.statusLine.sandboxShellWrapFile(scope)!.replace(/\//g, path.sep)
+      expect(read(r.claudeSandbox.chatArgs(false, scope)![1]).env).toMatchObject(claudeShellEnv(r.statusLine.sandboxShellWrapFile(scope)!))
+      rmSync(wrap)
+      mkdirSync(wrap)
+      expect(await r.statusLine.ensureSandboxFiles(scope)).toBe('write-failed')
+      expect(r.claudeSandbox.chatArgs(false, scope)).toBeNull()
+      expect(() => r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+      expect(r.spawned).toHaveLength(0)
     })
 
     it('on Windows with the shell route, a chat whose start cannot name the wrapper is refused', async () => {
