@@ -26,6 +26,7 @@ import {
   sandboxDefaultRemoved,
   sandboxHintKeys,
   sandboxReadinessShown,
+  shellCodexMissing,
   sandboxStateLine
 } from './agentProfilesText'
 
@@ -286,7 +287,10 @@ describe('the sandbox switch', () => {
     expect(sandboxReadinessShown(boxed, 'darwin', accounts)).toBe(false)
     expect(sandboxReadinessShown(boxed, 'linux', accounts)).toBe(false)
     expect(sandboxReadinessShown({ ...boxed, sandbox: false }, 'win32', accounts)).toBe(false)
-    expect(sandboxReadinessShown({ ...boxed, accountIds: ['c1'] }, 'win32', accounts)).toBe(false)
+    // A Claude account's profile too, on Windows only: Claude's shell borrows a Codex account's sandbox there (D11)
+    expect(sandboxReadinessShown({ ...boxed, accountIds: ['c1'] }, 'win32', accounts)).toBe(true)
+    expect(sandboxReadinessShown({ ...boxed, accountIds: ['c1'] }, 'darwin', accounts)).toBe(false)
+    expect(sandboxReadinessShown({ ...boxed, accountIds: ['c1'], sandbox: false }, 'win32', accounts)).toBe(false)
     // An account removed from Astera since is not asked about
     expect(sandboxReadinessShown({ ...boxed, accountIds: ['gone'] }, 'win32', accounts)).toBe(false)
   })
@@ -294,8 +298,8 @@ describe('the sandbox switch', () => {
   it('lists the profile’s Codex accounts in its order with what the Host answered for each', () => {
     const answer = { ok: true as const, body: { accounts: [{ accountId: 'x1', state: 'ready' }, { accountId: 'x2', state: 'not-set-up' }] } }
     expect(readinessRows(boxed, accounts, answer)).toEqual([
-      { accountId: 'x2', label: 'Home', state: 'not-set-up', elevatedDefault: false },
-      { accountId: 'x1', label: 'Work', state: 'ready', elevatedDefault: false }
+      { accountId: 'x2', label: 'Home', state: 'not-set-up', elevatedDefault: false, forClaudeShell: false },
+      { accountId: 'x1', label: 'Work', state: 'ready', elevatedDefault: false, forClaudeShell: false }
     ])
     // Task P: an account whose config.toml makes the elevated sandbox its default, as the Host says it
     const shared = { ok: true as const, body: { accounts: [{ accountId: 'x1', state: 'ready', elevatedDefault: true }, { accountId: 'x2', state: 'ready', elevatedDefault: 'yes' }] } }
@@ -326,6 +330,33 @@ describe('the sandbox switch', () => {
     expect(sandboxDefaultRemoved({ ok: true, body: {} })).toEqual({ ok: false, file: null })
   })
 
+  it('lists the Codex account Claude’s shell borrows, marked, and says when there is none', () => {
+    const claudeOnly = profile({ accountIds: ['c1'], sandbox: true })
+    const answer = { ok: true as const, body: { accounts: [{ accountId: 'x1', state: 'not-set-up', forClaudeShell: true }] } }
+    // A Claude-only profile gets the borrowed account as its one row
+    expect(readinessRows(claudeOnly, accounts, answer)).toEqual([{ accountId: 'x1', label: 'Work', state: 'not-set-up', elevatedDefault: false, forClaudeShell: true }])
+    // Still being asked: nothing to show yet, as before
+    expect(readinessRows(claudeOnly, accounts, null)).toEqual([])
+    // An account the profile lists already is marked in place, not listed twice
+    const both = profile({ accountIds: ['x2', 'x1'], sandbox: true })
+    expect(readinessRows(both, accounts, answer)).toEqual([
+      { accountId: 'x2', label: 'Home', state: 'check-failed', elevatedDefault: false, forClaudeShell: false },
+      { accountId: 'x1', label: 'Work', state: 'not-set-up', elevatedDefault: false, forClaudeShell: true }
+    ])
+    // A borrowed account Astera no longer knows is not listed
+    expect(readinessRows(claudeOnly, [c1], answer)).toEqual([])
+    // No Codex account registered: the Host says so beside the empty list; an older answer without the field does not
+    expect(shellCodexMissing({ ok: true, body: { accounts: [], noClaudeShellCodex: true } })).toBe(true)
+    expect(shellCodexMissing({ ok: true, body: { accounts: [] } })).toBe(false)
+    expect(shellCodexMissing({ ok: true, body: { accounts: [], noClaudeShellCodex: 'yes' } })).toBe(false)
+    expect(shellCodexMissing(null)).toBe(false)
+    expect(shellCodexMissing({ ok: false, code: 'HOST_NOT_RUNNING', message: 'no Host' })).toBe(false)
+    expect(en('settings.agentProfiles.sandboxShell.hint')).toBe("Claude sessions of this profile run their shell in this account's Windows sandbox.")
+    expect(en('settings.agentProfiles.sandboxShell.none')).toBe(
+      "Add a Codex account and set up its Windows sandbox to run this profile's Claude shell in a sandbox. Until then only the file tools are kept out of the login folders."
+    )
+  })
+
   it('the editor carries the switch and sends it, and asks readiness and sets up through the Host', () => {
     const editor = source('AgentProfilesSettings.tsx')
     // The draft carries the switch from what the Host kept, and a save sends the whole draft
@@ -345,6 +376,8 @@ describe('the sandbox switch', () => {
     expect(editor).toContain('sandboxReadinessShown(p, window.api.platform, accounts)')
     // Task P: an elevated default is said in one sentence beside the row, and taken out only on the person's press
     expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.hint')")
+    expect(editor).toContain("t('settings.agentProfiles.sandboxShell.hint')")
+    expect(editor).toContain("t('settings.agentProfiles.sandboxShell.none')")
     // Fix round 1, seen on the hidden desktop: as a settings row the sentence took the label's weight and squeezed the
     // button to one letter a line. It is a dim hint that grows, beside a button that keeps its width
     expect(editor).toContain('<div className="remote-actions sandbox-default-row">')

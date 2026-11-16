@@ -251,6 +251,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.agentProfiles.sandboxDefault.hint': "This account's config.toml makes the elevated sandbox the default for all its Codex sessions, so its ordinary sessions cannot read the folders holding logins either; Remove takes that line out and leaves the sandbox to sandboxed sessions.",
   'settings.agentProfiles.sandboxDefault.remove': 'Remove',
   'settings.agentProfiles.sandboxDefault.removeFailed': 'The line could not be removed. Edit {file} yourself.',
+  'settings.agentProfiles.sandboxShell.hint': "Claude sessions of this profile run their shell in this account's Windows sandbox.",
+  'settings.agentProfiles.sandboxShell.none': "Add a Codex account and set up its Windows sandbox to run this profile's Claude shell in a sandbox. Until then only the file tools are kept out of the login folders.",
   'agentProfiles.pick.label': 'Agent profile',
   'agentProfiles.pick.none': 'None',
   'agentProfiles.pick.permission': 'Permission checks follow this profile.',

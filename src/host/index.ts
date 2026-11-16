@@ -89,6 +89,9 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
+import type { Account } from '../core/types'
+import { isLoggedIn } from '../core/accounts/loginCheck'
+import { shellCodexOf } from '../core/sandbox/claudeStart'
 import { hostSandboxDefault, hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
@@ -966,7 +969,16 @@ async function main(): Promise<void> {
     log: (m) => log.write(m),
     ...(sandboxSetup ? { sandboxSetup } : {}),
     ...(sandboxReadiness ? { sandboxReadiness } : {}),
-    ...(sandboxDefault ? { sandboxDefault } : {})
+    ...(sandboxDefault ? { sandboxDefault } : {}),
+    // On Windows, the Codex account a sandboxed Claude profile's shell borrows, picked as the Host's Claude starts pick it
+    ...(process.platform === 'win32'
+      ? {
+          claudeShellAccount: async (accounts: Account[]) => {
+            const descriptors = makeDescriptors(process.platform)
+            return (await shellCodexOf({ accounts, loggedIn: (a) => isLoggedIn(a, descriptors), envOf: () => ({}) }))?.account.id ?? null
+          }
+        }
+      : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */

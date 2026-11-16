@@ -254,6 +254,8 @@ export const ko = {
   'settings.agentProfiles.sandboxDefault.hint': '이 계정의 config.toml이 elevated sandbox를 모든 Codex 세션의 기본값으로 정해 두어 일반 세션도 로그인 정보가 든 폴더를 읽지 못하며, 줄 삭제를 누르면 그 줄을 지워 sandbox 세션만 이것을 쓰게 됩니다.',
   'settings.agentProfiles.sandboxDefault.remove': '줄 삭제',
   'settings.agentProfiles.sandboxDefault.removeFailed': '그 줄을 지우지 못했습니다. {file}을(를) 직접 고쳐 주세요.',
+  'settings.agentProfiles.sandboxShell.hint': '이 프로필의 Claude 세션은 이 계정의 Windows sandbox 안에서 셸을 돌립니다.',
+  'settings.agentProfiles.sandboxShell.none': 'Codex 계정을 추가하고 Windows sandbox를 설정하면 이 프로필의 Claude 셸이 sandbox 안에서 돌아갑니다. 그 전에는 파일 도구만 로그인 정보가 있는 폴더를 읽지 못합니다.',
   'agentProfiles.pick.label': '에이전트 프로필',
   'agentProfiles.pick.none': '없음',
   'agentProfiles.pick.permission': '권한 확인은 이 프로필의 설정을 따릅니다.',

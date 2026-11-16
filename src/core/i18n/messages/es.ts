@@ -216,6 +216,8 @@ export const es: Catalog = {
   'settings.agentProfiles.sandboxDefault.hint': 'El config.toml de esta cuenta hace que el sandbox elevado sea el predeterminado de todas sus sesiones de Codex, así que sus sesiones normales tampoco pueden leer las carpetas con datos de inicio de sesión; Quitar borra esa línea y deja el sandbox solo para las sesiones en el sandbox.',
   'settings.agentProfiles.sandboxDefault.remove': 'Quitar',
   'settings.agentProfiles.sandboxDefault.removeFailed': 'No se pudo quitar la línea. Edite {file} usted mismo.',
+  'settings.agentProfiles.sandboxShell.hint': 'Las sesiones de Claude de este perfil ejecutan su shell en el sandbox de Windows de esta cuenta.',
+  'settings.agentProfiles.sandboxShell.none': 'Añada una cuenta de Codex y configure su sandbox de Windows para que el shell de Claude de este perfil se ejecute en un sandbox. Hasta entonces, solo las herramientas de archivos quedan sin acceso a las carpetas con inicios de sesión.',
   'agentProfiles.pick.label': 'Perfil de agente',
   'agentProfiles.pick.none': 'Ninguno',
   'agentProfiles.pick.permission': 'La comprobación de permisos sigue este perfil.',

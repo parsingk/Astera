@@ -215,6 +215,8 @@ export const ja: Catalog = {
   'settings.agentProfiles.sandboxDefault.hint': 'このアカウントの config.toml が elevated サンドボックスをすべての Codex セッションの既定にしているため通常のセッションもログイン情報を含むフォルダーを読めず、「行を削除」でその行を消すとサンドボックスのセッションだけがこれを使います。',
   'settings.agentProfiles.sandboxDefault.remove': '行を削除',
   'settings.agentProfiles.sandboxDefault.removeFailed': 'その行を削除できませんでした。{file} を直接編集してください。',
+  'settings.agentProfiles.sandboxShell.hint': 'このプロフィールの Claude セッションは、このアカウントの Windows サンドボックスでシェルを実行します。',
+  'settings.agentProfiles.sandboxShell.none': 'Codex アカウントを追加して Windows サンドボックスを設定すると、このプロフィールの Claude のシェルがサンドボックスで動きます。それまではファイルツールだけがログイン情報のあるフォルダーを読めません。',
   'agentProfiles.pick.label': 'エージェントプロファイル',
   'agentProfiles.pick.none': 'なし',
   'agentProfiles.pick.permission': '権限の確認はこのプロファイルの設定に従います。',
