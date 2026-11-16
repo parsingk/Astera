@@ -2657,8 +2657,13 @@ describe('the sandbox at spawn, for Claude', () => {
     codexReady: async (): Promise<Readiness> => o.readiness ?? 'ready',
     codexVersion: Object.assign(() => o.codexVersion ?? '0.160.0', { warm: async () => {} }),
     codexExe: () => 'C:/tools/codex.exe',
-    codexExcludes: async () => null
+    codexExcludes: async () => null,
+    // The rig's Git Bashes are there on every OS the tests run on (the route asks, Task 4 review M2)
+    exists: (p: string) => p === GIT_BASH || p === OWN_BASH || existsSync(p)
   })
+  /** A Git Bash the person names in CLAUDE_CODE_GIT_BASH_PATH, there; and one that is not. */
+  const OWN_BASH = 'D:\\MyGit\\bin\\bash.exe'
+  const GONE_BASH = 'D:\\OldGit\\bin\\bash.exe'
   const rig = async (platform: 'linux' | 'darwin' | 'win32', version: string | null | undefined = '2.1.310', extraEnv: Record<string, string> = {}, route?: Route) => {
     const profileDir = temp()
     const tmpDir = temp()
@@ -2958,6 +2963,23 @@ describe('the sandbox at spawn, for Claude', () => {
     // The Git Bash the prepare found is the one the session runs and the wrapper's plan names
     expect(env.CLAUDE_CODE_GIT_BASH_PATH).toBe(GIT_BASH)
     expect(scope.shell?.plan.bash).toBe(GIT_BASH)
+  })
+
+  // Task 4 review M2 (and its untested decision 3): the person's own CLAUDE_CODE_GIT_BASH_PATH wins over the bash the
+  // search finds, since Claude Code runs it; one that is not there turns the route off rather than wrap another bash
+  it('on win32 wraps the person’s own Git Bash when it is there, and has no route when it is not', async () => {
+    const own = await rig('win32', '2.1.310', { CLAUDE_CODE_GIT_BASH_PATH: OWN_BASH }, {})
+    const cwd = repoIn()
+    await own.manager.prepare({ account, cwd, sandbox: true })
+    expect(own.manager.spawn({ account, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+    expect(own.manager.claudeSandbox!.scopeOf(account.id, cwd, {})?.shell?.plan.bash).toBe(OWN_BASH)
+    expect(own.spawned[0].env?.CLAUDE_CODE_GIT_BASH_PATH).toBe(OWN_BASH)
+    const gone = await rig('win32', '2.1.310', { CLAUDE_CODE_GIT_BASH_PATH: GONE_BASH }, {})
+    await gone.manager.prepare({ account, cwd, sandbox: true })
+    const info = gone.manager.spawn({ account, cwd, sandbox: true })
+    expect(info).toMatchObject({ sandboxKind: 'deny-only', sandboxWarnings: ['claudeShellUnavailable'] })
+    expect(gone.manager.claudeSandbox!.shellOf(account.id, cwd)).toMatchObject({ on: false, why: 'no-git-bash' })
+    expect(gone.logged.join('\n')).toContain(GONE_BASH)
   })
 
   it('on win32 with the shell route, refuses a twin handed out without the wrapper', async () => {

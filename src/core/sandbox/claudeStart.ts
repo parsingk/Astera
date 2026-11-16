@@ -306,6 +306,11 @@ export function claudeSandboxStart(o: {
   const decideShell = async (cwd: string, gitBash: string | null, made: { claude?: string }): Promise<ShellDecision> => {
     const off = (why: ClaudeShellOff, refusal: string, cause: string): ShellDecision => shellOff(cwd, why, refusal, cause)
     if (!gitBash) return off('no-git-bash', NO_SANDBOX_CLAUDE, 'no Git Bash was found, so Claude Code has no Bash tool to wrap')
+    // Task 4 review M2: the person's own CLAUDE_CODE_GIT_BASH_PATH is the bash Claude Code runs, so it is the one wrapped
+    // or none: only a path with its drive (or a UNC path) that is there. A bare name would be looked up on the sandbox's
+    // PATH (where System32's bash.exe is WSL's launcher), a stale one fails every command while the session says sandbox
+    if (!/^([A-Za-z]:[\\/]|[\\/]{2})/.test(gitBash) || !exists(gitBash))
+      return off('no-git-bash', NO_SANDBOX_CLAUDE, `the Git Bash ${gitBash} is not an absolute path that is there, so the shell Claude Code runs cannot be wrapped`)
     try {
       const codex = (await o.shellCodex?.()) ?? null
       if (codex === null) return off('no-codex-account', NO_SANDBOX_CLAUDE, 'no Codex account is registered whose sandbox it could borrow')

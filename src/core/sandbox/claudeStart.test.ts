@@ -309,6 +309,7 @@ describe("the route for Claude's shell on Windows", () => {
     return d
   }
   const slashed = (p: string): string => p.replace(/\\/g, '/')
+  const RIG_BASH = 'E:/programs/Git/bin/bash.exe'
 
   type Rig = {
     platform?: NodeJS.Platform
@@ -397,11 +398,12 @@ describe("the route for Claude's shell on Windows", () => {
       appKeyFile,
       ...(o.noReadOnly ? {} : { readOnly }),
       agentLogins: () => [{ path: login, kind: 'file' as const }],
-      ...(o.exists ? { exists: o.exists } : {})
+      // The rig's Git Bash is there, whatever the disk says (Task 4 review M2: the route asks)
+      exists: (p) => p === RIG_BASH || (o.exists ?? existsSync)(p)
     })
     const sessionEnv = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }
     const prepare = (over: { required?: boolean } = {}) =>
-      start.prepare({ accountId: 'acc-1', cwd, env: sessionEnv, gitBash: o.gitBash === undefined ? 'E:/programs/Git/bin/bash.exe' : o.gitBash, ...over })
+      start.prepare({ accountId: 'acc-1', cwd, env: sessionEnv, gitBash: o.gitBash === undefined ? RIG_BASH : o.gitBash, ...over })
     return { start, prepare, cwd, home, tmpDir, profileDir, codexHome, codexEnv, sessionEnv, login, readOnly, appKeyFile, order, scopes, asked, logged, clock }
   }
 
@@ -486,6 +488,11 @@ describe("the route for Claude's shell on Windows", () => {
   // it the start is refused in the reason's own words before any twin is written
   const reasons: Array<{ name: string; rig: Rig; why: string; refusal: string; codexAsked: boolean }> = [
     { name: 'no Git Bash', rig: { gitBash: null, account: false, exe: null }, why: 'no-git-bash', refusal: 'no-sandbox claude', codexAsked: false },
+    // Task 4 review M2: the person's own CLAUDE_CODE_GIT_BASH_PATH, which Claude Code itself will use, counts only when it
+    // is an absolute path that is there; no other bash is taken in its place
+    { name: 'a Git Bash that is not there', rig: { gitBash: 'C:/Git-moved/bin/bash.exe' }, why: 'no-git-bash', refusal: 'no-sandbox claude', codexAsked: false },
+    { name: 'a Git Bash that is not an absolute path', rig: { gitBash: 'bash.exe', exists: () => true }, why: 'no-git-bash', refusal: 'no-sandbox claude', codexAsked: false },
+    { name: 'a Git Bash on the current drive only', rig: { gitBash: '\\Git\\bin\\bash.exe', exists: () => true }, why: 'no-git-bash', refusal: 'no-sandbox claude', codexAsked: false },
     { name: 'no Codex account', rig: { account: false, exe: null }, why: 'no-codex-account', refusal: 'no-sandbox claude', codexAsked: false },
     { name: 'no codex', rig: { exe: null, codexVersion: '0.1.0' }, why: 'no-codex', refusal: 'cli-missing codex', codexAsked: false },
     { name: 'a codex .cmd with no sh shim beside it', rig: { exe: 'C:/npm/codex.cmd', exists: () => false }, why: 'no-codex', refusal: 'cli-missing codex', codexAsked: false },

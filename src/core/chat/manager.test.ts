@@ -2031,6 +2031,9 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
   describe('a Claude chat', () => {
     /** Git for Windows where Program Files keeps it, for a rig whose Git Bash is found. */
     const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe'
+    /** A Git Bash the person names in CLAUDE_CODE_GIT_BASH_PATH, there; and one that is not. */
+    const OWN_BASH = 'D:\\MyGit\\bin\\bash.exe'
+    const GONE_BASH = 'D:\\OldGit\\bin\\bash.exe'
     /** Claude shell sandbox design D4, faked (no codex runs): the default Codex account, its readiness, version and path. */
     type Route = { gitBash?: boolean; account?: boolean; readiness?: Readiness }
     const claudeRig = async (o: { version?: string; mode?: 'enforce'; platform?: 'linux' | 'win32'; route?: Route; env?: Record<string, string> } = {}) => {
@@ -2054,7 +2057,9 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
               codexReady: async (): Promise<Readiness> => route.readiness ?? 'ready',
               codexVersion: Object.assign(() => '0.160.0', { warm: async () => {} }),
               codexExe: () => 'C:/tools/codex.exe',
-              codexExcludes: async () => null
+              codexExcludes: async () => null,
+              // The rig's Git Bashes are there on every OS the tests run on (the route asks, Task 4 review M2)
+              exists: (p: string) => p === GIT_BASH || p === OWN_BASH || existsSync(p)
             }
           : {})
       })
@@ -2106,6 +2111,20 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       const args = r.spawned[0].args
       expect(read(args[args.indexOf('--settings') + 1]).env).toMatchObject(claudeShellEnv(wrap))
       expect(r.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    })
+
+    // Task 4 review M2 (and its untested decision 3): the person's own CLAUDE_CODE_GIT_BASH_PATH wins over the bash the
+    // search finds, since Claude Code runs it; one that is not there turns the route off rather than wrap another bash
+    it('on Windows wraps the person’s own Git Bash when it is there, and has no route when it is not', async () => {
+      const cwd = repo()
+      const own = await claudeRig({ platform: 'win32', route: {}, env: { CLAUDE_CODE_GIT_BASH_PATH: OWN_BASH } })
+      await own.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      expect(own.manager.spawn({ account: claudeAccount, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+      expect(own.claudeSandbox.scopeOf(claudeAccount.id, cwd, {})?.shell?.plan.bash).toBe(OWN_BASH)
+      const gone = await claudeRig({ platform: 'win32', route: {}, env: { CLAUDE_CODE_GIT_BASH_PATH: GONE_BASH } })
+      await gone.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      expect(gone.manager.spawn({ account: claudeAccount, cwd, sandbox: true })).toMatchObject({ sandboxKind: 'deny-only', sandboxWarnings: ['claudeShellUnavailable'] })
+      expect(gone.claudeSandbox.shellOf(claudeAccount.id, cwd)).toMatchObject({ on: false, why: 'no-git-bash' })
     })
 
     it('on Windows with the shell route, a chat whose start cannot name the wrapper is refused', async () => {
