@@ -84,11 +84,17 @@ const TWINS_FOLDER = /^[0-9a-f]{16}$/
  * touched**: only a real folder (not a link) whose name is a scope's hash, holding nothing but twins (`.json` files) and
  * the shell route's two scripts (SHELL_WRAP_FILE, SHELL_BOOT_FILE; Task 3 review M1), each removed by name and then the
  * empty folder; any other entry keeps the whole folder. Never throws.
+ *
+ * `liveAppSince`: when a live app on this profile started (core/host/pidFile.ts liveAppSince), null for none. That app's
+ * own sessions run on local node-pty, invisible to the Host, and one with the shell route runs the wrapper from its
+ * folder on every command (final review M8). Each start stamps its folder, so a folder written before the app started
+ * is none of theirs; one holding the wrapper and written since is kept.
  */
 export async function pruneSandboxTwins(o: {
   profileDir: string
   now: number
   inUse: ReadonlySet<string>
+  liveAppSince?: number | null
   maxAgeMs?: number
   log?: (m: string) => void
 }): Promise<string[]> {
@@ -115,6 +121,10 @@ export async function pruneSandboxTwins(o: {
       const files = entries.map((e) => path.join(dir, e.name))
       const written = Math.max(st.mtimeMs, ...(await Promise.all(files.map(async (f) => (await fs.lstat(f)).mtimeMs))))
       if (o.now - written < maxAge) continue
+      if (typeof o.liveAppSince === 'number' && written >= o.liveAppSince && entries.some((e) => e.name === SHELL_WRAP_FILE)) {
+        o.log?.(`sandbox twins: ${name} holds a shell wrapper written since the live app started, which one of its own sessions may run — left as it is`)
+        continue
+      }
       for (const f of files) await fs.unlink(f)
       await fs.rmdir(dir)
       removed.push(name)

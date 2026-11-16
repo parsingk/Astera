@@ -1731,6 +1731,24 @@ describe('pruneSandboxTwins', () => {
     expect(await present(path.join(other, SHELL_WRAP_FILE))).toBe(true)
   })
 
+  // Final review M8: a live app's own sessions (local node-pty) are invisible to the Host, and one with the shell route
+  // runs its wrapper on every command. Each start stamps its folder, so a folder written before that app started is not
+  // one of theirs; one written since may be, and while it holds the wrapper it is kept. Without the wrapper (Claude Code
+  // read its twin at start) or without a live app, as before
+  it('keeps an old folder holding the wrapper written since a live app started, and only that one', async () => {
+    const wrap = { 'astera-settings-sandbox.json': '{}', [SHELL_WRAP_FILE]: '#!/bin/bash\n', [SHELL_BOOT_FILE]: '#!/bin/bash\n' }
+    const appSince = NOW - 50 * DAY
+    const routeSince = await folder('0123456789abcdef', 40 * DAY, wrap)
+    const routeBefore = await folder('fedcba9876543210', 60 * DAY, wrap)
+    const plainSince = await folder('00000000aaaaaaaa', 40 * DAY)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set(), liveAppSince: appSince })).toEqual(['00000000aaaaaaaa', 'fedcba9876543210'])
+    expect(await present(path.join(routeSince, SHELL_WRAP_FILE))).toBe(true)
+    expect(await present(routeBefore)).toBe(false)
+    expect(await present(plainSince)).toBe(false)
+    // No live app: removed as any other
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set(), liveAppSince: null })).toEqual(['0123456789abcdef'])
+  })
+
   it('does nothing, and says nothing, with no twins folder at all', async () => {
     expect(await pruneSandboxTwins({ profileDir: path.join(profile, 'none'), now: NOW, inUse: new Set() })).toEqual([])
   })
@@ -1756,6 +1774,8 @@ describe('pruneSandboxTwins', () => {
   it('runs at the Host’s start, before any session can open', async () => {
     const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'host', 'index.ts'), 'utf8')
     expect(src).toMatch(/await pruneSandboxTwins\(\{ profileDir, now: Date\.now\(\), inUse: /)
+    // Final review M8: with when a live app started, whose own sessions the Host cannot see
+    expect(src).toMatch(/await pruneSandboxTwins\(\{[^}]*liveAppSince: liveAppSince\(profileDir\)/)
     expect(src.indexOf('await pruneSandboxTwins(')).toBeGreaterThan(-1)
     expect(src.indexOf('await pruneSandboxTwins(')).toBeLessThan(src.indexOf('server = await startHostServer({'))
   })

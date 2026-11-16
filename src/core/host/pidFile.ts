@@ -8,7 +8,7 @@
 //
 // Shared between the two sides for the same reason `protocol.ts` is: the Host writes this file and the
 // app reads it, and two copies of the format would be one copy too many.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 /** What the Host records about itself. `exe` is checked against what the app expects to have started
@@ -136,4 +136,17 @@ export function liveAppPid(profileDir: string, fallbackPid?: number | null): num
   if (fromFile !== null) return fromFile
   if (typeof fallbackPid !== 'number' || !Number.isSafeInteger(fallbackPid) || fallbackPid <= 0) return null
   return pidLives(fallbackPid) ? fallbackPid : null
+}
+
+/** When the live app on this profile started (ms), or null when `app.pid` names no live app: the app writes the file
+ *  once, at its start, so the file's time is that start. For the Host's start-up prune of the sandbox twins folders
+ *  (host/index.ts, final review M8), before any app has said hello, so no hello's pid stands in. A file that cannot be
+ *  stat'ed after it was read reads as since always (0), which keeps more. Never throws. */
+export function liveAppSince(profileDir: string): number | null {
+  if (liveAppPid(profileDir) === null) return null
+  try {
+    return statSync(appPidFilePath(profileDir)).mtimeMs
+  } catch {
+    return 0
+  }
 }
