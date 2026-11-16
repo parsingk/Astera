@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
 import { CATALOGS, LANGS } from '../i18n'
-import { checkRefusalMessage, forcedSandboxBlocker, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
+import { checkRefusalMessage, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
 
 // worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees';
 // gitFiles: the checkout's commondir, the common directory's, its modules, the other worktrees' commondir
@@ -194,12 +194,11 @@ describe('sandboxUnavailable', () => {
     expect(sandboxUnavailable('bwrap').message).toBe('SANDBOX_UNAVAILABLE: bwrap')
   })
 
-  // Final fix pass (C3): what a sandboxed session starts must run in a sandbox, so where the CLI has none it is refused
-  it('refuses a forced sandbox where the CLI has none, in words the app has', () => {
-    expect(forcedSandboxBlocker('claude', 'win32')?.message).toBe('SANDBOX_UNAVAILABLE: no-sandbox claude')
+  // Final fix pass (C3): what a sandboxed session starts must run in a sandbox. A Claude start on Windows is no longer
+  // refused up front: its prepare refuses it when its shell has no route into Codex's sandbox (claude shell sandbox design
+  // D5), in the reason's words, and `no-sandbox claude` for a reason with none of its own (claudeStart.test.ts)
+  it('words the refusal of a start that must be sandboxed and cannot be', () => {
     expect(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: no-sandbox claude')).toEqual({ key: 'session.spawn.sandbox.noSandbox', params: { cli: 'Claude Code' } })
-    for (const [provider, platform] of [['claude', 'linux'], ['claude', 'darwin'], ['codex', 'win32'], ['codex', 'linux']] as const)
-      expect(forcedSandboxBlocker(provider, platform), `${provider} ${platform}`).toBeNull()
   })
 
   // Task K: a sandboxed Claude Task's check is refused where srt cannot run a command, and where Ubuntu's AppArmor profile

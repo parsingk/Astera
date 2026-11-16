@@ -31,7 +31,6 @@ import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/cla
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
 import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
-import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -255,7 +254,7 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  takes it back as a tab, and heard by `onSpawned`, so the rolling registers its chain. A missing
    *  folder or an unknown account starts nothing and is tagged `refusedBeforeActing`. */
   /** `sandbox`: a sandboxed session asked for it (final fix pass, C3), and it starts in the sandbox whatever its profile
-   *  says, or is refused where its CLI has none. */
+   *  says, or is refused where it cannot be had (claude shell sandbox design D5). */
   createSession(o: {
     accountId: string
     cwd: string
@@ -770,20 +769,22 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it.
     // What a sandboxed session asked for, or the work it made, starts in it whatever the profile says (final fix pass,
-    // C3), and where its CLI has no sandbox it is refused before anything starts rather than run without one
-    // A reviewer of work a profile's switch sandboxed allows the deny rules only there (`sandboxDenyOnly`, Task K fix
-    // rounds 1 and 2): it starts as a sandboxed profile's session does on that system, and its Dispatch records
+    // C3), and must have it (`sandboxRequired`): a Claude start on Windows whose shell has no route into Codex's sandbox is
+    // refused by the prepare in the reason's words (claude shell sandbox design D5), before any process, rather than run
+    // without one. A reviewer of work a profile's switch sandboxed allows the deny rules only there (`sandboxDenyOnly`,
+    // Task K fix rounds 1 and 2): it starts as a sandboxed profile's session does on that system, and its Dispatch records
     // `deny-only`. A reviewer of a sandboxed session's work never asks, so C3's refusal holds for it
-    if (o.sandbox === true && o.sandboxDenyOnly !== true) {
-      const refused = forcedSandboxBlocker(providerOf(account), platform)
-      if (refused) {
-        log(`spawn refused: ${refused.message} (a sandboxed session's work)`)
-        if (trace) trace.settingsRefused = true
-        throw refused
-      }
-    }
+    const sandboxRequired = o.sandbox === true && o.sandboxDenyOnly !== true
     const sandbox = profile?.sandbox === true || o.sandbox === true
-    await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) })
+    try {
+      await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(sandboxRequired ? { sandboxRequired: true } : {}) })
+    } catch (err) {
+      if (sandboxRequired && err instanceof Error && err.message.startsWith('SANDBOX_UNAVAILABLE:')) {
+        log(`spawn refused: ${err.message} (a sandboxed session's work)`)
+        if (trace) trace.settingsRefused = true
+      }
+      throw err
+    }
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
     let info: ReturnType<SessionManager['spawn']>
@@ -806,7 +807,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // from a remote controller is not (review M1). An agent's tab closes when it ends (2026-10-20).
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
       ...(profile ? { agentProfileId: profile.agentProfileId } : {}),
-      ...(sandbox ? { sandbox: true } : {})
+      ...(sandbox ? { sandbox: true } : {}),
+      ...(sandboxRequired ? { sandboxRequired: true } : {})
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -834,7 +836,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   let preparedShuttle: string | null = null
   let preparedBypass: boolean | null = null
   let preparedAccounts: Account[] = []
-  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void> => {
+  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean | 'required', kind?: 'chat'): Promise<void> => {
     if (retiring) throw new HostRetiring()
     const accounts = await readAccounts(accountsPath) // RepairNeeded on a damaged file (A10)
     accountIn(accounts, account.id)
@@ -845,8 +847,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     // The chain's profile id as the session holds it (already resolved when it was started): its capabilities, as at a spawn.
     // A chain started in the sandbox keeps it (the coordinator carries the flag): its folder is read for it before the kill,
-    // into the layouts the Host's chat sessions read too; a chat's respawn is an app-server, which needs no --no-daemon
-    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(kind === 'chat' ? { chat: true } : {}) })
+    // into the layouts the Host's chat sessions read too; a chat's respawn is an app-server, which needs no --no-daemon. A
+    // chain that must be sandboxed is held to it (claude shell sandbox design D5)
+    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(sandbox === 'required' ? { sandboxRequired: true } : {}), ...(kind === 'chat' ? { chat: true } : {}) })
     preparedBypass = await bypassFromSettings() // RepairNeeded on a damaged settings file (A10)
     await preTrustWorkspace({ account, cwd, homeDir, descriptors, log })
     await ensured()
@@ -876,7 +879,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       restoreExtra: o.restoreExtra,
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
       ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
-      ...(o.sandbox ? { sandbox: true } : {})
+      ...(o.sandbox ? { sandbox: true } : {}),
+      ...(o.sandboxRequired ? { sandboxRequired: true } : {})
     })
   }
 

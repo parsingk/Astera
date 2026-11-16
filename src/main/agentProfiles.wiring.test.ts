@@ -68,7 +68,7 @@ describe('ipc.ts starts a session from an agent profile', () => {
   // the prepare reads the folder for it and the spawn, which takes `...opts`, starts in it
   it('a terminal session: the prepare takes the profile and its sandbox, the spawn carries them in opts, and its use is stamped after', () => {
     expect(terminal).toMatch(
-      /core\.sessions\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.agentProfileId !== undefined \? \{ agentProfileId: opts\.agentProfileId \} : \{\}\), \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\) \}\)/
+      /core\.sessions\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.agentProfileId !== undefined \? \{ agentProfileId: opts\.agentProfileId \} : \{\}\), \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\), \.\.\.\(sandboxRequired \? \{ sandboxRequired: true \} : \{\}\) \}\)/
     )
     expect(terminal).toMatch(/core\.sessions\.spawn\(\{\s*\.\.\.opts,/)
     expect(before(terminal, 'core.sessions.spawn({', 'touchAgentProfile(opts.agentProfileId)')).toBe(true)
@@ -106,8 +106,10 @@ describe('index.ts prepares a roll on the chain’s agent profile', () => {
   it('both coordinators’ prepareSpawn pass the profile id and the sandbox to the prepare', () => {
     expect(index.split('\n').filter((l) => l.includes('prepareSpawn:'))).toHaveLength(2)
     const shared = String.raw`core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\), \.\.\.\(sandbox \? \{ sandbox: true \} : \{\}\)`
-    // The claude coordinator's, as it was
-    expect(index).toMatch(new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox\) => ${shared} \}\)`))
+    // The claude coordinator's, which also says when the chain must be sandboxed (claude shell sandbox design D5)
+    expect(index).toMatch(
+      new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox\) =>\s+${shared}, \.\.\.\(sandbox === 'required' \? \{ sandboxRequired: true \} : \{\}\) \}\)`)
+    )
     // Task 6 fix round 1: the codex coordinator's also says when the respawn is a chat's (its sandbox needs no
     // --no-daemon)
     expect(index).toMatch(
@@ -181,15 +183,20 @@ describe('the app records the conversation a profiled session is on, and reads i
 
 // Final fix pass (minor 1, C3): the sandbox comes from the profile, never from the options a caller passes (a `sandbox`
 // the renderer sends is dropped), and the app's own start of a sandboxed session's work asks for it apart
-// (`forceSandbox`), refused where the CLI has no sandbox. registerIpc cannot run without Electron: guarded by its text
+// (`forceSandbox`), which it must have: the prepares and the spawns are told (`sandboxRequired`) and refuse where it cannot
+// be had (claude shell sandbox design D5). registerIpc cannot run without Electron: guarded by its text
 describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session’s work', () => {
   const body = between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")
-  it('drops a caller’s sandbox before the profile is read, and refuses a forced one where the CLI has none', () => {
+  it('drops a caller’s sandbox before the profile is read, and tells every prepare and spawn that a forced one must be had', () => {
     // Task K fix round 1: a reviewer's allowance of deny rules only is dropped with them, never taken from the caller
     expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, \.\.\.withoutSandbox \} = opts/)
     expect(before(body, 'withoutSandbox', 'appProfileSpawn(')).toBe(true)
-    expect(body).toMatch(/forcedSandboxBlocker\(providerOf\(account\), process\.platform\)/)
+    expect(body).toMatch(/const sandboxRequired = forceSandbox && !forceSandboxDenyOnly/)
     expect(body).toMatch(/if \(forceSandbox\) opts = \{ \.\.\.opts, sandbox: true \}/)
+    // The chat's prepare and spawn, and the terminal's prepare and spawn
+    expect(body.match(/\.\.\.\(sandboxRequired \? \{ sandboxRequired: true \} : \{\}\)/g)).toHaveLength(4)
+    expect(body).toMatch(/core\.chat\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\), \.\.\.\(sandboxRequired \? \{ sandboxRequired: true \} : \{\}\) \}\)/)
+    expect(body).not.toMatch(/forcedSandboxBlocker/)
   })
   it('the renderer cannot ask for a forced one', () => {
     expect(src).toMatch(/ipcMain\.handle\('sessions\.spawn', async \(_e, opts\) => spawnSession\(\{ \.\.\.opts, forceSandbox: undefined, forceSandboxDenyOnly: undefined \}\)\)/)

@@ -276,8 +276,8 @@ describe('createReviewStarter', () => {
   })
 
   // Task K part 3: a reviewer of work done in a sandbox (or, Claude Code on Windows, under its deny rules) starts in its own
-  // CLI's sandbox: it works in the implementer's tree and commonly runs its tests. Where that CLI has none the start is
-  // refused by the wiring (forcedSandboxBlocker), never run outside it
+  // CLI's sandbox: it works in the implementer's tree and commonly runs its tests. Where it cannot be had the start is
+  // refused by the session's prepare (`sandboxRequired`; claude shell sandbox design D5), never run outside it
   it('starts the reviewer of sandboxed work in its own CLI’s sandbox, and of unsandboxed work as before', async () => {
     for (const [kind, boxed] of [['sandbox', true], ['deny-only', true], [undefined, false]] as const) {
       const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], ...(kind ? { implSandboxKind: kind } : {}) })

@@ -1,19 +1,11 @@
 // The error a session start throws when the CLI's own sandbox cannot be used. Callers match the prefix, so a session never
 // starts quietly without the protection the profile asked for.
 import type { Message } from '../i18n'
-import { sandboxKindOf } from './coverage'
 
 export const SANDBOX_UNAVAILABLE = 'SANDBOX_UNAVAILABLE'
 
 export function sandboxUnavailable(code: string): Error {
   return new Error(`${SANDBOX_UNAVAILABLE}: ${code}`)
-}
-
-/** A session a sandboxed session starts, its Job's coordinator, a worker of its work, must run in its CLI's sandbox (final
- *  fix pass, C3): where that CLI has none, Claude Code on Windows with deny rules only, it is refused rather than started
- *  without one (`no-sandbox <cli>`). Null where the sandbox runs. */
-export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: string): Error | null {
-  return sandboxKindOf(provider, platform) === 'deny-only' ? sandboxUnavailable(`no-sandbox ${provider}`) : null
 }
 
 // The codes a start refuses with, wherever the error text was carried (the app's IPC wraps it, the Host's answer quotes
@@ -22,7 +14,9 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // `path-unsafe` (the work folder's repository), `named-path-unsafe` (another path the sandbox names: Astera's own
 // folders, a login folder; Task E fix round 3), `linked-path` (a named path through a link the session could change,
 // where nothing else refuses it; fix round 5), `git-layout`, `not-prepared`, `settings-write-failed` (Claude's sandbox
-// settings, claudeStart.ts), `no-sandbox <cli>` (forcedSandboxBlocker), `command-too-long` (a Windows command line the
+// settings, claudeStart.ts), `no-sandbox <cli>` (a start that must be sandboxed, final fix pass C3, of a Claude session on
+// Windows whose shell has no route into Codex's sandbox for a reason with no code of its own: claudeStart.ts, claude shell
+// sandbox design D5), `command-too-long` (a Windows command line the
 // profile overflows,
 // prepared.ts fitsOnTheLine), `profile-not-active codex` (a sandboxed chat's thread that does not run
 // under the Astera profile, codexAdapter.ts), `outside-sandbox <session|job|task|command> <id>` (a sandboxed session handing work

@@ -1318,6 +1318,9 @@ describe('createHostSpawner — createSession', () => {
         expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
         expect(info.sandboxed).toBe(true)
         expect(h.registry.list()[i].meta!.restore).toMatchObject({ sandboxed: true })
+        // Claude shell sandbox design D5: it must be, and its note says so, so its rolls are held to it too
+        expect(info.sandboxRequired).toBe(true)
+        expect(h.registry.list()[i].meta!.restore).toMatchObject({ sandboxRequired: true })
       }
       if (process.platform === 'win32') {
         await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
