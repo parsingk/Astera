@@ -296,7 +296,7 @@ export const ko = {
   'settings.security.sandboxCoverage.level.none': '안 막음',
   'settings.security.sandboxCoverage.level.seen': '허용',
   'settings.security.sandboxCoverage.homeReadable': '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. macOS와 Linux의 Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). Windows에서는 셸이 Codex sandbox 안에 있으면 안에서 실행됩니다. 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
-  'settings.security.sandboxCoverage.windowsClaude': 'Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 이 세션에서는 PowerShell 도구가 꺼집니다. 없는 .mcp.json은 셸이 만들 수 있습니다.',
+  'settings.security.sandboxCoverage.windowsClaude': 'Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 셸이 Codex sandbox 안에서 도는 세션에서는 PowerShell 도구가 꺼지고, .claude(없으면 새로 만듭니다)와 이미 있는 .mcp.json은 셸에서 읽기 전용입니다. 그런 세션이 한 번 돈 폴더에서는 그 뒤로 어떤 sandbox 세션의 셸에서도 둘이 읽기 전용으로 남습니다(파일 도구로는 고칠 수 있습니다).',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 이상: AppArmor의 bubblewrap 프로필 때문에 셸 명령이 실패합니다",
   'settings.security.builtin.profileWrite': 'Astera 설정 폴더 쓰기',
   'settings.security.builtin.settingsCommand': 'Astera 설정 변경 명령',

@@ -245,21 +245,21 @@ describe('securityText', () => {
   })
 
   // Task 8 fix round 1: what the table cannot say in a cell. Outside the login folders the home stays readable (spec §6),
-  // and Claude Code's shell on Windows is not restricted, said beside its row
-  it('says under the table that the home stays readable, and beside the Claude Windows row that its shell is not restricted', () => {
+  // and when Claude Code's shell on Windows is in Codex's sandbox and what that holds, said beside its row
+  it('says under the table that the home stays readable, and beside the Claude Windows row when its shell is in Codex’s sandbox', () => {
     expect(sandboxTableCaption(en)).toBe("Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session on macOS and Linux, commands the person types with `!` usually run outside the sandbox (see Claude Code’s sandboxing docs); on Windows they run inside it when the shell is in Codex’s sandbox. The agent’s own commands run inside it.")
     expect(sandboxTableCaption(ko)).toBe("로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. macOS와 Linux의 Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). Windows에서는 셸이 Codex sandbox 안에 있으면 안에서 실행됩니다. 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.")
     // Task E fix rounds 2 and 3: beside the Claude Linux row, that on Ubuntu 25.04 and later its shell commands fail
     // under AppArmor's bubblewrap profile
     expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual([
-      "Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. The PowerShell tool is off in such a session. A missing .mcp.json can still be made by the shell.",
+      "Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. In a session whose shell runs there, the PowerShell tool is off, and .claude (made if missing) and an existing .mcp.json are read-only to the shell. After such a session ran in a folder, no sandboxed session’s shell can write them there (the file tools still can).",
       null,
       "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
       null,
       null,
       null
     ])
-    expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe("Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 이 세션에서는 PowerShell 도구가 꺼집니다. 없는 .mcp.json은 셸이 만들 수 있습니다.")
+    expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe("Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 셸이 Codex sandbox 안에서 도는 세션에서는 PowerShell 도구가 꺼지고, .claude(없으면 새로 만듭니다)와 이미 있는 .mcp.json은 셸에서 읽기 전용입니다. 그런 세션이 한 번 돈 폴더에서는 그 뒤로 어떤 sandbox 세션의 셸에서도 둘이 읽기 전용으로 남습니다(파일 도구로는 고칠 수 있습니다).")
   })
 
   // Task 8 fix round 1: what the sandbox lets through (the network) is not drawn in the green that reads as "covered"

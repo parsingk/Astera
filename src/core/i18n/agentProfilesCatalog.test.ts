@@ -59,11 +59,12 @@ const SANDBOX_GIVEN = {
     'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 macOS と Linux の Claude のセッションで人が `!` を付けて直接入力したコマンドは、通常サンドボックスの外で実行されます（Claude Code のサンドボックスのドキュメントを参照）。Windows では、シェルが Codex のサンドボックスにあれば内側で実行されます。エージェント自身のコマンドは内側で実行されます。',
     'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude en macOS y Linux, los comandos que la persona escribe con `!` suelen ejecutarse fuera del sandbox (véase la documentación de sandbox de Claude Code); en Windows se ejecutan dentro cuando el shell está en el sandbox de Codex. Los del propio agente se ejecutan dentro.'
   ],
+  // Final fixes I2 and M6: the guards and their lasting effect (design D6), said of a session whose shell runs there
   'settings.security.sandboxCoverage.windowsClaude': [
-    'Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 이 세션에서는 PowerShell 도구가 꺼집니다. 없는 .mcp.json은 셸이 만들 수 있습니다.',
-    'Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. The PowerShell tool is off in such a session. A missing .mcp.json can still be made by the shell.',
-    'Windows: Codex アカウントの Windows サンドボックスを設定済みなら、シェルは Codex のサンドボックスで動きます。そうでなければファイルツールだけが遠ざけられます。この場合 PowerShell ツールはオフです。存在しない .mcp.json はシェルが作れます。',
-    'Windows: el shell se ejecuta en el sandbox de Codex cuando el sandbox de Windows de una cuenta de Codex está configurado; si no, solo las herramientas de archivos quedan fuera. La herramienta PowerShell está desactivada en esa sesión. El shell aún puede crear un .mcp.json que no exista.'
+    'Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 셸이 Codex sandbox 안에서 도는 세션에서는 PowerShell 도구가 꺼지고, .claude(없으면 새로 만듭니다)와 이미 있는 .mcp.json은 셸에서 읽기 전용입니다. 그런 세션이 한 번 돈 폴더에서는 그 뒤로 어떤 sandbox 세션의 셸에서도 둘이 읽기 전용으로 남습니다(파일 도구로는 고칠 수 있습니다).',
+    'Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. In a session whose shell runs there, the PowerShell tool is off, and .claude (made if missing) and an existing .mcp.json are read-only to the shell. After such a session ran in a folder, no sandboxed session’s shell can write them there (the file tools still can).',
+    'Windows: Codex アカウントの Windows サンドボックスを設定済みならシェルは Codex のサンドボックスで動き、そうでなければファイルツールだけが遠ざけられます。シェルがそこで動くセッションでは PowerShell ツールはオフで、.claude（なければ作成します）と既存の .mcp.json はシェルからは読み取り専用です。そうしたセッションが一度動いたフォルダーでは、その後どのサンドボックスのセッションのシェルもこれらに書き込めません（ファイルツールは書き込めます）。',
+    'Windows: el shell se ejecuta en el sandbox de Codex cuando el sandbox de Windows de una cuenta de Codex está configurado; si no, solo las herramientas de archivos quedan fuera. En una sesión cuyo shell se ejecuta allí, la herramienta PowerShell está desactivada, y .claude (se crea si falta) y un .mcp.json existente son de solo lectura para el shell. Después de que una sesión así se ejecute en una carpeta, ningún shell de una sesión con sandbox puede escribirlos allí (las herramientas de archivos sí pueden).'
   ],
   'audit.coverageNote.bus-path-only': [
     '세션 bus가 파일 경로일 때',

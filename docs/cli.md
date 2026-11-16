@@ -1580,8 +1580,16 @@ for each CLI on each OS (`provider`, `os` as `win32`, `darwin` or `linux`), clai
 (outside the session's folders), `sensitive` (the folders holding logins), `stores` (the OS secret store) and `network`.
 Codex's sandbox blocks the first three on every OS and allows the network (`seen`, printed `allowed`). Claude Code's
 blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runtime its sandbox runs on was measured,
-not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
-is `partial` with the note `file-tools-only`. Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
+not Claude Code's own use of it. On Windows Claude Code has no sandbox of its own: its `write`, `sensitive` and `stores`
+are `enforced` with the note `via-codex`, which means they hold only in a session whose shell runs in Codex's sandbox.
+A sandboxed Claude session's start puts its shell there when Git Bash is found and a Codex account is registered, with
+a recent enough codex and its Windows sandbox set up (Settings › Agent profiles); otherwise the session starts with
+deny rules only, which keep the file tools out of the login folders and leave the shell unrestricted, and its start
+says why. In a session whose shell runs in Codex's sandbox, the PowerShell tool is off, and `.claude` in the work
+folder (made if missing) and an existing `.mcp.json` are read-only to the shell, so it cannot plant what Claude Code
+runs outside the sandbox; a missing `.mcp.json` can still be made by the shell. These guards outlive the session: after
+such a session ran in a folder, no sandboxed session's shell, Codex's included, can write `.claude` or an existing
+`.mcp.json` there (the file tools still can). Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
 session bus by its file path, and a bus on an abstract socket is not denied. `--human` prints it as a table of its own,
 headed `sandbox`, under the other, with "Windows: the shell runs in Codex's sandbox when a Codex account's Windows sandbox is set up …" beside the Claude Code Windows row and,
 under the table, that outside the login folders the home folder stays readable inside the sandbox. Settings › Security

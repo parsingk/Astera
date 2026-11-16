@@ -291,7 +291,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.sandboxCoverage.level.none': 'Not blocked',
   'settings.security.sandboxCoverage.level.seen': 'Allowed',
   'settings.security.sandboxCoverage.homeReadable': 'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session on macOS and Linux, commands the person types with `!` usually run outside the sandbox (see Claude Code’s sandboxing docs); on Windows they run inside it when the shell is in Codex’s sandbox. The agent’s own commands run inside it.',
-  'settings.security.sandboxCoverage.windowsClaude': 'Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. The PowerShell tool is off in such a session. A missing .mcp.json can still be made by the shell.',
+  'settings.security.sandboxCoverage.windowsClaude': 'Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. In a session whose shell runs there, the PowerShell tool is off, and .claude (made if missing) and an existing .mcp.json are read-only to the shell. After such a session ran in a folder, no sandboxed session’s shell can write them there (the file tools still can).',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
   'settings.security.builtin.profileWrite': "Writing Astera's settings folder",
   'settings.security.builtin.settingsCommand': "Commands that change Astera's settings",

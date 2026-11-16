@@ -255,7 +255,7 @@ export const ja: Catalog = {
   'settings.security.sandboxCoverage.level.none': 'ブロックしない',
   'settings.security.sandboxCoverage.level.seen': '許可',
   'settings.security.sandboxCoverage.homeReadable': 'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 macOS と Linux の Claude のセッションで人が `!` を付けて直接入力したコマンドは、通常サンドボックスの外で実行されます（Claude Code のサンドボックスのドキュメントを参照）。Windows では、シェルが Codex のサンドボックスにあれば内側で実行されます。エージェント自身のコマンドは内側で実行されます。',
-  'settings.security.sandboxCoverage.windowsClaude': 'Windows: Codex アカウントの Windows サンドボックスを設定済みなら、シェルは Codex のサンドボックスで動きます。そうでなければファイルツールだけが遠ざけられます。この場合 PowerShell ツールはオフです。存在しない .mcp.json はシェルが作れます。',
+  'settings.security.sandboxCoverage.windowsClaude': 'Windows: Codex アカウントの Windows サンドボックスを設定済みならシェルは Codex のサンドボックスで動き、そうでなければファイルツールだけが遠ざけられます。シェルがそこで動くセッションでは PowerShell ツールはオフで、.claude（なければ作成します）と既存の .mcp.json はシェルからは読み取り専用です。そうしたセッションが一度動いたフォルダーでは、その後どのサンドボックスのセッションのシェルもこれらに書き込めません（ファイルツールは書き込めます）。',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 以降: AppArmor の bubblewrap 用プロファイルによりシェルコマンドが失敗します",
   'settings.security.builtin.profileWrite': 'Astera の設定フォルダーへの書き込み',
   'settings.security.builtin.settingsCommand': 'Astera の設定を変えるコマンド',
