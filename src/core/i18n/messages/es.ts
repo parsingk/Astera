@@ -554,6 +554,7 @@ export const es: Catalog = {
   'settings.remote.detail.sandbox': 'Sandbox de {provider}: {kind}',
   'settings.remote.detail.sandboxKind.sandbox': 'sandbox completo',
   'settings.remote.detail.sandboxKind.denyOnly': 'solo herramientas de archivos',
+  'settings.remote.detail.sandboxKind.denyOnlyUnlessCodex': 'solo herramientas de archivos salvo que el sandbox de Codex esté configurado',
   'settings.remote.detail.codexAccounts': 'Cuentas de Codex con el sandbox configurado: {ready} de {total}',
   'settings.remote.detail.cliVersion': 'CLI de {provider} {version}',
   'settings.remote.detail.cliMissing': 'No se encontró la CLI de {provider}',

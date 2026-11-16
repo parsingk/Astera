@@ -550,6 +550,7 @@ export const ja: Catalog = {
   'settings.remote.detail.sandbox': '{provider} サンドボックス: {kind}',
   'settings.remote.detail.sandboxKind.sandbox': '完全なサンドボックス',
   'settings.remote.detail.sandboxKind.denyOnly': 'ファイルツールのみ',
+  'settings.remote.detail.sandboxKind.denyOnlyUnlessCodex': 'Codex のサンドボックスが未設定ならファイルツールのみ',
   'settings.remote.detail.codexAccounts': 'サンドボックスを設定済みの Codex アカウント: {total} 件中 {ready} 件',
   'settings.remote.detail.cliVersion': '{provider} CLI {version}',
   'settings.remote.detail.cliMissing': '{provider} CLI が見つかりません',

@@ -674,6 +674,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.remote.detail.sandbox': '{provider} sandbox: {kind}',
   'settings.remote.detail.sandboxKind.sandbox': 'full sandbox',
   'settings.remote.detail.sandboxKind.denyOnly': 'file tools only',
+  'settings.remote.detail.sandboxKind.denyOnlyUnlessCodex': 'file tools only unless Codex’s sandbox is set up',
   'settings.remote.detail.codexAccounts': 'Codex accounts with the sandbox set up: {ready} of {total}',
   'settings.remote.detail.cliVersion': '{provider} CLI {version}',
   'settings.remote.detail.cliMissing': '{provider} CLI not found',

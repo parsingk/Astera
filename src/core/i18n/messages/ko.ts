@@ -679,6 +679,7 @@ export const ko = {
   'settings.remote.detail.sandbox': '{provider} 샌드박스: {kind}',
   'settings.remote.detail.sandboxKind.sandbox': '전체 샌드박스',
   'settings.remote.detail.sandboxKind.denyOnly': '파일 도구만',
+  'settings.remote.detail.sandboxKind.denyOnlyUnlessCodex': 'Codex 샌드박스를 설정하지 않았으면 파일 도구만',
   'settings.remote.detail.codexAccounts': '샌드박스가 설정된 Codex 계정: {total}개 중 {ready}개',
   'settings.remote.detail.cliVersion': '{provider} CLI {version}',
   'settings.remote.detail.cliMissing': '{provider} CLI 없음',

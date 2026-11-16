@@ -510,6 +510,13 @@ const SANDBOX_KIND_KEYS: Record<'sandbox' | 'deny-only', MessageKey> = {
 const MODES: readonly string[] = ['compatibility', 'observe', 'enforce'] satisfies AuditMode[]
 /** A state word in the person's language where this build knows it; a newer Runtime's word as it came (ruling R2-1). */
 const wordOf = (keys: Record<string, MessageKey>, word: string, t: (k: MessageKey) => string): string => (Object.hasOwn(keys, word) ? t(keys[word]) : word)
+/** A Windows Runtime reports Claude Code as deny-only by its CLI alone (sandboxKindOf), while each start there puts the
+ *  shell in Codex's sandbox when a Codex account's Windows sandbox is set up (claude shell sandbox design D9), which the
+ *  report does not count: that kind is worded with the condition (final review M3). Every other row keeps its word. */
+const sandboxKindWord = (provider: string, platform: string, kind: string, t: (k: MessageKey) => string): string =>
+  provider === 'claude' && platform === 'win32' && kind === 'deny-only'
+    ? t('settings.remote.detail.sandboxKind.denyOnlyUnlessCodex')
+    : wordOf(SANDBOX_KIND_KEYS, kind, t)
 /** How long a fingerprint is on screen; the whole one goes to the clipboard (§10.1). */
 const FINGERPRINT_SHOWN = 16
 
@@ -625,7 +632,7 @@ export function RuntimeDetailView(p: { detail: RuntimeDetail; busy: boolean; onR
                     </>
                   )}
                   <p className="settings-hint">
-                    {t('settings.remote.detail.sandbox', { provider: name, kind: wordOf(SANDBOX_KIND_KEYS, sandbox.kind, t) })}
+                    {t('settings.remote.detail.sandbox', { provider: name, kind: sandboxKindWord(provider, r.astera.platform, sandbox.kind, t) })}
                     {sandbox.blocker === null ? '' : ` (${sandbox.blocker})`}
                   </p>
                   {cli !== undefined && (

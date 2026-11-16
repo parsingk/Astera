@@ -188,6 +188,9 @@ export async function buildControlPlaneReport(d: ControlPlaneReportDeps): Promis
   ])
 
   const sandbox: ControlPlaneReport['sandbox'] = {
+    // Claude Code on Windows is deny-only by its CLI alone: whether a start's shell runs in Codex's sandbox is decided
+    // per start (claude shell sandbox design D9), so the report does not count it and the detail words the kind with
+    // that condition (RemoteRuntimesSettings.tsx sandboxKindWord, final review M3)
     claude: { kind: sandboxKindOf('claude', d.platform), blocker: claudeSandboxBlocker },
     // Codex's sandbox has no machine-wide blocker here: its Windows readiness is per account, counted below
     codex: { kind: sandboxKindOf('codex', d.platform), blocker: null }
