@@ -238,7 +238,7 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
   it('the StatusLineManager, the terminal checks and the chat deps all take that one list, and look at its links', () => {
     expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly, agentLogins \}\n  \)/)
     // Fix round 6: Claude's twins take the way to look from the scope each start hands them (claudeSandboxStart)
-    expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog\n  \}\)/)
+    expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog,\n/)
     expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
     // The registered accounts plus the folders on the disk now, so an unregistered folder's login file is named too
     expect(core).toContain('agentLoginEntries({ homeDir: os.homedir(), accounts: [...accounts.list(), ...agentAccountFolders(os.homedir())] })')
@@ -264,7 +264,7 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   it('the spawner, rollingWiring and hostChats hand the way to look at links to every start', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
     expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
-    expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log\n  \}\)/)
+    expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log,\n/)
     expect(spawner).toMatch(/\n    sandboxWarn,\n    linkLook: nodeLinkLook,\n/)
     expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    linkLook: a\.spawner\.linkLook,\n/)
     expect(hostChats).toMatch(/\n    linkLook: d\.linkLook,\n/)
@@ -286,6 +286,39 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   })
   it('hostChats passes both on to the chat manager', () => {
     expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.agentLogins \? \{ agentLogins: d\.agentLogins \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
+  })
+})
+
+// Claude shell sandbox design D4 (Task 4): on Windows a sandboxed Claude session's shell runs in Codex's sandbox under the
+// default Codex account (shellCodexOf, claudeStart.test.ts), with what a sandboxed Codex start of that process is given.
+// The app and the Host must hand claudeSandboxStart the same things, each from what it holds: the app from its registry,
+// the Host from accounts.json as it is at the ask. core.ts cannot run without Electron, so both are guarded by their text;
+// spawner.test.ts runs the Host's
+describe('Claude’s shell on Windows borrows the default Codex account, in the app and the Host alike', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const core = readFileSync(path.join(here, 'core.ts'), 'utf8')
+  const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+  const block = (src: string): string => src.slice(src.indexOf('const claudeSandbox = claudeSandboxStart({'), src.indexOf('\n  })', src.indexOf('const claudeSandbox = claudeSandboxStart({')))
+  it('the app: the registry, its login check, its sessions’ environment, and its Codex start’s own options', () => {
+    const b = block(core)
+    expect(b).toMatch(/shellCodex: \(\) =>\s+shellCodexOf\(\{\s+accounts: accounts\.list\(\),\s+loggedIn: \(a\) => accounts\.loginStatus\(a\.id\),\s+envOf: \(a\) => cliEnvFor\(\{ base: process\.env, account: a, descriptor: descriptorOf\(descriptors, a\), homeDir: os\.homedir\(\) \}\)\s+\}\)/)
+    expect(b).toMatch(/\n    codexReady: askCodexWindowsReady,\n    codexVersion: cliVersions,\n    codexExe: \(\) => resolveWindowsExecutable\('codex'\),\n    codexExcludes,\n    appKeyFile,\n    readOnly,\n    agentLogins$/)
+    // The SessionManager's own environment is built from process.env too (cliEnvFor, its baseEnv)
+    expect(core).toMatch(/\[previewShotsDir\(userDataDir\)\],\n    process\.env,/)
+    // The chat manager finds the Git Bash its shell route wraps with the process's one resolver
+    const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
+    expect(chat).toMatch(/\n    gitBash: defaultSpawnChecks\(sessionsLog\)\.gitBash,\n/)
+  })
+  it('the Host: accounts.json as it is at the ask, its login check, its sessions’ environment, and its Codex start’s own options', () => {
+    const b = block(spawner)
+    expect(b).toMatch(/shellCodex: \(\) =>\s+shellCodexOf\(\{\s+accounts: registeredAccounts\(\),\s+loggedIn: \(a\) => isLoggedIn\(a, descriptors\),\s+envOf: \(a\) => cliEnvFor\(\{ base: hostWorkerBaseEnv\(d\.env\), account: a, descriptor: descriptorOf\(descriptors, a\), homeDir \}\)\s+\}\)/)
+    expect(b).toMatch(/\n    codexReady: codexWindowsReady,\n    codexVersion: d\.codexVersion \?\? cliVersions,\n    codexExe: \(\) => resolveWindowsExecutable\('codex'\),\n    codexExcludes,\n    appKeyFile,\n    readOnly,\n    agentLogins$/)
+    // Its terminal sessions start from the same base (SessionManager's baseEnv)
+    expect(spawner).toMatch(/\(\) => hostWorkerBaseEnv\(d\.env\),\n/)
+    // Its chats get the spawner's Git Bash resolver, through rollingWiring and hostChats
+    expect(spawner).toMatch(/\n    gitBash: defaultSpawnChecks\(log\)\.gitBash,\n/)
+    expect(readFileSync(path.join(here, '..', 'host', 'rollingWiring.ts'), 'utf8')).toMatch(/\.\.\.\(a\.spawner\.gitBash \? \{ gitBash: a\.spawner\.gitBash \} : \{\}\),/)
+    expect(readFileSync(path.join(here, '..', 'host', 'hostChats.ts'), 'utf8')).toMatch(/\.\.\.\(d\.gitBash \? \{ gitBash: d\.gitBash \} : \{\}\),/)
   })
 })
 

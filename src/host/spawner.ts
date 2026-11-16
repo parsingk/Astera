@@ -27,7 +27,9 @@ import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink, shuttleNames } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
-import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { claudeSandboxStart, shellCodexOf, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { cliEnvFor } from '../core/sessions/cliEnv'
+import { resolveWindowsExecutable } from '../core/sessions/windowsExecutable'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
 import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
@@ -187,6 +189,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The sandbox for Claude (core/sandbox/claudeStart.ts), this spawner's, shared with the Host's chat sessions: a roll
    *  prepares a Claude chat chain's respawn through prepareRollSpawn, and its settings come from this StatusLineManager. */
   claudeSandbox?: ClaudeSandboxStart
+  /** The process's Git Bash resolver, this spawner's terminal manager's, which a sandboxed Claude chat's shell route on
+   *  Windows wraps (claude shell sandbox design D4.1), handed to the Host's chat sessions (rollingWiring). */
+  gitBash?: ChatManagerDeps['gitBash']
   /** The folder this Host's socket is in (macOS and Linux; null on Windows), which a sandboxed Codex session's profile
    *  denies, terminal or chat (final fix pass, C2). */
   hostSocketDir?: string | null
@@ -393,7 +398,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // current or even to exist. When the read or the parse fails, the last list any path through this spawner read stands
   // in. The folders are found on the disk by agentAccountFolders, so an account kept in the usual places is named even
   // before anything was read.
-  const registeredAccounts = (): { provider?: 'claude' | 'codex'; configDir: string }[] => {
+  const registeredAccounts = (): Account[] => {
     try {
       const list = (JSON.parse(readFileSync(path.join(profileDir, 'accounts.json'), 'utf8')) as { accounts?: unknown }).accounts
       if (!Array.isArray(list)) return lastAccounts
@@ -581,7 +586,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   }
   sessions.enforce = enforce
   // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
-  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start here or in the Host's chat sessions
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start here or in the Host's chat sessions.
+  // On Windows its shell runs in Codex's sandbox when it can (claude shell sandbox design D4), as the app's does: under the
+  // default Codex account, from accounts.json as it is at the ask (the login-file thunk's read), with the environment that
+  // account's sessions start with here, and what a sandboxed Codex start of this spawner is given
   const claudeSandbox = claudeSandboxStart({
     platform,
     profileDir,
@@ -592,7 +600,20 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     version: d.claudeVersion ?? cliVersions,
     ...(d.runGit ? { runGit: d.runGit } : {}),
     linkLook: nodeLinkLook,
-    log
+    log,
+    shellCodex: () =>
+      shellCodexOf({
+        accounts: registeredAccounts(),
+        loggedIn: (a) => isLoggedIn(a, descriptors),
+        envOf: (a) => cliEnvFor({ base: hostWorkerBaseEnv(d.env), account: a, descriptor: descriptorOf(descriptors, a), homeDir })
+      }),
+    codexReady: codexWindowsReady,
+    codexVersion: d.codexVersion ?? cliVersions,
+    codexExe: () => resolveWindowsExecutable('codex'),
+    codexExcludes,
+    appKeyFile,
+    readOnly,
+    agentLogins
   })
   sessions.claudeSandbox = claudeSandbox
   // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
@@ -1024,6 +1045,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady,
     claudeSandbox,
+    gitBash: defaultSpawnChecks(log).gitBash,
     hostSocketDir,
     appKeyFile,
     agentLogins,

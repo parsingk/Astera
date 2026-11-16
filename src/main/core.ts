@@ -49,7 +49,9 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
-import { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import { claudeSandboxStart, shellCodexOf } from '../core/sandbox/claudeStart'
+import { cliEnvFor } from '../core/sessions/cliEnv'
+import { resolveWindowsExecutable } from '../core/sessions/windowsExecutable'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
 import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
@@ -391,7 +393,11 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
   }
   sessions.enforce = enforce
   // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
-  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start of either manager
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start of either manager. On Windows its
+  // shell runs in Codex's sandbox when it can (claude shell sandbox design D4): under the default Codex account, from the
+  // registry, with the environment that account's sessions start with, and what a sandboxed Codex start here is given
+  // (the readiness question, the version probe, the codex on PATH, the excludes copy, the app key, the read-only folders,
+  // the login files)
   const claudeSandbox = claudeSandboxStart({
     platform: process.platform,
     profileDir: userDataDir,
@@ -401,7 +407,20 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     files: statusLine,
     version: cliVersions,
     linkLook: nodeLinkLook,
-    log: sessionsLog
+    log: sessionsLog,
+    shellCodex: () =>
+      shellCodexOf({
+        accounts: accounts.list(),
+        loggedIn: (a) => accounts.loginStatus(a.id),
+        envOf: (a) => cliEnvFor({ base: process.env, account: a, descriptor: descriptorOf(descriptors, a), homeDir: os.homedir() })
+      }),
+    codexReady: askCodexWindowsReady,
+    codexVersion: cliVersions,
+    codexExe: () => resolveWindowsExecutable('codex'),
+    codexExcludes,
+    appKeyFile,
+    readOnly,
+    agentLogins
   })
   sessions.claudeSandbox = claudeSandbox
   // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
@@ -433,6 +452,8 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady: askCodexWindowsReady,
     claudeSandbox,
+    // The process's one Git Bash resolver, the terminal manager's: a sandboxed Claude chat's shell route wraps that bash
+    gitBash: defaultSpawnChecks(sessionsLog).gitBash,
     hostSocketDir,
     appKeyFile,
     agentLogins,

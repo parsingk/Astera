@@ -1331,6 +1331,25 @@ describe('createHostSpawner — createSession', () => {
       }
     })
 
+    // Claude shell sandbox design D4 and D5 (Task 4): on Windows the Host decides the route for a Claude session's shell
+    // under the default Codex account it reads from accounts.json, with its login: a forced start with no Codex account
+    // logged in is refused for that (`no-sandbox claude`), and one with a logged-in account goes on to ask its codex (here
+    // a version probe that finds none: `cli-missing codex`). Off Windows a forced Claude start runs in Claude's own sandbox
+    it.runIf(process.platform === 'win32')('a forced Claude start on Windows asks the route of the default Codex account in accounts.json', async () => {
+      const cx = path.join(dir, 'cfg2')
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' },
+        { id: 'acc2', label: 'two', configDir: cx, color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      const missing = Object.assign((): undefined => undefined, { warm: async () => {} })
+      const h = rig({ findRollout: async () => null, claudeVersion: Object.assign(() => '2.1.310', { warm: async () => {} }), codexVersion: missing })
+      await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+      await fs.mkdir(cx, { recursive: true })
+      await fs.writeFile(path.join(cx, 'auth.json'), '{}')
+      await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-missing codex$/)
+      expect(h.spawned).toHaveLength(0)
+    })
+
     // Task K fix rounds 1 and 2 (the controller's rulings, after E2): a reviewer of work a profile's switch sandboxed asks
     // for its CLI's sandbox and allows deny rules only where that CLI has none: a Claude reviewer on Windows starts as a
     // sandboxed profile's Claude session does there (deny-only), not refused. Without that allowance, which a reviewer of

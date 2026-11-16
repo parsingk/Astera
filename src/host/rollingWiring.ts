@@ -153,6 +153,7 @@ export function composeHostRolling(a: {
     sandboxLayouts: a.spawner.sandboxLayouts,
     codexWindowsReady: a.spawner.codexWindowsReady,
     claudeSandbox: a.spawner.claudeSandbox,
+    ...(a.spawner.gitBash ? { gitBash: a.spawner.gitBash } : {}),
     hostSocketDir: a.spawner.hostSocketDir ?? null,
     appKeyFile: a.spawner.appKeyFile ?? null,
     ...(a.spawner.agentLogins ? { agentLogins: a.spawner.agentLogins } : {}),
