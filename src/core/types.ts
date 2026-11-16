@@ -165,7 +165,9 @@ export interface SessionInfo {
   sandboxRequired?: true
 }
 
-/** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
+/** SessionInfo.sandboxKind: what the start recorded. core/sandbox/coverage.ts sandboxKindOf decides it, except for Claude
+ *  Code on Windows, whose start records `sandbox` when its shell has its route into Codex's sandbox and `deny-only`
+ *  otherwise (claude shell sandbox design D9). */
 export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** SessionInfo.sandboxWarnings, one each (core/sandbox/startWarnings.ts sandboxStartWarnings). */
