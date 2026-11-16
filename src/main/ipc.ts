@@ -2160,7 +2160,8 @@ export function registerIpc(
     // of a sandboxed session's work never asks (review.ts), so C3's refusal holds for it
     const forceSandboxDenyOnly = opts.forceSandboxDenyOnly === true
     {
-      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, ...withoutSandbox } = opts
+      // A caller's `sandboxRequired` too (Task 4 review M3): only the forced paths below set it
+      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, sandboxRequired: _callerRequired, ...withoutSandbox } = opts
       opts = withoutSandbox
     }
     const sandboxRequired = forceSandbox && !forceSandboxDenyOnly
@@ -2392,6 +2393,11 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
+    // A forced Claude start on Windows without its shell's route is refused here (and the chat's above), no longer up
+    // front (Task 4 review M4): a forced resume refused here has already recorded its conversation under the profile and
+    // copied its transcript into the account. Both are harmless: the record names the profile the conversation was asked
+    // to resume as, which a later resume writes again, and the copy is the one any resume into that account makes and
+    // remakes, which a resume that fails for any other reason after this point leaves just the same
     await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}), ...(sandboxRequired ? { sandboxRequired: true } : {}) })
     const info = core.sessions.spawn({
       ...opts,

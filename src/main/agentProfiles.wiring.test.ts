@@ -188,8 +188,9 @@ describe('the app records the conversation a profiled session is on, and reads i
 describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session’s work', () => {
   const body = between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")
   it('drops a caller’s sandbox before the profile is read, and tells every prepare and spawn that a forced one must be had', () => {
-    // Task K fix round 1: a reviewer's allowance of deny rules only is dropped with them, never taken from the caller
-    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, \.\.\.withoutSandbox \} = opts/)
+    // Task K fix round 1: a reviewer's allowance of deny rules only is dropped with them, never taken from the caller;
+    // Task 4 review M3: so is a caller's `sandboxRequired`, which only the forced paths below set
+    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, sandboxRequired: _callerRequired, \.\.\.withoutSandbox \} = opts/)
     expect(before(body, 'withoutSandbox', 'appProfileSpawn(')).toBe(true)
     expect(body).toMatch(/const sandboxRequired = forceSandbox && !forceSandboxDenyOnly/)
     expect(body).toMatch(/if \(forceSandbox\) opts = \{ \.\.\.opts, sandbox: true \}/)
