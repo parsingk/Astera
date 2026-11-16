@@ -1032,6 +1032,9 @@ export const ko = {
   'session.sandbox.warn.linkAndHome': "이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
   'session.sandbox.warn.elevatedDefault': '이 계정의 config.toml이 Codex의 elevated sandbox를 기본값으로 정해 두어, 이 계정의 일반 Codex 세션도 명령을 그 안에서 실행하고 로그인 정보가 든 폴더를 읽지 못합니다. 설정 › 에이전트 프로필에서 그 줄을 지울 수 있습니다.',
   'session.sandbox.warn.elevatedDefaultAndHome': '이 계정의 config.toml이 Codex의 elevated sandbox를 기본값으로 정해 두어, 이 계정의 일반 Codex 세션도 명령을 그 안에서 실행하고 로그인 정보가 든 폴더를 읽지 못합니다. 설정 › 에이전트 프로필에서 그 줄을 지울 수 있습니다. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
+  'session.sandbox.warn.claudeShellNoCodex': '이 세션의 셸은 sandbox 밖에서 돌아갑니다. Windows의 Claude Code에는 sandbox가 없어서 Astera가 셸을 Codex의 sandbox에서 돌리는데, 그러려면 Codex 계정이 등록되어 있고 최신 Codex CLI가 설치되어 있어야 합니다. 지금은 파일 도구만 로그인 정보 폴더에 닿지 못합니다. Codex 계정을 추가하거나 Codex CLI를 설치 또는 업데이트한 뒤 새 세션을 시작해 주세요.',
+  'session.sandbox.warn.claudeShellNotSetUp': '이 세션의 셸은 sandbox 밖에서 돌아갑니다. Windows의 Claude Code에는 sandbox가 없어서 Astera가 셸을 Codex의 sandbox에서 돌리는데, 그러려면 Codex 계정의 Windows sandbox가 설정되어 있어야 합니다. 지금은 파일 도구만 로그인 정보 폴더에 닿지 못합니다. 설정 › 에이전트 프로필에서 설정한 뒤 새 세션을 시작해 주세요.',
+  'session.sandbox.warn.claudeShellUnavailable': '이 세션의 셸은 sandbox 밖에서 돌아갑니다. Windows의 Claude Code에는 sandbox가 없어서 Astera가 셸을 Codex의 sandbox에서 돌리는데, 이 폴더에서는 그 sandbox를 쓸 수 없었습니다. 지금은 파일 도구만 로그인 정보 폴더에 닿지 못합니다. 이유는 Astera 로그에 남아 있습니다.',
   // A Claude roll refused for the sandbox (core/rolling/claudeCoordinator.ts): {reason} is the refusal's own sentence
   'session.roll.sandbox.windowsCheckFailed': '{account} 계정은 Codex에게 Windows sandbox 상태를 묻지 못해 넘어가지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
   'session.roll.sandbox.refused': '다음 계정으로 넘어가지 못했습니다: {reason}',

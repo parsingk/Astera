@@ -144,24 +144,39 @@ export interface SessionInfo {
    *  back and a roll's successor starts in the sandbox too; absent on every session started outside it. */
   sandboxed?: true
   /** What protection `sandboxed` gives, set beside it by the session manager that knows the OS and the CLI: `sandbox`, the
-   *  CLI's own sandbox; `deny-only`, Claude Code on Windows, which has none and gets only deny rules for its file tools
-   *  (its shell is not restricted). In the note too, so a session taken back says the same. Absent when not sandboxed. */
+   *  CLI's own sandbox, or on Windows a Claude session whose shell runs in Codex's sandbox (claude shell sandbox design
+   *  D9); `deny-only`, a Claude session on Windows without that route, which gets only deny rules for its file tools (its
+   *  shell is not restricted). What that start really got. In the note too, so a session taken back says the same. Absent
+   *  when not sandboxed. */
   sandboxKind?: SandboxKind
   /** What a sandboxed start warned about (Task E fix rounds 2 and 3, core/sandbox/startWarnings.ts decides it): the work
    *  folder holds the home folder, Claude's shell cannot run under Ubuntu's AppArmor bubblewrap profile, or (Codex on
    *  Linux, fix round 5) a named path goes through a link in the work folder, so Codex refuses every command, or (Codex
    *  on Windows, Task P) the account's config.toml makes the elevated sandbox its default, so its ordinary Codex sessions
-   *  run in it too and cannot read the login folders. Beside
+   *  run in it too and cannot read the login folders, or (Claude on Windows, claude shell sandbox design D9) its shell
+   *  could not be put in Codex's sandbox: no Codex account or codex, its sandbox not set up, or anything else. Beside
    *  `sandboxKind` in the info and the note, so a Host worker's tab and a tab taken back after a restart show it too; the
    *  tab shows it as a line above the terminal or the chat. Absent when there is nothing to say. */
   sandboxWarnings?: SandboxStartWarning[]
+  /** The session must run in its CLI's sandbox (final fix pass, C3: a sandboxed session asked for it, or for the work it
+   *  made), so a start that cannot have it is refused, not started with less: on Windows a Claude session whose shell has
+   *  no route into Codex's sandbox (claude shell sandbox design D5). In the note too, so a roll's successor is held to it
+   *  as its chain was. Absent on every other session and on every note written before it. */
+  sandboxRequired?: true
 }
 
 /** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
 export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** SessionInfo.sandboxWarnings, one each (core/sandbox/startWarnings.ts sandboxStartWarnings). */
-export type SandboxStartWarning = 'claudeUserns' | 'linkInWorkFolder' | 'elevatedDefault' | 'homeInWorkFolder'
+export type SandboxStartWarning =
+  | 'claudeUserns'
+  | 'linkInWorkFolder'
+  | 'elevatedDefault'
+  | 'claudeShellNoCodex'
+  | 'claudeShellNotSetUp'
+  | 'claudeShellUnavailable'
+  | 'homeInWorkFolder'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as

@@ -835,6 +835,9 @@ export const ja: Catalog = {
   'session.sandbox.warn.linkAndHome': "このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
   'session.sandbox.warn.elevatedDefault': 'このアカウントの config.toml が Codex の elevated サンドボックスを既定にしているため、このアカウントの通常の Codex セッションもコマンドをその中で実行し、ログイン情報を含むフォルダーを読めません。設定 › エージェントプロファイルでその行を削除できます。',
   'session.sandbox.warn.elevatedDefaultAndHome': 'このアカウントの config.toml が Codex の elevated サンドボックスを既定にしているため、このアカウントの通常の Codex セッションもコマンドをその中で実行し、ログイン情報を含むフォルダーを読めません。設定 › エージェントプロファイルでその行を削除できます。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。',
+  'session.sandbox.warn.claudeShellNoCodex': 'このセッションのシェルはサンドボックスの外で動きます。Windows の Claude Code にはサンドボックスがなく、Astera がシェルを Codex のサンドボックスで動かせるのは、Codex アカウントが登録され、新しい Codex CLI が入っているときだけです。ログイン情報のフォルダーから遠ざけられているのはファイルツールだけです。Codex アカウントを追加するか、Codex CLI を入れるか更新して、新しいセッションを始めてください。',
+  'session.sandbox.warn.claudeShellNotSetUp': 'このセッションのシェルはサンドボックスの外で動きます。Windows の Claude Code にはサンドボックスがなく、Astera がシェルを Codex のサンドボックスで動かせるのは、Codex アカウントの Windows サンドボックスが設定済みのときだけです。ログイン情報のフォルダーから遠ざけられているのはファイルツールだけです。設定 › エージェントプロファイルで設定してから、新しいセッションを始めてください。',
+  'session.sandbox.warn.claudeShellUnavailable': 'このセッションのシェルはサンドボックスの外で動きます。Windows の Claude Code にはサンドボックスがなく、Astera がシェルを動かす Codex のサンドボックスをこのフォルダーでは使えませんでした。ログイン情報のフォルダーから遠ざけられているのはファイルツールだけです。理由は Astera のログにあります。',
   'session.roll.sandbox.windowsCheckFailed': '{account} アカウントの Windows サンドボックスの状態を Codex に確認できなかったため、切り替えられませんでした。Codex を更新するか、もう一度起動してください。',
   'session.roll.sandbox.refused': '次のアカウントに切り替えられませんでした: {reason}',
   'session.spawn.failedWorktreeKept':
