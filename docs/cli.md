@@ -1319,7 +1319,11 @@ and so does a Codex check on Windows, whose shell first prints a line of its own
 its terminal as before, so a sandbox that stops there still reads as the check's failure. A check that ran and failed
 is a failure. A Docker check
 (`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
-Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
+Claude Code on Windows has no sandbox of its own. When its workers' shell ran in Codex's sandbox (a Codex account's
+Windows sandbox set up), its checks run in Codex's sandbox through the same runner as a Codex check, under the Codex
+account its shell borrowed and the same profile; if that route is not there when the check starts, the check is not
+run and the question says why. When its workers ran with deny rules only, its checks run as before and say `validated
+outside the sandbox`. Every check,
 sandboxed or not, starts without the variables the Credentials list hides from a session in its folder, and its result
 names them (`hiddenEnv`: names only, never a value), which the completion block shows under a failed check; a check that
 timed out twice opens a question whose words name them. A value a check needs can be given on purpose in its run

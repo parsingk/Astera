@@ -86,9 +86,10 @@ export interface CheckResult {
   externalUrl?: string
   /** A person let this round go on without this check (C9 `skip-check`); its status is `not-run` */
   skipped?: true
-  /** The check ran outside any sandbox although the Task's workers were sandboxed: Claude Code on Windows has no sandbox,
-   *  only deny rules for its file tools, so its workers' shells, and with them this check, run as the person (Task K,
-   *  the person's Q1). Shown beside the verdict. */
+  /** The check ran outside any sandbox although the Task's workers were sandboxed: they were Claude Code on Windows
+   *  without its shell route into Codex's sandbox (claude shell sandbox design D5), with only deny rules for its file
+   *  tools, so its workers' shells, and with them this check, run as the person (Task K, the person's Q1). Shown beside
+   *  the verdict. */
   outsideSandbox?: true
   /** The variables the Credentials list kept from the check's environment, by name, never a value (Task K fix round 2):
    *  the names it took from the environment the check started from, and those it pointed at an empty location. A

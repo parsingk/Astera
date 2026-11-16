@@ -207,8 +207,8 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         // by TaskValidator's own queue.
         if (sandbox?.kind !== 'sandbox') {
           const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, ...(env ? { env } : {}) })
-          // Claude Code on Windows has no sandbox: its workers' shells ran as the person, and so does this check, said on
-          // its result (the person's Q1)
+          // Deny rules only (Claude Code on Windows without its shell route into Codex's sandbox): its workers' shells ran
+          // as the person, and so does this check, said on its result (the person's Q1)
           return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden }
         }
         // Inside the sandbox the workers ran in, as their CLI and account, or not at all: a check that cannot be put in it

@@ -210,8 +210,8 @@ export interface HostSession {
   agentProfileId?: string
   /** It runs in its agent CLI's own sandbox (the note's `restore.sandboxed`, SessionInfo.sandboxed); absent outside it. */
   sandboxed?: true
-  /** What protection that is (SessionInfo.sandboxKind): `sandbox`, the CLI's own, or `deny-only`, Claude Code on Windows,
-   *  whose shell is not restricted. Absent when not sandboxed, or for a kind this build does not know. */
+  /** What protection that is (SessionInfo.sandboxKind): `sandbox`, the CLI's own (for Claude Code on Windows, its shell in
+   *  Codex's sandbox), or `deny-only`, Claude Code on Windows without that route, whose shell is not restricted. Absent when not sandboxed, or for a kind this build does not know. */
   sandboxKind?: SandboxKind
   /** Where the Host reads each fact of this session from (X1-06); `none` means the Host cannot say, and the fact is
    *  shown as unknown, never as idle. */
