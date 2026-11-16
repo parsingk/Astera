@@ -18,6 +18,7 @@ import type { DenyEntry, LinkLook } from './locations'
 import type { ClaudeSandboxSettings } from './claudeSettings'
 import { bashRunnable, type ClaudeShellPlan } from './claudeShell'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
+import { readinessGeneration } from './windowsReadiness'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
 
@@ -33,6 +34,13 @@ export type ClaudeShellState = { on: true } | { on: false; why: ClaudeShellOff; 
 
 /** D5's refusal for the reasons whose own code says nothing the person could act on. */
 const NO_SANDBOX_CLAUDE = `${SANDBOX_UNAVAILABLE}: no-sandbox claude`
+
+/** How long a borrowed Codex home found not ready (`not-set-up`, `check-failed`) answers the next Claude starts without
+ *  asking Codex again (Task 2 review I1): asking runs `codex doctor`, seconds each time, at every start and roll, while
+ *  for Claude the answer only chooses between two kinds that both start. The same limit as the control plane report's
+ *  own probe answers (src/host/controlPlaneReport.ts REPORT_PROBE_TTL_MS, ten minutes); a setup this process runs or
+ *  hears of drops it at once (readinessGeneration). */
+export const SHELL_NOT_READY_MS = 10 * 60_000
 
 /** The reason a Codex prepare's refusal is for Claude's shell (prepareCodexSandbox, codexSandboxBlocker): its codes for
  *  codex itself and for the account's Windows sandbox keep their own words as the refusal, which name the account to set
@@ -217,19 +225,21 @@ export function claudeSandboxStart(o: {
     accountId: route.accountId
   })
 
-  /** The work folder's guards (D6), read-only inside the sandbox so the shell cannot plant what Claude Code runs outside
-   *  it: `.claude`, made empty first when missing, since a read entry holds only for a path that is there (spec M8), and
-   *  each of srt's dangerous names that is there (the `.claude` ones are inside the first). Forward slashes. A `.claude`
-   *  made here is noted in `made`, so the prepare can take it away again when the route ends up off. */
+  /** The work folder's guards (D6 as revised after spec M12), read-only inside the sandbox so the shell cannot plant what
+   *  the Claude session itself loads and runs outside it: `.claude`, made empty first when missing, since a read entry
+   *  holds only for a path that is there (spec M8), and `.mcp.json` when it is there. srt's other names (`.vscode`,
+   *  `.gitmodules`, the shell startup files, …) are not guarded: on Windows a guard is an ACE for the machine's one
+   *  sandbox users group that outlives the session (M12), so it would keep a later Codex session's shell in that folder
+   *  from writing them too. Forward slashes. A `.claude` made here is noted in `made`, so the prepare can take it away
+   *  again when the route ends up off. */
   const guardsOf = async (cwd: string, made: { claude?: string }): Promise<string[]> => {
     const claude = path.join(cwd, '.claude')
     if (!exists(claude)) {
       await fs.mkdir(claude, { recursive: true })
       made.claude = claude
     }
-    const names = [...SRT_DANGEROUS_FILES, ...SRT_DANGEROUS_DIRECTORIES.filter((d) => !d.startsWith('.claude/'))].filter((n) => exists(path.join(cwd, n)))
     const root = slashed(cwd).replace(/\/+$/, '')
-    return ['.claude', ...names].map((n) => `${root}/${n}`)
+    return ['.claude', ...(exists(path.join(cwd, '.mcp.json')) ? ['.mcp.json'] : [])].map((n) => `${root}/${n}`)
   }
 
   /** The route off, for `why`, logged with what caused it. */
@@ -238,24 +248,44 @@ export function claudeSandboxStart(o: {
     return { on: false, why, refusal }
   }
 
+  /** The not-ready answers of borrowed Codex homes (`not-set-up`, `check-failed`), by home, with when and under which
+   *  readiness generation they came (Task 2 review I1). */
+  const notReady = new Map<string, { at: number; generation: number; why: ClaudeShellOff; refusal: string }>()
+
   /** Whether the shell can run in a Codex account's sandbox (D4), asked in D4's order, the first that fails the reason:
    *  Git Bash, the default Codex account, a codex bash can run (bashRunnable), its version, then, after the guards are in
    *  place, everything a sandboxed Codex start on Windows checks, by its own code with that account's environment and
    *  this folder (prepareCodexSandbox), whose profile, with the guards as more read-only paths, is the wrapper's (D6).
-   *  Each reason is logged with what caused it. Never throws. */
+   *  Each reason is logged with what caused it; a failure that is no refusal (a wiring callback or a builder that threw)
+   *  is `other`, logged as unexpected with its stack. Never throws.
+   *
+   *  A home found not ready is remembered for SHELL_NOT_READY_MS, or until a setup bumps readinessGeneration, and answers
+   *  the next starts without `codex doctor`; the remembered answer only ever turns the route off, and every ON comes from
+   *  a real prepareCodexSandbox run.
+   *
+   *  The profile keeps prepareCodexSandbox's refusal of a path cmd.exe cannot carry (`path-unsafe`, `named-path-unsafe`,
+   *  which become `other` here), though the wrapper launches codex from bash: the readiness check, and Codex's own
+   *  sessions in that folder, go through cmd.exe, and the route is held to the rule a Codex start there meets. */
   const decideShell = async (cwd: string, gitBash: string | null, made: { claude?: string }): Promise<ShellDecision> => {
     const off = (why: ClaudeShellOff, refusal: string, cause: string): ShellDecision => shellOff(cwd, why, refusal, cause)
     if (!gitBash) return off('no-git-bash', NO_SANDBOX_CLAUDE, 'no Git Bash was found, so Claude Code has no Bash tool to wrap')
-    const codex = o.shellCodex?.() ?? null
-    if (codex === null) return off('no-codex-account', NO_SANDBOX_CLAUDE, 'no Codex account is registered whose sandbox it could borrow')
-    const resolved = o.codexExe?.() ?? null
-    const runnable = resolved === null ? null : bashRunnable(resolved, exists)
-    if (runnable === null) return off('no-codex', `${SANDBOX_UNAVAILABLE}: cli-missing codex`, resolved === null ? 'codex was not found' : `${resolved} is not a program bash can run`)
-    // Asked before anything is made in the folder; prepareCodexSandbox asks again, from the same probe
-    await o.codexVersion?.warm('codex')
-    const tooOld = codexVersionBlocker(o.codexVersion)
-    if (tooOld !== null) return off(shellOffOf(new Error(tooOld)).why, tooOld, tooOld)
     try {
+      const codex = o.shellCodex?.() ?? null
+      if (codex === null) return off('no-codex-account', NO_SANDBOX_CLAUDE, 'no Codex account is registered whose sandbox it could borrow')
+      const resolved = o.codexExe?.() ?? null
+      const runnable = resolved === null ? null : bashRunnable(resolved, exists)
+      if (runnable === null) return off('no-codex', `${SANDBOX_UNAVAILABLE}: cli-missing codex`, resolved === null ? 'codex was not found' : `${resolved} is not a program bash can run`)
+      // Asked before anything is made in the folder; prepareCodexSandbox asks again, from the same probe
+      await o.codexVersion?.warm('codex')
+      const tooOld = codexVersionBlocker(o.codexVersion)
+      if (tooOld !== null) return off(shellOffOf(new Error(tooOld)).why, tooOld, tooOld)
+      const home = codex.env.CODEX_HOME ?? ''
+      const held = notReady.get(home)
+      const t = now()
+      if (held && held.generation === readinessGeneration() && t - held.at < SHELL_NOT_READY_MS)
+        return off(held.why, held.refusal, `the Codex home was found not ready ${Math.round((t - held.at) / 1000)} s ago, and no setup ran since`)
+      notReady.delete(home)
+      const generation = readinessGeneration()
       const guards = await guardsOf(cwd, made)
       // The session's `-c` values, as prepareCodexSandbox built them for its readiness check, are handed to `check`
       const built: { args?: string[] } = {}
@@ -275,7 +305,12 @@ export function claudeSandboxStart(o: {
         },
         ...(o.codexExcludes ? { excludes: o.codexExcludes } : {}),
         look: o.linkLook,
-        log: o.log
+        // Its lines are about a Codex start; here a refusal only turns the route off, said by the line after it
+        log: (m) => o.log(`${m} [Codex prepare for Claude's shell route; for it this means only the route is off]`)
+      }).catch((err: unknown) => {
+        const { why, refusal } = shellOffOf(err)
+        if (why === 'not-set-up' || why === 'check-failed') notReady.set(home, { at: t, generation, why, refusal })
+        throw err
       })
       if (!built.args) throw new Error('the Codex prepare built no profile')
       return {
@@ -289,7 +324,13 @@ export function claudeSandboxStart(o: {
       }
     } catch (err) {
       const { why, refusal } = shellOffOf(err)
-      return off(why, refusal, String(err))
+      const refused = err instanceof Error && err.message.startsWith(`${SANDBOX_UNAVAILABLE}:`)
+      // Task 2 review M2: not a refusal, so a fault of a callback or a builder; it still decides off, said as unexpected
+      if (!refused) o.log(`sandbox: unexpected error while deciding Claude's shell route in ${cwd}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
+      const cause = err instanceof Error ? err.message : String(err)
+      // M4: a path cmd.exe cannot carry is refused for the readiness check and Codex's own launches, not the wrapper's
+      const where = /: (named-)?path-unsafe/.test(cause) ? ' (a path the profile names holds a character cmd.exe cannot carry, which the readiness check and Codex sessions in this folder are launched through)' : ''
+      return off(why, refusal, `${cause}${where}`)
     }
   }
   /** Whether the last prepare wrote the exclude file: a spawn after one that could not points git at nothing new. */
@@ -329,6 +370,12 @@ export function claudeSandboxStart(o: {
 
   return {
     prepare: async (p) => {
+      // Task 2 review M3: on Windows what an earlier prepare kept for this account and folder goes first, so a prepare
+      // that is refused or fails never leaves an earlier route behind for a spawn to find
+      if (o.platform === 'win32') {
+        layouts.forget(p.accountId, p.cwd)
+        shells.delete(shellKeyOf(p.accountId, p.cwd))
+      }
       await o.version.warm('claude')
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)

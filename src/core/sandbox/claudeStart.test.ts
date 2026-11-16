@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import nodeFs from 'node:fs'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
   SRT_DANGEROUS_DIRECTORIES,
   SRT_DANGEROUS_FILES,
+  SHELL_NOT_READY_MS,
   claudeSandboxBlocker,
   claudeSandboxEnv,
   claudeSandboxStart,
@@ -17,8 +18,8 @@ import { gitLayoutOf } from './gitLayout'
 import type { SandboxFilesResult, SandboxScope } from '../sessions/statusline'
 import { sandboxRefusalMessage } from './unavailable'
 import { sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from './prepared'
-import type { LinkLook } from './locations'
-import type { Readiness } from './windowsReadiness'
+import { nodeLinkLook, type LinkLook } from './locations'
+import { forgetReadiness, type Readiness } from './windowsReadiness'
 
 // srt 0.0.79's own lists, as Task 2 measured them (inventory §23.4, scripts/measure/s2.mjs)
 const SRT_LINES = [
@@ -318,6 +319,8 @@ describe("the route for Claude's shell on Windows", () => {
     readiness?: Readiness
     look?: LinkLook | null
     written?: (scope: SandboxScope) => SandboxFilesResult
+    /** A wiring callback that throws: the account, the codex path or the version's warm-up. */
+    throws?: 'account' | 'exe' | 'warm'
   }
   const rig = (o: Rig = {}) => {
     const profileDir = temp()
@@ -339,8 +342,14 @@ describe("the route for Claude's shell on Windows", () => {
     const claudeVersion = Object.assign((cli: 'claude') => (order.push(`version ${cli}`), '2.1.325'), { warm: async (cli: 'claude') => void order.push(`warm ${cli}`) })
     const codexVersion = Object.assign(
       (cli: 'codex') => (order.push(`version ${cli}`), o.codexVersion === 'missing' ? undefined : o.codexVersion === undefined ? '0.160.0' : o.codexVersion),
-      { warm: async (cli: 'codex') => void order.push(`warm ${cli}`) }
+      {
+        warm: async (cli: 'codex') => {
+          order.push(`warm ${cli}`)
+          if (o.throws === 'warm') throw new Error('the version probe broke')
+        }
+      }
     ) as CodexVersionProbe
+    const clock = { t: 1_000_000 }
     const start = claudeSandboxStart({
       linkLook: o.look ?? null,
       platform: o.platform ?? 'win32',
@@ -357,10 +366,19 @@ describe("the route for Claude's shell on Windows", () => {
       uid: 1000,
       runGit: async () => null,
       log: (m) => logged.push(m),
-      shellCodex: () => (order.push('account'), o.account === false ? null : { account: { id: 'cx-1' }, env: codexEnv }),
+      now: () => clock.t,
+      shellCodex: () => {
+        order.push('account')
+        if (o.throws === 'account') throw new Error('the registry broke')
+        return o.account === false ? null : { account: { id: 'cx-1' }, env: codexEnv }
+      },
       codexReady: async (a) => (order.push('ready'), asked.push(a), o.readiness ?? 'ready'),
       codexVersion,
-      codexExe: () => (order.push('exe'), o.exe === undefined ? 'C:/tools/codex.exe' : o.exe),
+      codexExe: () => {
+        order.push('exe')
+        if (o.throws === 'exe') throw new Error('the resolver broke')
+        return o.exe === undefined ? 'C:/tools/codex.exe' : o.exe
+      },
       codexExcludes: async () => 'C:/t/astera-excludes',
       appKeyFile,
       readOnly,
@@ -370,16 +388,19 @@ describe("the route for Claude's shell on Windows", () => {
     const sessionEnv = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }
     const prepare = (over: { required?: boolean } = {}) =>
       start.prepare({ accountId: 'acc-1', cwd, env: sessionEnv, gitBash: o.gitBash === undefined ? 'E:/programs/Git/bin/bash.exe' : o.gitBash, ...over })
-    return { start, prepare, cwd, home, tmpDir, profileDir, codexHome, codexEnv, sessionEnv, login, readOnly, appKeyFile, order, scopes, asked, logged }
+    return { start, prepare, cwd, home, tmpDir, profileDir, codexHome, codexEnv, sessionEnv, login, readOnly, appKeyFile, order, scopes, asked, logged, clock }
   }
 
   it('runs the shell in the Codex account’s sandbox, under the Codex session’s profile with the work folder’s guards', async () => {
     const r = rig()
     writeFileSync(path.join(r.cwd, '.mcp.json'), '{}')
+    // Spec D6 after M12: `.claude` and an existing `.mcp.json` only; srt's other names (`.vscode`, `.gitmodules`) are not
+    // named, since on Windows a guard outlives the session and would hold a later Codex session's shell too
     mkdirSync(path.join(r.cwd, '.vscode'))
+    writeFileSync(path.join(r.cwd, '.gitmodules'), '')
     await r.prepare()
     const layout = await gitLayoutOf(r.cwd)
-    const guards = [`${slashed(r.cwd)}/.claude`, `${slashed(r.cwd)}/.mcp.json`, `${slashed(r.cwd)}/.vscode`]
+    const guards = [`${slashed(r.cwd)}/.claude`, `${slashed(r.cwd)}/.mcp.json`]
     // The same builders a Codex session of that account in this folder gets, with the guards as more read-only paths
     const expected = appServerSandboxArgs(
       sessionSandboxArgs({
@@ -410,6 +431,7 @@ describe("the route for Claude's shell on Windows", () => {
     expect(r.asked).toHaveLength(1)
     expect(r.asked[0].codexHome).toBe(r.codexHome)
     expect(profileEntries(r.asked[0].profile ?? [], 'read')).toEqual([...r.readOnly, ...guards])
+    expect(JSON.stringify(expected)).not.toMatch(/\.vscode|\.gitmodules/)
     // Another account was not prepared
     expect(r.start.scopeOf('acc-2', r.cwd, r.sessionEnv)).toBeUndefined()
   })
@@ -554,5 +576,96 @@ describe("the route for Claude's shell on Windows", () => {
     await r.prepare()
     expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
     expect(r.start.shellOf('acc-2', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
+  })
+
+  // Task 2 review M3, M8: a later prepare's answer replaces an earlier ON, and a refused one leaves nothing behind
+  it('lets a later prepare that loses the route say so, and a refused one keep nothing', async () => {
+    const o: Rig = {}
+    const r = rig(o)
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    o.readiness = 'not-set-up'
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'not-set-up', refusal: 'SANDBOX_UNAVAILABLE: windows-setup codex cx-1' })
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeUndefined()
+    const q: Rig = {}
+    const s = rig(q)
+    await s.prepare()
+    expect(s.start.shellOf('acc-1', s.cwd)).toEqual({ on: true })
+    q.readiness = 'check-failed'
+    await expect(s.prepare({ required: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-check-failed codex cx-1$/)
+    expect(s.start.shellOf('acc-1', s.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
+    expect(s.start.scopeOf('acc-1', s.cwd, s.sessionEnv)).toBeUndefined()
+  })
+
+  // Task 2 review M1, M8: a wiring callback that throws turns the route off; the start goes on, unless it must be sandboxed
+  for (const throws of ['account', 'exe', 'warm'] as const) {
+    it(`turns the route off when the ${throws} callback throws, and the start goes on`, async () => {
+      const r = rig({ throws })
+      await r.prepare()
+      expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: no-sandbox claude' })
+      expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)).toBeDefined()
+      // M2: not a refusal, so the log says it was unexpected, with its stack
+      expect(r.logged.join('\n')).toMatch(/unexpected[\s\S]*broke[\s\S]*at /)
+      await expect(rig({ throws }).prepare({ required: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+    })
+  }
+
+  // Task 2 review I1: a borrowed home that is not ready is not asked again at every start (codex doctor takes seconds);
+  // the answer is kept for SHELL_NOT_READY_MS, dropped when a setup ran (forgetReadiness), and only ever turns the route off
+  it('remembers a home that is not ready for a while, and asks again after a setup or after the time', async () => {
+    const o: Rig = { readiness: 'not-set-up' }
+    const r = rig(o)
+    await r.prepare()
+    expect(r.asked).toHaveLength(1)
+    await r.prepare()
+    expect(r.asked).toHaveLength(1)
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'not-set-up', refusal: 'SANDBOX_UNAVAILABLE: windows-setup codex cx-1' })
+    // Nothing made in the folder for a remembered answer
+    expect(existsSync(path.join(r.cwd, '.claude'))).toBe(false)
+    await expect(r.prepare({ required: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex cx-1$/)
+    expect(r.asked).toHaveLength(1)
+    // A setup ran: asked again, and now it is ready
+    o.readiness = 'ready'
+    forgetReadiness()
+    await r.prepare()
+    expect(r.asked).toHaveLength(2)
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    // A ready answer is never remembered here: each ON comes from a real prepare
+    await r.prepare()
+    expect(r.asked).toHaveLength(3)
+    // check-failed is remembered too, until the time is up
+    o.readiness = 'check-failed'
+    await r.prepare()
+    await r.prepare()
+    expect(r.asked).toHaveLength(4)
+    r.clock.t += SHELL_NOT_READY_MS - 1
+    await r.prepare()
+    expect(r.asked).toHaveLength(4)
+    r.clock.t += 1
+    await r.prepare()
+    expect(r.asked).toHaveLength(5)
+  })
+
+  // Task 2 review M8: with a real look, the plan and the readiness echo name the guards the same way (namedPathFor)
+  it('names the guards identically in the plan and the readiness echo when the disk is looked at', async () => {
+    const r = rig({ look: nodeLinkLook })
+    writeFileSync(path.join(r.cwd, '.mcp.json'), '{}')
+    await r.prepare()
+    const plan = r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell?.plan
+    expect(plan).toBeDefined()
+    const reads = profileEntries(plan!.args, 'read')
+    expect(reads).toEqual(profileEntries(r.asked[0].profile ?? [], 'read'))
+    const real = slashed(realpathSync.native(r.cwd))
+    expect(reads).toEqual(expect.arrayContaining([`${real}/.claude`, `${real}/.mcp.json`]))
+  })
+
+  it('guards a .claude that is a file as it is, and makes nothing', async () => {
+    const r = rig()
+    writeFileSync(path.join(r.cwd, '.claude'), 'x')
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    expect(profileEntries(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)!.shell!.plan.args, 'read')).toContain(`${slashed(r.cwd)}/.claude`)
+    expect(readFileSync(path.join(r.cwd, '.claude'), 'utf8')).toBe('x')
   })
 })
