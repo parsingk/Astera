@@ -432,7 +432,6 @@ export const ja: Catalog = {
   'audit.coverageNote.web-search-and-shell-text': 'Web 検索とシェルの文字列',
   'audit.coverageNote.interactive-input': '実行中のシェルへの入力は止められない',
   'audit.coverageNote.runtime-measured': 'ランタイムで測定',
-  'audit.coverageNote.file-tools-only': 'ファイルツールのみ',
   'audit.coverageNote.via-codex': 'シェルが Codex のサンドボックスにあるとき。Windows のサンドボックスを設定した Codex アカウントが必要',
   'audit.coverageNote.bus-path-only': 'セッションバスがファイルパスのとき',
   'settings.remote.hint': '別のコンピューターで動く Astera(Runtime)の Job をこのアプリで見ます。接続はそのコンピューターの鍵を確かめた後にだけ行われ、トークンはこのコンピューターにだけ保存されます。',

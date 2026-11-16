@@ -474,7 +474,6 @@ export const ko = {
   'audit.coverageNote.web-search-and-shell-text': '웹 검색과 셸 명령 글자',
   'audit.coverageNote.interactive-input': '실행 중인 셸에 입력하는 것은 못 막음',
   'audit.coverageNote.runtime-measured': '런타임으로 측정',
-  'audit.coverageNote.file-tools-only': '파일 도구만',
   'audit.coverageNote.via-codex': '셸이 Codex sandbox 안에 있을 때. Windows sandbox를 설정한 Codex 계정이 필요합니다',
   'audit.coverageNote.bus-path-only': '세션 bus가 파일 경로일 때',
   'settings.plugins.hint': '플러그인은 Astera Host 옆에서 도는 프로그램입니다. 설치하면 이 컴퓨터에서 신뢰된 코드로 실행되고, Astera 에는 허락한 권한 안에서만 요청할 수 있습니다.',

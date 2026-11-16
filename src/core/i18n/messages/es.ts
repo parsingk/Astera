@@ -436,7 +436,6 @@ export const es: Catalog = {
   'audit.coverageNote.web-search-and-shell-text': 'búsqueda web y texto de shell',
   'audit.coverageNote.interactive-input': 'no la entrada a un shell en ejecución',
   'audit.coverageNote.runtime-measured': 'medido en el entorno de ejecución',
-  'audit.coverageNote.file-tools-only': 'solo herramientas de archivos',
   'audit.coverageNote.via-codex': 'cuando el shell va en el sandbox de Codex, que requiere una cuenta de Codex con su sandbox de Windows configurado',
   'audit.coverageNote.bus-path-only': 'cuando el bus de sesión es una ruta de archivo',
   'settings.remote.hint': 'Mira desde esta app los Jobs de Astera que se ejecuta en otro equipo (un Runtime). Solo se conecta tras comprobar la clave de ese equipo, y el token se guarda solo en este equipo.',

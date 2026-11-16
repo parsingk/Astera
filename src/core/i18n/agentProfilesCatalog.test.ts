@@ -38,7 +38,6 @@ const SANDBOX_GIVEN = {
   'settings.security.sandboxCoverage.class.network': ['네트워크', 'Network', 'ネットワーク', 'Red'],
   'settings.security.sandboxCoverage.level.seen': ['허용', 'Allowed', '許可', 'Permitido'],
   'audit.coverageNote.runtime-measured': ['런타임으로 측정', 'measured on the runtime', 'ランタイムで測定', 'medido en el entorno de ejecución'],
-  'audit.coverageNote.file-tools-only': ['파일 도구만', 'file tools only', 'ファイルツールのみ', 'solo herramientas de archivos'],
   'audit.coverageNote.via-codex': [
     '셸이 Codex sandbox 안에 있을 때. Windows sandbox를 설정한 Codex 계정이 필요합니다',
     'when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up',

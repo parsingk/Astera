@@ -469,7 +469,6 @@ export const en: Record<keyof typeof ko, string> = {
   'audit.coverageNote.web-search-and-shell-text': 'web search and shell text',
   'audit.coverageNote.interactive-input': 'not input typed into a running shell',
   'audit.coverageNote.runtime-measured': 'measured on the runtime',
-  'audit.coverageNote.file-tools-only': 'file tools only',
   'audit.coverageNote.via-codex': 'when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up',
   'audit.coverageNote.bus-path-only': 'when the session bus is a file path',
   'settings.plugins.hint': 'A plugin is a program that runs beside the Astera Host. Once installed it runs as trusted code on this computer, and asks Astera only for what you granted.',

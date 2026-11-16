@@ -229,7 +229,9 @@ describe('securityText', () => {
     expect(cells(row('claude', 'win32'), ko)).toEqual([viaCodexKo, viaCodexKo, viaCodexKo, '허용'])
     expect(sandboxCellText(row('claude', 'linux').classes.stores, ko)).toBe('막음 (런타임으로 측정)')
     // A level or note this side does not know (a newer Host's) is shown as it was named
-    expect(sandboxCellText({ level: 'sealed' as 'none', note: 'later' as 'file-tools-only' }, en)).toBe('sealed (later)')
+    expect(sandboxCellText({ level: 'sealed' as 'none', note: 'later' as 'via-codex' }, en)).toBe('sealed (later)')
+    // An older Host's note this build removed (file-tools-only, 2026-11-16) is shown as it was named too
+    expect(sandboxCellText({ level: 'partial', note: 'file-tools-only' as 'via-codex' }, en)).toBe('Partly (file-tools-only)')
     expect(sandboxCellText(undefined, en)).toBe('')
   })
 
@@ -266,7 +268,7 @@ describe('securityText', () => {
   it('draws an allowed cell neutral, and the others by their level', () => {
     expect(sandboxCellClass({ level: 'seen' })).toBe('is-allowed')
     expect(sandboxCellClass({ level: 'enforced' })).toBe('is-enforced')
-    expect(sandboxCellClass({ level: 'partial', note: 'file-tools-only' })).toBe('is-partial')
+    expect(sandboxCellClass({ level: 'partial', note: 'via-codex' })).toBe('is-partial')
     expect(sandboxCellClass({ level: 'none' })).toBe('is-none')
     expect(sandboxCellClass(undefined)).toBe('is-none')
   })
