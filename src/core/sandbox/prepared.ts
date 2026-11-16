@@ -104,12 +104,6 @@ export class PreparedLayouts {
     return e && now - e.at < PREPARED_MS ? e.otherHosts : []
   }
 
-  /** Drops what a prepare kept for this account and folder: a Windows Claude prepare does so before it decides again
-   *  (claudeStart.ts), so one that fails leaves nothing of an earlier one for the spawn. */
-  forget(accountId: string, cwd: string): void {
-    this.entries.delete(keyOf(accountId, cwd))
-  }
-
   /** The layout a prepare kept for this account and folder within PREPARED_MS (null outside a repository), or undefined
    *  when there is none: the spawn then refuses with `not-prepared`. */
   layoutOf(accountId: string, cwd: string, now: number): GitLayout | null | undefined {

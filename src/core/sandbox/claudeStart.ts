@@ -409,19 +409,19 @@ export function claudeSandboxStart(o: {
 
   return {
     prepare: async (p) => {
-      // Task 2 review M3: on Windows the route an earlier prepare kept for this account and folder goes first, so a
-      // prepare that is refused or fails never leaves an earlier route behind for a spawn to find. Its layout stays
-      // (Task 3 review M2): a start that already prepared still finds its scope while this one runs, without the route
-      if (o.platform === 'win32') shells.delete(shellKeyOf(p.accountId, p.cwd))
-      await o.version.warm('claude')
-      const blocked = blocker()
-      if (blocked !== null) throw new Error(blocked)
-      const layout = await layoutFor(p.cwd)
       // A `.claude` this prepare made for the route is taken away again unless a route that is on is kept (Task 3): never
       // recursively, so anything put in it since stays, and a failure to is ignored
       const made: { claude?: string } = {}
       let keptOn = false
+      // What an earlier prepare kept for this account and folder stays while this one runs, so a start that already
+      // prepared still finds its layout and its route (fix round 2). This prepare replaces the route decision once its
+      // twins are written; a prepare that rejects removes it first (the catch below), so a refused or failed prepare
+      // never leaves an earlier ON behind for a spawn to find (Task 2 review M3)
       try {
+        await o.version.warm('claude')
+        const blocked = blocker()
+        if (blocked !== null) throw new Error(blocked)
+        const layout = await layoutFor(p.cwd)
         // Windows: the route for the shell, before the twins, which carry it (D4); a start that must be sandboxed is
         // refused without one (D5), anything else goes on with the deny rules
         let decided = o.platform === 'win32' ? await decideShell(p.cwd, p.gitBash, made) : null
@@ -465,6 +465,9 @@ export function claudeSandboxStart(o: {
           shells.set(shellKeyOf(p.accountId, p.cwd), { decided, at })
           keptOn = decided.on
         }
+      } catch (err) {
+        if (o.platform === 'win32') shells.delete(shellKeyOf(p.accountId, p.cwd))
+        throw err
       } finally {
         if (made.claude !== undefined && !keptOn) await fs.rmdir(made.claude).catch(() => {})
       }

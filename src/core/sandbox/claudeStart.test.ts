@@ -612,11 +612,20 @@ describe("the route for Claude's shell on Windows", () => {
     expect(s.start.shellOf('acc-1', s.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
     expect(s.start.scopeOf('acc-1', s.cwd, s.sessionEnv)).toBeDefined()
     expect(s.start.scopeOf('acc-1', s.cwd, s.sessionEnv)?.shell).toBeUndefined()
+    // A prepare that rejects for its twins drops the earlier ON too
+    const w: Rig = {}
+    const t = rig(w)
+    await t.prepare()
+    expect(t.start.shellOf('acc-1', t.cwd)).toEqual({ on: true })
+    w.written = () => 'write-failed'
+    await expect(t.prepare()).rejects.toThrow(/settings-write-failed/)
+    expect(t.start.shellOf('acc-1', t.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
+    expect(t.start.scopeOf('acc-1', t.cwd, t.sessionEnv)?.shell).toBeUndefined()
   })
 
-  // Task 3 review M2: a prepare drops only the route an earlier one kept, not its layout, so a start that already prepared
-  // still finds its scope while a later prepare for the same account and folder runs (codex doctor takes seconds)
-  it("keeps an earlier prepare's layout while a later prepare for the same folder is still running", async () => {
+  // Task 3 review M2, fix round 2: a prepare drops nothing at its start, so a start that already prepared still finds its
+  // layout and its route while a later prepare for the same account and folder runs (codex doctor takes seconds)
+  it("keeps an earlier prepare's layout and route while a later prepare for the same folder is still running", async () => {
     const o: Rig = {}
     const r = rig(o)
     await r.prepare()
@@ -625,10 +634,9 @@ describe("the route for Claude's shell on Windows", () => {
     o.hold = new Promise<void>((done) => (release = done))
     const later = r.prepare()
     await vi.waitFor(() => expect(r.asked).toHaveLength(2))
-    // The layout is still there for the start that prepared; the route waits for the later prepare's answer
-    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)).toBeDefined()
-    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeUndefined()
-    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
+    // The layout and the route are still there for the start that prepared
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeDefined()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
     release()
     await later
     expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
