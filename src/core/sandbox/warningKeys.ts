@@ -26,7 +26,8 @@ export function knownSandboxWarnings(v: unknown): SandboxStartWarning[] {
 /** One message for a set of warnings: each alone, or two in one pair of sentences (the Ubuntu one, the link one or the
  *  elevated default one, each with the home one, the only pairs a start gives: the first is Claude's on Linux, the second
  *  Codex's on Linux, the third Codex's on Windows); null for none. The three about Claude's shell on Windows come alone:
- *  the home one needs the shell in Codex's sandbox, which is what each of them says it is not. What a chat's notice
+ *  the home one needs the shell in Codex's sandbox, which is what each of them says it is not. A pair this build has no
+ *  sentence for (a note from another build) is worded by its first warning (Task 4 review M6). What a chat's notice
  *  carries and what the line above a tab says. */
 export function sandboxWarningMessage(ws: readonly SandboxStartWarning[]): Message | null {
   if (ws.length === 0) return null
@@ -36,7 +37,9 @@ export function sandboxWarningMessage(ws: readonly SandboxStartWarning[]): Messa
         ? 'session.sandbox.warn.linkAndHome'
         : ws.includes('elevatedDefault')
           ? 'session.sandbox.warn.elevatedDefaultAndHome'
-          : 'session.sandbox.warn.claudeUsernsAndHome'
+          : ws.includes('claudeUserns')
+            ? 'session.sandbox.warn.claudeUsernsAndHome'
+            : SANDBOX_WARNING_KEYS[ws[0]]
     }
   return { key: SANDBOX_WARNING_KEYS[ws[0]] }
 }

@@ -158,6 +158,13 @@ describe('sandboxWarningMessage', () => {
     expect(sandboxWarningMessage(['claudeShellUnavailable'])).toEqual({ key: 'session.sandbox.warn.claudeShellUnavailable' })
   })
 
+  // Task 4 review M6: a note from another build may hold a pair this one has no sentence for; it is worded by its first
+  // warning, never as the Ubuntu one
+  it('words a pair it has no sentence for by its first warning', () => {
+    expect(sandboxWarningMessage(['claudeShellNoCodex', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.claudeShellNoCodex' })
+    expect(sandboxWarningMessage(['claudeShellNotSetUp', 'claudeShellUnavailable'])).toEqual({ key: 'session.sandbox.warn.claudeShellNotSetUp' })
+  })
+
   it('reads back every warning this build knows, in the fixed order, the three shell ones included', () => {
     const all: SandboxStartWarning[] = ['homeInWorkFolder', 'claudeShellUnavailable', 'claudeShellNotSetUp', 'claudeShellNoCodex', 'elevatedDefault', 'linkInWorkFolder', 'claudeUserns']
     expect(knownSandboxWarnings([...all, 'nonsense'])).toEqual([...all].reverse())
