@@ -34,7 +34,8 @@ import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, codexSessionLinks, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
-import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { ClaudeSandboxStart, ClaudeShellState } from '../sandbox/claudeStart'
+import { claudeShellEnv } from '../sandbox/claudeShell'
 import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import type { CodexExcludes } from '../sandbox/gitExcludes'
 import type { DenyEntry, LinkLook } from '../sandbox/locations'
@@ -51,6 +52,8 @@ export interface StatusLineSpawnInfo {
   enforced?: true // the settings file is an enforce variant: the blocking hook runs before every tool call
   sandboxed?: true // the settings file is a sandbox twin: Claude's sandbox and the deny rules are in it
   useHooks?: true // an observed session's settings file has the hooks that report a skill, command or agent use
+  shell?: true // the sandbox twin names the wrapper that runs the shell in Codex's sandbox (claude shell sandbox D7), which is in place
+  shellWrapFile?: string // that wrapper, forward slashes: the session's CLAUDE_CODE_SHELL_PREFIX names it too
 }
 export type StatusLineProvider = (
   sessionId: string,
@@ -272,11 +275,14 @@ export class SessionManager {
    * await. Rejects with CWD_MISSING, or CWD_UNREACHABLE when the folder did not answer in time.
    * `sandbox`: the session will start in its CLI's sandbox. For Codex the folder's git layout is read here for the spawn, and
    * on Windows a Codex home that is not set up refuses (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`); for Claude
-   * the version floor is asked and the settings twins written (`cli-too-old claude <found> <min>` refuses).
+   * the version floor is asked and the settings twins written (`cli-too-old claude <found> <min>` refuses), and on Windows
+   * whether its shell can run in Codex's sandbox, with the Git Bash found here (claude shell sandbox design D4).
+   * `sandboxRequired`: the start must be sandboxed (SessionInfo.sandboxRequired), so a Claude start on Windows without that
+   * route is refused in the reason's words (D5); nothing else changes with it.
    * `chat`: what will start is a chat's app-server (a roll prepares a chat chain's respawn here), which is its own server,
    * so its sandbox does not ask for `--no-daemon`; the layout read is the chat manager's too (sandboxLayouts).
    */
-  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string; sandbox?: boolean; chat?: boolean }): Promise<void> {
+  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string; sandbox?: boolean; sandboxRequired?: boolean; chat?: boolean }): Promise<void> {
     // A folder confirmed a moment ago (a Host session create checks it, then spawns) is not probed again.
     if (!this.cwdConfirmed(opts.cwd)) {
       await checkCwd(opts.cwd, this.checks.cwd, opts.missing)
@@ -284,12 +290,16 @@ export class SessionManager {
       for (const [cwd, at] of this.confirmedCwds) if (now - at >= CWD_CONFIRMED_MS) this.confirmedCwds.delete(cwd)
       this.confirmedCwds.set(opts.cwd, now)
     }
+    // The Git Bash a session would run: the person's own CLAUDE_CODE_GIT_BASH_PATH, which the search leaves alone, or the
+    // one found. A Claude session's shell route on Windows wraps that bash (claude shell sandbox design D4.1)
+    let gitBash: string | null = null
     if (this.checks.platform === 'win32') {
       const env = this.envFor(opts.account)
       const { bash, timedOut } = await this.checks.gitBash.search(env)
       const now = this.checks.now()
       for (const [k, v] of this.preparedGitBash) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedGitBash.delete(k)
       this.preparedGitBash.set(pathValueOf(env), { bash, timedOut, at: now })
+      gitBash = env.CLAUDE_CODE_GIT_BASH_PATH || bash
     }
     // The shared extensions this account's session gets (from its agent profile, when it has one), so the synchronous
     // spawn reads them ready
@@ -320,7 +330,8 @@ export class SessionManager {
     // twin holds both), with its version asked first; a chat chain's roll is prepared here too, and its file with them
     if (opts.sandbox === true) {
       if (providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true ? 'chat' : 'terminal')
-      else if (this.claudeSandbox) await this.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.envFor(opts.account) })
+      else if (this.claudeSandbox)
+        await this.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.envFor(opts.account), gitBash, ...(opts.sandboxRequired === true ? { required: true } : {}) })
       else throw sandboxUnavailable('not-prepared')
     }
   }
@@ -431,7 +442,8 @@ export class SessionManager {
       throw sandboxUnavailable('runtime-missing claude')
     }
     const inherited = this.envFor(a.account)
-    await this.claudeSandbox.prepare({ accountId: a.account.id, cwd: a.cwd, env: inherited })
+    // macOS and Linux only (Windows is refused above), where no Git Bash is asked
+    await this.claudeSandbox.prepare({ accountId: a.account.id, cwd: a.cwd, env: inherited, gitBash: null })
     const scope = this.claudeSandbox.scopeOf(a.account.id, a.cwd, inherited)
     if (scope === undefined) throw sandboxUnavailable('not-prepared')
     const { part, links } = this.claudeSandbox.settingsOf(scope)
@@ -498,8 +510,12 @@ export class SessionManager {
     agentProfileId?: string
     /** Start in the CLI's own sandbox (sandbox design §6), as the profile's switch says; `prepare` must have been told
      *  too. Marked in the info and the note (SessionInfo.sandboxed). Codex takes it as arguments, Claude as its settings
-     *  file (on Windows the deny rules alone). */
+     *  file (on Windows its shell in Codex's sandbox when the prepare found the route, else the deny rules alone). */
     sandbox?: boolean
+    /** The start must be sandboxed (SessionInfo.sandboxRequired): a Claude start on Windows whose prepare found no route for
+     *  its shell is refused in the reason's words (claude shell sandbox design D5). Marked in the info and the note, so a
+     *  roll's successor is held to it too. */
+    sandboxRequired?: boolean
   }): SessionInfo {
     // The folder `prepare` just confirmed is not looked at again. The sync check is left only for a
     // caller that did not prepare (tests, and anything added later without it): it is the one that can
@@ -553,12 +569,19 @@ export class SessionManager {
     // directories would leave the session unable to commit, so a sandboxed spawn nobody prepared for it is refused
     // rather than started without them (E5)
     const sandboxed = opts.sandbox === true
-    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
-    const sandboxKind = sandboxed ? sandboxKindOf(providerOf(opts.account), this.checks.platform) : undefined
+    const required = sandboxed && opts.sandboxRequired === true
     const sandboxedCodex = sandboxed && providerOf(opts.account) === 'codex'
     // Claude's sandbox is its settings file: the version the prepare asked is asked again here (the CLI may have been
     // updated since), and a session the twin was not written for is refused below rather than started outside it
     const sandboxedClaude = sandboxed && providerOf(opts.account) === 'claude'
+    // Windows: whether the prepare found the route for a Claude session's shell into Codex's sandbox (claude shell sandbox
+    // design D4), what it kept, never a new look; a start that must be sandboxed is refused without it (D5)
+    const claudeShell: ClaudeShellState | undefined =
+      sandboxedClaude && this.checks.platform === 'win32' && this.claudeSandbox ? this.claudeSandbox.shellOf(opts.account.id, opts.cwd) : undefined
+    if (claudeShell && !claudeShell.on && required) throw new Error(claudeShell.refusal)
+    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): what this start really got, so Claude
+    // on Windows is a sandbox only with its shell's route (D9), deny rules only without
+    const sandboxKind = !sandboxed ? undefined : claudeShell ? (claudeShell.on ? 'sandbox' : 'deny-only') : sandboxKindOf(providerOf(opts.account), this.checks.platform)
     let layout: GitLayout | null = null
     if (sandboxedCodex) {
       // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
@@ -581,6 +604,11 @@ export class SessionManager {
     const sl = d.usesStatusLine ? (this.statusLineProvider?.(id, opts.account, claudeScope ? { ...slOpts, sandbox: claudeScope } : slOpts) ?? null) : null
     if (enforce && d.usesStatusLine && sl?.enforced !== true) throw enforceUnavailable('no-interpreter')
     if (sandboxedClaude && sl?.sandboxed !== true) throw sandboxUnavailable('not-prepared')
+    // With the route, the settings it is started with must name the wrapper (D7), and its scope carry the route: a twin
+    // without it would start a session marked a sandbox whose shell runs outside one
+    const shellRoute = claudeShell?.on === true ? claudeScope?.shell : undefined
+    const wrapFile = shellRoute && sl?.shell === true ? (sl.shellWrapFile ?? null) : null
+    if (claudeShell?.on === true && (shellRoute === undefined || wrapFile === null)) throw sandboxUnavailable('not-prepared')
     const enforceArgs = enforce && !d.usesStatusLine ? (this.enforce?.args(providerOf(opts.account)) ?? null) : []
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
     // A sandboxed Codex approves its shared servers' tools, as the bypass the sandbox stands for does (resolve.ts)
@@ -613,10 +641,13 @@ export class SessionManager {
           homeDir: this.homeDir,
           linkInWorkFolder,
           // Task P: the account's Codex home still makes the elevated sandbox its default, as the prepare found it
-          elevatedDefault: sandboxedCodex && this.sandboxLayouts.elevatedDefaultOf(opts.account.id, opts.cwd, this.checks.now())
+          elevatedDefault: sandboxedCodex && this.sandboxLayouts.elevatedDefaultOf(opts.account.id, opts.cwd, this.checks.now()),
+          // Claude on Windows: its shell's route, or why it has none (D9)
+          ...(claudeShell ? { claudeShell: claudeShell.on ? ('on' as const) : claudeShell.why } : {})
         })
       : []
     const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
+    const requiredMark = required ? { sandboxRequired: true as const } : {}
     // Shared extensions: their environment values only here, in this process's environment (design D5). The workload
     // token goes to every session, shared servers or not.
     Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
@@ -711,6 +742,13 @@ export class SessionManager {
     }
     // Enforce: the hook names the session's file by it, orchestration up or not (final review I5b)
     if (enforced) env.ASTERA_SESSION = id
+    // Windows, the shell's route (claude shell sandbox design D7, D8): what a sandboxed Codex session's environment gets
+    // there, and the wrapper's switches, after everything else Astera adds, so nothing above can undo them; and no
+    // CLAUDE_PROJECT_DIR inherited, which the wrapper reads as "not a tool command" (D2)
+    if (shellRoute && wrapFile !== null) {
+      Object.assign(env, shellRoute.env, claudeShellEnv(wrapFile))
+      delete env.CLAUDE_PROJECT_DIR
+    }
     const pty = this.ptyFactory(file, args, {
       cwd: opts.cwd,
       cols: opts.cols ?? 120,
@@ -742,7 +780,7 @@ export class SessionManager {
           ...(observed ? { provider: providerOf(opts.account) } : {}),
           ...(useHooks !== undefined ? { useHooks } : {}),
           ...(enforced ? { enforced: true } : {}),
-          ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {})
+          ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned, ...requiredMark } : {})
         }
       }
     })
@@ -763,7 +801,7 @@ export class SessionManager {
       schedule: opts.schedule,
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned, ...requiredMark } : {})
     }
     const tracked = this.track(info, pty)
     // Task E fix round 2: started as it would be anyway, and told once what the sandbox will not do here

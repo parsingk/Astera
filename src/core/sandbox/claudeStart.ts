@@ -19,6 +19,9 @@ import type { ClaudeSandboxSettings } from './claudeSettings'
 import { bashRunnable, type ClaudeShellPlan } from './claudeShell'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import { readinessGeneration } from './windowsReadiness'
+import { defaultAccountIdOf } from '../accounts/defaultAccount'
+import { providerOf } from '../providers/meta'
+import type { Account } from '../types'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
 
@@ -31,6 +34,30 @@ export type ClaudeShellOff = 'no-git-bash' | 'no-codex-account' | 'no-codex' | '
 /** What a prepare decided for the shell (ClaudeSandboxStart.shellOf): on, or off with the reason and the refusal a start
  *  that must be sandboxed gets for it (D5). */
 export type ClaudeShellState = { on: true } | { on: false; why: ClaudeShellOff; refusal: string }
+
+/** The Codex account Claude's shell borrows on Windows (D4.2), and the environment that account's own sessions start
+ *  with: its CODEX_HOME is the home `codex sandbox` runs under. */
+export interface ShellCodex {
+  account: { id: string }
+  env: Record<string, string | undefined>
+}
+
+/** The account the shell borrows, as the app and the Host both pick it (claudeSandboxStart `shellCodex`): the default
+ *  Codex account (defaultAccountIdOf, the earliest registered one that is logged in; the rule behind the app's default
+ *  badge), with `envOf`, the environment its sessions start with. A login check that fails counts as logged out. Null
+ *  when no Codex account is logged in. */
+export async function shellCodexOf(o: {
+  accounts: readonly Account[]
+  loggedIn: (a: Account) => Promise<boolean>
+  envOf: (a: Account) => Record<string, string | undefined>
+}): Promise<ShellCodex | null> {
+  const codex = o.accounts.filter((a) => providerOf(a) === 'codex')
+  const ids = new Set<string>()
+  await Promise.all(codex.map(async (a) => ((await o.loggedIn(a).catch(() => false)) ? ids.add(a.id) : undefined)))
+  const id = defaultAccountIdOf('codex', codex, ids)
+  const account = id === null ? undefined : codex.find((a) => a.id === id)
+  return account ? { account: { id: account.id }, env: o.envOf(account) } : null
+}
 
 /** D5's refusal for the reasons whose own code says nothing the person could act on. */
 const NO_SANDBOX_CLAUDE = `${SANDBOX_UNAVAILABLE}: no-sandbox claude`
@@ -126,13 +153,13 @@ export function claudeSandboxBlocker(version: string | null | undefined): string
 export interface ClaudeSandboxStart {
   /** The version floor; on macOS and Linux the folder's git layout read and its missing git files made (`git-layout` when
    *  either fails); on Windows the route for the shell (claude shell sandbox design D4: `gitBash` is the Git Bash the
-   *  manager's prepare found, null for none), which with `required` (a start that must be sandboxed) refuses with the
-   *  reason's refusal (D5) when there is none, and without it goes on with the deny rules; the settings twins for the
-   *  scope (`settings-write-failed` when they cannot be written); npm's cache folder on macOS and Linux, and on Linux the
-   *  exclude file, in that order: an old Claude is refused before anything is written. `env` is the environment the
-   *  session is built from (its account's, before the hiding), the one the spawn hands scopeOf. Rejects with
-   *  `SANDBOX_UNAVAILABLE: …`. Off Windows `gitBash` and `required` change nothing. */
-  prepare(o: { accountId: string; cwd: string; env: Record<string, string | undefined>; gitBash?: string | null; required?: boolean }): Promise<void>
+   *  manager's prepare found, null for none; required, so a caller that forgets it does not compile), which with
+   *  `required` (a start that must be sandboxed) refuses with the reason's refusal (D5) when there is none, and without it
+   *  goes on with the deny rules; the settings twins for the scope (`settings-write-failed` when they cannot be written);
+   *  npm's cache folder on macOS and Linux, and on Linux the exclude file, in that order: an old Claude is refused before
+   *  anything is written. `env` is the environment the session is built from (its account's, before the hiding), the one
+   *  the spawn hands scopeOf. Rejects with `SANDBOX_UNAVAILABLE: …`. Off Windows `gitBash` and `required` change nothing. */
+  prepare(o: { accountId: string; cwd: string; env: Record<string, string | undefined>; gitBash: string | null; required?: boolean }): Promise<void>
   /** The version floor again, read synchronously at the spawn (the CLI may have changed since the prepare). */
   blocker(): string | null
   /** The scope a prepare wrote twins for, for this account and folder within PREPARED_MS, with `env`, the environment the
@@ -146,6 +173,11 @@ export interface ClaudeSandboxStart {
   /** A chat's one `--settings`: the sandbox of its scope, with the Enforce hook when `enforce`; null when it was not
    *  written. */
   chatArgs(enforce: boolean, scope: SandboxScope): string[] | null
+  /** Windows: the wrapper a chat of a scope with the shell route names in its environment (D7), forward-slashed, once it
+   *  and its boot script are written; null for a scope without the route or before they are (StatusLineManager
+   *  sandboxShellWrapFile). A terminal spawn reads it off its spawnConfig instead. Absent, a chat with the route refuses
+   *  (`not-prepared`) rather than start with a twin that names a wrapper it was not given. */
+  shellWrapFile?(scope: SandboxScope): string | null
   /** The settings the scope's twin holds, and the links its named paths go through (Task K: a Task's check runs under
    *  them, srtCheck.ts). */
   settingsOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
@@ -166,6 +198,8 @@ export function claudeSandboxStart(o: {
     ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult>
     sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null
     sandboxPartOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
+    /** The wrapper of a scope with the shell route, once written (Task 3); absent, a chat with the route refuses. */
+    sandboxShellWrapFile?(scope: SandboxScope): string | null
     /** The agents' login files a scope's twin denies, chosen once here at the prepare (sandbox design §6): kept with the
      *  prepared layout and carried by the scope the spawn gets. Absent, the twin chooses them itself each time. */
     chooseAgentLogins?(scope: Pick<SandboxScope, 'look'>): string[]
@@ -186,8 +220,9 @@ export function claudeSandboxStart(o: {
   // Windows only, for the route of the shell into Codex's sandbox (claude shell sandbox design D4, D6); each absent
   // reads as that step failing, so a wiring without them starts as before the route existed
   /** The default Codex account and the environment its sessions start with (its CODEX_HOME is the home the sandbox runs
-   *  under); null when no Codex account is registered. */
-  shellCodex?: () => { account: { id: string }; env: Record<string, string | undefined> } | null
+   *  under); null when no Codex account is registered (shellCodexOf). Asked at each prepare, which awaits it: the app and
+   *  the Host ask whether each Codex account is logged in. */
+  shellCodex?: () => ShellCodex | null | Promise<ShellCodex | null>
   /** Whether that account's Windows sandbox is set up (prepareCodexSandbox `ready`). */
   codexReady?: CodexWindowsReady
   /** The codex version question (prepareCodexSandbox `version`). */
@@ -270,13 +305,15 @@ export function claudeSandboxStart(o: {
     const off = (why: ClaudeShellOff, refusal: string, cause: string): ShellDecision => shellOff(cwd, why, refusal, cause)
     if (!gitBash) return off('no-git-bash', NO_SANDBOX_CLAUDE, 'no Git Bash was found, so Claude Code has no Bash tool to wrap')
     try {
-      const codex = o.shellCodex?.() ?? null
+      const codex = (await o.shellCodex?.()) ?? null
       if (codex === null) return off('no-codex-account', NO_SANDBOX_CLAUDE, 'no Codex account is registered whose sandbox it could borrow')
+      // Warmed before the codex is looked for: the wiring's warm finds it off the thread, and the codex path below reads
+      // that answer rather than search PATH on this one (windowsExecutable.ts). Asked before anything is made in the
+      // folder; prepareCodexSandbox asks again, from the same probe
+      await o.codexVersion?.warm('codex')
       const resolved = o.codexExe?.() ?? null
       const runnable = resolved === null ? null : bashRunnable(resolved, exists)
       if (runnable === null) return off('no-codex', `${SANDBOX_UNAVAILABLE}: cli-missing codex`, resolved === null ? 'codex was not found' : `${resolved} is not a program bash can run`)
-      // Asked before anything is made in the folder; prepareCodexSandbox asks again, from the same probe
-      await o.codexVersion?.warm('codex')
       const tooOld = codexVersionBlocker(o.codexVersion)
       if (tooOld !== null) return off(shellOffOf(new Error(tooOld)).why, tooOld, tooOld)
       const home = codex.env.CODEX_HOME ?? ''
@@ -387,7 +424,7 @@ export function claudeSandboxStart(o: {
       try {
         // Windows: the route for the shell, before the twins, which carry it (D4); a start that must be sandboxed is
         // refused without one (D5), anything else goes on with the deny rules
-        let decided = o.platform === 'win32' ? await decideShell(p.cwd, p.gitBash ?? null, made) : null
+        let decided = o.platform === 'win32' ? await decideShell(p.cwd, p.gitBash, made) : null
         if (decided !== null && !decided.on && p.required === true) throw new Error(decided.refusal)
         const chosen = o.files.chooseAgentLogins?.({ look: o.linkLook })
         const ensure = (shell: SandboxScope['shell']) =>
@@ -449,6 +486,7 @@ export function claudeSandboxStart(o: {
       return decided.on ? { on: true } : { on: false, why: decided.why, refusal: decided.refusal }
     },
     chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
+    shellWrapFile: (scope) => o.files.sandboxShellWrapFile?.(scope) ?? null,
     settingsOf: (scope) => o.files.sandboxPartOf(scope),
     env: (inherited) =>
       claudeSandboxEnv({

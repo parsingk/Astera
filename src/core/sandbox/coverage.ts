@@ -47,8 +47,11 @@ export const SANDBOX_TABLE_CAPTION: MessageKey = 'settings.security.sandboxCover
 export const sandboxRowCaption = (r: Pick<SandboxCoverageRow, 'provider' | 'os'>): MessageKey | null =>
   r.provider !== 'claude' ? null : r.os === 'win32' ? 'settings.security.sandboxCoverage.windowsClaude' : r.os === 'linux' ? 'settings.security.sandboxCoverage.linuxClaudeUbuntu' : null
 
-/** The protection a sandboxed session of `provider` gets on `platform` (SessionInfo.sandboxKind), decided by the session
- *  managers, which know both: Claude Code on Windows has no sandbox, only deny rules for its file tools; everything else
- *  runs in its CLI's own sandbox. `platform` is a string: the renderer, which has no NodeJS types, reads this file. */
+/** The protection a sandboxed session of `provider` gets on `platform` by its CLI alone: Claude Code on Windows has no
+ *  sandbox, only deny rules for its file tools; everything else runs in its CLI's own sandbox. Not what a Claude session
+ *  on Windows got: its start records that (SessionInfo.sandboxKind), `sandbox` when its shell ran in Codex's sandbox
+ *  (claude shell sandbox design D9), and every reader of a session takes the recorded kind. What this answers is kept for
+ *  work recorded before kinds were (checkSandbox.ts's last line) and for the control plane's static report.
+ *  `platform` is a string: the renderer, which has no NodeJS types, reads this file. */
 export const sandboxKindOf = (provider: 'claude' | 'codex', platform: string): SandboxKind =>
   provider === 'claude' && platform === 'win32' ? 'deny-only' : 'sandbox'

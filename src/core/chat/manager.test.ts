@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { gitLayoutOf } from '../sandbox/gitLayout'
 import { claudeSandboxStart, gitExcludesFileOf } from '../sandbox/claudeStart'
+import { claudeShellEnv } from '../sandbox/claudeShell'
+import type { Readiness } from '../sandbox/windowsReadiness'
 import { StatusLineManager } from '../sessions/statusline'
 import { credentialStoreDenies, nodeLinkLook, sensitiveLocations } from '../sandbox/locations'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
@@ -2027,7 +2029,11 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
   // --settings (hooks and sandbox) as a terminal session"): one --settings file, the Enforce hook in it when the mode is
   // enforce, and nothing for the adapter to name
   describe('a Claude chat', () => {
-    const claudeRig = async (o: { version?: string; mode?: 'enforce'; platform?: 'linux' | 'win32' } = {}) => {
+    /** Git for Windows where Program Files keeps it, for a rig whose Git Bash is found. */
+    const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe'
+    /** Claude shell sandbox design D4, faked (no codex runs): the default Codex account, its readiness, version and path. */
+    type Route = { gitBash?: boolean; account?: boolean; readiness?: Readiness }
+    const claudeRig = async (o: { version?: string; mode?: 'enforce'; platform?: 'linux' | 'win32'; route?: Route; env?: Record<string, string> } = {}) => {
       const platform = o.platform ?? 'linux'
       const profileDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-sbx-'))
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-tmp-'))
@@ -2038,10 +2044,21 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       await statusLine.init()
       if (o.mode === 'enforce') expect(await statusLine.ensureEnforceFiles()).toBe('ok')
       const versions = Object.assign(() => o.version ?? '2.1.310', { warm: async () => {} })
+      const route = o.route
       const claudeSandbox = claudeSandboxStart({ linkLook: null,
         platform, profileDir, homeDir: profileDir, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
-        runGit: async () => null, log: () => {}
+        runGit: async () => null, log: () => {},
+        ...(route
+          ? {
+              shellCodex: async () => (route.account === false ? null : { account: { id: 'cx-1' }, env: { CODEX_HOME: path.join(profileDir, 'cx-1'), TEMP: tmpDir, TMP: tmpDir } }),
+              codexReady: async (): Promise<Readiness> => route.readiness ?? 'ready',
+              codexVersion: Object.assign(() => '0.160.0', { warm: async () => {} }),
+              codexExe: () => 'C:/tools/codex.exe',
+              codexExcludes: async () => null
+            }
+          : {})
       })
+      const gitBash = createGitBashResolver(async (p) => (route !== undefined && route.gitBash !== false && p === GIT_BASH ? 'present' : 'absent'))
       const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions }> = []
       const { createAdapter, handles } = makeAdapterFactory()
       const manager = new ChatSessionManager({ linkLook: null,
@@ -2052,8 +2069,9 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
         version: '1.0.0',
         log: () => {},
         createAdapter,
-        baseEnv: { ...BASE[platform] },
+        baseEnv: { ...BASE[platform], ...o.env },
         claudeSandbox,
+        gitBash,
         ...(o.mode === 'enforce'
           ? {
               capabilities: {
@@ -2064,9 +2082,93 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
             }
           : {})
       })
-      return { manager, spawned, handles, statusLine, profileDir, tmpDir }
+      return { manager, spawned, handles, statusLine, profileDir, tmpDir, claudeSandbox, gitBash }
     }
     const read = (file: string): Record<string, unknown> => JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+
+    // Claude shell sandbox design D7 to D9 (Task 4): a Claude chat on Windows whose shell has the route into Codex's
+    // sandbox is a sandbox: its one --settings names the wrapper, and its environment gets the Codex sandbox's environment
+    // and the wrapper's switches after everything else, without the CLAUDE_PROJECT_DIR it inherited
+    it('on Windows with the shell route, a sandboxed Claude chat runs its shell in Codex’s sandbox', async () => {
+      const cwd = repo()
+      const r = await claudeRig({ platform: 'win32', route: {}, env: { CLAUDE_PROJECT_DIR: 'C:\\inherited' } })
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      const info = r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+      expect(info).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+      expect(info).not.toHaveProperty('sandboxWarnings')
+      const scope = r.claudeSandbox.scopeOf(claudeAccount.id, cwd, { ...BASE.win32, CLAUDE_PROJECT_DIR: 'C:\\inherited' })!
+      expect(scope.shell?.plan.bash).toBe(GIT_BASH)
+      const wrap = r.statusLine.sandboxShellWrapFile(scope)!
+      expect(wrap).toMatch(/\/shell-wrap\.sh$/)
+      const env = r.spawned[0].opts.env
+      expect(env).toMatchObject({ ...scope.shell!.env, ...claudeShellEnv(wrap) })
+      expect(env).not.toHaveProperty('CLAUDE_PROJECT_DIR')
+      const args = r.spawned[0].args
+      expect(read(args[args.indexOf('--settings') + 1]).env).toMatchObject(claudeShellEnv(wrap))
+      expect(r.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    })
+
+    it('on Windows with the shell route, a chat whose start cannot name the wrapper is refused', async () => {
+      const cwd = repo()
+      const r = await claudeRig({ platform: 'win32', route: {} })
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      // A start that cannot say where the wrapper is (shellWrapFile absent) never starts a chat marked a sandbox
+      const blind = { ...r.claudeSandbox, shellWrapFile: undefined }
+      const m = new ChatSessionManager({ linkLook: null, factory: () => new FakeProc(), descriptors: makeDescriptors('win32', HOME.win32), homeDir: HOME.win32, platform: 'win32', version: '1.0.0', log: () => {}, createAdapter: makeAdapterFactory().createAdapter, baseEnv: { ...BASE.win32 }, claudeSandbox: blind })
+      expect(() => m.spawn({ account: claudeAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    })
+
+    // D5 and D9: without the route, as today (deny rules only) with the reason's warning; the inherited environment kept
+    it('on Windows without the shell route, a sandboxed Claude chat is deny-only with the reason’s warning', async () => {
+      const cases: Array<[string, Route, string]> = [
+        ['no Codex account', { account: false }, 'claudeShellNoCodex'],
+        ['not set up', { readiness: 'not-set-up' }, 'claudeShellNotSetUp'],
+        ['no Git Bash', { gitBash: false }, 'claudeShellUnavailable']
+      ]
+      for (const [name, route, warning] of cases) {
+        const cwd = repo()
+        const r = await claudeRig({ platform: 'win32', route, env: { CLAUDE_PROJECT_DIR: 'C:\\inherited' } })
+        const told: string[][] = []
+        r.manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (_id, ws) => void told.push([...ws]) }
+        await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+        const info = r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+        expect(info, name).toMatchObject({ sandboxKind: 'deny-only', sandboxWarnings: [warning] })
+        expect(told, name).toEqual([[warning]])
+        expect(r.spawned[0].opts.env, name).not.toHaveProperty('CLAUDE_CODE_SHELL_PREFIX')
+        expect(r.spawned[0].opts.env.CLAUDE_PROJECT_DIR, name).toBe('C:\\inherited')
+      }
+    })
+
+    // D5: a chat that must be sandboxed is refused without the route, at the prepare and at the spawn
+    it('a Claude chat that must be sandboxed is refused without the shell route, in the reason’s words', async () => {
+      const cwd = repo()
+      const off = await claudeRig({ platform: 'win32', route: { readiness: 'not-set-up' } })
+      await expect(off.manager.prepare({ account: claudeAccount, cwd, sandbox: true, sandboxRequired: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex cx-1$/)
+      await off.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      expect(() => off.manager.spawn({ account: claudeAccount, cwd, sandbox: true, sandboxRequired: true })).toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex cx-1$/)
+      expect(off.spawned).toHaveLength(0)
+      const on = await claudeRig({ platform: 'win32', route: {} })
+      await on.manager.prepare({ account: claudeAccount, cwd, sandbox: true, sandboxRequired: true })
+      const info = on.manager.spawn({ account: claudeAccount, cwd, sandbox: true, sandboxRequired: true })
+      expect(info).toMatchObject({ sandboxKind: 'sandbox', sandboxRequired: true })
+      expect(chatInfoFromNote({ kind: 'chat', id: info.id, restore: on.spawned[0].opts.meta!.restore! })).toMatchObject({ sandboxRequired: true })
+    })
+
+    // A chat chain's roll is prepared through the terminal manager's prepare (index.ts, rollingWiring.ts), which finds the
+    // Git Bash and decides the route into the store the chat's spawn reads
+    it('a Claude chat roll prepared through the terminal manager starts with the route it found', async () => {
+      const cwd = repo()
+      const r = await claudeRig({ platform: 'win32', route: {} })
+      const terminal = new SessionManager(() => { throw new Error('no pty') }, makeDescriptors('win32', HOME.win32), 100, 20, HOME.win32, undefined, [], { ...BASE.win32 },
+        { linkLook: null, cwd: async () => 'present', gitBash: r.gitBash, platform: 'win32', now: Date.now, syncExists: () => true, log: () => {} })
+      terminal.claudeSandbox = r.claudeSandbox
+      await terminal.prepare({ account: claudeAccount, cwd, sandbox: true, chat: true })
+      expect(r.manager.spawn({ account: claudeAccount, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+      // And a required roll whose route went away is refused before the kill
+      const gone = await claudeRig({ platform: 'win32', route: { account: false } })
+      terminal.claudeSandbox = gone.claudeSandbox
+      await expect(terminal.prepare({ account: claudeAccount, cwd, sandbox: true, sandboxRequired: true, chat: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+    })
 
     // Task E fix round 2: a sandboxed Claude chat on Linux where bubblewrap is confined starts as today and its sink is
     // told once; the same chat outside the sandbox is not

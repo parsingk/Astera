@@ -11,6 +11,7 @@ import {
   claudeSandboxEnv,
   claudeSandboxStart,
   gitExcludesFileOf,
+  shellCodexOf,
   gitExcludesText
 } from './claudeStart'
 import { appServerSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
@@ -144,7 +145,7 @@ describe('claudeSandboxStart', () => {
     })
     /** The session's environment, as its manager hands it: another than the one Astera runs with */
     const sessionEnv = { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' }
-    const prepare = (over: { accountId?: string; cwd?: string } = {}) => start.prepare({ accountId: over.accountId ?? 'acc-1', cwd: over.cwd ?? cwd, env: sessionEnv })
+    const prepare = (over: { accountId?: string; cwd?: string } = {}) => start.prepare({ accountId: over.accountId ?? 'acc-1', cwd: over.cwd ?? cwd, env: sessionEnv, gitBash: null })
     return { start, prepare, profileDir, tmpDir, home, env, cwd, sessionEnv, scopes, chatAsked, order, gitCalls, logged }
   }
 
@@ -321,6 +322,8 @@ describe("the route for Claude's shell on Windows", () => {
     written?: (scope: SandboxScope) => SandboxFilesResult
     /** A wiring callback that throws: the account, the codex path or the version's warm-up. */
     throws?: 'account' | 'exe' | 'warm'
+    /** The account answered as a promise, as the app's and the Host's wirings answer it (they ask the logins). */
+    asyncAccount?: boolean
   }
   const rig = (o: Rig = {}) => {
     const profileDir = temp()
@@ -360,7 +363,8 @@ describe("the route for Claude's shell on Windows", () => {
       files: {
         ensureSandboxFiles: async (scope: SandboxScope): Promise<SandboxFilesResult> => (order.push('files'), scopes.push(scope), o.written ? o.written(scope) : 'ok'),
         sandboxChatArgs: () => ['--settings', 'S.json'],
-        sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] })
+        sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] }),
+        sandboxShellWrapFile: (scope: SandboxScope) => (scope.shell ? 'C:/p/sandbox-settings/k/shell-wrap.sh' : null)
       },
       version: claudeVersion,
       uid: 1000,
@@ -370,7 +374,8 @@ describe("the route for Claude's shell on Windows", () => {
       shellCodex: () => {
         order.push('account')
         if (o.throws === 'account') throw new Error('the registry broke')
-        return o.account === false ? null : { account: { id: 'cx-1' }, env: codexEnv }
+        const found = o.account === false ? null : { account: { id: 'cx-1' }, env: codexEnv }
+        return o.asyncAccount ? Promise.resolve(found) : found
       },
       codexReady: async (a) => (order.push('ready'), asked.push(a), o.readiness ?? 'ready'),
       codexVersion,
@@ -667,5 +672,59 @@ describe("the route for Claude's shell on Windows", () => {
     expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
     expect(profileEntries(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)!.shell!.plan.args, 'read')).toContain(`${slashed(r.cwd)}/.claude`)
     expect(readFileSync(path.join(r.cwd, '.claude'), 'utf8')).toBe('x')
+  })
+
+  // Task 4: the wirings answer the account as a promise (each Codex account's login is asked), and the prepare awaits it
+  it('takes the borrowed account answered as a promise', async () => {
+    const r = rig({ asyncAccount: true })
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell?.accountId).toBe('cx-1')
+    const none = rig({ asyncAccount: true, account: false })
+    await none.prepare()
+    expect(none.start.shellOf('acc-1', none.cwd)).toMatchObject({ on: false, why: 'no-codex-account' })
+  })
+
+  // Task 4: a chat names the wrapper in its environment (D7), and reads where it is through the start, which asks the twins
+  it('gives a chat the wrapper of a scope with the route, and nothing for one without', async () => {
+    const r = rig()
+    await r.prepare()
+    const scope = r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)!
+    expect(r.start.shellWrapFile?.(scope)).toBe('C:/p/sandbox-settings/k/shell-wrap.sh')
+    const { shell: _route, ...withoutRoute } = scope
+    expect(r.start.shellWrapFile?.(withoutRoute)).toBeNull()
+  })
+
+  // Task 4: warmed before the codex is looked for, so the wiring's resolver reads the warm's answer, not PATH on the thread
+  it('warms the codex version before it looks for the codex', async () => {
+    const r = rig()
+    await r.prepare()
+    expect(r.order.indexOf('warm codex')).toBeLessThan(r.order.indexOf('exe'))
+  })
+})
+
+// The account Claude's shell borrows on Windows (D4.2), as the app's and the Host's wirings pick it: the default Codex
+// account (defaultAccountIdOf: the earliest registered that is logged in), with the environment its own sessions start with
+describe('shellCodexOf', () => {
+  const acc = (id: string, provider: 'claude' | 'codex', createdAt: string) =>
+    ({ id, label: id, configDir: `C:/accts/${id}`, color: '#888', createdAt, provider }) as const
+  it('borrows the earliest registered Codex account that is logged in, with its sessions’ environment', async () => {
+    const accounts = [acc('cl', 'claude', '2026-01-01T00:00:00Z'), acc('cx-late', 'codex', '2026-03-01T00:00:00Z'), acc('cx-early', 'codex', '2026-02-01T00:00:00Z'), acc('cx-out', 'codex', '2025-01-01T00:00:00Z')]
+    const asked: string[] = []
+    const got = await shellCodexOf({
+      accounts,
+      loggedIn: async (a) => (asked.push(a.id), a.id !== 'cx-out'),
+      envOf: (a) => ({ CODEX_HOME: a.configDir })
+    })
+    expect(got).toEqual({ account: { id: 'cx-early' }, env: { CODEX_HOME: 'C:/accts/cx-early' } })
+    // Only the Codex accounts' logins are asked
+    expect(asked.sort()).toEqual(['cx-early', 'cx-late', 'cx-out'])
+  })
+
+  it('answers null when no Codex account is logged in, a login check that fails counting as logged out', async () => {
+    const envOf = () => ({})
+    expect(await shellCodexOf({ accounts: [acc('cl', 'claude', '2026-01-01T00:00:00Z')], loggedIn: async () => true, envOf })).toBeNull()
+    expect(await shellCodexOf({ accounts: [acc('cx', 'codex', '2026-01-01T00:00:00Z')], loggedIn: async () => { throw new Error('unreadable') }, envOf })).toBeNull()
+    expect(await shellCodexOf({ accounts: [], loggedIn: async () => true, envOf })).toBeNull()
   })
 })
