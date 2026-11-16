@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { tempDir } from '../worktrees/testRepo'
 import {
@@ -9,6 +9,7 @@ import {
   clearAppRunning,
   hostPidFilePath,
   liveAppPid,
+  liveAppSince,
   markAppRunning,
   parseHostPidFile,
   serializeHostPidFile,
@@ -147,5 +148,18 @@ describe('the app pid file', () => {
     expect(() => markAppRunning(nowhere, process.pid)).not.toThrow()
     expect(() => clearAppRunning(nowhere, process.pid)).not.toThrow()
     expect(liveAppPid(nowhere)).toBeNull()
+    expect(liveAppSince(nowhere)).toBeNull()
+  })
+  // Final review M8: when the live app started, which the Host's start-up prune keeps the wrapper folders since: the
+  // app writes the file once, at its start
+  it('says when a live app started, by its file, and nothing for no live app', async () => {
+    const dir = await tempDir('astera-apppid-')
+    expect(liveAppSince(dir)).toBeNull()
+    markAppRunning(dir, process.pid)
+    const at = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+    utimesSync(appPidFilePath(dir), at, at)
+    expect(liveAppSince(dir)).toBe(statSync(appPidFilePath(dir)).mtimeMs)
+    writeFileSync(appPidFilePath(dir), String(await dead()))
+    expect(liveAppSince(dir)).toBeNull()
   })
 })

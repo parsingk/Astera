@@ -20,6 +20,8 @@ import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexP
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
 import type { GitLayout } from '../sandbox/gitLayout'
 import { claudeSandboxStart, gitExcludesFileOf, gitExcludesText } from '../sandbox/claudeStart'
+import { claudeShellEnv } from '../sandbox/claudeShell'
+import type { Readiness } from '../sandbox/windowsReadiness'
 import { StatusLineManager } from './statusline'
 import { srtConfigOf, type SrtCheckPayload } from '../sandbox/srtCheck'
 import { CHECK_STARTED_MARK, CODEX_CHECK_FLAG, codexCheckRunner } from '../sandbox/checkRunner'
@@ -2039,6 +2041,28 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // Sandbox design §6: the agents' login files are denied on every OS, and the thunk is asked at each prepare and spawn,
+  // so an account registered after the manager was built is denied at its next start
+  it("denies the agents' login files the wiring names now, on every OS", async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      let logins: { path: string; kind: 'file' }[] = [{ path: '/acc/one/.credentials.json', kind: 'file' }]
+      const argv: string[][] = []
+      const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, HOME[platform], undefined, daemon(true)),
+        100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, { ...checksFor(platform), agentLogins: () => logins })
+      manager.codexVersion = versionOf('0.160.0')
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const first = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+      expect(first, platform).toContain('"/acc/one/.credentials.json"="deny"')
+      expect(first, platform).not.toContain('/acc/two/auth.json')
+      logins = [...logins, { path: '/acc/two/auth.json', kind: 'file' }]
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(codexArgs(argv[1]).find((a) => a.startsWith('permissions='))!, platform).toContain('"/acc/two/auth.json"="deny"')
+    }
+  })
+
   // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a sandboxed
   // session's profile keeps that folder read-only on every OS, wherever the session's folder is; the app key in it stays
   // denied and the Host key readable
@@ -2185,6 +2209,41 @@ describe('the sandbox at spawn', () => {
         expect(r.argv, platform).toHaveLength(0)
       }
     })
+  })
+
+  // Sandbox design §6: the agents' login files are chosen once, at the prepare, and the spawn names exactly those: a login
+  // file that appears or goes between the two changes nothing (the readiness echo ran under the prepare's list), and a new
+  // prepare picks the change up
+  it('names the login files the prepare chose at the spawn, whatever changed on the disk in between', async () => {
+    const base = realpathSync.native(repo()).split(path.sep).join('/')
+    const home = `${base}/home`
+    mkdirSync(`${home}/a`, { recursive: true })
+    mkdirSync(`${home}/b`, { recursive: true })
+    const a = `${home}/a/auth.json`
+    const b = `${home}/b/auth.json`
+    writeFileSync(a, 'fake')
+    const cwd = repo()
+    for (const platform of ['linux', 'win32'] as const) {
+      const argv: string[][] = []
+      const env = platform === 'win32' ? { Path: 'C:\\Windows', APPDATA: `${home}/AppData/Roaming` } : { ...BASE.linux }
+      const manager = new SessionManager((_f, args) => (argv.push(args as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
+        100, 20, home, undefined, [], env, { ...checksFor(platform), linkLook: nodeLinkLook, agentLogins: () => [{ path: a, kind: 'file' }, { path: b, kind: 'file' }] })
+      manager.codexVersion = versionOf('0.160.0')
+      const profileOf = (i: number): string => codexArgs(argv[i]).find((x) => x.startsWith('permissions='))!
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      writeFileSync(b, 'fake') // appears after the prepare
+      rmSync(a) // goes after the prepare
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(profileOf(0), platform).toContain(`"${a}"="deny"`)
+      expect(profileOf(0), platform).not.toContain(`"${b}"`)
+      // A new prepare sees the disk as it is now
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      expect(profileOf(1), platform).toContain(`"${b}"="deny"`)
+      expect(profileOf(1), platform).not.toContain(`"${a}"`)
+      writeFileSync(a, 'fake')
+      rmSync(b)
+    }
   })
 
   // Task E fix round 6 (Important): Codex's Windows sandbox makes a missing deny-read path a folder before it denies it
@@ -2585,10 +2644,28 @@ describe('the sandbox at spawn, for Claude', () => {
     darwin: { PATH: '/usr/bin' },
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
-  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({ linkLook: null,
-    cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {}
+  /** Git for Windows where Program Files keeps it, for a rig whose Git Bash is found. */
+  const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe'
+  const checksFor = (platform: NodeJS.Platform, gitBash = false): SpawnChecks => ({ linkLook: null,
+    cwd: async () => 'present', gitBash: createGitBashResolver(async (p) => (gitBash && p === GIT_BASH ? 'present' : 'absent')), platform, now: Date.now, syncExists: () => true, log: () => {}
   })
-  const rig = async (platform: 'linux' | 'darwin' | 'win32', version: string | null | undefined = '2.1.310', extraEnv: Record<string, string> = {}) => {
+  /** Claude shell sandbox design D4: what the route for Claude's shell on Windows is asked of, faked (no codex runs): the
+   *  default Codex account, its readiness, its version and where it is. */
+  type Route = { gitBash?: boolean; account?: boolean; readiness?: Readiness; codexVersion?: string; codexExe?: string; codexHome?: null }
+  const routeOptions = (o: Route, home: string, tmpDir: string) => ({
+    shellCodex: async () =>
+      o.account === false ? null : { account: { id: 'cx-1' }, env: { ...(o.codexHome === null ? {} : { CODEX_HOME: path.join(home, 'cx-1') }), TEMP: tmpDir, TMP: tmpDir } },
+    codexReady: async (): Promise<Readiness> => o.readiness ?? 'ready',
+    codexVersion: Object.assign(() => o.codexVersion ?? '0.160.0', { warm: async () => {} }),
+    codexExe: () => o.codexExe ?? 'C:/tools/codex.exe',
+    codexExcludes: async () => null,
+    // The rig's Git Bashes are there on every OS the tests run on (the route asks, Task 4 review M2)
+    exists: (p: string) => p === GIT_BASH || p === OWN_BASH || existsSync(p)
+  })
+  /** A Git Bash the person names in CLAUDE_CODE_GIT_BASH_PATH, there; and one that is not. */
+  const OWN_BASH = 'D:\\MyGit\\bin\\bash.exe'
+  const GONE_BASH = 'D:\\OldGit\\bin\\bash.exe'
+  const rig = async (platform: 'linux' | 'darwin' | 'win32', version: string | null | undefined = '2.1.310', extraEnv: Record<string, string> = {}, route?: Route) => {
     const profileDir = temp()
     const tmpDir = temp()
     const gitHome = temp()
@@ -2603,18 +2680,27 @@ describe('the sandbox at spawn, for Claude', () => {
     const versions = Object.assign(() => version, { warm: async (cli: 'claude' | 'codex') => void warmed.push(cli) })
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
+    /** A twin handed out without the wrapper the scope's route needs (Task 4: the spawn must refuse it). */
+    const tamper = { dropShell: false }
+    const logged: string[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform]),
       100, 20, HOME[platform],
-      (id, acc, o) => statusLine.spawnConfig(id, acc, o),
-      [], { ...BASE[platform], ...extraEnv }, checksFor(platform)
+      (id, acc, o) => {
+        const c = statusLine.spawnConfig(id, acc, o)
+        if (!tamper.dropShell) return c
+        const { shell: _s, shellWrapFile: _w, ...without } = c
+        return without
+      },
+      [], { ...BASE[platform], ...extraEnv }, checksFor(platform, route !== undefined && route.gitBash !== false)
     )
     manager.claudeSandbox = claudeSandboxStart({ linkLook: null,
       platform, profileDir, homeDir: gitHome, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
-      runGit: async () => null, log: () => {}
+      runGit: async () => null, log: (m) => void logged.push(m),
+      ...(route ? routeOptions(route, gitHome, tmpDir) : {})
     })
-    return { manager, argv, spawned, statusLine, profileDir, tmpDir, gitHome, warmed }
+    return { manager, argv, spawned, statusLine, profileDir, tmpDir, gitHome, warmed, tamper, logged }
   }
   /** The `--settings` file a session was started with. */
   const settingsOf = (a: string[]): string => a[a.indexOf('--settings') + 1]
@@ -2626,6 +2712,8 @@ describe('the sandbox at spawn, for Claude', () => {
     const tmpDir = r.tmpDir
     return claudeSandboxSettings({ platform, denied, readOnly: profileReadOnly(r.profileDir), npmCache: npmCacheOf(tmpDir), layout })
   }
+  /** The runner a Windows check goes through (checkRunner.ts), a Claude worker's with the shell route too (D10) */
+  const CHECK_RUNNER = { execPath: 'C:\\Astera\\Astera.exe', runnerPath: 'C:\\Astera\\sandbox-check.js' }
   /** A repository's top in a fresh temp folder: a `.git` folder is all gitLayoutOf needs. */
   const repoIn = (): string => {
     const top = temp()
@@ -2666,11 +2754,76 @@ describe('the sandbox at spawn, for Claude', () => {
     r.manager.checkRunner = { missing: async () => null, launch: never }
     r.manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: () => {} }
     await expect(r.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: userns-restricted claude')
+    // Windows without the route for Claude's shell (claude shell sandbox design D10): its reason's refusal, here no Git Bash
     const w = await rig('win32')
+    w.manager.codexCheckRunner = codexCheckRunner(CHECK_RUNNER)
     await expect(w.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-sandbox claude')
     // Fix round 2: a process without the runner says so, which running the checks again will not change
     const none = await rig('darwin')
     await expect(none.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-check-runner')
+  })
+
+  // Claude shell sandbox design D10 (Task 6): a Task's check of a Claude worker on Windows whose shell ran in Codex's
+  // sandbox runs through `codex sandbox` as a Codex worker's check does: the scope's own profile (D6, never another one
+  // built), the check's cmd.exe shell with its mark, Astera's runner, the scope's environment (D8) and the borrowed
+  // account's Codex home, after the Credentials list's hiding. The wrapper is no part of it: Astera launches the check
+  it("on win32 with the shell route, starts a Claude worker's check in Codex's sandbox under the scope's profile and the borrowed home", async () => {
+    const r = await rig('win32', '2.1.310', { SECRET_TOKEN: 's', KEEP: 'k' }, {})
+    r.manager.hiding = { get: () => ({ remove: ['SECRET_TOKEN'], set: {} }), damaged: () => false }
+    r.manager.codexCheckRunner = codexCheckRunner(CHECK_RUNNER)
+    const cwd = repoIn()
+    const launch = await r.manager.checkLaunch({ account, cwd, command: 'npm run test' })
+    const scope = r.manager.claudeSandbox!.scopeOf(account.id, cwd, { ...BASE.win32, KEEP: 'k' })!
+    expect(scope.shell?.accountId).toBe('cx-1')
+    expect(launch.file).toBe(CHECK_RUNNER.execPath)
+    expect(launch.args).toEqual([
+      CHECK_RUNNER.runnerPath, CODEX_CHECK_FLAG, 'C:/tools/codex.exe',
+      'sandbox', ...scope.shell!.plan.args, '--', 'cmd.exe', '/d', '/s', '/c', `echo ${CHECK_STARTED_MARK}& npm run test`
+    ])
+    expect(launch.runner).toBe(true)
+    expect(launch.env).toMatchObject({ ...scope.shell!.env, KEEP: 'k', ELECTRON_RUN_AS_NODE: '1', CODEX_HOME: path.join(r.gitHome, 'cx-1') })
+    expect(launch.env).not.toHaveProperty('SECRET_TOKEN')
+    expect(launch.env).not.toHaveProperty('CLAUDE_CODE_SHELL_PREFIX')
+  })
+
+  // The plan's codex is what bash runs: for an npm install the sh shim beside its `.cmd`, which Node cannot start, so the
+  // check runs the `.cmd` beside it as windowsSpawn runs a shim; and a borrowed account on the ambient Codex home leaves
+  // CODEX_HOME out of the launch, whatever the Claude account's environment held
+  it("on win32 with the shell route, starts the check through the plan's npm shim and without a Codex home the plan has none of", async () => {
+    const bin = temp()
+    writeFileSync(path.join(bin, 'codex.cmd'), '@echo off\r\n')
+    writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\n')
+    const r = await rig('win32', '2.1.310', { CODEX_HOME: 'C:\\Users\\t\\.codex-claude-env' }, { codexExe: path.join(bin, 'codex.cmd'), codexHome: null })
+    r.manager.codexCheckRunner = codexCheckRunner(CHECK_RUNNER)
+    const cwd = repoIn()
+    const launch = await r.manager.checkLaunch({ account, cwd, command: 'npm test' })
+    const scope = r.manager.claudeSandbox!.scopeOf(account.id, cwd, {})!
+    expect(scope.shell?.plan).toMatchObject({ codex: path.join(bin, 'codex'), codexHome: null })
+    expect((launch.args as string[]).slice(0, 8)).toEqual([CHECK_RUNNER.runnerPath, CODEX_CHECK_FLAG, 'cmd.exe', '/d', '/c', 'call', path.join(bin, 'codex.cmd'), 'sandbox'])
+    expect(launch.env).not.toHaveProperty('CODEX_HOME')
+  })
+
+  // D4, D5 and D10: without the route the check is refused in the reason's own words, decided for that folder now (the
+  // prepare runs as a start that must be sandboxed does), and nothing is launched; a process without the runner says so
+  // before anything is asked
+  it('on win32 without the shell route, refuses a Claude check with the reason’s refusal and launches nothing', async () => {
+    const cases: Array<[string, Route, RegExp]> = [
+      ['no Codex account', { account: false }, /^SANDBOX_UNAVAILABLE: no-sandbox claude$/],
+      ['no Git Bash', { gitBash: false }, /^SANDBOX_UNAVAILABLE: no-sandbox claude$/],
+      ['an old codex', { codexVersion: '0.159.0' }, /^SANDBOX_UNAVAILABLE: cli-too-old codex 0\.159\.0 /],
+      ['a Windows sandbox not set up', { readiness: 'not-set-up' }, /^SANDBOX_UNAVAILABLE: windows-setup codex cx-1$/],
+      ['Codex could not be asked', { readiness: 'check-failed' }, /^SANDBOX_UNAVAILABLE: windows-check-failed codex cx-1$/]
+    ]
+    for (const [name, route, refusal] of cases) {
+      const r = await rig('win32', '2.1.310', {}, route)
+      const launched: unknown[] = []
+      r.manager.codexCheckRunner = { launch: (cmd) => (launched.push(cmd), codexCheckRunner(CHECK_RUNNER).launch(cmd)) }
+      await expect(r.manager.checkLaunch({ account, cwd: repoIn(), command: 'npm test' }), name).rejects.toThrow(refusal)
+      expect(launched, name).toEqual([])
+    }
+    const bare = await rig('win32', '2.1.310', {}, {})
+    await expect(bare.manager.checkLaunch({ account, cwd: repoIn(), command: 'npm test' })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-check-runner$/)
+    expect(bare.warmed).toEqual([])
   })
 
   // Task E fix round 2: where Ubuntu's AppArmor profile confines bubblewrap (asked once per process by the wiring), a
@@ -2848,5 +3001,136 @@ describe('the sandbox at spawn, for Claude', () => {
     expect(settings.sandbox).toEqual(builder('linux', r).sandbox)
     expect(r.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true, sandboxed: true })
     expect(info.sandboxed).toBe(true)
+  })
+
+  // Claude shell sandbox design D7 to D9 (Task 4): on Windows, with the route for its shell into Codex's sandbox, a
+  // sandboxed Claude session is a sandbox: its twin names the wrapper, and its environment gets the Codex sandbox's
+  // environment and the wrapper's switches after everything else Astera adds, without the CLAUDE_PROJECT_DIR it inherited
+  // (the wrapper's fail-closed rule reads it, D2)
+  it('on win32 with the shell route, starts as a sandbox whose shell runs in Codex’s sandbox', async () => {
+    const r = await rig('win32', '2.1.310', { CLAUDE_PROJECT_DIR: 'C:\\inherited' }, {})
+    const told: string[][] = []
+    r.manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (_id, ws) => void told.push([...ws]) }
+    const cwd = repoIn()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    const info = r.manager.spawn({ account, cwd, sandbox: true })
+    expect(info.sandboxKind).toBe('sandbox')
+    expect(r.spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(info).not.toHaveProperty('sandboxWarnings')
+    expect(told).toEqual([])
+    const scope = r.manager.claudeSandbox!.scopeOf(account.id, cwd, { ...BASE.win32, CLAUDE_PROJECT_DIR: 'C:\\inherited' })!
+    expect(scope.shell?.accountId).toBe('cx-1')
+    const wrap = r.statusLine.spawnConfig('x', account, { sandbox: scope }).shellWrapFile!
+    expect(wrap).toMatch(/\/shell-wrap\.sh$/)
+    const env = r.spawned[0].env ?? {}
+    expect(env).toMatchObject({ ...scope.shell!.env, ...claudeShellEnv(wrap) })
+    expect(env.CLAUDE_CODE_SHELL_PREFIX).toBe(wrap)
+    expect(env).not.toHaveProperty('CLAUDE_PROJECT_DIR')
+    // The twin it was started with names the same wrapper (D7: a project's settings cannot take it away)
+    expect(JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8')).env).toMatchObject(claudeShellEnv(wrap))
+    // The Git Bash the prepare found is the one the session runs and the wrapper's plan names
+    expect(env.CLAUDE_CODE_GIT_BASH_PATH).toBe(GIT_BASH)
+    expect(scope.shell?.plan.bash).toBe(GIT_BASH)
+  })
+
+  // Task 4 review M2 (and its untested decision 3): the person's own CLAUDE_CODE_GIT_BASH_PATH wins over the bash the
+  // search finds, since Claude Code runs it; one that is not there turns the route off rather than wrap another bash
+  it('on win32 wraps the person’s own Git Bash when it is there, and has no route when it is not', async () => {
+    const own = await rig('win32', '2.1.310', { CLAUDE_CODE_GIT_BASH_PATH: OWN_BASH }, {})
+    const cwd = repoIn()
+    await own.manager.prepare({ account, cwd, sandbox: true })
+    expect(own.manager.spawn({ account, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+    expect(own.manager.claudeSandbox!.scopeOf(account.id, cwd, {})?.shell?.plan.bash).toBe(OWN_BASH)
+    expect(own.spawned[0].env?.CLAUDE_CODE_GIT_BASH_PATH).toBe(OWN_BASH)
+    const gone = await rig('win32', '2.1.310', { CLAUDE_CODE_GIT_BASH_PATH: GONE_BASH }, {})
+    await gone.manager.prepare({ account, cwd, sandbox: true })
+    const info = gone.manager.spawn({ account, cwd, sandbox: true })
+    expect(info).toMatchObject({ sandboxKind: 'deny-only', sandboxWarnings: ['claudeShellUnavailable'] })
+    expect(gone.manager.claudeSandbox!.shellOf(account.id, cwd)).toMatchObject({ on: false, why: 'no-git-bash' })
+    expect(gone.logged.join('\n')).toContain(GONE_BASH)
+  })
+
+  // Task 4 review M7: the route's values are written after everything else Astera adds, so an earlier writer (here the
+  // shared extensions' env) cannot set the prefix, a start-up script or CLAUDE_PROJECT_DIR for the session
+  it('on win32 with the shell route, its values win over an earlier writer of the same names', async () => {
+    const r = await rig('win32', '2.1.310', {}, {})
+    const planted = { CLAUDE_CODE_SHELL_PREFIX: 'C:/evil/prefix.sh', BASH_ENV: 'C:/evil/env.sh', SHELLOPTS: 'xtrace', CLAUDE_PROJECT_DIR: 'C:\\planted', CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' }
+    r.manager.capabilities = {
+      get: () => ({ context: { kind: 'implicit', accounts: [account.id], policyMode: 'compatibility', executionMode: 'managed' }, args: [], env: planted, given: [], gatewayGrant: [], skipped: [] }),
+      refresh: async () => {}
+    }
+    const cwd = repoIn()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    expect(r.manager.spawn({ account, cwd, sandbox: true }).sandboxKind).toBe('sandbox')
+    const scope = r.manager.claudeSandbox!.scopeOf(account.id, cwd, {})!
+    const env = r.spawned[0].env ?? {}
+    expect(env).toMatchObject(claudeShellEnv(r.statusLine.sandboxShellWrapFile(scope)!))
+    expect(env).not.toHaveProperty('CLAUDE_PROJECT_DIR')
+  })
+
+  it('on win32 with the shell route, refuses a twin handed out without the wrapper', async () => {
+    const r = await rig('win32', '2.1.310', {}, {})
+    const cwd = repoIn()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    r.tamper.dropShell = true
+    expect(() => r.manager.spawn({ account, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(r.spawned).toHaveLength(0)
+  })
+
+  // D5 and D9: without the route the session starts as today (deny rules only), with one warning by the reason, told once;
+  // the CLAUDE_PROJECT_DIR it inherited and everything else is as it was
+  it('on win32 without the shell route, starts deny-only with the warning for the reason', async () => {
+    const cases: Array<[string, Route, string]> = [
+      ['no Codex account', { account: false }, 'claudeShellNoCodex'],
+      ['an old codex', { codexVersion: '0.159.0' }, 'claudeShellNoCodex'],
+      ['a Windows sandbox not set up', { readiness: 'not-set-up' }, 'claudeShellNotSetUp'],
+      ['Codex could not be asked', { readiness: 'check-failed' }, 'claudeShellUnavailable'],
+      ['no Git Bash', { gitBash: false }, 'claudeShellUnavailable']
+    ]
+    for (const [name, route, warning] of cases) {
+      const r = await rig('win32', '2.1.310', { CLAUDE_PROJECT_DIR: 'C:\\inherited' }, route)
+      const told: string[][] = []
+      r.manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (_id, ws) => void told.push([...ws]) }
+      const cwd = repoIn()
+      await r.manager.prepare({ account, cwd, sandbox: true })
+      const info = r.manager.spawn({ account, cwd, sandbox: true })
+      expect(info.sandboxKind, name).toBe('deny-only')
+      expect(info.sandboxWarnings, name).toEqual([warning])
+      expect(r.spawned[0].meta?.restore, name).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only', sandboxWarnings: [warning] })
+      expect(told, name).toEqual([[warning]])
+      const env = r.spawned[0].env ?? {}
+      expect(env, name).not.toHaveProperty('CLAUDE_CODE_SHELL_PREFIX')
+      expect(env.CLAUDE_PROJECT_DIR, name).toBe('C:\\inherited')
+      expect(JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8')), name).not.toHaveProperty('env')
+      // The prepare's log says why, once
+      expect(r.logged.filter((m) => m.includes("cannot run in Codex's sandbox")), name).toHaveLength(1)
+    }
+  })
+
+  // D5: a start that must be sandboxed (C3) is refused in the reason's words when the route is off, at the prepare and at
+  // the spawn; with the route it starts. Off Windows `sandboxRequired` changes nothing
+  it('a start that must be sandboxed is refused without the shell route, in the reason’s words', async () => {
+    const off = await rig('win32', '2.1.310', {}, { readiness: 'not-set-up' })
+    const cwd = repoIn()
+    await expect(off.manager.prepare({ account, cwd, sandbox: true, sandboxRequired: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex cx-1$/)
+    // A spawn after a prepare that was not told: refused there too
+    await off.manager.prepare({ account, cwd, sandbox: true })
+    expect(() => off.manager.spawn({ account, cwd, sandbox: true, sandboxRequired: true })).toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex cx-1$/)
+    const none = await rig('win32', '2.1.310', {}, { account: false })
+    await expect(none.manager.prepare({ account, cwd, sandbox: true, sandboxRequired: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+    expect(off.spawned).toHaveLength(0)
+    const on = await rig('win32', '2.1.310', {}, {})
+    await on.manager.prepare({ account, cwd, sandbox: true, sandboxRequired: true })
+    const info = on.manager.spawn({ account, cwd, sandbox: true, sandboxRequired: true })
+    expect(info).toMatchObject({ sandboxKind: 'sandbox', sandboxRequired: true })
+    // Written into the note, so a roll's successor is held to it too
+    expect(on.spawned[0].meta?.restore).toMatchObject({ sandboxRequired: true })
+    expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: on.spawned[0].meta!.restore! })).toMatchObject({ sandboxRequired: true })
+    for (const platform of ['linux', 'darwin'] as const) {
+      const p = await rig(platform)
+      const here = repoIn()
+      await p.manager.prepare({ account, cwd: here, sandbox: true, sandboxRequired: true })
+      expect(p.manager.spawn({ account, cwd: here, sandbox: true, sandboxRequired: true }).sandboxKind, platform).toBe('sandbox')
+    }
   })
 })

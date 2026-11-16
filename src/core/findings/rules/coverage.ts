@@ -20,10 +20,13 @@ import type { Finding } from '../types'
 type Provider = CoverageRow['provider']
 
 /** Whether a sandboxed profile's sessions of `provider` cannot write outside their folders on `platform`: the sandbox
- *  table has that CLI on that OS with writes enforced. Claude Code on Windows has no sandbox, only deny rules for its file
- *  tools, so its profiles are not held there. */
+ *  table has that CLI on that OS with writes enforced by its own sandbox. Claude Code on Windows holds writes only when its
+ *  shell runs in Codex's sandbox (the `via-codex` note), which each start decides and Findings cannot know, so its profiles
+ *  are not held there. */
 export const sandboxHoldsWrites = (provider: Provider, platform: string): boolean =>
-  SANDBOX_COVERAGE.some((r) => r.provider === provider && r.os === platform && r.classes.write.level === 'enforced')
+  SANDBOX_COVERAGE.some(
+    (r) => r.provider === provider && r.os === platform && r.classes.write.level === 'enforced' && r.classes.write.note !== 'via-codex'
+  )
 
 /** The actions whose calls outside the folder a sandbox holds. */
 const HELD: ReadonlySet<AuditAction> = new Set<AuditAction>(['filesystem.write', 'filesystem.delete'])

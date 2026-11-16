@@ -64,7 +64,8 @@ export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'netw
 
 /** Why a class is only partly seen, as a key the screens and the CLI put in words. The sandbox's table adds two:
  *  `runtime-measured`, blocked by the runtime Claude Code's sandbox runs on (srt), which was measured, while Claude Code's
- *  own use of it was not; `file-tools-only`, Claude Code on Windows, whose file tools alone are kept out; `bus-path-only`,
+ *  own use of it was not; `file-tools-only`, a session whose file tools alone are kept out (Claude Code on Windows without
+ *  Codex's sandbox); `via-codex`, Claude Code on Windows, whose shell is held only when it runs in Codex's sandbox; `bus-path-only`,
  *  Codex on Linux, whose deny names the session bus by its file path (an abstract-socket bus is not denied). */
 export type CoverageNote =
   | 'web-tools-only'
@@ -72,7 +73,11 @@ export type CoverageNote =
   | 'web-search-and-shell-text'
   | 'interactive-input'
   | 'runtime-measured'
+  // No row uses it since Claude Code's shell route into Codex's sandbox (2026-11-16, claude shell sandbox design D12:
+  // the Claude Windows row reads `via-codex`). Kept, with its phrase and its four catalog lines, until the person
+  // decides whether to remove it (final review M7)
   | 'file-tools-only'
+  | 'via-codex'
   | 'bus-path-only'
 
 export interface CoverageCell {

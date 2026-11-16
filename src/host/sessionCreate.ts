@@ -29,7 +29,6 @@ import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { providerOf } from '../core/providers/meta'
 import { sourcesOf } from './sessions'
 import { profileSpawn } from '../core/agentProfiles/permission'
-import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 
 export function createHostSessionStarter(d: {
   /** Null for a Host started without the agent CLI paths: it starts no session. */
@@ -59,9 +58,6 @@ export function createHostSessionStarter(d: {
   list(): Promise<HostSession[]>
   /** The pty a terminal session runs in (registry `sessionPty`), for a row not listed yet. */
   ptyOf?(sessionId: string): string | null
-  /** Test seam: the platform a chat a sandboxed session asks for is judged on (forcedSandboxBlocker). Default: this
-   *  process's. */
-  platform?: NodeJS.Platform
   log(m: string): void
 }): (o: SessionCreate) => Promise<HostSession> {
   // A row not listed yet still names its pty or process, provider and sources, so a controller that just made the
@@ -133,17 +129,13 @@ export function createHostSessionStarter(d: {
       if (d.profileDir !== undefined)
         profile = await profileSpawn({ profileDir: d.profileDir, agentProfileId: o.agentProfileId, appWideYolo: d.bypass, log: d.log })
       bypass = profile?.bypassPermissions ?? (await d.bypass())
-      // A sandboxed caller's chat starts in the sandbox whatever its profile says, and where its CLI has none it is
-      // refused before anything starts (final fix pass, C3)
-      if (o.sandbox === true) {
-        const refused = forcedSandboxBlocker(providerOf(account), d.platform ?? process.platform)
-        if (refused) throw refused
-      }
+      // A sandboxed caller's chat starts in the sandbox whatever its profile says, and must have it (final fix pass, C3):
+      // its prepare refuses it before anything starts where it cannot (claude shell sandbox design D5)
       sandbox = profile?.sandbox === true || o.sandbox === true
       // The profile's sandbox (sandbox design §6): the folder's git layout read for the spawn, and on Windows the account's
-      // Codex home asked whether it is set up (for Claude, its version asked and its settings written); a refusal
-      // (`SANDBOX_UNAVAILABLE: …`) starts nothing
-      if (sandbox) await chats.prepare?.({ account, cwd: o.cwd, sandbox: true })
+      // Codex home asked whether it is set up (for Claude, its version asked, its settings written and its shell's route
+      // decided); a refusal (`SANDBOX_UNAVAILABLE: …`) starts nothing
+      if (sandbox) await chats.prepare?.({ account, cwd: o.cwd, sandbox: true, ...(o.sandbox === true ? { sandboxRequired: true } : {}) })
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err
     }
@@ -159,7 +151,8 @@ export function createHostSessionStarter(d: {
       // Who started it, as the command decided (SessionCreate.startedBy): an agent's tab closes when it ends
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
       ...(profile ? { agentProfileId: profile.agentProfileId } : {}),
-      ...(sandbox ? { sandbox: true } : {})
+      ...(sandbox ? { sandbox: true } : {}),
+      ...(o.sandbox === true ? { sandboxRequired: true } : {})
     })
     // The handshake and the first prompt settle before anyone else may take the session.
     if (!(await chats.started(info.id)))

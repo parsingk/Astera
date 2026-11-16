@@ -7,6 +7,7 @@ import { findProfile, liveAccounts, readAgentProfiles, validateProfile, writeAge
 import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/types'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { Account } from '../../core/types'
+import { providerOf } from '../../core/providers/meta'
 import type { Readiness } from '../../core/sandbox/windowsReadiness'
 import type { RemoveOutcome } from '../../core/sandbox/codexDefaultSandbox'
 import { agentProfileIdOf } from '../../core/sessions/noteInfo'
@@ -112,8 +113,25 @@ export function createHostAgentProfiles(d: {
     elevated(file: string): Promise<boolean>
     remove(file: string): Promise<RemoveOutcome>
   }
+  /** The id of the Codex account Claude's shell borrows on Windows (core/sandbox/claudeStart.ts shellCodexOf over the
+   *  registered accounts, the rule the Host's Claude starts use), or null when no Codex account is registered. Absent
+   *  off Windows, where nothing is borrowed. Never rejects. */
+  claudeShellAccount?: (accounts: Account[]) => Promise<string | null>
 }): HostAgentProfiles {
   const now = d.now ?? Date.now
+  /** The Codex account Claude's shell borrows for a profile that holds a Claude account (D11), or null: none borrowed
+   *  (off Windows, no Claude account in the profile, or no Codex account registered). */
+  const holdsClaude = (p: AgentProfile, accounts: Account[]): boolean =>
+    liveAccounts(p, accounts).some((id) => providerOf(accounts.find((a) => a.id === id) ?? {}) === 'claude')
+  const shellAccountOf = async (p: AgentProfile, accounts: Account[]): Promise<string | null> => {
+    if (!d.claudeShellAccount || !holdsClaude(p, accounts)) return null
+    return Promise.resolve()
+      .then(() => d.claudeShellAccount!(accounts))
+      .catch(() => null)
+  }
+  /** The account a command may act on for a profile: one of the profile's own, or the one its Claude shell borrows. */
+  const accountOfProfile = async (p: AgentProfile, accounts: Account[], accountId: string): Promise<Account | undefined> =>
+    liveAccounts(p, accounts).includes(accountId) || (await shellAccountOf(p, accounts)) === accountId ? accounts.find((a) => a.id === accountId) : undefined
   // One change at a time: two updates must each read what the other wrote
   let chain: Promise<unknown> = Promise.resolve()
   const queued = <T>(f: () => Promise<T>): Promise<T> => {
@@ -275,7 +293,7 @@ export function createHostAgentProfiles(d: {
         const p = findProfile(await readAgentProfiles(d.profileDir), id)
         if (!p) return { status: 404, body: { error: `no agent profile ${id}` } }
         const accounts = await d.readAccounts()
-        const account = liveAccounts(p, accounts).includes(accountId) ? accounts.find((a) => a.id === accountId) : undefined
+        const account = await accountOfProfile(p, accounts, accountId)
         if (!account) return bad(`${accountId} is not an account of the profile ${p.name}`)
         if (account.provider !== 'codex') return bad(`${accountId} is not a Codex account`)
         const r = await setUpOnce(account.id, async () => {
@@ -298,6 +316,10 @@ export function createHostAgentProfiles(d: {
         const codex = liveAccounts(p, all)
           .map((id) => all.find((a) => a.id === id))
           .filter((a): a is Account => a?.provider === 'codex')
+        // D11: and the Codex account Claude's shell borrows, marked, whether the profile lists it already or not
+        const borrowed = await shellAccountOf(p, all)
+        const borrowedAccount = borrowed === null ? undefined : all.find((a) => a.id === borrowed)
+        if (borrowedAccount && !codex.some((a) => a.id === borrowedAccount.id)) codex.push(borrowedAccount)
         // Task P: and whether its config.toml still makes the elevated sandbox its default, for Remove beside the row; one
         // that cannot be read is said as none (a hint, never a gate)
         const defaults = d.sandboxDefault
@@ -315,10 +337,12 @@ export function createHostAgentProfiles(d: {
                 .catch((): Readiness => 'check-failed'),
               elevatedDefault(a)
             ])
-            return { accountId: a.id, state, ...(shared ? { elevatedDefault: true } : {}) }
+            return { accountId: a.id, state, ...(shared ? { elevatedDefault: true } : {}), ...(a.id === borrowed ? { forClaudeShell: true } : {}) }
           })
         )
-        return { status: 200, body: { accounts } }
+        // A profile Claude's shell would borrow from, with no Codex account registered, is told so, beside the empty list
+        const noShell = d.claudeShellAccount !== undefined && borrowed === null && holdsClaude(p, all)
+        return { status: 200, body: { accounts, ...(noShell ? { noClaudeShellCodex: true } : {}) } }
       }
       case 'agent-profiles-sandbox-default-remove': {
         // Task P (the person's decision, 2026-10-29): the `windows.sandbox = "elevated"` line and Codex's older
@@ -330,7 +354,7 @@ export function createHostAgentProfiles(d: {
         const p = findProfile(await readAgentProfiles(d.profileDir), args.id)
         if (!p) return { status: 404, body: { error: `no agent profile ${args.id}` } }
         const accounts = await d.readAccounts()
-        const account = liveAccounts(p, accounts).includes(args.accountId) ? accounts.find((a) => a.id === args.accountId) : undefined
+        const account = await accountOfProfile(p, accounts, args.accountId)
         if (!account) return bad(`${args.accountId} is not an account of the profile ${p.name}`)
         if (account.provider !== 'codex') return bad(`${args.accountId} is not a Codex account`)
         const file = defaults.fileOf(account)

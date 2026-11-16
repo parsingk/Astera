@@ -159,35 +159,49 @@ const codexAccountsOf = <A extends { id: string; provider?: Provider }>(p: Agent
   p.accountIds.map((id) => accounts.find((a) => a.id === id)).filter((a): a is A => a !== undefined && providerOf(a) === 'codex')
 
 /** Whether the editor shows each Codex account's readiness (Task 8): a stored profile with the sandbox on, on Windows,
- *  where Codex's elevated sandbox is set up per account, with a Codex account. */
+ *  where Codex's elevated sandbox is set up per account, with a Codex account, or with a Claude account, whose shell
+ *  borrows one Codex account's sandbox there (Windows Claude shell sandbox D11: the Host lists that account too, or says
+ *  there is none to borrow). */
 export function sandboxReadinessShown(p: AgentProfile, platform: string, accounts: readonly { id: string; provider?: Provider }[]): boolean {
-  return p.sandbox && platform === 'win32' && codexAccountsOf(p, accounts).length > 0
+  if (!p.sandbox || platform !== 'win32') return false
+  const live = p.accountIds.map((id) => accounts.find((a) => a.id === id)).filter((a): a is { id: string; provider?: Provider } => a !== undefined)
+  return live.length > 0 && live.some((a) => providerOf(a) === 'codex' || providerOf(a) === 'claude')
 }
 
 /** The readiness lines, one per Codex account of the profile in its order, with what the Host answered (null while it is
  *  still being asked). An account the Host left out, or an answer that did not come, could not be asked about.
  *  `elevatedDefault` (Task P): the Host said the account's config.toml still makes the elevated sandbox its default, so
- *  the row offers Remove; only an explicit `true` counts. */
+ *  the row offers Remove; only an explicit `true` counts. `forClaudeShell` (D11): the Host marked the account as the one
+ *  Claude's shell of this profile borrows; it is listed after the profile's own accounts when the profile lacks it. */
 export function readinessRows(
   p: AgentProfile,
   accounts: readonly { id: string; label: string; provider?: Provider }[],
   answer: PluginsCallAnswer | null
-): { accountId: string; label: string; state: SandboxState | null; elevatedDefault: boolean }[] {
+): { accountId: string; label: string; state: SandboxState | null; elevatedDefault: boolean; forClaudeShell: boolean }[] {
   const said = new Map<string, SandboxState>()
   const shared = new Set<string>()
+  const borrowed = new Set<string>()
   if (answer?.ok && Array.isArray(answer.body.accounts))
     for (const e of answer.body.accounts as unknown[]) {
       const o = typeof e === 'object' && e !== null ? (e as Record<string, unknown>) : {}
       if (typeof o.accountId === 'string' && isState(o.state)) said.set(o.accountId, o.state)
       if (typeof o.accountId === 'string' && o.elevatedDefault === true) shared.add(o.accountId)
+      if (typeof o.accountId === 'string' && o.forClaudeShell === true) borrowed.add(o.accountId)
     }
-  return codexAccountsOf(p, accounts).map((a) => ({
+  const own = codexAccountsOf(p, accounts)
+  const extra = accounts.filter((a) => providerOf(a) === 'codex' && borrowed.has(a.id) && !own.some((o) => o.id === a.id))
+  return [...own, ...extra].map((a) => ({
     accountId: a.id,
     label: a.label,
     state: answer === null ? null : (said.get(a.id) ?? 'check-failed'),
-    elevatedDefault: shared.has(a.id)
+    elevatedDefault: shared.has(a.id),
+    forClaudeShell: borrowed.has(a.id)
   }))
 }
+
+/** Whether the Host said no Codex account is registered for Claude's shell to borrow (D11); an older answer without the
+ *  field says nothing. */
+export const shellCodexMissing = (answer: PluginsCallAnswer | null): boolean => answer?.ok === true && answer.body.noClaudeShellCodex === true
 
 /** What the Host did with Remove (Task P): the elevated default is gone (the line, or Codex's older feature key), was
  *  not there, or names another sandbox now, and the readiness asked again shows it, so nothing more is said; or it

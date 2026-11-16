@@ -104,19 +104,24 @@ Task를 다 짠 뒤 상세 창의 `실행`을 눌러야 시작합니다.
   합니다. 검사가 시작되기 전에 sandbox가 멈춘 경우도 같은 질문이 되고, 코드의 실패로 치지 않습니다. 다만 macOS와
   Linux의 Codex 검사는 예전처럼 터미널에서 곧바로 돌므로, 거기서 sandbox가 멈추면 아직 검사의 실패로 읽힙니다.
   Docker 검사(`compose`, `dockerfile`)도 같은 질문이 됩니다. Docker는 sandbox 밖에 닿기 때문입니다.
-- Windows의 Claude Code에는 sandbox가 없습니다. 그 워커의 검사는 예전처럼 돌고, 결과 옆에
-  `sandbox 밖에서 검증함`이라고 적힙니다.
+- Windows의 Claude Code에는 자기 sandbox가 없습니다. 워커의 셸이 Codex sandbox 안에서 돌았으면(Codex 계정의
+  Windows sandbox가 설정되어 있을 때) 검사도 Codex 워커의 검사처럼 `codex sandbox` 안에서, 그 셸이 빌린 Codex
+  계정과 같은 권한 프로필로 돕니다. 검사를 시작할 때 그 길이 없어졌으면 검사를 돌리지 않고 위처럼 사람에게
+  묻습니다. 워커가 모두 파일 도구만 막힌 채(deny 규칙만으로) 일했다면 검사는 예전처럼 sandbox 밖에서 돌고, 결과
+  옆에 `sandbox 밖에서 검증함`이라고 적힙니다.
 - 검사는 sandbox 여부와 상관없이 Credentials 목록이 그 폴더의 세션에 숨기는 변수 없이 시작합니다. 결과에는 빠진
   변수의 이름이 적히고(값은 적지 않습니다), 실패한 검사 아래에 보입니다. 두 번 시간을 넘긴 검사는 묻는 질문에 그
   이름을 적습니다. 검사에 꼭 필요한 값(사설 레지스트리의 토큰 같은 것)은 실행 구성의 `env`에 일부러 넣을 수
   있습니다. 그 값은 숨긴 뒤의 환경 위에 얹힙니다.
 - 그런 Task의 검토자도 구현자의 워크트리에서 일하므로 자기 CLI의 sandbox 안에서 시작합니다. Windows의 Claude
-  Code에는 sandbox가 없어서, 그 검토자는 무엇이 작업을 sandbox에 넣었는지에 따라 갈립니다.
-  - 프로필의 `sandbox 에서 실행`으로 sandbox 안에서 한 작업: 검토자는 sandbox 프로필의 Claude Code 세션처럼
-    파일 도구만 로그인 폴더에서 막힌 채 시작합니다(셸은 제한 없음). 완료 블록에 `파일 도구 보호만으로
-    검토했습니다`라고 적힙니다.
-  - sandbox 안의 세션이 만든 Job이나 Task: 그런 작업의 다른 시작처럼 검토자도 시작하지 않고
-    (`SANDBOX_UNAVAILABLE: no-sandbox claude`), 검토가 사람에게 묻습니다.
+  Code 검토자는 sandbox 프로필의 Claude Code 세션처럼 시작합니다. 셸이 Codex sandbox 안에서 돌 수 있으면(Codex
+  계정의 Windows sandbox가 설정되어 있으면) sandbox 안에서 시작하고, 완료 블록에 따로 적히는 것은 없습니다. 그
+  길이 없으면 무엇이 작업을 sandbox에 넣었는지에 따라 갈립니다.
+  - 프로필의 `sandbox 에서 실행`으로 sandbox 안에서 한 작업: 검토자는 파일 도구만 로그인 폴더에서 막힌 채
+    시작합니다(셸은 제한 없음). 완료 블록에 `파일 도구 보호만으로 검토했습니다`라고 적힙니다.
+  - sandbox 안의 세션이 만든 Job이나 Task: 그런 작업의 다른 시작처럼 검토자도 시작하지 않습니다. 거절에는
+    이유마다 다른 코드가 붙고(`SANDBOX_UNAVAILABLE: windows-setup codex <계정>`, `cli-missing codex`,
+    `no-sandbox claude` 등), 검토는 사람에게 묻습니다.
 
 ### 외부 검토자
 

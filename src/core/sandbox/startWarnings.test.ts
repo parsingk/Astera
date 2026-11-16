@@ -3,7 +3,9 @@
 import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import { claudeUsernsCheck, sandboxStartWarnings, sandboxWarningMessage, startWarningsFor, ubuntuBwrapRestricted, UBUNTU_BWRAP } from './startWarnings'
+import { claudeUsernsCheck, sandboxStartWarnings, sandboxWarningMessage, startWarningsFor, ubuntuBwrapRestricted, UBUNTU_BWRAP, type SandboxStartWarning } from './startWarnings'
+import { SANDBOX_WARNING_KEYS, knownSandboxWarnings } from './warningKeys'
+import type { ClaudeShellOff } from './claudeStart'
 
 const home = path.join(os.tmpdir(), 'astera-home-t')
 
@@ -41,6 +43,37 @@ describe('sandboxStartWarnings', () => {
   it('does not warn Claude Code on Windows about the home folder', () => {
     expect(sandboxStartWarnings({ provider: 'claude', platform: 'win32', cwd: home, homeDir: home, claudeUsernsRestricted: false })).toEqual([])
     expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: home, homeDir: home, claudeUsernsRestricted: false })).toEqual(['homeInWorkFolder'])
+  })
+
+  // Claude shell sandbox design D9: on Windows a Claude session whose shell runs in Codex's sandbox (the route on) is told
+  // about the home folder as a Codex one is; one without the route gets one warning by the reason instead, and never the
+  // home one (its shell is not restricted, so the advice would be untrue)
+  it('warns a Claude session on Windows by its shell route: the home warning with it, the reason’s warning without', () => {
+    const project = path.join(home, 'project')
+    const at = (cwd: string, claudeShell: 'on' | ClaudeShellOff) =>
+      sandboxStartWarnings({ provider: 'claude', platform: 'win32', cwd, homeDir: home, claudeUsernsRestricted: false, claudeShell })
+    expect(at(home, 'on')).toEqual(['homeInWorkFolder'])
+    expect(at(project, 'on')).toEqual([])
+    const byReason: Array<[ClaudeShellOff, SandboxStartWarning]> = [
+      ['no-codex-account', 'claudeShellNoCodex'],
+      ['no-codex', 'claudeShellNoCodex'],
+      ['codex-too-old', 'claudeShellNoCodex'],
+      ['not-set-up', 'claudeShellNotSetUp'],
+      ['no-git-bash', 'claudeShellUnavailable'],
+      ['check-failed', 'claudeShellUnavailable'],
+      ['other', 'claudeShellUnavailable']
+    ]
+    for (const [why, warning] of byReason) {
+      expect(at(project, why), why).toEqual([warning])
+      expect(at(home, why), `${why} at home`).toEqual([warning])
+    }
+    // Only Claude on Windows: the route is not asked anywhere else, and a value given there changes nothing
+    expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: project, homeDir: home, claudeUsernsRestricted: false, claudeShell: 'other' })).toEqual([])
+    for (const platform of ['linux', 'darwin'] as const)
+      expect(sandboxStartWarnings({ provider: 'claude', platform, cwd: home, homeDir: home, claudeUsernsRestricted: false, claudeShell: 'other' }), platform).toEqual(['homeInWorkFolder'])
+    // The managers ask through startWarningsFor, which passes it on
+    expect(startWarningsFor(undefined, { provider: 'claude', platform: 'win32', cwd: project, homeDir: home, claudeShell: 'not-set-up' })).toEqual(['claudeShellNotSetUp'])
+    expect(startWarningsFor(undefined, { provider: 'claude', platform: 'win32', cwd: home, homeDir: home, claudeShell: 'on' })).toEqual(['homeInWorkFolder'])
   })
 
   // Task P (the person's decision, 2026-10-29): a Codex home whose config.toml still makes the elevated sandbox its
@@ -119,6 +152,23 @@ describe('sandboxWarningMessage', () => {
     // Task P: a Windows Codex home whose config.toml makes the elevated sandbox its default, alone and with the home one
     expect(sandboxWarningMessage(['elevatedDefault'])).toEqual({ key: 'session.sandbox.warn.elevatedDefault' })
     expect(sandboxWarningMessage(['elevatedDefault', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.elevatedDefaultAndHome' })
+    // Claude shell sandbox design D9: each of the three alone; none comes with the home one (that needs the route on)
+    expect(sandboxWarningMessage(['claudeShellNoCodex'])).toEqual({ key: 'session.sandbox.warn.claudeShellNoCodex' })
+    expect(sandboxWarningMessage(['claudeShellNotSetUp'])).toEqual({ key: 'session.sandbox.warn.claudeShellNotSetUp' })
+    expect(sandboxWarningMessage(['claudeShellUnavailable'])).toEqual({ key: 'session.sandbox.warn.claudeShellUnavailable' })
+  })
+
+  // Task 4 review M6: a note from another build may hold a pair this one has no sentence for; it is worded by its first
+  // warning, never as the Ubuntu one
+  it('words a pair it has no sentence for by its first warning', () => {
+    expect(sandboxWarningMessage(['claudeShellNoCodex', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.claudeShellNoCodex' })
+    expect(sandboxWarningMessage(['claudeShellNotSetUp', 'claudeShellUnavailable'])).toEqual({ key: 'session.sandbox.warn.claudeShellNotSetUp' })
+  })
+
+  it('reads back every warning this build knows, in the fixed order, the three shell ones included', () => {
+    const all: SandboxStartWarning[] = ['homeInWorkFolder', 'claudeShellUnavailable', 'claudeShellNotSetUp', 'claudeShellNoCodex', 'elevatedDefault', 'linkInWorkFolder', 'claudeUserns']
+    expect(knownSandboxWarnings([...all, 'nonsense'])).toEqual([...all].reverse())
+    expect(Object.keys(SANDBOX_WARNING_KEYS).sort()).toEqual([...all].sort())
   })
 })
 

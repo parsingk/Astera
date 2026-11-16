@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
+import { AGENT_LOGIN_FILE, agentAccountFolders, agentLoginEntries, appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -457,5 +457,115 @@ describe('the other Hosts beside this one', () => {
     expect(await otherHostFolders('darwin', own, { entries })).toEqual([slashed(live)])
     // Without a uid to compare, the empty one is left out all the same
     expect(await otherHostFolders('linux', own, { uid: undefined, entries })).toEqual([slashed(live)])
+  })
+})
+
+describe('agentLoginEntries', () => {
+  // Backslashes are built, not typed, so no tool layer can fold them
+  const bs = String.fromCharCode(92)
+  it("names the two default login files and each account's own provider file, as files, once", () => {
+    expect(agentLoginEntries({ homeDir: `C:${bs}Users${bs}a`, accounts: [] })).toEqual([
+      { path: 'C:/Users/a/.claude/.credentials.json', kind: 'file' },
+      { path: 'C:/Users/a/.codex/auth.json', kind: 'file' }
+    ])
+    const entries = agentLoginEntries({
+      homeDir: '/h/',
+      accounts: [
+        { provider: 'claude', configDir: '/acc/one' },
+        { configDir: `${bs}acc${bs}two${bs}` }, // no provider: claude
+        { provider: 'codex', configDir: '/acc/three' },
+        { provider: 'codex', configDir: '/h/.codex' }, // the default folder again: once
+        { provider: 'claude', configDir: '/acc/one' }
+      ]
+    })
+    expect(entries.map((e) => e.path)).toEqual([
+      '/h/.claude/.credentials.json',
+      '/h/.codex/auth.json',
+      '/acc/one/.credentials.json',
+      '/acc/two/.credentials.json',
+      '/acc/three/auth.json'
+    ])
+    expect(entries.every((e) => e.kind === 'file')).toBe(true)
+    expect(AGENT_LOGIN_FILE).toEqual({ claude: '.credentials.json', codex: 'auth.json' })
+  })
+})
+
+describe('agentAccountFolders', () => {
+  const made: string[] = []
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const home = (): string => {
+    const h = mkdtempSync(path.join(os.tmpdir(), 'astera-acct-folders-'))
+    made.push(h)
+    return h
+  }
+  const slash = (p: string): string => p.split(path.sep).join('/')
+
+  it('lists the default folders, the accounts-root sub-folders and the dash siblings, for both providers', () => {
+    const h = home()
+    for (const d of ['.claude-accounts/a', '.claude-accounts/b', '.claude-x', '.codex-accounts/c', '.codex-y', 'other', '.claude-accounts-not']) mkdirSync(path.join(h, d), { recursive: true })
+    writeFileSync(path.join(h, '.claude-file'), 'not a folder')
+    writeFileSync(path.join(h, '.claude-accounts', 'loose.txt'), 'not a folder')
+    const found = agentAccountFolders(h).map((f) => `${f.provider}:${slash(path.relative(h, f.configDir))}`)
+    expect(found.filter((f) => f.startsWith('claude:')).sort()).toEqual(['claude:.claude', 'claude:.claude-accounts-not', 'claude:.claude-accounts/a', 'claude:.claude-accounts/b', 'claude:.claude-x'].sort())
+    expect(found.filter((f) => f.startsWith('codex:')).sort()).toEqual(['codex:.codex', 'codex:.codex-accounts/c', 'codex:.codex-y'].sort())
+  })
+
+  // A moved `~/.claude-accounts` is commonly a junction (off C:), and `Dirent.isDirectory()` is false for a link
+  it('follows a junction or symlink to a folder, and ignores one to a file', () => {
+    const h = home()
+    const elsewhere = home()
+    mkdirSync(path.join(elsewhere, 'moved', 'a'), { recursive: true })
+    mkdirSync(path.join(elsewhere, 'side'))
+    writeFileSync(path.join(elsewhere, 'file'), 'x')
+    const kind = process.platform === 'win32' ? 'junction' : 'dir'
+    symlinkSync(path.join(elsewhere, 'moved'), path.join(h, '.claude-accounts'), kind)
+    symlinkSync(path.join(elsewhere, 'side'), path.join(h, '.codex-side'), kind)
+    // A file symlink needs a privilege on Windows (EPERM without developer mode): without it that one assertion is skipped
+    let fileLinked = true
+    try {
+      symlinkSync(path.join(elsewhere, 'file'), path.join(h, '.claude-link-to-file'), 'file')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err
+      fileLinked = false
+    }
+    const found = agentAccountFolders(h).map((f) => `${f.provider}:${slash(path.relative(h, f.configDir))}`)
+    expect(found).toContain('claude:.claude-accounts/a')
+    expect(found).toContain('codex:.codex-side')
+    if (fileLinked) expect(found).not.toContain('claude:.claude-link-to-file')
+  })
+
+  it('gives only the default folders for a home that cannot be listed, and never throws', () => {
+    const missing = path.join(os.tmpdir(), 'astera-no-such-home-xyz')
+    expect(agentAccountFolders(missing).map((f) => f.provider)).toEqual(['claude', 'codex'])
+    const throwing = (): never => {
+      throw new Error('EACCES')
+    }
+    expect(agentAccountFolders('/h', throwing)).toEqual([
+      { provider: 'claude', configDir: '/h/.claude' },
+      { provider: 'codex', configDir: '/h/.codex' }
+    ])
+  })
+})
+
+// The wirings' thunks (main/core.ts, host/spawner.ts) hand agentLoginEntries the registered accounts plus the folders on
+// the disk now, so a login file in a folder nobody registered is named too
+describe('agentLoginEntries over registered accounts and the folders found on the disk', () => {
+  it("names an unregistered folder's login file once, beside the registered one", () => {
+    const h = mkdtempSync(path.join(os.tmpdir(), 'astera-unreg-'))
+    try {
+      mkdirSync(path.join(h, '.claude-accounts', 'reg'), { recursive: true })
+      mkdirSync(path.join(h, '.claude-accounts', 'unreg'), { recursive: true })
+      mkdirSync(path.join(h, '.codex-side'), { recursive: true })
+      const reg = path.join(h, '.claude-accounts', 'reg').split(path.sep).join('/')
+      const paths = agentLoginEntries({ homeDir: h, accounts: [{ configDir: reg }, ...agentAccountFolders(h)] }).map((e) => e.path)
+      const at = (p: string) => `${h.split(path.sep).join('/')}/${p}`
+      expect(paths).toContain(at('.claude-accounts/unreg/.credentials.json'))
+      expect(paths).toContain(at('.codex-side/auth.json'))
+      expect(paths.filter((p) => p === at('.claude-accounts/reg/.credentials.json'))).toHaveLength(1)
+    } finally {
+      rmSync(h, { recursive: true, force: true })
+    }
   })
 })

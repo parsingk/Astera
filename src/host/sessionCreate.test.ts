@@ -282,6 +282,24 @@ describe('createHostSessionStarter — with an agent profile', () => {
     expect(refusing.chats.spawn).not.toHaveBeenCalled()
   })
 
+  // Final fix pass C3 with claude shell sandbox design D5: a sandboxed caller's chat is not refused up front for its CLI;
+  // its prepare and its spawn are told it must be sandboxed, and refuse there where it cannot be. A profile's switch alone
+  // asks for the sandbox, not that it must be had
+  it('a sandboxed caller’s chat is prepared and started as one that must be sandboxed', async () => {
+    const h = rig()
+    const prepare = vi.fn(async (_o: { account: Account; cwd: string; sandbox?: boolean; sandboxRequired?: boolean }) => {})
+    Object.assign(h.chats, { prepare })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], sandbox: true })
+    expect(prepare.mock.calls[0][0]).toMatchObject({ sandbox: true, sandboxRequired: true })
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ sandbox: true, sandboxRequired: true }))
+    const profiled = rig({ profileDir: await withProfiles([P({ id: 'ap_box', sandbox: true })]) })
+    const plainPrepare = vi.fn(async (_o: { account: Account; cwd: string; sandbox?: boolean; sandboxRequired?: boolean }) => {})
+    Object.assign(profiled.chats, { prepare: plainPrepare })
+    await profiled.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_box' })
+    expect(plainPrepare.mock.calls[0][0]).not.toHaveProperty('sandboxRequired')
+    expect(profiled.chats.spawn.mock.calls[0][0]).not.toHaveProperty('sandboxRequired')
+  })
+
   // The answer is the row `sessions list` will show, the mark of the sandbox and its kind with it, before it is listed
   it('a sandboxed session’s answer says it is sandboxed and how, before it is listed', async () => {
     const h = rig({ list: async () => [] })

@@ -13,11 +13,13 @@ import { CLAUDE_INPUT_FIELDS, CLAUDE_USE_INPUT_FIELDS } from '../audit/resolve'
 import { reportsUses } from './cliVersion'
 import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
-import { claudeSandboxSettings, claudeSessionDenied, claudeWritableFolders, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
+import { claudeSandboxSettings, claudeSessionDenied, claudeWritableFolders, withShellEnv, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
-import { namedPaths, profileReadOnly, type LinkLook } from '../sandbox/locations'
+import { SHELL_BOOT_FILE, SHELL_BOOT_SCRIPT, SHELL_WRAP_FILE, shellWrapScript, type ClaudeShellPlan } from '../sandbox/claudeShell'
+import { WIN32_PROCESS_LINE_MAX, windowsCommandLineLength } from './windowsExecutable'
+import { namedPaths, profileReadOnly, type DenyEntry, type LinkLook } from '../sandbox/locations'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -29,11 +31,15 @@ export interface StatusLineSpawn {
   enforced?: true // the settings file is an enforce variant (ensureEnforceFiles): every tool call waits on the blocking hook first
   sandboxed?: true // the settings file is a sandbox twin (ensureSandboxFiles): Claude's sandbox and the deny rules are in it
   useHooks?: true // an observed session's file has the use hooks (UserPromptExpansion, SubagentStart; lifecycle design §4.12)
+  shell?: true // the sandbox twin names the wrapper that runs the shell in Codex's sandbox (claude shell sandbox D1, D7), which is in place
+  shellWrapFile?: string // that wrapper, forward slashes: what the session's CLAUDE_CODE_SHELL_PREFIX names too (claudeShellEnv)
 }
 
 /** Whether every sandbox twin is in place (ensureSandboxFiles), or, on macOS and Linux, the links inside the session's
- *  writable folders a named path goes through, for which no twin is written (Task E fix round 5). */
-export type SandboxFilesResult = 'ok' | 'write-failed' | { linked: string[] }
+ *  writable folders a named path goes through, for which no twin is written (Task E fix round 5), or, for a scope with the
+ *  shell route, that the wrapper's launch of codex would not fit on a Windows command line, for which nothing is written
+ *  (claude shell sandbox design D1). */
+export type SandboxFilesResult = 'ok' | 'write-failed' | 'command-too-long' | { linked: string[] }
 
 /** What a sandboxed Claude session's twins are built for (ensureSandboxFiles, spawnConfig, sandboxChatArgs): its folder's
  *  git layout, whose git files the sandbox keeps from being written, and the environment the session is built from (its
@@ -47,6 +53,15 @@ export interface SandboxScope {
   cwd?: string
   /** How the disk is read for those links (claudeSandboxStart's `linkLook`); null or absent, every path as given. */
   look?: LinkLook | null
+  /** The agents' login files the prepare chose for this scope (StatusLineManager.chooseAgentLogins), taken as they are:
+   *  the spawn then computes the same twin key the prepare wrote even if a login file appeared or went in between (sandbox
+   *  design §6). Absent, they are chosen from the manager's thunk and the disk each time (the measurement, tests). */
+  agentLogins?: readonly string[]
+  /** Windows: the route the prepare found for the session's shell, Codex's sandbox (claude shell sandbox design D4,
+   *  claudeStart.ts): the wrapper's plan without its boot file's place, which the twins' folder decides; `env`, what a
+   *  sandboxed Codex session's environment gets on Windows (codexSandboxEnv, D8); `accountId`, the Codex account whose
+   *  sandbox it borrows. Absent: no route, and the twins hold the deny rules only. Never set off Windows. */
+  shell?: { plan: Omit<ClaudeShellPlan, 'bootFile'>; env: Record<string, string>; accountId: string }
 }
 
 /** How many scopes a StatusLineManager keeps the twins of up to date: every settings rewrite rewrites them all. A scope
@@ -66,13 +81,20 @@ const TWINS_FOLDER = /^[0-9a-f]{16}$/
  * Removes the scopes' twins folders (`<profile>/sandbox-settings/<hash>/`) not written for `maxAgeMs` that no live
  * session uses (`inUse`, by folder name), and returns the names removed (sandbox follow-ups, item 3). Written means the
  * newest of the folder's own time, which every sandboxed start stamps (writeTwinsOf), and its twins'. **Nothing else is
- * touched**: only a real folder (not a link) whose name is a scope's hash, holding nothing but twins (`.json` files),
- * each removed by name and then the empty folder; any other entry keeps the whole folder. Never throws.
+ * touched**: only a real folder (not a link) whose name is a scope's hash, holding nothing but twins (`.json` files) and
+ * the shell route's two scripts (SHELL_WRAP_FILE, SHELL_BOOT_FILE; Task 3 review M1), each removed by name and then the
+ * empty folder; any other entry keeps the whole folder. Never throws.
+ *
+ * `liveAppSince`: when a live app on this profile started (core/host/pidFile.ts liveAppSince), null for none. That app's
+ * own sessions run on local node-pty, invisible to the Host, and one with the shell route runs the wrapper from its
+ * folder on every command (final review M8). Each start stamps its folder, so a folder written before the app started
+ * is none of theirs; one holding the wrapper and written since is kept.
  */
 export async function pruneSandboxTwins(o: {
   profileDir: string
   now: number
   inUse: ReadonlySet<string>
+  liveAppSince?: number | null
   maxAgeMs?: number
   log?: (m: string) => void
 }): Promise<string[]> {
@@ -92,13 +114,17 @@ export async function pruneSandboxTwins(o: {
       const st = await fs.lstat(dir)
       if (!st.isDirectory() || st.isSymbolicLink()) continue
       const entries = await fs.readdir(dir, { withFileTypes: true })
-      if (entries.some((e) => !e.isFile() || !e.name.endsWith('.json'))) {
+      if (entries.some((e) => !e.isFile() || !(e.name.endsWith('.json') || e.name === SHELL_WRAP_FILE || e.name === SHELL_BOOT_FILE))) {
         o.log?.(`sandbox twins: ${name} holds more than twins — left as it is`)
         continue
       }
       const files = entries.map((e) => path.join(dir, e.name))
       const written = Math.max(st.mtimeMs, ...(await Promise.all(files.map(async (f) => (await fs.lstat(f)).mtimeMs))))
       if (o.now - written < maxAge) continue
+      if (typeof o.liveAppSince === 'number' && written >= o.liveAppSince && entries.some((e) => e.name === SHELL_WRAP_FILE)) {
+        o.log?.(`sandbox twins: ${name} holds a shell wrapper written since the live app started, which one of its own sessions may run — left as it is`)
+        continue
+      }
       for (const f of files) await fs.unlink(f)
       await fs.rmdir(dir)
       removed.push(name)
@@ -446,14 +472,34 @@ export function withUseReports<O extends StatusLineSpawnOptions>(o: O | undefine
 /** What a sandbox twin adds (ensureSandboxFiles): the builder's settings. */
 type SandboxPart = ClaudeSandboxSettings
 
-/** The name of a scope's twins folder: a hash of what its sandbox holds. */
-const sandboxKeyOf = (part: SandboxPart): string => createHash('sha256').update(JSON.stringify(part)).digest('hex').slice(0, 16)
+/** The shell route's plan a scope's twins name (SandboxScope.shell), without the boot file's place, which is in the folder. */
+type ShellPlan = Omit<ClaudeShellPlan, 'bootFile'>
 
-/** A settings file's sandbox twin: the same JSON with Claude's sandbox added and the deny rules after any it already has. */
-function withSandbox(content: string, part: SandboxPart): string {
+const slashed = (p: string): string => p.replace(/\\/g, '/')
+
+/** The name of a scope's twins folder: a hash of what its sandbox holds, and with the shell route (claude shell sandbox
+ *  design D7) of the whole plan and the scripts' text too, so two scopes never share a wrapper, and an app and a Host
+ *  of two Astera versions never write different scripts into one folder (Task 3 review M4). The wrapper's text is taken
+ *  with an empty boot file, whose place is the folder itself. Without the route, the hash of the part alone, as before
+ *  the route existed. */
+const sandboxKeyOf = (part: SandboxPart, shell?: ShellPlan): string =>
+  createHash('sha256')
+    .update(JSON.stringify(shell ? { ...part, shell, scripts: [shellWrapScript({ ...shell, bootFile: '' }), SHELL_BOOT_SCRIPT] } : part))
+    .digest('hex')
+    .slice(0, 16)
+
+/** How much shorter than WIN32_PROCESS_LINE_MAX the wrapper's codex launch must be when the codex is not an `.exe`: an
+ *  npm sh shim runs `node <...>/codex.js <args>`, which launches the vendor codex.exe by a longer path, so the lines
+ *  Windows is handed are longer than the measured one by roughly 100 to 150 characters (Task 3 review M3). */
+const SHIM_LINE_MARGIN = 512
+
+/** A settings file's sandbox twin: the same JSON with Claude's sandbox added and the deny rules after any it already has,
+ *  and with the shell route the wrapper `wrapFile` in its `env` (withShellEnv, D7). */
+function withSandbox(content: string, part: SandboxPart, wrapFile?: string): string {
   const s = JSON.parse(content) as Record<string, unknown> & { permissions?: Record<string, unknown> & { deny?: string[] } }
   const permissions = { ...(s.permissions ?? {}), deny: [...(s.permissions?.deny ?? []), ...part.permissions.deny] }
-  return JSON.stringify({ ...s, ...(part.sandbox ? { sandbox: part.sandbox } : {}), permissions }, null, 2)
+  const twin = { ...s, ...(part.sandbox ? { sandbox: part.sandbox } : {}), permissions }
+  return JSON.stringify(wrapFile === undefined ? twin : withShellEnv(twin, wrapFile), null, 2)
 }
 
 export class StatusLineManager {
@@ -491,11 +537,14 @@ export class StatusLineManager {
   private twins = new Map<string, string>()
   /** The scopes whose sandboxed chat file (no hooks) holds what their last write built. */
   private sandboxChatReady = new Set<string>()
-  /** The sandbox each prepared scope's twins hold, by key, the latest prepared last (SANDBOX_SCOPES_KEPT of them). From
-   *  a scope's first ensureSandboxFiles on, each file rewritten gets its twins rewritten with it, so the order in which a
-   *  start's preparations run does not matter (a Host chat prepares its sandbox before the capability refresh writes
-   *  Enforce's files). */
-  private scopes = new Map<string, SandboxPart>()
+  /** The scopes with the shell route whose wrapper and boot script hold what their last write built: no twin of such a
+   *  scope is handed out until they do (claude shell sandbox design D1). */
+  private shellReady = new Set<string>()
+  /** The sandbox each prepared scope's twins hold, by key, the latest prepared last (SANDBOX_SCOPES_KEPT of them), with the
+   *  shell route's plan when it has one. From a scope's first ensureSandboxFiles on, each file rewritten gets its twins
+   *  (and its scripts) rewritten with it, so the order in which a start's preparations run does not matter (a Host chat
+   *  prepares its sandbox before the capability refresh writes Enforce's files). */
+  private scopes = new Map<string, { part: SandboxPart; shell?: ShellPlan }>()
   private readonly platform: NodeJS.Platform
   private readonly execPath: string
   private readonly appImage: string | undefined
@@ -508,6 +557,9 @@ export class StatusLineManager {
   private readonly tmpDir: string
   /** The read-only folders a sandbox twin keeps from being written (Task E and its fix round 1). */
   private readonly readOnly: readonly string[]
+  /** The agents' login files as the manager's wiring knows them now (locations.ts agentLoginEntries), asked at each
+   *  sandbox start; none by default. */
+  private readonly agentLogins: () => readonly DenyEntry[]
 
   constructor(
     private userDataDir: string,
@@ -531,6 +583,10 @@ export class StatusLineManager {
        *  Astera writes code or an installer to and runs unsandboxed, built by the app and Host wiring (sandboxReadOnly).
        *  Default: this profile folder alone (profileReadOnly), so a start that names no more still protects the profile. */
       readOnly?: readonly string[]
+      /** The agents' login files a sandboxed Claude twin denies (sandbox design §6): a thunk, since accounts come and go
+       *  while the process runs, built by the app and Host wiring (agentLoginEntries). Each is named only if it is there
+       *  when the prepare looks, if the scope can (chooseAgentLogins). Default: none. */
+      agentLogins?: () => readonly DenyEntry[]
     } = {}
   ) {
     this.findRuntime = host.findRuntime
@@ -539,6 +595,7 @@ export class StatusLineManager {
     this.homeDir = host.homeDir ?? os.homedir()
     this.tmpDir = host.tmpDir ?? os.tmpdir()
     this.readOnly = host.readOnly ?? profileReadOnly(userDataDir)
+    this.agentLogins = host.agentLogins ?? (() => [])
     // A test that names the executable names the AppImage too, or there is none
     this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
@@ -826,14 +883,14 @@ export class StatusLineManager {
    * The sandbox (sandbox design §6): writes, for the scope of a sandboxed Claude start (SandboxScope: its folder's git
    * layout and the environment its session is built from), a twin of each settings file a session can be pointed at
    * (plain, hooks, observe, observe hooks, enforce, enforce hooks, as far as each has been built), the same JSON with
-   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store, with this profile folder kept
+   * Claude's sandbox added and the deny rules for the E6 list, the OS credential store and the agents' login files (those there when the prepare chose), with this profile folder kept
    * from being written (claudeSandboxSettings), and the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
    * scope are in a folder of their own, `sandbox-settings/<hash>`, named by what its sandbox holds, so sessions in
    * different repositories, or of accounts whose environment names another bus, never read each other's, and two starts
    * in the same folder share them. No Unix socket is granted, the Host's included: a sandboxed session reaches the Host
    * through `astera` in `excludedCommands` or the loopback with its workload token, so a line `excludedCommands` does not
    * take out (`cd x && astera …`) cannot reach it, on macOS as on Linux. Windows gets the deny rules only (Claude has no
-   * sandbox there). Written only once a sandboxed Claude is about to start (core/sandbox/claudeStart.ts), so a session
+   * sandbox there), and with the shell route the wrapper below. Written only once a sandboxed Claude is about to start (core/sandbox/claudeStart.ts), so a session
    * without it reads exactly the bytes it always did, at the same path. From then on every file rewritten gets the twins
    * of the last SANDBOX_SCOPES_KEPT scopes rewritten too. Resolves to 'write-failed' when one of this scope's twins is not
    * in place: a session asked to be sandboxed is then not marked so (spawnConfig), and its manager refuses it (E5).
@@ -842,16 +899,47 @@ export class StatusLineManager {
    * The app and the Host each write these paths in the profile folder, each from its own home and temp folder, as they
    * already do the files the twins are made from; a scope names the same folder in both only when what its sandbox holds
    * is the same.
+   *
+   * With the shell route (`scope.shell`, Windows; claude shell sandbox design D1, D7), the scope's folder, keyed by the
+   * whole plan, also gets the wrapper (SHELL_WRAP_FILE, shellWrapScript with the boot script beside it) and the boot
+   * script (SHELL_BOOT_FILE), written first, and every twin of the scope names the wrapper in its `env` (withShellEnv).
+   * A script that cannot be written answers 'write-failed'. A plan whose launch, `<codex> sandbox <args> -- <bash>
+   * <boot script>`, is longer than CreateProcess carries (WIN32_PROCESS_LINE_MAX, less SHIM_LINE_MARGIN for a codex that
+   * is not an `.exe`) could never run a command: nothing is
+   * written for it, and it answers 'command-too-long'. Without the route every byte is as before it existed.
    */
   async ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult> {
     if (!this.built) await this.ensureFiles()
     const { part, links } = this.sandboxNamed(scope)
     if (this.refusesLinks(links)) return { linked: links }
-    const key = sandboxKeyOf(part)
+    const shell = scope.shell?.plan
+    const key = sandboxKeyOf(part, shell)
+    if (shell) {
+      const p = shell
+      const launch = windowsCommandLineLength(slashed(p.codex), ['sandbox', ...p.args, '--', slashed(p.bash), slashed(this.bootFileOf(key))])
+      // A line of exactly the limit is accepted, as fitsWindowsCommandLine accepts one; a codex that is not an `.exe`
+      // keeps SHIM_LINE_MARGIN for the longer lines its shim launches
+      const max = WIN32_PROCESS_LINE_MAX - (/\.exe$/i.test(p.codex) ? 0 : SHIM_LINE_MARGIN)
+      if (launch > max) {
+        this.log(`sandbox: the shell wrapper's codex launch is ${launch} characters, longer than Windows carries for it (${max}); no wrapper is written`)
+        return 'command-too-long'
+      }
+    }
     this.scopes.delete(key)
-    this.scopes.set(key, part)
+    this.scopes.set(key, { part, ...(shell ? { shell } : {}) })
     for (const old of [...this.scopes.keys()].slice(0, Math.max(0, this.scopes.size - SANDBOX_SCOPES_KEPT))) this.forgetScope(old)
-    return this.writeTwinsOf(key, part)
+    return this.writeTwinsOf(key, part, shell)
+  }
+
+  /** The wrapper of a scope with the shell route, forward slashes, once ensureSandboxFiles has written it and its boot
+   *  script; null for a scope without the route or before. What a chat's environment names in CLAUDE_CODE_SHELL_PREFIX
+   *  (a terminal session reads it off spawnConfig's `shellWrapFile`). */
+  sandboxShellWrapFile(scope: SandboxScope): string | null {
+    if (!scope.shell) return null
+    const { part, links } = this.sandboxNamed(scope)
+    if (this.refusesLinks(links)) return null
+    const key = sandboxKeyOf(part, scope.shell.plan)
+    return this.shellReady.has(key) ? slashed(this.wrapFileOf(key)) : null
   }
 
   /** The part a scope's twin holds and its links (sandboxNamed), for a Task's check of that scope (Task K). */
@@ -859,14 +947,39 @@ export class StatusLineManager {
     return this.sandboxNamed(scope)
   }
 
+  /** The agents' login files a scope's twin denies (sandbox design §6): the wiring's entries (`agentLogins`), each only
+   *  if it is there now when the scope can look; a look that throws keeps the entry, and without a look (the measurement)
+   *  every entry stands as given. A prepare calls this once and keeps the result in the scope (`SandboxScope.agentLogins`),
+   *  so the spawn after it names the same files. */
+  chooseAgentLogins(scope: Pick<SandboxScope, 'look'>): string[] {
+    return this.agentLogins()
+      .filter((e) => {
+        if (!scope.look) return true
+        try {
+          return scope.look.lstat(e.path) !== null
+        } catch {
+          return true
+        }
+      })
+      .map((e) => e.path)
+  }
+
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
-   *  person's home. */
-  /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
+   *  person's home. The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
    *  round 5). With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and
    *  the read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them
-   *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. */
+   *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. The agents' login
+   *  files (sandbox design §6) are named on every OS only if they are there when the prepare chose them (chooseAgentLogins, kept in the scope), if the scope can look: a
+   *  logged-out account has no file to protect, and Codex's twin leaves a missing one out for the reasons prepared.ts
+   *  gives; a look that throws keeps the entry. Without a look (the measurement), as given. */
   private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
-    const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
+    const denied = claudeSessionDenied({
+      platform: this.platform,
+      env: scope.env,
+      homeDir: this.homeDir,
+      appKeyFile: appKeyPath(this.userDataDir),
+      agentLogins: scope.agentLogins ?? this.chooseAgentLogins(scope)
+    })
     const npmCache = npmCacheOf(this.tmpDir)
     const look = scope.look
     if (!look || scope.cwd === undefined)
@@ -888,7 +1001,8 @@ export class StatusLineManager {
    *  isSymlinkOutsideBoundary, :216-282) and pins the link itself among the ancestors (macos-sandbox-utils.js:539-557),
    *  but the deny then names only the link's spelling, and the target stays reachable by its own path inside the
    *  writable folder, which no rule names. Windows has no sandbox for Claude: its file tools' deny rules match a link and
-   *  its target alike, and its shell is not restricted anyway. */
+   *  its target alike, and its shell is either unrestricted or, with the shell route, in Codex's sandbox, whose prepare
+   *  refuses such a link itself (prepared.ts sessionSandboxArgs, which turns the route off). */
   private refusesLinks(links: readonly string[]): boolean {
     return links.length > 0 && this.platform !== 'win32'
   }
@@ -906,10 +1020,24 @@ export class StatusLineManager {
     return path.join(this.twinsDirOf(key), path.basename(this.sandboxChatSettingsFile))
   }
 
+  /** The shell route's wrapper and boot script for the scope `key`, in its folder (claude shell sandbox design D1). */
+  private wrapFileOf(key: string): string {
+    return path.join(this.twinsDirOf(key), SHELL_WRAP_FILE)
+  }
+
+  private bootFileOf(key: string): string {
+    return path.join(this.twinsDirOf(key), SHELL_BOOT_FILE)
+  }
+
   /** Whether `file`'s twin for the scope `key` holds the sandbox over what `file` holds now. */
   private twinReady(file: string, key: string): boolean {
     const from = this.twins.get(`${key}\u0000${file}`)
     return from !== undefined && from === this.variants.get(file)
+  }
+
+  /** Whether a scope's twins may be handed out as far as its shell route goes: no route, or its scripts in place. */
+  private shellInPlace(key: string, shell: ShellPlan | undefined): boolean {
+    return shell === undefined || this.shellReady.has(key)
   }
 
   /** Stops keeping a scope's twins up to date; its files stay on disk, and none is handed out again until a prepare writes
@@ -917,14 +1045,15 @@ export class StatusLineManager {
   private forgetScope(key: string): void {
     this.scopes.delete(key)
     this.sandboxChatReady.delete(key)
+    this.shellReady.delete(key)
     for (const k of [...this.twins.keys()]) if (k.startsWith(`${key}\u0000`)) this.twins.delete(k)
   }
 
   private async writeSandboxTwins(): Promise<void> {
-    for (const [key, part] of [...this.scopes]) await this.writeTwinsOf(key, part)
+    for (const [key, { part, shell }] of [...this.scopes]) await this.writeTwinsOf(key, part, shell)
   }
 
-  private async writeTwinsOf(key: string, part: SandboxPart): Promise<SandboxFilesResult> {
+  private async writeTwinsOf(key: string, part: SandboxPart, shell?: ShellPlan): Promise<SandboxFilesResult> {
     // A folder that cannot be made fails each write below, which says so
     await fs.mkdir(this.twinsDirOf(key), { recursive: true }).catch(() => {})
     // Stamped at every prepare, which writes nothing when every twin already holds what it would: a Host's start removes
@@ -932,26 +1061,40 @@ export class StatusLineManager {
     const now = new Date()
     await fs.utimes(this.twinsDirOf(key), now, now).catch(() => {})
     let ok = true
+    // The shell route's scripts before the twins that name the wrapper
+    let wrapFile: string | undefined
+    if (shell) {
+      wrapFile = this.wrapFileOf(key)
+      const scripts =
+        (await writeScript(wrapFile, shellWrapScript({ ...shell, bootFile: this.bootFileOf(key) }))) && (await writeScript(this.bootFileOf(key), SHELL_BOOT_SCRIPT))
+      if (scripts) this.shellReady.add(key)
+      else {
+        this.shellReady.delete(key)
+        ok = false
+      }
+    }
     for (const [file, content] of [...this.variants]) {
       const k = `${key}\u0000${file}`
-      if (await writeScript(this.twinOf(file, key), withSandbox(content, part))) this.twins.set(k, content)
+      if (await writeScript(this.twinOf(file, key), withSandbox(content, part, wrapFile))) this.twins.set(k, content)
       else {
         this.twins.delete(k)
         ok = false
       }
     }
-    const chat = await writeScript(this.chatTwinOf(key), withSandbox('{}', part))
+    const chat = await writeScript(this.chatTwinOf(key), withSandbox('{}', part, wrapFile))
     if (chat) this.sandboxChatReady.add(key)
     else this.sandboxChatReady.delete(key)
     return ok && chat ? 'ok' : 'write-failed'
   }
 
   /** A sandboxed Claude chat's one `--settings` (sandbox design §6): the sandbox of its scope, and in Enforce the blocking
-   *  hook with it, once ensureSandboxFiles for that scope (and for Enforce ensureEnforceFiles) has written it, else null. */
+   *  hook with it, once ensureSandboxFiles for that scope (and for Enforce ensureEnforceFiles) has written it, else null.
+   *  With the shell route, also only once its wrapper is in place (sandboxShellWrapFile). */
   sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null {
     const { part, links } = this.sandboxNamed(scope)
     if (this.refusesLinks(links)) return null
-    const key = sandboxKeyOf(part)
+    const key = sandboxKeyOf(part, scope.shell?.plan)
+    if (!this.shellInPlace(key, scope.shell?.plan)) return null
     if (enforce)
       return this.enforceReady && this.twinReady(this.enforceChatSettingsFile, key) ? ['--settings', this.twinOf(this.enforceChatSettingsFile, key).replace(/\\/g, '/')] : null
     return this.sandboxChatReady.has(key) ? ['--settings', this.chatTwinOf(key).replace(/\\/g, '/')] : null
@@ -1036,7 +1179,9 @@ export class StatusLineManager {
    *  ensureEnforceFiles has written them, and says so (`enforced`). `opts.reportsUses` (an observed session's
    *  Claude Code reports uses, withUseReports) points either at its twin with the use hooks (lifecycle design §4.12).
    *  `opts.sandbox` (a sandboxed Claude session's scope) points it at that scope's sandbox twin of whichever of these it would read, once ensureSandboxFiles has written that
-   *  twin over what the file holds now, and says so (`sandboxed`); without that mark its manager refuses the start. */
+   *  twin over what the file holds now, and says so (`sandboxed`); without that mark its manager refuses the start. A scope
+   *  with the shell route (claude shell sandbox design D1, D7) gets its twin only once the wrapper is in place, and then
+   *  `shell` and the wrapper's path (`shellWrapFile`), which the twin's `env` names. */
   spawnConfig(sessionId: string, account: Account, opts?: StatusLineSpawnOptions): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
     const observe = opts?.observe === true && this.observeReady
@@ -1063,9 +1208,12 @@ export class StatusLineManager {
           : this.settingsFile
     // A scope whose named path goes through a link it could change has no twin (Task E fix round 5): not marked sandboxed
     const named = opts?.sandbox ? this.sandboxNamed(opts.sandbox) : null
-    const key = named && !this.refusesLinks(named.links) ? sandboxKeyOf(named.part) : null
-    const sandboxed = key !== null && this.twinReady(variant, key)
+    // With the shell route the twin names the wrapper, and is handed out only once the wrapper is in place
+    const shell = opts?.sandbox?.shell?.plan
+    const key = named && !this.refusesLinks(named.links) ? sandboxKeyOf(named.part, shell) : null
+    const sandboxed = key !== null && this.twinReady(variant, key) && this.shellInPlace(key, shell)
     const file = sandboxed && key !== null ? this.twinOf(variant, key) : variant
+    const wrap = sandboxed && key !== null && shell ? slashed(this.wrapFileOf(key)) : null
     return {
       // Normalised to forward slashes — this is the --settings argument path passed to the shell/cmd (a verified format). node fs handles it as-is too.
       settingsFile: file.replace(/\\/g, '/'),
@@ -1077,7 +1225,8 @@ export class StatusLineManager {
       ...(observe ? { observed: true as const } : {}),
       ...(enforce ? { enforced: true as const } : {}),
       ...(uses ? { useHooks: true as const } : {}),
-      ...(sandboxed ? { sandboxed: true as const } : {})
+      ...(sandboxed ? { sandboxed: true as const } : {}),
+      ...(wrap !== null ? { shell: true as const, shellWrapFile: wrap } : {})
     }
   }
 

@@ -89,7 +89,9 @@ export interface CoordinatorDeps {
      *  Dispatch's; a coordinator's and a reviewer's never do. */
     agentProfileId?: string
     /** Start in the CLI's sandbox whatever the profile says (final fix pass, C3): a worker of work a sandboxed session
-     *  made or asked for. The wiring refuses it where that CLI has none, unless `sandboxDenyOnly`. */
+     *  made or asked for. A session a sandboxed session starts must itself be sandboxed: on Windows a Claude one is when
+     *  the shell route is there (Codex's sandbox set up), and the wiring refuses it with the reason's code otherwise,
+     *  unless `sandboxDenyOnly`. */
     sandbox?: true
     /** With `sandbox`: where the CLI has no sandbox, start with its deny rules only rather than be refused (a reviewer of
      *  work a profile's switch sandboxed, Task K fix rounds 1 and 2). */

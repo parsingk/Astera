@@ -46,7 +46,7 @@ import tls from 'node:tls'
 import * as pty from 'node-pty'
 import { hostAddress } from './address'
 import { nodePtyMissing } from './nodePtyCheck'
-import { hostPidFilePath, writeHostPidFile } from '../core/host/pidFile'
+import { hostPidFilePath, liveAppSince, writeHostPidFile } from '../core/host/pidFile'
 import { SPAWN_DEADLINE_MS } from '../core/host/unresponsive'
 import { hideForkedConsoleWindows } from './childWindows'
 import { trustSystemCa } from './systemCa'
@@ -89,6 +89,9 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
+import type { Account } from '../core/types'
+import { isLoggedIn } from '../core/accounts/loginCheck'
+import { shellCodexOf } from '../core/sandbox/claudeStart'
 import { hostSandboxDefault, hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
@@ -966,7 +969,16 @@ async function main(): Promise<void> {
     log: (m) => log.write(m),
     ...(sandboxSetup ? { sandboxSetup } : {}),
     ...(sandboxReadiness ? { sandboxReadiness } : {}),
-    ...(sandboxDefault ? { sandboxDefault } : {})
+    ...(sandboxDefault ? { sandboxDefault } : {}),
+    // On Windows, the Codex account a sandboxed Claude profile's shell borrows, picked as the Host's Claude starts pick it
+    ...(process.platform === 'win32'
+      ? {
+          claudeShellAccount: async (accounts: Account[]) => {
+            const descriptors = makeDescriptors(process.platform)
+            return (await shellCodexOf({ accounts, loggedIn: (a) => isLoggedIn(a, descriptors), envOf: () => ({}) }))?.account.id ?? null
+          }
+        }
+      : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */
@@ -1356,9 +1368,11 @@ async function main(): Promise<void> {
     process.exit(HOST_EXIT.keyFailure)
   }
   // Sandbox follow-ups, item 3: the sandbox twins folders not written for 30 days are removed, before any session this
-  // Host starts. None of this Host's sessions is live yet, and none of an earlier Host's outlived it; the app's own (its
-  // fallback while no Host answers) are what the 30 days keep, since every sandboxed start stamps its folder first.
-  const prunedTwins = await pruneSandboxTwins({ profileDir, now: Date.now(), inUse: new Set<string>(), log: (m) => log.write(m) })
+  // Host starts. None of this Host's sessions is live yet, and none of an earlier Host's outlived it (it ends them on its
+  // way out); the app's own (its fallback while no Host answers) are what the 30 days keep, since every sandboxed start
+  // stamps its folder first. A session with the shell route runs its folder's wrapper on every command (final review
+  // M8), so a folder holding one is kept when written since a live app started, which may be one of its own sessions'.
+  const prunedTwins = await pruneSandboxTwins({ profileDir, now: Date.now(), inUse: new Set<string>(), liveAppSince: liveAppSince(profileDir), log: (m) => log.write(m) })
   if (prunedTwins.length > 0) log.write(`sandbox twins not written for 30 days removed: ${prunedTwins.join(', ')}`)
   // Sandbox follow-ups, item 1: the key the app proves it is the app with. The app makes it before it first talks to a
   // Host; made here too when there is none, before any session this Host starts, so a sandboxed session is denied a

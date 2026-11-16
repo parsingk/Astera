@@ -116,4 +116,16 @@ describe('whether a session runs in the sandbox, read from its note', () => {
       expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: r })).not.toHaveProperty('sandboxWarnings')
     }
   })
+
+  // Claude shell sandbox design D5 (Task 4 review M7): a session that must be sandboxed says so beside `sandboxed`, so its
+  // rolls are held to it; a note without the field (an older build's) or with it but not sandboxed is not required
+  it('keeps sandboxRequired only beside sandboxed, and nothing for a note without it', () => {
+    const required = { ...base, sandboxed: true, sandboxRequired: true }
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: required })?.sandboxRequired).toBe(true)
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: required })?.sandboxRequired).toBe(true)
+    for (const restore of [{ ...base, sandboxed: true }, { ...base, sandboxRequired: true }, { ...base, sandboxed: false, sandboxRequired: true }, { ...base, sandboxed: true, sandboxRequired: 'true' }]) {
+      expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore }), JSON.stringify(restore)).not.toHaveProperty('sandboxRequired')
+      expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore }), JSON.stringify(restore)).not.toHaveProperty('sandboxRequired')
+    }
+  })
 })

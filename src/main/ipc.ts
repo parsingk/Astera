@@ -70,7 +70,6 @@ import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { forgetReadiness } from '../core/sandbox/windowsReadiness'
-import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { claudeUsernsCheck, sandboxWarningMessage } from '../core/sandbox/startWarnings'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
@@ -2151,21 +2150,21 @@ export function registerIpc(
     const account = core.accounts.get(opts.accountId)
     // **The sandbox comes from the profile only** (final fix pass, minor 1; permission.ts: "never a caller's"): a
     // `sandbox` in the options is dropped, whoever sent it. The app's own start of a sandboxed session's work, a Job's
-    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
-    // rather than started without one; the renderer's handler clears that one.
+    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and must have it: the prepares and spawns below are
+    // told so (`sandboxRequired`), and a Claude start on Windows whose shell has no route into Codex's sandbox is refused
+    // there in the reason's words (claude shell sandbox design D5), rather than started without one; the renderer's
+    // handler clears that one.
     const forceSandbox = opts.forceSandbox === true
     // A reviewer of work a profile's switch sandboxed allows the deny rules only where the CLI has no sandbox (Task K fix
     // rounds 1 and 2): it then starts as a sandboxed profile's session does there, rather than being refused. A reviewer
     // of a sandboxed session's work never asks (review.ts), so C3's refusal holds for it
     const forceSandboxDenyOnly = opts.forceSandboxDenyOnly === true
     {
-      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, ...withoutSandbox } = opts
+      // A caller's `sandboxRequired` too (Task 4 review M3): only the forced paths below set it
+      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, sandboxRequired: _callerRequired, ...withoutSandbox } = opts
       opts = withoutSandbox
     }
-    if (forceSandbox && !forceSandboxDenyOnly) {
-      const refused = forcedSandboxBlocker(providerOf(account), process.platform)
-      if (refused) throw refused
-    }
+    const sandboxRequired = forceSandbox && !forceSandboxDenyOnly
     // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
     // the profile's permission decides the bypass when the caller gave none. One that is not found is logged and
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
@@ -2333,7 +2332,7 @@ export function registerIpc(
       await core.capabilities.refresh(account, opts.agentProfileId)
       // The profile's sandbox: the folder's git layout read for the synchronous spawn, and on Windows the account's Codex
       // home asked whether it is set up; a refusal reaches the toast like any failed spawn (설정하기 for an account not set up)
-      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}) })
+      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}), ...(sandboxRequired ? { sandboxRequired: true } : {}) })
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -2347,7 +2346,8 @@ export function registerIpc(
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
         bypassSignal,
         ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
-        ...(opts.sandbox === true ? { sandbox: true } : {})
+        ...(opts.sandbox === true ? { sandbox: true } : {}),
+        ...(sandboxRequired ? { sandboxRequired: true } : {})
       })
       if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
       // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
@@ -2393,12 +2393,18 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
-    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}) })
+    // A forced Claude start on Windows without its shell's route is refused here (and the chat's above), no longer up
+    // front (Task 4 review M4): a forced resume refused here has already recorded its conversation under the profile and
+    // copied its transcript into the account. Both are harmless: the record names the profile the conversation was asked
+    // to resume as, which a later resume writes again, and the copy is the one any resume into that account makes and
+    // remakes, which a resume that fails for any other reason after this point leaves just the same
+    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}), ...(sandboxRequired ? { sandboxRequired: true } : {}) })
     const info = core.sessions.spawn({
       ...opts,
       account,
       rollProviders,
       orchEnv: orchEnvOf(),
+      ...(sandboxRequired ? { sandboxRequired: true } : {}),
       // 백지 재개 — `--resume` 을 부르지 않는다. `opts` 에는 아직 `resumeSessionId` 가 들어 있으므로
       // 여기서 undefined 로 덮는 것이 그 취소다. 그 결과 `info.resumeSessionId` 도 비고, 그것을
       // 읽는 아래 배선들(rolling·codexRolling 의 seed 필드, rollout 감시자)이 저절로 새 세션으로

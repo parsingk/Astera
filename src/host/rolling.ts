@@ -59,6 +59,8 @@ export interface RollSpawnOpts {
   agentProfileId?: string
   /** The chain started in the sandbox (SessionInfo.sandboxed), so its successor does too. */
   sandbox?: boolean
+  /** The chain must be sandboxed (SessionInfo.sandboxRequired), so its successor is held to it too. */
+  sandboxRequired?: boolean
 }
 
 /** What the rolling asks of the Host's chat sessions (chat takeover Task 6). `info` answers the session's
@@ -74,9 +76,10 @@ export interface HostRollSpawner {
   /** Everything a roll's respawn can wait on or be refused by, done while the old session still lives
    *  (R5). Rejects with HostRetiring, a RepairNeeded settings or accounts file, CWD_MISSING, or an
    *  unknown account. `agentProfileId` is the chain's own: the account's capabilities are resolved with it. `sandbox`:
-   *  the chain runs in the sandbox, so the folder is read for it (SessionManager.prepare). `kind: 'chat'`: the respawn
-   *  is a chat's app-server, whose sandbox needs no --no-daemon. */
-  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void>
+   *  the chain runs in the sandbox, so the folder is read for it (SessionManager.prepare); `'required'`: and must
+   *  (SessionInfo.sandboxRequired). `kind: 'chat'`: the respawn is a chat's app-server, whose sandbox needs no
+   *  --no-daemon. */
+  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean | 'required', kind?: 'chat'): Promise<void>
   /** The respawn itself, synchronous (constraint 12). Throws until the first prepareRollSpawn has
    *  succeeded. */
   rollSpawn(opts: RollSpawnOpts): SessionInfo
@@ -341,6 +344,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
         ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
         // A chain started in the sandbox keeps it; prepareRollSpawn read its folder before the kill
         ...(o.sandbox ? { sandbox: true } : {}),
+        ...(o.sandboxRequired ? { sandboxRequired: true } : {}),
         ...restoreExtra
       })
     }
@@ -359,7 +363,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   }
   const common = {
     // Its async half is done first, while the old session lives (R5). Left rejecting (see `safe`).
-    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat') =>
+    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean | 'required', kind?: 'chat') =>
       d.spawner.prepareRollSpawn(account, cwd, agentProfileId, sandbox, kind),
     write,
     kill,

@@ -53,8 +53,11 @@ const runsAsProfile = (profile: readonly string[] | undefined): profile is reado
  *  doctor above and every sandboxed launch name it themselves. */
 export const SETUP_ARGV = ['sandbox', 'setup', '--elevated', '--current-user']
 
-/** doctor answered in 0.5 to 12 s and the echo in about 1 s (Task 2); past this a home reads not set up. */
-export const READINESS_RUN_MS = 30_000
+/** doctor answered in 0.5 to 12 s and the echo in about 1 s (Task 2); a run stopped at this limit reads `check-failed`.
+ *  Raised from 30 s (claude shell sandbox design §5): on Windows 11 with codex-cli 0.160.0, on 2026-11-16, `codex doctor
+ *  --json` took 25 to 43 s on a Codex home with months of sessions, its `state.paths` check alone 27.6 s. The echo runs
+ *  under the same limit. */
+export const READINESS_RUN_MS = 120_000
 /** The setup waits on a person at the administrator prompt. */
 export const SETUP_RUN_MS = 5 * 60_000
 

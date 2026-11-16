@@ -1283,8 +1283,9 @@ shell-mode commands too" and "A Linux session with `CLAUDE_CODE_SUBPROCESS_ENV_S
 shell-mode commands included". Seen on a Mac, 2026-10-29: a profile folder write typed with `!` succeeded.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
-`worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
-`SANDBOX_UNAVAILABLE: no-sandbox claude` rather than run without one. Nor does a sandboxed session hand work to what
+`worker-start`. On Windows a Claude Code start is sandboxed when its shell can run in Codex's sandbox (a Codex
+account whose Windows sandbox is set up); otherwise it is refused with the reason's code (`SANDBOX_UNAVAILABLE: no-sandbox claude`,
+`cli-missing codex`, `windows-setup codex <account>`, …) rather than run without one. Nor does a sandboxed session hand work to what
 runs outside the sandbox: from inside one, typing into a session that is not sandboxed (`sessions send`, a
 `worker-start --terminal` into it, a `reply` its worker reads) is refused with 5 and
 `SANDBOX_UNAVAILABLE: outside-sandbox session <id>`, running a Job no sandboxed session made (`run-start`, `jobs run`,
@@ -1318,18 +1319,24 @@ and so does a Codex check on Windows, whose shell first prints a line of its own
 its terminal as before, so a sandbox that stops there still reads as the check's failure. A check that ran and failed
 is a failure. A Docker check
 (`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
-Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
+Claude Code on Windows has no sandbox of its own. When its workers' shell ran in Codex's sandbox (a Codex account's
+Windows sandbox set up), its checks run in Codex's sandbox through the same runner as a Codex check, under the Codex
+account its shell borrowed and the same profile; if that route is not there when the check starts, the check is not
+run and the question says why. When its workers ran with deny rules only, its checks run as before and say `validated
+outside the sandbox`. Every check,
 sandboxed or not, starts without the variables the Credentials list hides from a session in its folder, and its result
 names them (`hiddenEnv`: names only, never a value), which the completion block shows under a failed check; a check that
 timed out twice opens a question whose words name them. A value a check needs can be given on purpose in its run
 configuration's `env`, which is laid over that environment; inside `codex sandbox` the account's
 `shell_environment_policy` still decides what reaches the command, as it does for a session's commands. A reviewer of
-such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows,
-which has none, depends on what put the work in the sandbox. For work a profile's sandbox switch sandboxed, it starts
-as a sandboxed profile's Claude Code session does there, with its file tools kept out of the login folders and its
-shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block) says the review ran with file-tool
-protection only. For a Job or Task a sandboxed session made, it is refused with `SANDBOX_UNAVAILABLE: no-sandbox
-claude`, as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
+such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows
+starts as a sandboxed Claude Code session does there: when its shell can run in Codex's sandbox (a Codex account's
+Windows sandbox set up), it starts sandboxed and the Task is not marked. Without that route, it depends on what put the
+work in the sandbox. For work a profile's sandbox switch sandboxed, it starts with deny rules only, its file tools kept
+out of the login folders and its shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block)
+says the review ran with file-tool protection only. For a Job or Task a sandboxed session made, it is refused with
+`SANDBOX_UNAVAILABLE` and the reason's own code (`cli-missing codex`, `windows-setup codex <account>`, `no-sandbox
+claude`, …), as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
 loader, its JVM proxy agent) out of `app.asar`, and Astera hands srt their unpacked paths.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
@@ -1528,7 +1535,7 @@ still read your files and OS stores, git and Docker hand their stored logins to 
 your shell startup files set can come back in the commands an agent runs through a shell. Astera does not search the
 machine for credentials. Doctor then says, one line each and for every OS whatever this machine is, what an agent
 profile's sandbox does for Codex and for Claude Code (`Sandbox, Codex on Windows: …`; Claude Code on Windows is a
-warning, since its shell is not restricted there), that a sandboxed Claude Code session's git on Linux reads an excludes
+warning, since its shell is not restricted there unless Codex's sandbox runs it), that a sandboxed Claude Code session's git on Linux reads an excludes
 file of Astera's so `git add -A` works, and the sandbox's limits: `curl` fails TLS inside a sandboxed Codex session on
 Windows, `gh` inside cannot use your login (GitHub work goes through Astera), pushes from inside stay with the Host on
 Windows, a chain keeps the sandbox state it started with, a worktree a sandboxed Codex session adds itself has a
@@ -1575,12 +1582,20 @@ for each CLI on each OS (`provider`, `os` as `win32`, `darwin` or `linux`), clai
 (outside the session's folders), `sensitive` (the folders holding logins), `stores` (the OS secret store) and `network`.
 Codex's sandbox blocks the first three on every OS and allows the network (`seen`, printed `allowed`). Claude Code's
 blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runtime its sandbox runs on was measured,
-not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
-is `partial` with the note `file-tools-only`. Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
+not Claude Code's own use of it. On Windows Claude Code has no sandbox of its own: its `write`, `sensitive` and `stores`
+are `enforced` with the note `via-codex`, which means they hold only in a session whose shell runs in Codex's sandbox.
+A sandboxed Claude session's start puts its shell there when Git Bash is found and a Codex account is registered, with
+a recent enough codex and its Windows sandbox set up (Settings › Agent profiles); otherwise the session starts with
+deny rules only, which keep the file tools out of the login folders and leave the shell unrestricted, and its start
+says why. In a session whose shell runs in Codex's sandbox, the PowerShell tool is off, and `.claude` in the work
+folder (made if missing) and an existing `.mcp.json` are read-only to the shell, so it cannot plant what Claude Code
+runs outside the sandbox; a missing `.mcp.json` can still be made by the shell. These guards outlive the session: after
+such a session ran in a folder, no sandboxed session's shell, Codex's included, can write `.claude` or an existing
+`.mcp.json` there (the file tools still can). Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
 session bus by its file path, and a bus on an abstract socket is not denied. `--human` prints it as a table of its own,
-headed `sandbox`, under the other, with "Windows: the shell is not restricted" beside the Claude Code Windows row and,
+headed `sandbox`, under the other, with "Windows: the shell runs in Codex's sandbox when a Codex account's Windows sandbox is set up …" beside the Claude Code Windows row and,
 under the table, that outside the login folders the home folder stays readable inside the sandbox. Settings › Security
-& Access shows the same two lines. The tab of a sandboxed session shows a marker; for Claude Code on Windows it says
+& Access shows the same two lines. The tab of a sandboxed session shows a marker; for a Claude Code session on Windows whose shell is not in Codex's sandbox it says
 there is no sandbox, only deny rules for the file tools (the session's `sandboxKind` is `deny-only`, else `sandbox`).
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
@@ -1679,7 +1694,7 @@ or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` hold
   find the conversation that came before.
 - `sandboxed: true` and `sandboxKind`, when the session runs in its agent CLI's own sandbox (its agent
   profile's sandbox switch, or a sandboxed session asked for it). `sandboxKind` is `sandbox`, the CLI's
-  own sandbox, or `deny-only`: Claude Code on Windows has none, so only its file tools are kept from the
+  own sandbox, or `deny-only`: Claude Code on Windows without Codex's sandbox for its shell, so only its file tools are kept from the
   denied places and its shell is not restricted. Both are left out for a session outside the sandbox.
   `--human` prints them as a column before the title: `sandbox`, `deny-only`, or `-`.
 - `sources`, where the Host reads each fact of the session: `status`, `prompt`, `usage` and

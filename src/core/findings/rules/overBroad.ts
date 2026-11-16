@@ -67,7 +67,8 @@ export function overBroadBypassFindings(i: FindingInputs): Finding[] {
 }
 
 /** The sandbox line: the sandbox is off, every write stayed in its folder and no call named a login folder. Only where its
- *  CLI has a sandbox that holds writes to the folder: never Claude Code on Windows (SANDBOX_COVERAGE). */
+ *  CLI has a sandbox that holds writes to the folder (sandboxHoldsWrites): never Claude Code on Windows, whose shell is
+ *  held only when its start finds the route into Codex's sandbox, so turning the sandbox on may give deny rules only. */
 export function overBroadSandboxFindings(i: FindingInputs): Finding[] {
   return judged(i)
     .filter(({ p, use, provider }) => !p.sandbox && sandboxHoldsWrites(provider, i.platform) && use.stayedInFolder)

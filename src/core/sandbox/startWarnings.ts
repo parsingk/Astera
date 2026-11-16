@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { comparablePath, isPathWithin } from '../files/tree'
 import type { SandboxStartWarning } from '../types'
+import type { ClaudeShellOff } from './claudeStart'
 
 export type { SandboxStartWarning } from '../types'
 export { sandboxWarningMessage } from './warningKeys'
@@ -23,7 +24,15 @@ export interface SandboxWarnSink {
  *  for a Claude session on Linux, and a check that throws counts as no (a hint, not a gate). */
 export function startWarningsFor(
   sink: SandboxWarnSink | undefined,
-  o: { provider: 'claude' | 'codex'; platform: NodeJS.Platform; cwd: string; homeDir: string; linkInWorkFolder?: boolean; elevatedDefault?: boolean }
+  o: {
+    provider: 'claude' | 'codex'
+    platform: NodeJS.Platform
+    cwd: string
+    homeDir: string
+    linkInWorkFolder?: boolean
+    elevatedDefault?: boolean
+    claudeShell?: 'on' | ClaudeShellOff
+  }
 ): SandboxStartWarning[] {
   let restricted = false
   if (sink && o.provider === 'claude' && o.platform === 'linux') {
@@ -57,6 +66,20 @@ function holdsHome(cwd: string, homeDir: string, platform: NodeJS.Platform): boo
   return isPathWithin(cwd, homeDir, platform)
 }
 
+/** The warning a Claude session on Windows gets when its shell has no route into Codex's sandbox (claude shell sandbox
+ *  design D9), by the reason the prepare found (claudeStart.ts ClaudeShellOff): no Codex account, no codex or one too
+ *  old, which installing or updating Codex changes; the account's Windows sandbox not set up, which Settings › Agent
+ *  profiles sets up; anything else, which the log names. */
+const CLAUDE_SHELL_WARNING: Record<ClaudeShellOff, SandboxStartWarning> = {
+  'no-codex-account': 'claudeShellNoCodex',
+  'no-codex': 'claudeShellNoCodex',
+  'codex-too-old': 'claudeShellNoCodex',
+  'not-set-up': 'claudeShellNotSetUp',
+  'no-git-bash': 'claudeShellUnavailable',
+  'check-failed': 'claudeShellUnavailable',
+  other: 'claudeShellUnavailable'
+}
+
 /**
  * The warnings for one sandboxed start, in a fixed order:
  * - `claudeUserns`: a Claude session on Linux where Ubuntu's AppArmor profile confines bubblewrap
@@ -70,9 +93,14 @@ function holdsHome(cwd: string, homeDir: string, platform: NodeJS.Platform): boo
  *   through the `windows.sandbox` line or Codex's older feature key, set up before Astera took that line back out or by
  *   the person. The session is sandboxed as always; the account's ordinary Codex sessions run in that sandbox too and
  *   cannot read the login folders, which Settings › Agent profiles can undo.
+ * - `claudeShellNoCodex`, `claudeShellNotSetUp`, `claudeShellUnavailable` (claude shell sandbox design D9): a Claude
+ *   session on Windows whose shell has no route into Codex's sandbox (`claudeShell`, the reason its prepare found;
+ *   CLAUDE_SHELL_WARNING), so it holds its file tools only. One of them, never with the home one.
  * - `homeInWorkFolder`: the work folder is the home folder, holds it, or is the root of the filesystem or drive the home
- *   folder is on, so the sandbox lets the session write anything in the home folder. Both CLIs on every OS but Claude Code on Windows, whose shell has no
- *   sandbox at all (deny rules for its file tools only, coverage.ts), so "start it in a project folder" would be untrue.
+ *   folder is on, so the sandbox lets the session write anything in the home folder. Both CLIs on every OS, but Claude
+ *   Code on Windows only when its shell runs in Codex's sandbox (`claudeShell` 'on'): without that route its shell has
+ *   no sandbox at all (deny rules for its file tools only), so "start it in a project folder" would be untrue. A Claude
+ *   start on Windows that does not say (`claudeShell` absent) is read as one without it.
  */
 export function sandboxStartWarnings(o: {
   provider: 'claude' | 'codex'
@@ -82,12 +110,15 @@ export function sandboxStartWarnings(o: {
   claudeUsernsRestricted: boolean
   linkInWorkFolder?: boolean
   elevatedDefault?: boolean
+  claudeShell?: 'on' | ClaudeShellOff
 }): SandboxStartWarning[] {
   const out: SandboxStartWarning[] = []
   if (o.provider === 'claude' && o.platform === 'linux' && o.claudeUsernsRestricted) out.push('claudeUserns')
   if (o.provider === 'codex' && o.platform === 'linux' && o.linkInWorkFolder === true) out.push('linkInWorkFolder')
   if (o.provider === 'codex' && o.platform === 'win32' && o.elevatedDefault === true) out.push('elevatedDefault')
-  const denyOnly = o.provider === 'claude' && o.platform === 'win32'
+  const claudeOnWindows = o.provider === 'claude' && o.platform === 'win32'
+  if (claudeOnWindows && o.claudeShell !== undefined && o.claudeShell !== 'on') out.push(CLAUDE_SHELL_WARNING[o.claudeShell])
+  const denyOnly = claudeOnWindows && o.claudeShell !== 'on'
   if (!denyOnly && holdsHome(o.cwd, o.homeDir, o.platform)) out.push('homeInWorkFolder')
   return out
 }

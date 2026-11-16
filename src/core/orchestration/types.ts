@@ -86,9 +86,10 @@ export interface CheckResult {
   externalUrl?: string
   /** A person let this round go on without this check (C9 `skip-check`); its status is `not-run` */
   skipped?: true
-  /** The check ran outside any sandbox although the Task's workers were sandboxed: Claude Code on Windows has no sandbox,
-   *  only deny rules for its file tools, so its workers' shells, and with them this check, run as the person (Task K,
-   *  the person's Q1). Shown beside the verdict. */
+  /** The check ran outside any sandbox although the Task's workers were sandboxed: they were Claude Code on Windows
+   *  without its shell route into Codex's sandbox (claude shell sandbox design D5), with only deny rules for its file
+   *  tools, so its workers' shells, and with them this check, run as the person (Task K, the person's Q1). Shown beside
+   *  the verdict. */
   outsideSandbox?: true
   /** The variables the Credentials list kept from the check's environment, by name, never a value (Task K fix round 2):
    *  the names it took from the environment the check started from, and those it pointed at an empty location. A
@@ -455,8 +456,8 @@ export interface Task {
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
   /** The last review that gave a verdict ran with Claude Code's file-tool protection only (Task K fix round 1): its work was
-   *  sandboxed, and Claude Code has no sandbox on Windows, so its reviewer started with the deny rules only (E2), its shell
-   *  unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */
+   *  sandboxed, and Claude Code on Windows without its shell route into Codex's sandbox has none, so its reviewer started
+   *  with the deny rules only (E2), its shell unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */
   reviewFileToolsOnly?: true
   /** 이 Task 가 처음 validating 이 될 때 찍은 완료 정책의 지문(설계 G3, 명세 §37).
    *  `completionPolicyHash` 의 값이다 — 해시가 아니라 읽을 수 있는 정규 문자열이다. */
@@ -571,7 +572,8 @@ export interface Dispatch {
    *  one borrowed with the accounts (`workerProfileOf`). A reviewer's Dispatch has none. */
   agentProfileId?: string
   /** The protection the session this Dispatch started actually ran in (SessionInfo.sandboxKind), recorded when it
-   *  starts: `sandbox` its CLI's own, `deny-only` Claude Code on Windows. Absent when it ran unsandboxed, or for a
+   *  starts: `sandbox` its CLI's own (or, for Claude Code on Windows, Codex's around its shell), `deny-only` Claude Code
+   *  on Windows without its shell route into Codex's sandbox. Absent when it ran unsandboxed, or for a
    *  Dispatch from before Task K. A Task's checks run in the same kind (exec/checkSandbox.ts checkSandboxOf). */
   sandboxKind?: SandboxKind
   /**

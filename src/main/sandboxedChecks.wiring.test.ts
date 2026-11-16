@@ -39,11 +39,12 @@ describe("the app's checks of a sandboxed Task", () => {
 
   // Fix rounds 1 and 2: the forced sandbox of a reviewer of work a profile's switch sandboxed allows deny rules only where
   // the CLI has none (Claude Code on Windows), as the Host's spawn does; any other forced sandbox there, a reviewer's of a
-  // sandboxed session's work included, is still refused (C3)
+  // sandboxed session's work included, must be had (C3), and is refused by its prepare where it cannot be (claude shell
+  // sandbox design D5)
   it("lets a reviewer's forced sandbox start with deny rules only where the CLI has none", () => {
     const src = read('src/main/ipc.ts')
     expect(src).toMatch(/\.\.\.\(o\.sandboxDenyOnly \? \{ forceSandboxDenyOnly: true \} : \{\}\)/)
-    expect(src).toMatch(/if \(forceSandbox && !forceSandboxDenyOnly\) \{\s*const refused = forcedSandboxBlocker/)
+    expect(src).toMatch(/const sandboxRequired = forceSandbox && !forceSandboxDenyOnly/)
   })
 
   it("gives the app's session manager the srt runner bundled beside the main bundle, off Windows", () => {

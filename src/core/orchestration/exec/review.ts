@@ -308,11 +308,13 @@ export function createReviewStarter(c: ReviewContext): ReviewStarter {
           // done in a sandbox (or under Claude Code's deny rules on Windows) starts in its own CLI's sandbox, recorded on
           // its Dispatch
           // Fix round 1 (the controller's ruling, after E2): where the reviewer's CLI has no sandbox (Claude Code on
-          // Windows) it starts with the deny rules only, as a sandboxed profile's session does there, and the Task's
-          // record says so (Task.reviewFileToolsOnly), rather than being refused
+          // Windows without its shell route into Codex's sandbox) it starts with the deny rules only, as a sandboxed
+          // profile's session does there, and the Task's record says so (Task.reviewFileToolsOnly), rather than being
+          // refused; with the route it starts sandboxed and is not marked (state.ts records the Dispatch's kind)
           // Fix round 2 (the controller's ruling, correcting that one): only for work a profile's switch sandboxed (E2).
           // Work a sandboxed session made (C3) keeps the person's strict rule: the worker start forces the sandbox
-          // (workerStart.ts) and, without the allowance, a Claude reviewer on Windows is refused as before
+          // (workerStart.ts) and, without the allowance, a Claude reviewer on Windows without the route is refused with
+          // the reason's code (claude shell sandbox design D5)
           ...(workRanSandboxed(c.getState(), task)
             ? { sandbox: true as const, ...(workSandboxed(c.getState(), task) ? {} : { sandboxDenyOnly: true as const }) }
             : {})

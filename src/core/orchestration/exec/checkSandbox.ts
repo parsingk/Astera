@@ -8,8 +8,10 @@
 // - A lifecycle Task's merged check: every implementer Dispatch of the Run, since the merged tree holds all their work
 //   (Q3). A reviewer's Dispatch never counts: it reads that work in its own CLI's sandbox, which no worker ran in.
 // - The latest sandboxed attempt names the CLI and the account the check runs under; a real sandbox wins over deny rules.
-// - Claude Code on Windows has no sandbox, only deny rules for its file tools, so its workers' shells ran as the person;
-//   its checks run as today and say so (`deny-only`, the person's Q1).
+// - Claude Code on Windows has no sandbox of its own. A worker whose shell ran in Codex's sandbox (claude shell sandbox
+//   design D1) recorded `sandbox`, and its checks run in Codex's sandbox too (D10, SessionManager.checkLaunch). One without
+//   that route had deny rules only for its file tools, so its shell ran as the person; its checks run as today and say so
+//   (`deny-only`, the person's Q1).
 // - Work a sandboxed session made (Task.sandboxed, Job.sandboxed: final fix pass C3), from before the kind was recorded:
 //   its latest attempt, in the kind its CLI gets on this OS. A profile's switch from then is not known here.
 import { sandboxKindOf } from '../../sandbox/coverage'

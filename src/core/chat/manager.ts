@@ -26,12 +26,14 @@ import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import { PreparedLayouts, codexSessionLinks, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
-import type { LinkLook } from '../sandbox/locations'
+import type { DenyEntry, LinkLook } from '../sandbox/locations'
 import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
-import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { ClaudeSandboxStart, ClaudeShellState } from '../sandbox/claudeStart'
+import { claudeShellEnv } from '../sandbox/claudeShell'
+import type { GitBashResolver } from '../sessions/gitBash'
 import type { CodexExcludes } from '../sandbox/gitExcludes'
 import type { SandboxScope } from '../sessions/statusline'
 
@@ -91,12 +93,19 @@ export interface ChatManagerDeps {
   /** The sandbox for Claude (core/sandbox/claudeStart.ts), the terminal manager's (SessionManager.claudeSandbox), whose
    *  prepare a roll's chat respawn goes through. Absent, a sandboxed Claude chat is refused. */
   claudeSandbox?: ClaudeSandboxStart
+  /** Windows: the Git Bash a sandboxed Claude chat's shell route wraps (claude shell sandbox design D4.1), found off the
+   *  thread by its prepare; the process's resolver, the terminal manager's (SpawnChecks.gitBash). Absent, no Git Bash is
+   *  found and such a chat starts without the route, as it did before it. */
+  gitBash?: Pick<GitBashResolver, 'resolve'>
   /** The folder the Host's socket is in, which a sandboxed Codex chat's profile denies on macOS and Linux (SpawnChecks'
    *  twin). Absent, nothing is denied for it. */
   hostSocketDir?: string | null
   /** The profile's app key file, which a sandboxed Codex chat's profile denies on every OS (SpawnChecks' twin). Absent,
    *  nothing is denied for it. */
   appKeyFile?: string | null
+  /** The agents' login files a sandboxed Codex chat's profile denies on every OS, each only if it is there when the prepare looks
+   *  (SpawnChecks' twin). Absent, none is denied. */
+  agentLogins?: () => readonly DenyEntry[]
   /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is
    *  kept read-only. */
   readOnly?: readonly string[]
@@ -287,14 +296,19 @@ export class ChatSessionManager {
    * it is set up (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`) and the missing `config.worktree` files made
    * (prepareCodexSandbox, core/sandbox/prepared.ts). Every caller awaits it before `spawn`, beside the capability refresh;
    * a roll's respawn is prepared through the terminal manager's prepare instead, into the same store. A sandboxed Claude
-   * chat's sandbox is its settings: its version is asked and the file it takes as its `--settings` written
-   * (claudeStart.ts). Nothing to do for a chat that is not sandboxed.
+   * chat's sandbox is its settings: its version is asked and the file it takes as its `--settings` written, and on
+   * Windows whether its shell can run in Codex's sandbox, with the Git Bash found here (claude shell sandbox design D4)
+   * (claudeStart.ts). `sandboxRequired`: a Claude chat on Windows without that route is refused in the reason's words
+   * (D5). Nothing to do for a chat that is not sandboxed.
    */
-  async prepare(opts: { account: Account; cwd: string; sandbox?: boolean }): Promise<void> {
+  async prepare(opts: { account: Account; cwd: string; sandbox?: boolean; sandboxRequired?: boolean }): Promise<void> {
     if (opts.sandbox !== true) return
     if (providerOf(opts.account) === 'claude') {
       if (!this.deps.claudeSandbox) throw sandboxUnavailable('not-prepared')
-      return this.deps.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.inheritedEnv(opts.account) })
+      const env = this.inheritedEnv(opts.account)
+      // The person's own CLAUDE_CODE_GIT_BASH_PATH, which the search leaves alone, or the one found
+      const gitBash = this.deps.platform === 'win32' ? env.CLAUDE_CODE_GIT_BASH_PATH || ((await this.deps.gitBash?.resolve(env)) ?? null) : null
+      return this.deps.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env, gitBash, ...(opts.sandboxRequired === true ? { required: true } : {}) })
     }
     const prepared = await prepareCodexSandbox({
       accountId: opts.account.id,
@@ -305,6 +319,7 @@ export class ChatSessionManager {
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
       appKeyFile: this.deps.appKeyFile ?? null,
+      agentLogins: this.deps.agentLogins?.() ?? [],
       readOnly: this.deps.readOnly ?? [],
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
@@ -315,7 +330,7 @@ export class ChatSessionManager {
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
     // the copy of the person's git excludes for its environment, and the home's elevated default for its warning (Task P)
-    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault)
+    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault, prepared.agentLogins)
   }
 
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
@@ -365,8 +380,12 @@ export class ChatSessionManager {
     agentProfileId?: string
     /** Start the chat in its CLI's sandbox (sandbox design §6), as the profile's switch says; `prepare` (or, for a roll,
      *  the terminal manager's prepare) must have run first. Marked in the info and the note (SessionInfo.sandboxed).
-     *  Codex takes it as the app-server's `-c` and the thread's parameters, Claude as its one `--settings` file. */
+     *  Codex takes it as the app-server's `-c` and the thread's parameters, Claude as its one `--settings` file (on Windows
+     *  with its shell in Codex's sandbox when the prepare found the route, claude shell sandbox design D9). */
     sandbox?: boolean
+    /** The chat must be sandboxed (SessionInfo.sandboxRequired): a Claude chat on Windows whose prepare found no route for
+     *  its shell is refused in the reason's words (D5). Marked in the info and the note, so a roll's successor is too. */
+    sandboxRequired?: boolean
   }): SessionInfo {
     const provider = providerOf(opts.account)
 
@@ -383,8 +402,15 @@ export class ChatSessionManager {
     // safely itself, and a profile that does not name the repository's git directories would leave the session unable to
     // commit, so a sandboxed chat nobody prepared for it is refused rather than started without them (E5)
     const sandboxed = opts.sandbox === true
-    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
-    const sandboxKind = sandboxed ? sandboxKindOf(provider, this.deps.platform) : undefined
+    const required = sandboxed && opts.sandboxRequired === true
+    // Windows: whether the prepare found the route for a Claude chat's shell into Codex's sandbox (claude shell sandbox
+    // design D4), what it kept, never a new look; a chat that must be sandboxed is refused without it (D5)
+    const claudeShell: ClaudeShellState | undefined =
+      sandboxed && provider === 'claude' && this.deps.platform === 'win32' && this.deps.claudeSandbox ? this.deps.claudeSandbox.shellOf(opts.account.id, opts.cwd) : undefined
+    if (claudeShell && !claudeShell.on && required) throw new Error(claudeShell.refusal)
+    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): what this start really got, so Claude
+    // on Windows is a sandbox only with its shell's route (D9), deny rules only without
+    const sandboxKind = !sandboxed ? undefined : claudeShell ? (claudeShell.on ? 'sandbox' : 'deny-only') : sandboxKindOf(provider, this.deps.platform)
     const sandboxedCodex = sandboxed && provider === 'codex'
     // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
     const tooOld = sandboxedCodex ? codexVersionBlocker(this.deps.codexVersion) : null
@@ -403,6 +429,11 @@ export class ChatSessionManager {
       claudeScope = this.deps.claudeSandbox?.scopeOf(opts.account.id, opts.cwd, this.inheritedEnv(opts.account))
       if (claudeScope === undefined) throw sandboxUnavailable('not-prepared')
     }
+    // With the route, the chat names the wrapper its twin names (D7), and its scope carries the route: without either it
+    // would start marked a sandbox with its shell outside one
+    const shellRoute = claudeShell?.on === true ? claudeScope?.shell : undefined
+    const wrapFile = shellRoute && claudeScope ? (this.deps.claudeSandbox?.shellWrapFile?.(claudeScope) ?? null) : null
+    if (claudeShell?.on === true && (shellRoute === undefined || wrapFile === null)) throw sandboxUnavailable('not-prepared')
 
     // design F5 fix round 1: BYPASS_ENV rides here, not just on a manual retry's respawn — a rolling
     // respawn whose chain was already granted the bypass has to keep it (opts.startWithBypass, set by
@@ -424,6 +455,8 @@ export class ChatSessionManager {
             hostSocketDir: this.deps.hostSocketDir ?? null,
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
             appKeyFile: this.deps.appKeyFile ?? null,
+            agentLogins: this.sandboxLayouts.agentLoginsOf(opts.account.id, opts.cwd, Date.now()),
+            agentLoginsChosen: true,
             readOnly: this.deps.readOnly ?? [],
             log: this.deps.log,
             links: this.deps.linkLook ? { cwd: opts.cwd, look: this.deps.linkLook } : null
@@ -443,6 +476,8 @@ export class ChatSessionManager {
         layout,
         env: inherited,
         appKeyFile: this.deps.appKeyFile ?? null,
+        agentLogins: this.sandboxLayouts.agentLoginsOf(opts.account.id, opts.cwd, Date.now()),
+        agentLoginsChosen: true,
         readOnly: this.deps.readOnly ?? [],
         links: { cwd: opts.cwd, look: this.deps.linkLook }
       }).length > 0
@@ -454,10 +489,13 @@ export class ChatSessionManager {
           homeDir: this.deps.homeDir,
           linkInWorkFolder,
           // Task P: the account's Codex home still makes the elevated sandbox its default, as the prepare found it
-          elevatedDefault: sandboxedCodex && this.sandboxLayouts.elevatedDefaultOf(opts.account.id, opts.cwd, Date.now())
+          elevatedDefault: sandboxedCodex && this.sandboxLayouts.elevatedDefaultOf(opts.account.id, opts.cwd, Date.now()),
+          // Claude on Windows: its shell's route, or why it has none (D9)
+          ...(claudeShell ? { claudeShell: claudeShell.on ? ('on' as const) : claudeShell.why } : {})
         })
       : []
     const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
+    const requiredMark = required ? { sandboxRequired: true as const } : {}
     const env: Record<string, string | undefined> = {
       ...inherited,
       ...(opts.startWithBypass ? BYPASS_ENV : {}),
@@ -488,6 +526,13 @@ export class ChatSessionManager {
       Object.assign(env, codexSandboxEnv({ platform: this.deps.platform, layout, tmpDir: os.tmpdir(), env, excludesFile }))
     }
     if (sandboxedClaude && this.deps.claudeSandbox) Object.assign(env, this.deps.claudeSandbox.env(env))
+    // Windows, the shell's route (claude shell sandbox design D7, D8): what a sandboxed Codex session's environment gets
+    // there, and the wrapper's switches, after everything else Astera adds; and no CLAUDE_PROJECT_DIR inherited, which the
+    // wrapper reads as "not a tool command" (D2)
+    if (shellRoute && wrapFile !== null) {
+      Object.assign(env, shellRoute.env, claudeShellEnv(wrapFile))
+      delete env.CLAUDE_PROJECT_DIR
+    }
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand
     // takes it directly.
@@ -534,7 +579,7 @@ export class ChatSessionManager {
         ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
         ...(enforced ? { enforced: true } : {}),
         // The sandbox, as a terminal session's note has it: a Host handing the session back and a roll's successor read it
-        ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {}),
+        ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned, ...requiredMark } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -574,7 +619,7 @@ export class ChatSessionManager {
       ...(rollPrompt === undefined ? {} : { rollPrompt }),
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned, ...requiredMark } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
