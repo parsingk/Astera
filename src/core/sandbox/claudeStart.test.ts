@@ -14,7 +14,7 @@ import {
 } from './claudeStart'
 import { appServerSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
 import { gitLayoutOf } from './gitLayout'
-import type { SandboxScope } from '../sessions/statusline'
+import type { SandboxFilesResult, SandboxScope } from '../sessions/statusline'
 import { sandboxRefusalMessage } from './unavailable'
 import { sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from './prepared'
 import type { LinkLook } from './locations'
@@ -317,6 +317,7 @@ describe("the route for Claude's shell on Windows", () => {
     codexVersion?: string | null | 'missing'
     readiness?: Readiness
     look?: LinkLook | null
+    written?: (scope: SandboxScope) => SandboxFilesResult
   }
   const rig = (o: Rig = {}) => {
     const profileDir = temp()
@@ -348,7 +349,7 @@ describe("the route for Claude's shell on Windows", () => {
       env: {},
       tmpDir,
       files: {
-        ensureSandboxFiles: async (scope: SandboxScope) => (order.push('files'), scopes.push(scope), 'ok' as const),
+        ensureSandboxFiles: async (scope: SandboxScope): Promise<SandboxFilesResult> => (order.push('files'), scopes.push(scope), o.written ? o.written(scope) : 'ok'),
         sandboxChatArgs: () => ['--settings', 'S.json'],
         sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] })
       },
@@ -469,14 +470,40 @@ describe("the route for Claude's shell on Windows", () => {
       expect(r.scopes[0].shell).toBeUndefined()
       expect(r.asked.length > 0).toBe(c.codexAsked)
       expect(r.logged.join('\n')).toContain(c.why)
-      // Nothing is made in the work folder before the codex is known to be one the sandbox was measured on
-      if (!c.codexAsked) expect(existsSync(path.join(r.cwd, '.claude'))).toBe(false)
+      // Nothing is left in the work folder: a .claude this prepare made for a route it then did not get is removed again
+      expect(existsSync(path.join(r.cwd, '.claude'))).toBe(false)
       const f = rig(c.rig)
       await expect(f.prepare({ required: true })).rejects.toThrow(new RegExp(`^SANDBOX_UNAVAILABLE: ${c.refusal.replace(/\./g, '\\.')}$`))
       expect(f.order).not.toContain('files')
       expect(f.start.scopeOf('acc-1', f.cwd, f.sessionEnv)).toBeUndefined()
+      expect(existsSync(path.join(f.cwd, '.claude'))).toBe(false)
     })
   }
+
+  it('keeps a .claude that was there when the route ends up off', async () => {
+    const r = rig({ readiness: 'not-set-up' })
+    mkdirSync(path.join(r.cwd, '.claude'))
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toMatchObject({ on: false, why: 'not-set-up' })
+    expect(nodeFs.statSync(path.join(r.cwd, '.claude')).isDirectory()).toBe(true)
+  })
+
+  // Task 3: the twins' folder decides where the boot script goes, so only ensureSandboxFiles can measure the wrapper's
+  // launch; one that would not fit on a Windows command line turns the route off, and the twins are written without it
+  it('turns the route off when the wrapper’s launch would not fit on the command line', async () => {
+    const tooLong = (s: SandboxScope) => (s.shell ? ('command-too-long' as const) : ('ok' as const))
+    const r = rig({ written: tooLong })
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: command-too-long' })
+    expect(r.scopes.map((s) => s.shell !== undefined)).toEqual([true, false])
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeUndefined()
+    expect(r.logged.join('\n')).toMatch(/command-too-long|command line/)
+    expect(existsSync(path.join(r.cwd, '.claude'))).toBe(false)
+    const f = rig({ written: tooLong })
+    await expect(f.prepare({ required: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: command-too-long$/)
+    expect(f.start.scopeOf('acc-1', f.cwd, f.sessionEnv)).toBeUndefined()
+    expect(existsSync(path.join(f.cwd, '.claude'))).toBe(false)
+  })
 
   it('asks in D4’s order: Git Bash, the account, the codex path, its version, then the readiness', async () => {
     const r = rig()

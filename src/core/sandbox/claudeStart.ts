@@ -61,7 +61,8 @@ interface ShellRoute {
   excludesFile: string | null
 }
 
-type ShellDecision = { on: true; route: ShellRoute } | { on: false; why: ClaudeShellOff; refusal: string }
+type ShellOffDecision = { on: false; why: ClaudeShellOff; refusal: string }
+type ShellDecision = { on: true; route: ShellRoute } | ShellOffDecision
 
 /** srt 0.0.79's own lists (`DANGEROUS_FILES` and `getDangerousDirectories()` in dist/sandbox/sandbox-utils.js), the runtime
  *  Claude Code's sandbox uses. On Linux srt mounts `/dev/null` over each of them that is missing in the session folder, and
@@ -218,13 +219,23 @@ export function claudeSandboxStart(o: {
 
   /** The work folder's guards (D6), read-only inside the sandbox so the shell cannot plant what Claude Code runs outside
    *  it: `.claude`, made empty first when missing, since a read entry holds only for a path that is there (spec M8), and
-   *  each of srt's dangerous names that is there (the `.claude` ones are inside the first). Forward slashes. */
-  const guardsOf = async (cwd: string): Promise<string[]> => {
+   *  each of srt's dangerous names that is there (the `.claude` ones are inside the first). Forward slashes. A `.claude`
+   *  made here is noted in `made`, so the prepare can take it away again when the route ends up off. */
+  const guardsOf = async (cwd: string, made: { claude?: string }): Promise<string[]> => {
     const claude = path.join(cwd, '.claude')
-    if (!exists(claude)) await fs.mkdir(claude, { recursive: true })
+    if (!exists(claude)) {
+      await fs.mkdir(claude, { recursive: true })
+      made.claude = claude
+    }
     const names = [...SRT_DANGEROUS_FILES, ...SRT_DANGEROUS_DIRECTORIES.filter((d) => !d.startsWith('.claude/'))].filter((n) => exists(path.join(cwd, n)))
     const root = slashed(cwd).replace(/\/+$/, '')
     return ['.claude', ...names].map((n) => `${root}/${n}`)
+  }
+
+  /** The route off, for `why`, logged with what caused it. */
+  const shellOff = (cwd: string, why: ClaudeShellOff, refusal: string, cause: string): ShellOffDecision => {
+    o.log(`sandbox: Claude's shell in ${cwd} cannot run in Codex's sandbox (${why}): ${cause}; the session holds its file tools only`)
+    return { on: false, why, refusal }
   }
 
   /** Whether the shell can run in a Codex account's sandbox (D4), asked in D4's order, the first that fails the reason:
@@ -232,11 +243,8 @@ export function claudeSandboxStart(o: {
    *  place, everything a sandboxed Codex start on Windows checks, by its own code with that account's environment and
    *  this folder (prepareCodexSandbox), whose profile, with the guards as more read-only paths, is the wrapper's (D6).
    *  Each reason is logged with what caused it. Never throws. */
-  const decideShell = async (cwd: string, gitBash: string | null): Promise<ShellDecision> => {
-    const off = (why: ClaudeShellOff, refusal: string, cause: string): ShellDecision => {
-      o.log(`sandbox: Claude's shell in ${cwd} cannot run in Codex's sandbox (${why}): ${cause}; the session holds its file tools only`)
-      return { on: false, why, refusal }
-    }
+  const decideShell = async (cwd: string, gitBash: string | null, made: { claude?: string }): Promise<ShellDecision> => {
+    const off = (why: ClaudeShellOff, refusal: string, cause: string): ShellDecision => shellOff(cwd, why, refusal, cause)
     if (!gitBash) return off('no-git-bash', NO_SANDBOX_CLAUDE, 'no Git Bash was found, so Claude Code has no Bash tool to wrap')
     const codex = o.shellCodex?.() ?? null
     if (codex === null) return off('no-codex-account', NO_SANDBOX_CLAUDE, 'no Codex account is registered whose sandbox it could borrow')
@@ -248,7 +256,7 @@ export function claudeSandboxStart(o: {
     const tooOld = codexVersionBlocker(o.codexVersion)
     if (tooOld !== null) return off(shellOffOf(new Error(tooOld)).why, tooOld, tooOld)
     try {
-      const guards = await guardsOf(cwd)
+      const guards = await guardsOf(cwd, made)
       // The session's `-c` values, as prepareCodexSandbox built them for its readiness check, are handed to `check`
       const built: { args?: string[] } = {}
       const prepared = await prepareCodexSandbox({
@@ -325,36 +333,54 @@ export function claudeSandboxStart(o: {
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
       const layout = await layoutFor(p.cwd)
-      // Windows: the route for the shell, before the twins, which carry it (D4); a start that must be sandboxed is refused
-      // without one (D5), anything else goes on with the deny rules
-      const decided = o.platform === 'win32' ? await decideShell(p.cwd, p.gitBash ?? null) : null
-      if (decided !== null && !decided.on && p.required === true) throw new Error(decided.refusal)
-      const shell = decided?.on ? shellScopeOf(decided.route, p.env) : undefined
-      const chosen = o.files.chooseAgentLogins?.({ look: o.linkLook })
-      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook, ...(chosen ? { agentLogins: chosen } : {}), ...(shell ? { shell } : {}) })
-      // Task E fix rounds 5 and 6 (rule E5): a named path through a link the session could change, through which srt
-      // cannot keep the deny in force (StatusLineManager.refusesLinks says how, per OS; ensureSandboxFiles writes no twin)
-      if (typeof written === 'object') {
-        o.log(`sandbox: ${written.linked.join(', ')} is a link inside the session's writable folders, which it could repoint, and Claude's sandbox cannot keep the path closed through it, so the sandboxed start is refused`)
-        throw sandboxUnavailable('linked-path')
-      }
-      if (written !== 'ok') {
-        o.log("sandbox: Claude's sandbox settings could not be written, so the sandboxed start is refused")
-        throw sandboxUnavailable('settings-write-failed')
-      }
-      // A sandboxed npm cannot install until its cache folder exists (inventory §23.4); a folder that cannot be made costs
-      // only the installs, so it is said and not refused. Windows has no shell sandbox for Claude, and npm keeps its own
-      if (o.platform !== 'win32')
-        await fs.mkdir(npmCacheOf(o.tmpDir), { recursive: true }).catch((err: unknown) => o.log(`sandbox: npm's cache folder could not be made: ${String(err)}`))
-      if (o.platform === 'linux') {
-        excludesWritten = await writeExcludes()
-        if (!excludesWritten) o.log(`sandbox: the git excludes ${excludesFile} could not be written; git add -A may fail in the session`)
-      }
-      const at = now()
-      layouts.keep(p.accountId, p.cwd, layout, at, [], null, false, (chosen ?? []).map((path) => ({ path, kind: 'file' as const })))
-      if (decided !== null) {
-        for (const [k, v] of shells) if (at - v.at >= PREPARED_MS) shells.delete(k)
-        shells.set(shellKeyOf(p.accountId, p.cwd), { decided, at })
+      // A `.claude` this prepare made for the route is taken away again unless a route that is on is kept (Task 3): never
+      // recursively, so anything put in it since stays, and a failure to is ignored
+      const made: { claude?: string } = {}
+      let keptOn = false
+      try {
+        // Windows: the route for the shell, before the twins, which carry it (D4); a start that must be sandboxed is
+        // refused without one (D5), anything else goes on with the deny rules
+        let decided = o.platform === 'win32' ? await decideShell(p.cwd, p.gitBash ?? null, made) : null
+        if (decided !== null && !decided.on && p.required === true) throw new Error(decided.refusal)
+        const chosen = o.files.chooseAgentLogins?.({ look: o.linkLook })
+        const ensure = (shell: SandboxScope['shell']) =>
+          o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook, ...(chosen ? { agentLogins: chosen } : {}), ...(shell ? { shell } : {}) })
+        let written = await ensure(decided?.on ? shellScopeOf(decided.route, p.env) : undefined)
+        // The twins' folder decides where the boot script goes, so only the writer can measure the wrapper's launch: one
+        // longer than Windows carries could never run a command, so the route is off and the twins are written without it
+        if (written === 'command-too-long') {
+          decided = shellOff(p.cwd, 'other', sandboxUnavailable('command-too-long').message, "the wrapper's codex launch is longer than a Windows command line (command-too-long)")
+          if (p.required === true) throw new Error(decided.refusal)
+          written = await ensure(undefined)
+        }
+        // Task E fix rounds 5 and 6 (rule E5): a named path through a link the session could change, through which srt
+        // cannot keep the deny in force (StatusLineManager.refusesLinks says how, per OS; ensureSandboxFiles writes no twin)
+        if (typeof written === 'object') {
+          o.log(`sandbox: ${written.linked.join(', ')} is a link inside the session's writable folders, which it could repoint, and Claude's sandbox cannot keep the path closed through it, so the sandboxed start is refused`)
+          throw sandboxUnavailable('linked-path')
+        }
+        if (written !== 'ok') {
+          o.log("sandbox: Claude's sandbox settings could not be written, so the sandboxed start is refused")
+          throw sandboxUnavailable('settings-write-failed')
+        }
+        // A sandboxed npm cannot install until its cache folder exists (inventory §23.4); a folder that cannot be made
+        // costs only the installs, so it is said and not refused. On Windows a session with the shell route runs npm in
+        // Codex's sandbox, which may write TEMP (as a sandboxed Codex session's does); one without keeps npm's own cache
+        if (o.platform !== 'win32')
+          await fs.mkdir(npmCacheOf(o.tmpDir), { recursive: true }).catch((err: unknown) => o.log(`sandbox: npm's cache folder could not be made: ${String(err)}`))
+        if (o.platform === 'linux') {
+          excludesWritten = await writeExcludes()
+          if (!excludesWritten) o.log(`sandbox: the git excludes ${excludesFile} could not be written; git add -A may fail in the session`)
+        }
+        const at = now()
+        layouts.keep(p.accountId, p.cwd, layout, at, [], null, false, (chosen ?? []).map((path) => ({ path, kind: 'file' as const })))
+        if (decided !== null) {
+          for (const [k, v] of shells) if (at - v.at >= PREPARED_MS) shells.delete(k)
+          shells.set(shellKeyOf(p.accountId, p.cwd), { decided, at })
+          keptOn = decided.on
+        }
+      } finally {
+        if (made.claude !== undefined && !keptOn) await fs.rmdir(made.claude).catch(() => {})
       }
     },
     blocker,

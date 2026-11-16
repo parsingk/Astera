@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import type { Account } from '../types'
 import {
   SANDBOX_SCOPES_KEPT,
@@ -28,6 +29,8 @@ import { appKeyDenies, credentialStoreDenies, nodeLinkLook, profileReadOnly, sen
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
+import { SHELL_BOOT_FILE, SHELL_BOOT_SCRIPT, SHELL_WRAP_FILE, claudeShellEnv, shellWrapScript, type ClaudeShellPlan } from '../sandbox/claudeShell'
+import { WIN32_PROCESS_LINE_MAX } from './windowsExecutable'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -1444,6 +1447,153 @@ describe('StatusLineManager sandbox', () => {
     const c = mgr.spawnConfig('s1', account, { sandbox: scope })
     expect(c.sandboxed).toBe(true)
     expect(await read(c.settingsFile)).toContain('/usr/local/bin/node')
+  })
+
+  // Claude shell sandbox Task 3: a scope without `shell` gets exactly the files it got before the route existed, on every
+  // OS: the same folder name (the hash of the twin's part alone), the same files in it, each the same bytes (the source
+  // file with the sandbox and the deny rules added, as built before), and no script anywhere in the profile
+  it('without a shell route, writes the twins it always wrote, byte for byte, and no script', async () => {
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      await fs.rm(dir, { recursive: true, force: true })
+      await fs.mkdir(dir)
+      const mgr = managerOn(platform)
+      await mgr.init()
+      expect(await mgr.ensureEnforceFiles()).toBe('ok')
+      const scope = scopeOn(platform)
+      expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+      const part = builder(platform, scope)
+      const key = createHash('sha256').update(JSON.stringify(part)).digest('hex').slice(0, 16)
+      const folder = path.join(dir, SANDBOX_TWINS_DIR, key)
+      const names = (await fs.readdir(folder)).sort()
+      const sources = [
+        'astera-statusline-settings.json', 'astera-hooks-settings.json',
+        'astera-observe-settings.json', 'astera-observe-hooks-settings.json', 'astera-observe-uses-settings.json', 'astera-observe-uses-hooks-settings.json',
+        'astera-enforce-settings.json', 'astera-enforce-hooks-settings.json', 'astera-enforce-uses-settings.json', 'astera-enforce-uses-hooks-settings.json'
+      ]
+      expect(names, platform).toEqual(
+        [...sources.map((s) => s.replace(/\.json$/, '-sandbox.json')), 'astera-enforce-sandbox-chat-settings.json', 'astera-sandbox-chat-settings.json'].sort()
+      )
+      const sourceOf = async (name: string): Promise<string> =>
+        name === 'astera-sandbox-chat-settings.json'
+          ? '{}'
+          : read(path.join(dir, name === 'astera-enforce-sandbox-chat-settings.json' ? 'astera-enforce-chat-settings.json' : name.replace(/-sandbox\.json$/, '.json')))
+      for (const name of names) {
+        const s = JSON.parse(await sourceOf(name))
+        const permissions = { ...(s.permissions ?? {}), deny: [...(s.permissions?.deny ?? []), ...part.permissions.deny] }
+        const want = JSON.stringify({ ...s, ...(part.sandbox ? { sandbox: part.sandbox } : {}), permissions }, null, 2)
+        expect(await read(path.join(folder, name)), `${platform} ${name}`).toBe(want)
+      }
+      const all = await fs.readdir(dir, { recursive: true })
+      expect(all.filter((f) => String(f).endsWith('.sh')), platform).toEqual([])
+      for (const o of VARIANTS) {
+        const c = mgr.spawnConfig('s1', account, { ...o, sandbox: scope })
+        expect(c.sandboxed, platform).toBe(true)
+        expect(Object.keys(c).filter((k) => k.startsWith('shell')), platform).toEqual([])
+      }
+    }
+  })
+
+  // Claude shell sandbox D1, D7: with the route, the scope's folder holds the wrapper and its boot script, and every twin
+  // of the scope, terminal and chat, names the wrapper in its `env` with the PowerShell tool off and BASH_ENV, ENV pinned
+  const PLAN: Omit<ClaudeShellPlan, 'bootFile'> = {
+    codex: 'C:/tools/codex.exe',
+    codexHome: 'C:\\Users\\t\\.codex-accounts\\cx',
+    bash: 'E:/programs/Git/bin/bash.exe',
+    root: 'C:\\w\\proj',
+    args: ['-c', 'permissions={astera={extends=":workspace", filesystem={"C:/w/proj/.claude"="read"}}}', '-c', 'windows.sandbox="elevated"']
+  }
+  const shellScope = (plan: Omit<ClaudeShellPlan, 'bootFile'> = PLAN): SandboxScope => ({ ...scopeOn('win32', null), shell: { plan, env: { npm_config_cache: 'C:/t/astera-npm-cache' }, accountId: 'cx-1' } })
+
+  it('with a shell route, puts the wrapper beside the twins and names it in every twin of the scope', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    const scope = shellScope()
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const want = builder('win32', scope)
+    const first = mgr.spawnConfig('s1', account, { sandbox: scope })
+    const folder = folderOf(first.settingsFile)
+    const wrap = path.join(folder, SHELL_WRAP_FILE).replace(/\\/g, '/')
+    expect(await read(wrap)).toBe(shellWrapScript({ ...PLAN, bootFile: path.join(folder, SHELL_BOOT_FILE) }))
+    expect(await read(path.join(folder, SHELL_BOOT_FILE))).toBe(SHELL_BOOT_SCRIPT)
+    for (const o of VARIANTS) {
+      const c = mgr.spawnConfig('s1', account, { ...o, sandbox: scope })
+      expect(c, JSON.stringify(o)).toMatchObject({ sandboxed: true, shell: true, shellWrapFile: wrap })
+      expect(folderOf(c.settingsFile)).toBe(folder)
+      const twin = JSON.parse(await read(c.settingsFile))
+      expect(twin.env, JSON.stringify(o)).toEqual(claudeShellEnv(wrap))
+      expect(twin.permissions).toEqual({ deny: want.permissions.deny })
+      // The rest is the file it is a twin of
+      const plain = JSON.parse(await read(mgr.spawnConfig('s1', account, o).settingsFile))
+      delete twin.env
+      delete twin.permissions
+      expect(twin).toEqual(plain)
+    }
+    for (const enforce of [false, true]) {
+      const chat = mgr.sandboxChatArgs(enforce, scope)
+      expect(folderOf(chat![1])).toBe(folder)
+      expect(JSON.parse(await read(chat![1])).env).toEqual(claudeShellEnv(wrap))
+    }
+    expect(mgr.sandboxShellWrapFile(scope)).toBe(wrap)
+    // A scope without the route has no wrapper to give
+    expect(mgr.sandboxShellWrapFile(scopeOn('win32', null))).toBeNull()
+  })
+
+  // D7: two scopes never share a wrapper; the same plan gives the same folder
+  it('keys the twins folder by the whole plan', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    const folderFor = async (scope: SandboxScope): Promise<string> => {
+      expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+      return folderOf(mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile)
+    }
+    const a = await folderFor(shellScope())
+    expect(await folderFor(shellScope({ ...PLAN }))).toBe(a)
+    for (const other of [{ ...PLAN, args: [...PLAN.args, '-c', 'x=1'] }, { ...PLAN, codexHome: null }, { ...PLAN, root: 'C:\\w\\other' }, { ...PLAN, codex: 'C:/npm/codex' }, { ...PLAN, bash: 'C:/Git/bin/bash.exe' }])
+      expect(await folderFor(shellScope(other))).not.toBe(a)
+    expect(await folderFor(scopeOn('win32', null))).not.toBe(a)
+  })
+
+  // The manager rewrites every kept scope's twins when a file changes: the wrapper stays named
+  it('keeps the wrapper in the twins a settings rewrite writes again', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    const scope = shellScope()
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    await mgr.useNode('C:/n/rewritten-node.exe')
+    const c = mgr.spawnConfig('s1', account, { sandbox: scope })
+    expect(c).toMatchObject({ sandboxed: true, shell: true })
+    const twin = await read(c.settingsFile)
+    expect(twin).toContain('rewritten-node.exe')
+    expect(JSON.parse(twin).env).toEqual(claudeShellEnv(c.shellWrapFile!))
+  })
+
+  it('a wrapper that could not be written leaves the scope with no twin to hand out', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    const scope = shellScope()
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const wrap = mgr.sandboxShellWrapFile(scope)!.replace(/\//g, path.sep)
+    await fs.rm(wrap)
+    await fs.mkdir(wrap)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('write-failed')
+    const c = mgr.spawnConfig('s1', account, { sandbox: scope })
+    expect(c).not.toHaveProperty('sandboxed')
+    expect(c).not.toHaveProperty('shell')
+    expect(mgr.sandboxChatArgs(false, scope)).toBeNull()
+    expect(mgr.sandboxShellWrapFile(scope)).toBeNull()
+  })
+
+  // The wrapper runs `<codex> sandbox <args> -- <bash> <boot>`: a launch longer than CreateProcess carries could never
+  // start, so no wrapper is written for it and the prepare is told
+  it('writes nothing for a plan whose launch would not fit on a Windows command line', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    const scope = shellScope({ ...PLAN, args: ['-c', `x="${'a'.repeat(WIN32_PROCESS_LINE_MAX)}"`] })
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('command-too-long')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scope })).not.toHaveProperty('sandboxed')
+    expect(mgr.sandboxShellWrapFile(scope)).toBeNull()
+    expect(existsSync(path.join(dir, SANDBOX_TWINS_DIR))).toBe(false)
   })
 })
 

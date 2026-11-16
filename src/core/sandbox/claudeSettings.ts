@@ -1,7 +1,9 @@
 // The Claude side of a sandboxed session (sandbox design §6): the `sandbox` and `permissions` parts of the settings handed to
-// the session. Claude's own sandbox runs on macOS and Linux only; on Windows the deny rules are all it can enforce.
+// the session. Claude's own sandbox runs on macOS and Linux only; on Windows the deny rules are all it can enforce, and a
+// session whose shell runs in Codex's sandbox names the wrapper in the settings' `env` (withShellEnv).
 import type { GitLayout } from './gitLayout'
 import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from './locations'
+import { claudeShellEnv } from './claudeShell'
 
 export interface ClaudeSandboxSettings {
   sandbox?: {
@@ -97,4 +99,12 @@ export function claudeSandboxSettings(o: { platform: NodeJS.Platform; denied: st
     },
     permissions
   }
+}
+
+/** A settings file with Claude's shell routed into Codex's sandbox on Windows (claude shell sandbox design D7): its `env`
+ *  gets claudeShellEnv's values for the wrapper `wrapFile`, over any it already holds, its other keys kept. In the file a
+ *  session is started with (`--settings`), these win over a project's settings files (spec M10). */
+export function withShellEnv<T extends object>(settings: T, wrapFile: string): T & { env: Record<string, string> } {
+  const own = (settings as { env?: Record<string, string> }).env
+  return { ...settings, env: { ...(own ?? {}), ...claudeShellEnv(wrapFile) } }
 }
