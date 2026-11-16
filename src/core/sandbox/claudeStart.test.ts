@@ -324,6 +324,10 @@ describe("the route for Claude's shell on Windows", () => {
     throws?: 'account' | 'exe' | 'warm'
     /** The account answered as a promise, as the app's and the Host's wirings answer it (they ask the logins). */
     asyncAccount?: boolean
+    /** A wiring that passes no read-only folders. */
+    noReadOnly?: boolean
+    /** While set, the readiness question waits for it: a prepare still running. */
+    hold?: Promise<void>
   }
   const rig = (o: Rig = {}) => {
     const profileDir = temp()
@@ -377,7 +381,12 @@ describe("the route for Claude's shell on Windows", () => {
         const found = o.account === false ? null : { account: { id: 'cx-1' }, env: codexEnv }
         return o.asyncAccount ? Promise.resolve(found) : found
       },
-      codexReady: async (a) => (order.push('ready'), asked.push(a), o.readiness ?? 'ready'),
+      codexReady: async (a) => {
+        order.push('ready')
+        asked.push(a)
+        if (o.hold) await o.hold
+        return o.readiness ?? 'ready'
+      },
       codexVersion,
       codexExe: () => {
         order.push('exe')
@@ -386,7 +395,7 @@ describe("the route for Claude's shell on Windows", () => {
       },
       codexExcludes: async () => 'C:/t/astera-excludes',
       appKeyFile,
-      readOnly,
+      ...(o.noReadOnly ? {} : { readOnly }),
       agentLogins: () => [{ path: login, kind: 'file' as const }],
       ...(o.exists ? { exists: o.exists } : {})
     })
@@ -583,7 +592,8 @@ describe("the route for Claude's shell on Windows", () => {
     expect(r.start.shellOf('acc-2', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
   })
 
-  // Task 2 review M3, M8: a later prepare's answer replaces an earlier ON, and a refused one leaves nothing behind
+  // Task 2 review M3, M8: a later prepare's answer replaces an earlier ON, and a refused one leaves no route behind (the
+  // earlier layout stays, Task 3 review M2)
   it('lets a later prepare that loses the route say so, and a refused one keep nothing', async () => {
     const o: Rig = {}
     const r = rig(o)
@@ -600,7 +610,40 @@ describe("the route for Claude's shell on Windows", () => {
     q.readiness = 'check-failed'
     await expect(s.prepare({ required: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-check-failed codex cx-1$/)
     expect(s.start.shellOf('acc-1', s.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
-    expect(s.start.scopeOf('acc-1', s.cwd, s.sessionEnv)).toBeUndefined()
+    expect(s.start.scopeOf('acc-1', s.cwd, s.sessionEnv)).toBeDefined()
+    expect(s.start.scopeOf('acc-1', s.cwd, s.sessionEnv)?.shell).toBeUndefined()
+  })
+
+  // Task 3 review M2: a prepare drops only the route an earlier one kept, not its layout, so a start that already prepared
+  // still finds its scope while a later prepare for the same account and folder runs (codex doctor takes seconds)
+  it("keeps an earlier prepare's layout while a later prepare for the same folder is still running", async () => {
+    const o: Rig = {}
+    const r = rig(o)
+    await r.prepare()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    let release = (): void => {}
+    o.hold = new Promise<void>((done) => (release = done))
+    const later = r.prepare()
+    await vi.waitFor(() => expect(r.asked).toHaveLength(2))
+    // The layout is still there for the start that prepared; the route waits for the later prepare's answer
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)).toBeDefined()
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeUndefined()
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: false, why: 'other', refusal: 'SANDBOX_UNAVAILABLE: not-prepared' })
+    release()
+    await later
+    expect(r.start.shellOf('acc-1', r.cwd)).toEqual({ on: true })
+    expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell).toBeDefined()
+  })
+
+  // Task 3 review M6: the wrapper runs outside the sandbox, so Astera's profile folder, where it is kept, is read-only in
+  // the route's profile whatever the wiring passes
+  it('keeps the profile folder read-only in the route’s profile when the wiring passes no read-only folders', async () => {
+    const r = rig({ noReadOnly: true })
+    await r.prepare()
+    const guards = [`${slashed(r.cwd)}/.claude`]
+    const plan = r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)?.shell?.plan
+    expect(profileEntries(plan!.args, 'read')).toEqual([slashed(r.profileDir), ...guards])
+    expect(profileEntries(r.asked[0].profile ?? [], 'read')).toEqual([slashed(r.profileDir), ...guards])
   })
 
   // Task 2 review M1, M8: a wiring callback that throws turns the route off; the start goes on, unless it must be sandboxed

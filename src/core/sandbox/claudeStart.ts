@@ -14,7 +14,7 @@ import { appServerSandboxArgs, appendGitConfig, codexSandboxEnv, npmCacheOf } fr
 import { globalExcludesText, runGitFile, type CodexExcludes, type RunGit } from './gitExcludes'
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { PREPARED_MS, PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, type CodexVersionProbe, type CodexWindowsReady } from './prepared'
-import type { DenyEntry, LinkLook } from './locations'
+import { profileReadOnly, type DenyEntry, type LinkLook } from './locations'
 import type { ClaudeSandboxSettings } from './claudeSettings'
 import { bashRunnable, type ClaudeShellPlan } from './claudeShell'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
@@ -232,7 +232,7 @@ export function claudeSandboxStart(o: {
   /** Writes the copy of the person's git excludes the sandbox's own account reads (prepareCodexSandbox `excludes`). */
   codexExcludes?: CodexExcludes
   /** The profile's app key, the read-only folders and the agents' login files, as a sandboxed Codex start of this process
-   *  gets them (prepareCodexSandbox). */
+   *  gets them (prepareCodexSandbox). `profileDir` is read-only in the route's profile with or without `readOnly`. */
   appKeyFile?: string | null
   readOnly?: readonly string[]
   agentLogins?: () => readonly DenyEntry[]
@@ -335,7 +335,9 @@ export function claudeSandboxStart(o: {
         ready: o.codexReady,
         appKeyFile: o.appKeyFile ?? null,
         agentLogins: o.agentLogins?.() ?? [],
-        readOnly: [...(o.readOnly ?? []), ...guards],
+        // Task 3 review M6: the profile folder, where the wrapper is kept, is read-only whatever the wiring passes: the
+        // wrapper runs outside the sandbox, and a work folder that holds the profile would otherwise let the shell rewrite it
+        readOnly: [...new Set([...profileReadOnly(o.profileDir), ...(o.readOnly ?? []), ...guards])],
         version: o.codexVersion,
         check: (args) => {
           built.args = args
@@ -407,12 +409,10 @@ export function claudeSandboxStart(o: {
 
   return {
     prepare: async (p) => {
-      // Task 2 review M3: on Windows what an earlier prepare kept for this account and folder goes first, so a prepare
-      // that is refused or fails never leaves an earlier route behind for a spawn to find
-      if (o.platform === 'win32') {
-        layouts.forget(p.accountId, p.cwd)
-        shells.delete(shellKeyOf(p.accountId, p.cwd))
-      }
+      // Task 2 review M3: on Windows the route an earlier prepare kept for this account and folder goes first, so a
+      // prepare that is refused or fails never leaves an earlier route behind for a spawn to find. Its layout stays
+      // (Task 3 review M2): a start that already prepared still finds its scope while this one runs, without the route
+      if (o.platform === 'win32') shells.delete(shellKeyOf(p.accountId, p.cwd))
       await o.version.warm('claude')
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
