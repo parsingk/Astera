@@ -10,3 +10,19 @@ export interface ManifestDoc {
   name: string | null
   namespace: string | null
 }
+
+/** One kubectl invocation: kubectl takes `-f` (many) or a single `-k` per command. */
+export type KubeCommand = { kind: 'files'; files: string[] } | { kind: 'overlay'; dir: string }
+
+/** A file or folder the plan did not apply, with the reason. */
+export interface LeftOut {
+  path: string
+  reason: 'plain-yaml' | 'base' | 'base-member' | 'helm'
+}
+
+export type OperationPlan =
+  | { ok: true; commands: KubeCommand[]; leftOut: LeftOut[] }
+  | { ok: false; reason: 'nothing' | 'base-folder' | 'many-overlays'; paths: string[] }
+
+/** `nsFlag` is the value for `-n`, or null when every resource names its namespace. */
+export type KubeTarget = { context: string; nsFlag: string | null }
