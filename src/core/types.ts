@@ -1,4 +1,5 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type { KubeContexts, KubeFileKind, Remembered, TargetState } from './kube/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -1404,6 +1405,18 @@ export interface CoreApi {
     setCurrent(id: string): Promise<void>
     /** Runs `workspace set <workspaceId>` under that account. */
     setWorkspace(id: string, workspaceId: string): Promise<void>
+  }
+  kube: {
+    /** Kinds of the YAML files among `paths` (other paths are left out of the answer). */
+    classify(paths: string[]): Promise<Record<string, KubeFileKind>>
+    contexts(): Promise<KubeContexts>
+    target(
+      filePath: string,
+      projectRoot: string
+    ): Promise<{ state: TargetState; rememberFolder: string; overlay: string | null; overlays: string[] }>
+    setTarget(folder: string, value: Remembered | null): Promise<void>
+    setOverlay(filePath: string, overlayDir: string): Promise<void>
+    useContext(context: string): Promise<{ ok: boolean; stdout: string; stderr: string; errorCode?: string }>
   }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */

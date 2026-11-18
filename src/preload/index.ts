@@ -134,6 +134,14 @@ const api = {
     setCurrent: invoke('higgsfield.setCurrent'),
     setWorkspace: invoke('higgsfield.setWorkspace')
   },
+  kube: {
+    classify: invoke('kube.classify'),
+    contexts: invoke('kube.contexts'),
+    target: invoke('kube.target'),
+    setTarget: invoke('kube.setTarget'),
+    setOverlay: invoke('kube.setOverlay'),
+    useContext: invoke('kube.useContext')
+  },
   github: {
     status: invoke('github.status'),
     recheck: invoke('github.recheck'),
