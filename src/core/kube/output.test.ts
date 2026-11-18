@@ -23,10 +23,48 @@ describe('parseKubectlOutput', () => {
     ])
   })
 
-  it('treats an unknown verb as configured', () => {
-    expect(parseKubectlOutput('configmap/x serverside-applied', '')).toEqual([
-      { ref: 'configmap/x', outcome: 'configured' }
+  it('maps the whitelisted variant verbs and keeps the verb as message', () => {
+    expect(
+      parseKubectlOutput(['configmap/x serverside-applied', 'service/y patched', 'pod/z pruned'].join('\n'), '')
+    ).toEqual([
+      { ref: 'configmap/x', outcome: 'configured', message: 'serverside-applied' },
+      { ref: 'service/y', outcome: 'configured', message: 'patched' },
+      { ref: 'pod/z', outcome: 'deleted', message: 'pruned' }
     ])
+  })
+
+  it('reads plain delete output with a quoted name', () => {
+    expect(
+      parseKubectlOutput(['deployment.apps "api-server" deleted', 'service "web" deleted (server dry run)'].join('\n'), '')
+    ).toEqual([
+      { ref: 'deployment.apps/api-server', outcome: 'deleted' },
+      { ref: 'service/web', outcome: 'deleted' }
+    ])
+  })
+
+  it('accepts dotted names', () => {
+    expect(parseKubectlOutput('configmap/app.config configured', '')).toEqual([
+      { ref: 'configmap/app.config', outcome: 'configured' }
+    ])
+  })
+
+  it('turns an unknown verb or a success-shaped stray line into an error', () => {
+    expect(parseKubectlOutput('', ['./x.yaml missing', 'service/a exploded'].join('\n'))).toEqual([
+      { ref: '', outcome: 'error', message: './x.yaml missing' },
+      { ref: '', outcome: 'error', message: 'service/a exploded' }
+    ])
+  })
+
+  it('reports a Warning line as a warning', () => {
+    expect(parseKubectlOutput('', 'Warning: resource lacks the last-applied annotation')).toEqual([
+      { ref: '', outcome: 'warning', message: 'resource lacks the last-applied annotation' }
+    ])
+  })
+
+  it('keeps a file path with spaces and Korean characters', () => {
+    const file = 'my app/배포 설정.yaml'
+    const line = `Error from server (Invalid): error when creating "${file}": bad`
+    expect(parseKubectlOutput('', line)).toEqual([{ ref: '', outcome: 'error', file, message: 'bad' }])
   })
 
   it('splits an error that names its file', () => {
@@ -48,8 +86,8 @@ describe('parseKubectlOutput', () => {
     expect(parseKubectlOutput('', line)).toEqual([{ ref: '', outcome: 'error', message: line }])
   })
 
-  it('keeps continuation lines and drops warnings and blanks', () => {
-    const stderr = 'Warning: something deprecated\n\nerror: first\n  detail line\n'
+  it('keeps continuation lines and drops blanks', () => {
+    const stderr = '\nerror: first\n  detail line\n'
     expect(parseKubectlOutput('', stderr)).toEqual([
       { ref: '', outcome: 'error', message: 'error: first' },
       { ref: '', outcome: 'error', message: 'detail line' }

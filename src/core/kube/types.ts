@@ -76,7 +76,7 @@ export interface ResourceDiff {
 /** One line of `kubectl apply`/`delete` output, per resource. `ref` is empty for an error that names no resource. */
 export interface ResourceOutcome {
   ref: string
-  outcome: 'created' | 'configured' | 'unchanged' | 'deleted' | 'error'
+  outcome: 'created' | 'configured' | 'unchanged' | 'deleted' | 'warning' | 'error'
   message?: string
   file?: string
 }
