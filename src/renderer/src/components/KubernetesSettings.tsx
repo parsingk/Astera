@@ -114,6 +114,7 @@ export function KubernetesSettings(): React.JSX.Element {
         <span>{t('kube.settings.override')}</span>
         <input
           type="text"
+          className="settings-gen-input"
           value={draft}
           placeholder={check?.ok ? check.path : 'kubectl'}
           spellCheck={false}
