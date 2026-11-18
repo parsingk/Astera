@@ -104,6 +104,12 @@ export interface KubeMenuAsk {
 export const kubeMenuAnswer = (s: KubeMenuAsk, menu: object, info: KubeMenuInfo | null): KubeMenuAsk =>
   s.menu === menu ? { menu, info } : s
 
+/** Whether a selection gets the Kubernetes group at all (kubeMenuItems is null otherwise): a folder, a manifest, a
+ *  kustomization, or a Helm template (shown disabled). False for a file whose kind has not arrived yet. */
+export function kubeMenuApplies(selection: string[], kinds: Record<string, KubeFileKind>, isDir: (p: string) => boolean): boolean {
+  return selection.some((p) => isDir(p) || kinds[p] === 'manifest' || kinds[p] === 'kustomization' || kinds[p] === 'helm-template')
+}
+
 /** The "Kubernetes" group item of the context menu, or null when nothing in the selection can be a target.
  *  A manifest, a kustomization or a folder (which may hold manifests; the real planning is the main
  *  process's) is a target. Helm templates are not, nor a folder known to be in a Helm chart (`isChart`): when they
@@ -123,7 +129,7 @@ export function kubeMenuItems(args: {
     (p) => !isHelm(p) && (isDir(p) || kinds[p] === 'manifest' || kinds[p] === 'kustomization')
   )
   const helmOnly = !applicable && selection.some(isHelm)
-  if (!applicable && !helmOnly) return null
+  if (!kubeMenuApplies(selection, kinds, isDir)) return null
   const onlyManifest = selection.length === 1 && !isDir(selection[0]) && kinds[selection[0]] === 'manifest'
   const helmTitle = helmOnly ? t('kube.menu.helm') : undefined
   const reloadOff = helmOnly || !onlyManifest
@@ -791,22 +797,21 @@ export function FileExplorer({
   const rowPaths = useMemo(() => entryPaths(rows), [rows])
   const kubeKinds = useKubeKinds(root, rowPaths)
   // Once a menu opens on a Kubernetes selection, the App resolves its target and which selected folders are Helm
-  // charts; an answer for an earlier opening is dropped (kubeMenuAnswer).
+  // charts; an answer for an earlier opening is dropped (kubeMenuAnswer). The kinds may arrive while the menu is open,
+  // so the ask also waits for the selection to become one the group shows for.
+  const kubeApplies = !!menu?.entry && !!onKube && kubeMenuApplies(kubePathsOf(menu.entry), kubeKinds, kubeIsDir())
   useEffect(() => {
     const entry = menu?.entry
-    if (!menu || !entry || !onKube || !resolveKube) return
+    if (!menu || !entry || !kubeApplies || !resolveKube) return
     const paths = kubePathsOf(entry)
     const isDir = kubeIsDir()
-    const noop = (): void => {}
-    const on = { compare: noop, apply: noop, reload: noop, delete: noop }
-    if (kubeMenuItems({ selection: paths, kinds: kubeKinds, isDir, heading: '', t, on }) === null) return
     setKubeMenu({ menu, info: 'loading' })
     resolveKube(paths, paths.filter(isDir)).then(
       (info) => setKubeMenu((s) => kubeMenuAnswer(s, menu, info)),
       () => setKubeMenu((s) => kubeMenuAnswer(s, menu, null))
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [menu])
+  }, [menu, kubeApplies])
   const [viewport, setViewport] = useState({ top: 0, h: DEFAULT_VIEWPORT_H })
   const range = visibleRange(offsets, viewport.top, viewport.h, OVERSCAN)
   // What the scroll handler and the reveal compare against — the latest render's layout

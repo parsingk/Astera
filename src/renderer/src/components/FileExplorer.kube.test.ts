@@ -3,7 +3,7 @@ import type { KubeFileKind } from '../../../core/kube/types'
 import type { MenuItem, SubmenuItem } from './ContextMenu'
 import { en } from '../../../core/i18n/messages/en'
 import { ko } from '../../../core/i18n/messages/ko'
-import { kubeMenuAnswer, kubeMenuHeading, kubeMenuItems, type KubeMenuAsk } from './FileExplorer'
+import { kubeMenuAnswer, kubeMenuApplies, kubeMenuHeading, kubeMenuItems, type KubeMenuAsk } from './FileExplorer'
 
 const t = (k: string): string => k
 const tp = (k: string, p?: Record<string, unknown>): string => (p ? `${k}${JSON.stringify(p)}` : k)
@@ -85,6 +85,32 @@ describe('kubeMenuItems', () => {
     expect(actions(build(['/chart'], {}, ['/chart'])!)[1].disabled).toBeFalsy()
     expect(actions(build(['/chart', '/a.yaml'], { '/a.yaml': 'manifest' }, ['/chart'], ['/chart'])!)[1].disabled).toBeFalsy()
     expect(actions(build(['/chart', '/k8s'], {}, ['/chart', '/k8s'], ['/chart'])!)[1].disabled).toBeFalsy()
+  })
+})
+
+describe('kubeMenuApplies: whether the open menu has a Kubernetes group (its resolver re-runs when this turns true)', () => {
+  const noDirs = (): boolean => false
+
+  it('is false for a file whose kind has not arrived yet, and true once it is a manifest', () => {
+    expect(kubeMenuApplies(['/a.yaml'], {}, noDirs)).toBe(false)
+    expect(kubeMenuApplies(['/a.yaml'], { '/a.yaml': 'manifest' }, noDirs)).toBe(true)
+  })
+
+  it('counts a folder, a kustomization and a Helm template (shown disabled); not plain YAML or other files', () => {
+    expect(kubeMenuApplies(['/dir'], {}, (p) => p === '/dir')).toBe(true)
+    expect(kubeMenuApplies(['/k/kustomization.yaml'], { '/k/kustomization.yaml': 'kustomization' }, noDirs)).toBe(true)
+    expect(kubeMenuApplies(['/t.yaml'], { '/t.yaml': 'helm-template' }, noDirs)).toBe(true)
+    expect(kubeMenuApplies(['/values.yaml', '/readme.md'], { '/values.yaml': 'plain' }, noDirs)).toBe(false)
+  })
+
+  it('agrees with whether kubeMenuItems builds a group', () => {
+    const cases: Array<[string[], Record<string, KubeFileKind>]> = [
+      [['/a.yaml'], {}],
+      [['/a.yaml'], { '/a.yaml': 'manifest' }],
+      [['/t.yaml', '/v.yaml'], { '/t.yaml': 'helm-template', '/v.yaml': 'plain' }],
+      [['/v.yaml'], { '/v.yaml': 'plain' }]
+    ]
+    for (const [sel, kinds] of cases) expect(kubeMenuApplies(sel, kinds, noDirs)).toBe(build(sel, kinds) !== null)
   })
 })
 
