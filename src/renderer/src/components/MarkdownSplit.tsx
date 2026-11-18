@@ -53,7 +53,9 @@ export function MarkdownSplit({
   onOpenFile,
   onSave,
   editor,
-  editorView
+  editorView,
+  aside,
+  asideOpen
 }: {
   /** 이 탭이 실제로 `.md`/`.markdown` 인가. 거짓이면 툴바·리사이저·프리뷰를 그리지 않고 `editor` 만
    *  그린다 — App 의 isMarkdownPath 결과를 그대로 받는다. 아래 모든 mode 기반 effect·렌더 분기는
@@ -73,6 +75,11 @@ export function MarkdownSplit({
    *  불투명한 ReactNode 라 이 프롭 없이는 둘 다 할 수 없다 — App 이 FileEditor 의 onViewChange 로
    *  받은 뷰를 그대로 내려준다. 마운트 전/언마운트 후에는 null. */
   editorView: EditorView | null
+  /** Read-only content beside the editor of a non-markdown file (the Kustomize rendered view). Shown only while
+   *  `markdown` is false and `asideOpen` is true, behind the same resizer and ratio as the markdown split; a
+   *  markdown tab ignores it. The editor pane is not touched either way: the aside sits in sibling slots. */
+  aside?: React.ReactNode
+  asideOpen?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const splitRef = useRef<HTMLDivElement>(null)
@@ -330,7 +337,7 @@ export function MarkdownSplit({
         >
           {editor}
         </div>
-        {markdown && mode === 'split' && (
+        {((markdown && mode === 'split') || (!markdown && asideOpen)) && (
           <div
             className="md-resizer"
             onPointerDown={startDrag}
@@ -338,6 +345,12 @@ export function MarkdownSplit({
             aria-orientation="vertical"
             aria-label={t('files.markdown.resizeSplit')}
           />
+        )}
+        {!markdown && asideOpen && (
+          // The editor pane keeps its own style; the aside takes the rest of the ratio instead.
+          <div className="md-pane md-pane-aside" style={{ flex: `0 0 ${(1 - ratio) * 100}%` }}>
+            {aside}
+          </div>
         )}
         {markdown && (
           <div className="md-pane md-pane-preview" hidden={mode === 'editor'}>

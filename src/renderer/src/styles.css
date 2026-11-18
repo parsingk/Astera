@@ -3568,3 +3568,17 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-picker-items { display: flex; flex-direction: column; padding: 4px; border-top: 1px solid var(--line-soft); }
 .kube-picker-item { text-align: left; padding: 5px 8px; background: transparent; border: 0; border-radius: var(--radius); color: var(--text); font-size: 12px; cursor: pointer; }
 .kube-picker-item:hover { background: var(--panel); }
+/* Kustomize rendered view (KustomizePreview), the aside of MarkdownSplit */
+.md-pane-aside { border-left: 1px solid var(--line-soft); }
+.kube-render { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.kube-render-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); font-size: 12px; flex-wrap: wrap; }
+.kube-render-title { font-weight: 500; color: var(--text); }
+.kube-render-badge { padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: var(--radius); font-size: 11px; color: var(--text-dim); }
+.kube-render-head select { min-width: 0; max-width: 220px; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); border-radius: var(--radius); font-size: 12px; }
+.kube-render-legend { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11.5px; }
+.kube-render-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--accent); opacity: 0.35; }
+.kube-render-body { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 6px 0; font-family: var(--mono); font-size: 12px; line-height: 1.5; user-select: text; }
+.kube-render-line { display: block; padding: 0 10px; white-space: pre; }
+.kube-render-line.hl { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.kube-render-note { padding: 12px; font-size: 12px; color: var(--text-dim); }
+.kube-render-err { margin: 0; padding: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; }

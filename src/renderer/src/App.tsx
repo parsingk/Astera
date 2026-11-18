@@ -154,6 +154,7 @@ import { useKubeKinds } from './hooks/useKubeKinds'
 import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
+import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
@@ -3192,6 +3193,8 @@ export default function App(): React.JSX.Element {
     const f = fileTabs.find((t) => t.id === fileTabId)
     const buf = fileBuffers[fileTabId]
     if (!f || !buf) return null
+    /** The overlay the rendered view shows: the toolbar's eye is on and the file has an overlay to apply through. */
+    const renderOverlay = kubeEditor.renderOpen(f.path) ? (kubeEditor.entries[f.path]?.view?.overlay ?? null) : null
     const editor = (
       <FileEditor
         path={f.path}
@@ -3260,6 +3263,8 @@ export default function App(): React.JSX.Element {
             onSave={() => saveFile(f.id)}
             editor={editor}
             editorView={mdViews[paneId] ?? null}
+            asideOpen={renderOverlay !== null}
+            aside={renderOverlay !== null && <KustomizePreview overlayDir={renderOverlay} patchText={buf.content} refreshKey={buf.savedContent} />}
           />
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
           {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
