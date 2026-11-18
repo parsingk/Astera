@@ -249,6 +249,14 @@ export function kubeRequestOf(
   return override?.context ? { ...req, override: true } : req
 }
 
+/** Why reload, which puts the live object into the file's buffer, must not run on this file: a Kustomize member or
+ *  kustomization holds a patch or a list, not the object (spec 4.3), and below a kustomization that does not parse
+ *  every action waits. null when it may. */
+export function reloadRefusal(view: KubeTargetView): 'kustomize' | 'broken-kustomization' | null {
+  if (view.brokenKustomization !== null) return 'broken-kustomization'
+  return view.overlays.length > 0 ? 'kustomize' : null
+}
+
 /** The namespace a remembered context pick stores: only one the person chose, the editor's own namespace or the one
  *  already remembered for this same context. Otherwise null, so the new context's own namespace applies. */
 export function rememberedNamespaceFor(view: KubeTargetView, override: KubeOverride | undefined, context: string): string | null {

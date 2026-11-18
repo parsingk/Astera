@@ -17,6 +17,7 @@ import {
   kubeRequestOf,
   kubeScope,
   rememberedNamespaceFor,
+  reloadRefusal,
   settlePendingReloads,
   touchesSelection,
   type KubeOpsAction,
@@ -500,6 +501,21 @@ describe('rememberedNamespaceFor: what a remembered context pick stores', () => 
     expect(rememberedNamespaceFor(remembered, undefined, 'stage')).toBeNull()
     expect(rememberedNamespaceFor(view(), undefined, 'stage')).toBeNull() // a current fallback's namespace is not a choice
     expect(rememberedNamespaceFor(remembered, { context: 'prod' }, 'stage')).toBeNull()
+  })
+})
+
+describe('reloadRefusal: why the explorer must not put the live object into a file', () => {
+  it('a Kustomize member (any overlay reaches it, picked or not) holds a patch, not the object', () => {
+    expect(reloadRefusal(view({ overlays: ['/p/envs/dev'], overlay: '/p/envs/dev' }))).toBe('kustomize')
+    expect(reloadRefusal(view({ overlays: ['/p/envs/dev', '/p/envs/prod'], overlay: null }))).toBe('kustomize')
+  })
+
+  it('a file below a kustomization that does not parse is refused like every other action', () => {
+    expect(reloadRefusal(view({ brokenKustomization: '/p/k8s' }))).toBe('broken-kustomization')
+  })
+
+  it('a plain manifest may reload', () => {
+    expect(reloadRefusal(view())).toBeNull()
   })
 })
 

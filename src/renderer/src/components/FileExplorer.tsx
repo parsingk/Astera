@@ -88,6 +88,8 @@ export function kubeMenuItems(args: {
   const onlyManifest = selection.length === 1 && !isDir(selection[0]) && kinds[selection[0]] === 'manifest'
   const helmTitle = helmOnly ? t('kube.menu.helm') : undefined
   const reloadOff = helmOnly || !onlyManifest
+  // A kustomization holds a list, not an object; a Kustomize member is refused once its target is known.
+  const oneKustomization = selection.length === 1 && kinds[selection[0]] === 'kustomization'
   return {
     label: t('kube.menu.group'),
     icon: <FileIcon id="kubernetes" tone="blue" />,
@@ -100,7 +102,13 @@ export function kubeMenuItems(args: {
         icon: <RefreshCw size={14} />,
         onSelect: on.reload,
         disabled: reloadOff,
-        title: helmOnly ? helmTitle : reloadOff ? t('kube.menu.reloadOnlyOne') : undefined
+        title: helmOnly
+          ? helmTitle
+          : oneKustomization
+            ? t('kube.menu.reloadKustomize')
+            : reloadOff
+              ? t('kube.menu.reloadOnlyOne')
+              : undefined
       },
       'separator',
       { label: t('kube.menu.delete'), icon: <Trash2 size={14} />, onSelect: on.delete, danger: true, disabled: helmOnly, title: helmTitle },

@@ -5,7 +5,7 @@ import { toast } from '../lib/toast'
 import { writeThrough } from '../lib/writeThrough'
 import { errText } from './useFileOps'
 import { isKubeCandidate } from './useKubeKinds'
-import { firstLine, kubeRequestOf, rememberedNamespaceFor, type KubeOverride, type useKubeOps } from './useKubeOps'
+import { firstLine, kubeRequestOf, rememberedNamespaceFor, reloadRefusal, type KubeOverride, type useKubeOps } from './useKubeOps'
 
 /** An open file tab the Kubernetes strip may show for. */
 export interface KubeTab {
@@ -311,7 +311,15 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
       if (file) openFile(file)
       return
     }
-    if (verb === 'reload') openFile(selection[0])
+    if (verb === 'reload') {
+      // The menu cannot tell a Kustomize member from a plain manifest; its target can.
+      const refusal = reloadRefusal(view)
+      if (refusal) {
+        toast.error(t(refusal === 'kustomize' ? 'kube.ops.reloadKustomize' : 'kube.toolbar.brokenKustomization'))
+        return
+      }
+      openFile(selection[0])
+    }
     start(verb, req, labelOf(view, req.pill))
   }
 

@@ -51,6 +51,11 @@ describe('kubeMenuItems', () => {
     expect(actions(k)[2].disabled).toBe(true)
   })
 
+  it('a kustomization says why reload is off: Kustomize files are not reloaded', () => {
+    const k = build(['/k/kustomization.yaml'], { '/k/kustomization.yaml': 'kustomization' })!
+    expect(actions(k)[2]).toMatchObject({ disabled: true, title: 'kube.menu.reloadKustomize' })
+  })
+
   it('only helm templates disable everything with the helm tooltip', () => {
     const m = build(['/t.yaml'], { '/t.yaml': 'helm-template' })!
     const a = actions(m)
