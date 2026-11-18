@@ -79,13 +79,14 @@ function stepFailure(step: string, r: KubectlResult): StepFailure {
 }
 
 /** The preview of a failed step: `commandLines` stay the commands confirm would run with their `-n` values (`nsFlags`),
- *  the step goes into stderr. */
-function failedPreview(f: StepFailure, commandLines: string[][], nsFlags: (string | null)[]): Failure {
+ *  `checks` are the read-only commands run up to the failure, the step goes into stderr. */
+function failedPreview(f: StepFailure, commandLines: string[][], nsFlags: (string | null)[], checks: string[][]): Failure {
   return {
     ok: false,
     reason: 'kubectl',
     commandLines,
     nsFlags,
+    checkCommandLines: checks,
     stderr: `${f.failed} failed: ${f.stderr}`,
     ...(f.timedOut ? { timedOut: true as const } : {})
   }
@@ -244,14 +245,16 @@ export function createKubeOperations(d: KubeOperationDeps) {
   }
 
   /** Reads what one command applies. Every overlay is rendered, a locked one too: its output feeds the fingerprint
-   *  and the delete diff. `kubectl kustomize` is local and contacts no cluster. */
-  async function sourcesOf(cmd: KubeCommand, signal?: AbortSignal): Promise<Sources | StepFailure> {
+   *  and the delete diff. `kubectl kustomize` is local and contacts no cluster. A render is added to `checks`. */
+  async function sourcesOf(cmd: KubeCommand, signal?: AbortSignal, checks: string[][] = []): Promise<Sources | StepFailure> {
     if (cmd.kind === 'files') {
       const texts: [string, string][] = []
       for (const file of cmd.files) texts.push([file, await d.readText(file)])
       return { texts, rendered: null }
     }
-    const r = await d.run(kustomizeArgs(cmd.dir), { signal })
+    const args = kustomizeArgs(cmd.dir)
+    checks.push(args)
+    const r = await d.run(args, { signal })
     if (!r.ok) return stepFailure('kustomize', r)
     const rendered = readObjects(r.stdout)
     if (!rendered) return { failed: 'kustomize', stderr: UNREADABLE }
@@ -288,6 +291,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
         steps: Step[]
         commandLines: string[][]
         nsFlags: (string | null)[]
+        checkCommandLines: string[][]
         fingerprint: string
       }
     | Refusal
@@ -306,6 +310,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     if (req.override && !oneItem) return overrideRefusal
 
     const decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[] = []
+    const checks: string[][] = []
     const conflicts = new Map<string, { path: string; namespace: string }>()
     let renderFailure: StepFailure | null = null
     for (const cmd of plan.commands) {
@@ -313,7 +318,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       let src: Sources | null = null
       // After a failed render the remaining namespaces stay undecided; those commands are listed without -n.
       if (!renderFailure) {
-        const read = await sourcesOf(cmd, signal)
+        const read = await sourcesOf(cmd, signal, checks)
         if ('failed' in read) renderFailure = read
         else {
           src = read
@@ -329,7 +334,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
     // target() needs the contexts, and a kubectl that cannot run is not a context mismatch.
     const ctx = await d.contexts()
-    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines, nsFlags)
+    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines, nsFlags, checks)
     if (req.override) {
       // The item's own remembered or current context need not agree, but kubeconfig must still have this one.
       if (!ctx.contexts.some((c) => c.name === req.context)) return overrideRefusal
@@ -337,7 +342,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       const folders = await contextConflicts(plan.commands, req)
       if (folders) return { ok: false, reason: 'mixed-contexts', folders }
     }
-    if (renderFailure) return failedPreview(renderFailure, commandLines, nsFlags)
+    if (renderFailure) return failedPreview(renderFailure, commandLines, nsFlags, checks)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
     // One item's pill is its own (or one chosen for its editor); several items share one pill (the first item's, or
     // the picked folder's), which must then be every item's own.
@@ -350,7 +355,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const steps: Step[] = decided.flatMap((x) =>
       x.src ? [{ cmd: x.cmd, t: { context: req.context, nsFlag: x.flag }, src: x.src, fallbackNs: x.flag ?? contextNs }] : []
     )
-    return { ok: true, plan, steps, commandLines, nsFlags, fingerprint: fingerprintOf(req, commandLines, steps) }
+    return { ok: true, plan, steps, commandLines, nsFlags, checkCommandLines: checks, fingerprint: fingerprintOf(req, commandLines, steps) }
   }
 
   /** Ties a run to the preview that was confirmed (C1, 5.2): the override flag and context (R11), the command lines,
@@ -366,14 +371,22 @@ export function createKubeOperations(d: KubeOperationDeps) {
   }
 
   /** What one command would change. apply: the cluster now against the server dry run. delete: the dry run as
-   *  validation, then the live objects against what the command names (the files, or the overlay's output). */
-  async function diffStep(verb: KubeVerb, step: Step, opts: { keepServerFields: boolean }): Promise<ResourceDiff[] | StepFailure> {
+   *  validation, then the live objects against what the command names (the files, or the overlay's output). Each
+   *  command sent is added to `checks`. */
+  async function diffStep(
+    verb: KubeVerb,
+    step: Step,
+    opts: { keepServerFields: boolean },
+    checks: string[][] = []
+  ): Promise<ResourceDiff[] | StepFailure> {
     const { cmd, t } = step
     const liveArgs = kubectlArgs('live', cmd, t)
     const DRY = 'dry run'
     const LIVE = 'reading the cluster'
     if (verb === 'apply') {
-      const [live, dry] = await Promise.all([d.run(liveArgs), d.run(kubectlArgs('dry-apply', cmd, t))])
+      const dryArgs = kubectlArgs('dry-apply', cmd, t)
+      checks.push(liveArgs, dryArgs)
+      const [live, dry] = await Promise.all([d.run(liveArgs), d.run(dryArgs)])
       if (!dry.ok) return stepFailure(DRY, dry)
       if (!live.ok) return stepFailure(LIVE, live)
       // `get --ignore-not-found` prints nothing for what is absent: no live objects.
@@ -383,8 +396,11 @@ export function createKubeOperations(d: KubeOperationDeps) {
       if (!after) return { failed: DRY, stderr: UNREADABLE }
       return pairObjects(liveObjs, after, 'apply', opts)
     }
-    const dry = await d.run(kubectlArgs('dry-delete', cmd, t))
+    const dryArgs = kubectlArgs('dry-delete', cmd, t)
+    checks.push(dryArgs)
+    const dry = await d.run(dryArgs)
     if (!dry.ok) return stepFailure(DRY, dry)
+    checks.push(liveArgs)
     const live = await d.run(liveArgs)
     if (!live.ok) return stepFailure(LIVE, live)
     const liveObjs = readObjects(live.stdout)
@@ -406,12 +422,21 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const p = await prepare(verb, req)
     if (!p.ok) return p
     const resources: { command: number; diff: ResourceDiff }[] = []
+    const checks = [...p.checkCommandLines]
     for (const [command, step] of p.steps.entries()) {
-      const diffs = await diffStep(verb, step, opts)
-      if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines, p.nsFlags)
+      const diffs = await diffStep(verb, step, opts, checks)
+      if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines, p.nsFlags, checks)
       for (const diff of diffs) resources.push({ command, diff })
     }
-    return { ok: true, plan: p.plan, commandLines: p.commandLines, nsFlags: p.nsFlags, resources, fingerprint: p.fingerprint }
+    return {
+      ok: true,
+      plan: p.plan,
+      commandLines: p.commandLines,
+      nsFlags: p.nsFlags,
+      checkCommandLines: checks,
+      resources,
+      fingerprint: p.fingerprint
+    }
   }
 
   /** Re-plans and re-checks, and refuses unless what it would write is what the confirmed preview showed (its

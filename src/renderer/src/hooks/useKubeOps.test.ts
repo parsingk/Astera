@@ -39,12 +39,17 @@ const diff = (ref: string, state: ResourceState): ResourceDiff => ({
 })
 
 const LINES = [['apply', '-f', '/p/k8s/a.yaml', '--context', 'kind-dev']]
+const CHECKS = [
+  ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-f', '/p/k8s/a.yaml'],
+  ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-f', '/p/k8s/a.yaml']
+]
 
 const okPreview = (fingerprint = 'fp1', states: ResourceState[] = ['changed']): KubePreview => ({
   ok: true,
   plan: { ok: true, commands: [{ kind: 'files', files: ['/p/k8s/a.yaml'] }], leftOut: [] },
   commandLines: LINES,
   nsFlags: [null],
+  checkCommandLines: CHECKS,
   resources: states.map((s, i) => ({ command: 0, diff: diff(`cm/${i}`, s) })),
   fingerprint
 })
@@ -117,7 +122,7 @@ describe('kubeOpsReducer: the apply flow', () => {
     const failed = step(loading, {
       type: 'previewed',
       seq: loading.dialog!.seq,
-      preview: { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], stderr: 'dry run failed: boom' },
+      preview: { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], checkCommandLines: [], stderr: 'dry run failed: boom' },
       scope: ''
     })
     expect(canConfirm(failed.dialog)).toBe(false)
@@ -315,7 +320,8 @@ describe('kubeOpsReducer: compare and reload entries', () => {
         verb: 'compare',
         context: 'kind-dev',
         scope: '1 file',
-        commandLines: LINES,
+        // what the compare ran, never the apply it did not run
+        commandLines: CHECKS,
         startedAt: 5,
         state: 'done',
         req: REQ,
@@ -335,7 +341,7 @@ describe('kubeOpsReducer: compare and reload entries', () => {
     const s2 = step(s1, {
       type: 'previewed',
       seq: s1.dialog!.seq,
-      preview: { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], stderr: 'unreachable' },
+      preview: { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], checkCommandLines: [], stderr: 'unreachable' },
       scope: ''
     })
     expect(s2.log).toEqual([])

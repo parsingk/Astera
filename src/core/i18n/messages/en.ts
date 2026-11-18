@@ -2924,6 +2924,8 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.confirm.leftOutReason.unlisted': 'Inside a kustomization folder but listed by no kustomization',
   'kube.confirm.command': 'Command {n}',
   'kube.confirm.copyCommands': 'Copy commands',
+  'kube.confirm.commandsToRun': 'Commands to run',
+  'kube.confirm.commandsToCompare': 'Commands used to compare',
   'kube.confirm.apply': 'Apply to {context}',
   'kube.confirm.delete': 'Delete from {context}',
   'kube.confirm.mixedContexts': 'These files belong to different clusters',

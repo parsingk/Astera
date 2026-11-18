@@ -3178,6 +3178,8 @@ export const ko = {
   'kube.confirm.leftOutReason.unlisted': 'kustomization 폴더 안에 있지만 어느 kustomization 에도 적히지 않은 파일',
   'kube.confirm.command': '명령 {n}',
   'kube.confirm.copyCommands': '명령 복사',
+  'kube.confirm.commandsToRun': '실행할 명령',
+  'kube.confirm.commandsToCompare': '비교에 쓴 명령',
   'kube.confirm.apply': '{context} 에 적용',
   'kube.confirm.delete': '{context} 에서 삭제',
   'kube.confirm.mixedContexts': '서로 다른 클러스터의 파일이 섞여 있습니다',

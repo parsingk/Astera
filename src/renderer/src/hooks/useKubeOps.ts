@@ -145,7 +145,8 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         verb: 'compare',
         context: d.req.context,
         scope: a.scope,
-        commandLines: a.preview.commandLines,
+        // A compare ran only read-only commands: those, never the apply it did not run.
+        commandLines: a.preview.checkCommandLines,
         startedAt: d.startedAt,
         state: 'done',
         req: d.req,
@@ -315,6 +316,7 @@ const failedPreview = (err: unknown): KubePreview => ({
   reason: 'kubectl',
   commandLines: [],
   nsFlags: [],
+  checkCommandLines: [],
   stderr: errText(err)
 })
 

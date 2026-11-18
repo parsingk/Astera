@@ -663,6 +663,8 @@ describe('preview', () => {
   const b = p('k8s', 'b.yaml')
   const c = p('k8s', 'c.yaml')
   const applyA = (f: string): string[] => ['apply', '--context', 'kind-dev', '-f', f]
+  const liveA = (f: string): string[] => ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-f', f]
+  const dryA = (f: string): string[] => ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-f', f]
 
   it('three files on one context: one command, each resource the cluster now against the dry run', async () => {
     const h = harness(
@@ -801,6 +803,7 @@ describe('preview', () => {
       reason: 'kubectl',
       commandLines: [applyA(a)],
       nsFlags: [null],
+      checkCommandLines: [liveA(a), dryA(a)],
       stderr: `dry run failed: ${denied}`
     })
     answer = { ok: false, stdout: '', stderr: 'timed out', timedOut: true }
@@ -809,6 +812,7 @@ describe('preview', () => {
       reason: 'kubectl',
       commandLines: [applyA(a)],
       nsFlags: [null],
+      checkCommandLines: [liveA(a), dryA(a)],
       stderr: 'dry run failed: timed out',
       timedOut: true
     })
@@ -834,6 +838,11 @@ describe('preview', () => {
         ['apply', '--context', 'kind-dev', '-n', 'shop', '-k', prod]
       ],
       nsFlags: ['shop', 'shop'],
+      checkCommandLines: [
+        ['kustomize', prod],
+        ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-n', 'shop', '-f', a],
+        ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-n', 'shop', '-f', a]
+      ],
       stderr: 'reading the cluster failed: Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout'
     })
     // An overlay that does not render has no namespace to decide: its command is listed without -n.
@@ -846,6 +855,7 @@ describe('preview', () => {
         ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-k', prod]
       ],
       nsFlags: ['shop', null],
+      checkCommandLines: [['kustomize', prod]],
       stderr: 'kustomize failed: Error: accumulating resources: missing.yaml'
     })
   })
@@ -864,6 +874,7 @@ describe('preview', () => {
         reason: 'kubectl',
         commandLines: [applyA(a)],
         nsFlags: [null],
+        checkCommandLines: [liveA(a), dryA(a)],
         stderr: 'dry run failed: unreadable output from kubectl'
       })
       expect(await svc.status(a, root)).toEqual({ kind: 'unknown', reason: 'unreadable output from kubectl' })
@@ -881,6 +892,7 @@ describe('preview', () => {
       reason: 'kubectl',
       commandLines: [applyA(a)],
       nsFlags: [null],
+      checkCommandLines: [],
       stderr: 'listing contexts failed: spawn kubectl ENOENT'
     })
   })
@@ -942,6 +954,7 @@ describe('preview', () => {
       reason: 'kubectl',
       commandLines: [['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-f', a]],
       nsFlags: [null],
+      checkCommandLines: [['delete', '--dry-run=server', '--ignore-not-found', '--context', 'kind-dev', '-f', a]],
       stderr: 'dry run failed: error: unable to recognize "a.yaml"'
     })
     expect(clusterCalls(h.calls).map(opOf)).toEqual(['dry-delete'])
@@ -960,6 +973,49 @@ describe('preview', () => {
       [0, 'ConfigMap/prod/a', 'delete'],
       [0, 'ConfigMap/prod/b', 'not-found']
     ])
+  })
+})
+
+describe('preview: the read-only commands it ran (checkCommandLines)', () => {
+  const a = p('k8s', 'a.yaml')
+  const prod = p('envs', 'prod')
+
+  it("lists the renders, then each command's live read and dry run, in order; the fingerprint binds the planned commands only", async () => {
+    const h = harness(
+      { ...OVERLAY_TREE, [a]: yamlDocs(cm('a', {}, 'dev')) },
+      fakeKube({ kustomize: yamlDocs(cm('x', {}, 'dev')) })
+    )
+    const svc = traced(createKubeService(h.deps))
+    const apply = await svc.preview('apply', request([a, prod]), HIDE)
+    if (!apply.ok) throw new Error(`preview failed: ${apply.reason}`)
+    expect(apply.commandLines).toEqual([
+      ['apply', '--context', 'kind-dev', '-f', a],
+      ['apply', '--context', 'kind-dev', '-k', prod]
+    ])
+    expect(apply.checkCommandLines).toEqual([
+      ['kustomize', prod],
+      ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-f', a],
+      ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-f', a],
+      ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-k', prod],
+      ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-k', prod]
+    ])
+    // exactly what was sent, besides listing the contexts
+    expect(clusterCalls(h.calls).sort()).toEqual([...apply.checkCommandLines].sort())
+
+    const del = await svc.preview('delete', request([a, prod]), HIDE)
+    if (!del.ok) throw new Error(`preview failed: ${del.reason}`)
+    expect(del.checkCommandLines).toEqual([
+      ['kustomize', prod],
+      ['delete', '--dry-run=server', '--ignore-not-found', '--context', 'kind-dev', '-f', a],
+      ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-f', a],
+      ['delete', '--dry-run=server', '--ignore-not-found', '--context', 'kind-dev', '-k', prod],
+      ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-k', prod]
+    ])
+
+    // a run still accepts the preview's fingerprint
+    const ran = await svc.run('r-checks', 'apply', request([a, prod]), apply.fingerprint)
+    expect(ran.refused).toBeUndefined()
+    expect(ran.commandLines).toEqual(apply.commandLines)
   })
 })
 

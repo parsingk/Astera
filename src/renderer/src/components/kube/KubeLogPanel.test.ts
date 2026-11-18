@@ -131,6 +131,15 @@ describe('KubeLogPanel', () => {
     expect(html).not.toContain('c/d created')
   })
 
+  it('a compare entry labels its commands as the ones used to compare; an apply entry does not', () => {
+    const compare = render([
+      entry({ verb: 'compare', commandLines: [['get', '--ignore-not-found', '-o', 'yaml', '-f', '/p/a.yaml']], compare: { changed: 1, unchanged: 0, created: 0 } })
+    ])
+    expect(compare).toContain('kube.confirm.commandsToCompare')
+    expect(compare).toContain('$ kubectl get --ignore-not-found -o yaml -f /p/a.yaml')
+    expect(render([entry({ result: result() })])).not.toContain('kube.confirm.commandsToCompare')
+  })
+
   it('every rail button is an icon with title equal to aria-label', () => {
     const html = render([entry({ result: result() })])
     for (const k of ['rerun', 'copy', 'clear']) expect(html).toContain(`title="kube.log.${k}" aria-label="kube.log.${k}"`)

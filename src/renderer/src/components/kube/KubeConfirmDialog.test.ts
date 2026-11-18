@@ -36,6 +36,10 @@ const okPreview = (d: ResourceDiff = diff(), nsFlags: (string | null)[] = [null]
   plan: { ok: true, commands: [{ kind: 'files', files: ['/p/a.yaml'] }], leftOut: [{ path: '/p/x.yaml', reason: 'helm' }] },
   commandLines: [['apply', '--context', 'prod', '-f', '/p/a.yaml']],
   nsFlags,
+  checkCommandLines: [
+    ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'prod', '-f', '/p/a.yaml'],
+    ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'prod', '-f', '/p/a.yaml']
+  ],
   resources: [{ command: 0, diff: d }],
   fingerprint: 'fp'
 })
@@ -61,7 +65,7 @@ const render = (preview: KubePreview | null, over: Record<string, unknown> = {})
 
 describe('KubeConfirmDialog', () => {
   it('a kubectl failure shows stderr and a disabled primary button', () => {
-    const html = render({ ok: false, reason: 'kubectl', commandLines: [['apply']], nsFlags: [null], stderr: 'boom: no route', timedOut: true })
+    const html = render({ ok: false, reason: 'kubectl', commandLines: [['apply']], nsFlags: [null], checkCommandLines: [], stderr: 'boom: no route', timedOut: true })
     expect(html).toContain('boom: no route')
     expect(html).toContain('kube.confirm.timedOut')
     expect(html).toMatch(/<button[^>]*class="primary"[^>]*disabled/)
@@ -80,6 +84,32 @@ describe('KubeConfirmDialog', () => {
     const loading = render(null)
     expect(loading).toContain('kube.confirm.loading')
     expect(loading).toMatch(/<button[^>]*class="primary"[^>]*disabled/)
+  })
+
+  it('apply and delete list the commands to run; a compare lists the read-only commands it ran instead', () => {
+    for (const verb of ['apply', 'delete']) {
+      const html = render(okPreview(), { verb })
+      expect(html).toContain('kube.confirm.commandsToRun')
+      expect(html).toContain('$ kubectl apply --context prod -f /p/a.yaml')
+      expect(html).not.toContain('kube.confirm.commandsToCompare')
+    }
+    const compare = render(okPreview(), { verb: 'compare' })
+    expect(compare).toContain('kube.confirm.commandsToCompare')
+    expect(compare).toContain('$ kubectl get --ignore-not-found -o yaml --context prod -f /p/a.yaml')
+    expect(compare).toContain('$ kubectl apply --dry-run=server -o yaml --context prod -f /p/a.yaml')
+    expect(compare).not.toContain('$ kubectl apply --context prod -f /p/a.yaml')
+    expect(compare).not.toContain('kube.confirm.commandsToRun')
+    // a failed compare shows what it ran up to the failure
+    const failed = render(
+      { ok: false, reason: 'kubectl', commandLines: [['apply', '-f', '/p/a.yaml']], nsFlags: [null], checkCommandLines: [['kustomize', '/p/o']], stderr: 'kustomize failed: x' },
+      { verb: 'compare' }
+    )
+    expect(failed).toContain('$ kubectl kustomize /p/o')
+    expect(failed).not.toContain('$ kubectl apply -f /p/a.yaml')
+    for (const key of ['kube.confirm.commandsToRun', 'kube.confirm.commandsToCompare'] as const) {
+      expect(ko[key]).toBeTruthy()
+      expect(en[key]).toBeTruthy()
+    }
   })
 
   it('a delete uses the danger style; compare has no primary button', () => {
@@ -142,6 +172,7 @@ describe('KubeConfirmDialog', () => {
       reason: 'kubectl',
       commandLines: nsFlags.map(() => ['apply']),
       nsFlags,
+      checkCommandLines: [],
       stderr: 'dry run failed: boom'
     })
     const fromFiles = render(failed([null, null]))
@@ -160,7 +191,7 @@ describe('KubeConfirmDialog', () => {
       { ok: false, reason: 'namespace', conflicts: [{ path: '/p/a.yaml', namespace: 'dev' }] },
       { ok: false, reason: 'refused', plan: { ok: false, reason: 'broken-kustomization', paths: ['/p/app'] } },
       { ok: false, reason: 'refused', plan: { ok: false, reason: 'base-folder', paths: ['/b'] } },
-      { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], stderr: 'ipc failed' }
+      { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], checkCommandLines: [], stderr: 'ipc failed' }
     ]
     for (const r of refusals) {
       const html = render(r)

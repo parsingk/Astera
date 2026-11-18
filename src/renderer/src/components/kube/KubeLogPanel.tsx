@@ -65,6 +65,9 @@ function EntryBody({ e, onOpenFile }: { e: KubeLogEntry; onOpenFile: (path: stri
   const explained = !!r && r.outcomes.some((o) => o.outcome === 'error')
   return (
     <div className="kube-log-body">
+      {e.verb === 'compare' && e.commandLines.length > 0 && (
+        <div className="kube-log-line">{t('kube.confirm.commandsToCompare')}</div>
+      )}
       {e.commandLines.map((args, i) => (
         <div key={i} className="kube-log-line cmd">
           $ {kubeCommandText(args, platform())}

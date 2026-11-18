@@ -92,7 +92,13 @@ export function KubeConfirmDialog({
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel, running])
 
-  const commandLines = preview && (preview.ok || preview.reason === 'kubectl') ? preview.commandLines : []
+  // A compare runs nothing it shows as planned: it lists the read-only commands it ran instead.
+  const commandLines =
+    preview && (preview.ok || preview.reason === 'kubectl')
+      ? verb === 'compare'
+        ? preview.checkCommandLines
+        : preview.commandLines
+      : []
   const copyAll = (): void => {
     window.api.clipboard.writeText(commandLines.map(commandText).join('\n'))
     setCopied(true)
@@ -270,6 +276,11 @@ export function KubeConfirmDialog({
           </>
         )}
 
+        {commandLines.length > 0 && (
+          <div className="kube-list-title">
+            {t(verb === 'compare' ? 'kube.confirm.commandsToCompare' : 'kube.confirm.commandsToRun')}
+          </div>
+        )}
         {commandLines.length > 0 && (
           <div className="kube-commands">
             <pre className="kube-cmd-text">{commandLines.map((l) => `$ ${commandText(l)}`).join('\n')}</pre>
