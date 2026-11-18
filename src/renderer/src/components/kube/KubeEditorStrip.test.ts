@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { KubeStatus, KubeTargetView } from '../../../../core/kube/types'
+import type { KubeEditorEntry } from '../../hooks/useKubeEditor'
 import { KubeEditorStrip, resourceLabel } from './KubeEditorStrip'
 
 vi.mock('../../i18n/I18nProvider', () => ({
@@ -28,7 +29,12 @@ const VIEW: KubeTargetView = {
 }
 
 /** The strip as App renders it, over a stand-in for useKubeEditor's answer. */
-const strip = (view: Partial<KubeTargetView>, status: KubeStatus | null = null, kind: 'manifest' | 'kustomization' = 'manifest'): string =>
+const strip = (
+  view: Partial<KubeTargetView>,
+  status: KubeStatus | null = null,
+  kind: 'manifest' | 'kustomization' = 'manifest',
+  extra: Partial<KubeEditorEntry> = {}
+): string =>
   renderToStaticMarkup(
     React.createElement(KubeEditorStrip, {
       path: '/p/k8s/a.yaml',
@@ -37,7 +43,7 @@ const strip = (view: Partial<KubeTargetView>, status: KubeStatus | null = null, 
       busy: false,
       onOpenSettings: () => {},
       editor: {
-        entries: { '/p/k8s/a.yaml': { view: { ...VIEW, ...view }, status, statusLoading: false } },
+        entries: { '/p/k8s/a.yaml': { view: { ...VIEW, ...view }, status, statusLoading: false, resourceCount: null, ...extra } },
         overrideOf: () => undefined,
         contexts: null,
         picker: null,
@@ -48,10 +54,14 @@ const strip = (view: Partial<KubeTargetView>, status: KubeStatus | null = null, 
   )
 
 describe('KubeEditorStrip', () => {
-  it("a Kustomize file's kind chip counts the overlay's resources from the latest status", () => {
+  it("a Kustomize file's kind chip counts the overlay's resources, kept while a new status for the same overlay loads", () => {
     const k = { overlays: ['/p/envs/prod'], overlay: '/p/envs/prod', resource: { overlay: true as const } }
-    const html = strip(k, { kind: 'same', resourceCount: 4 }, 'kustomization')
-    expect(html).toContain('<span class="kube-chip kube-chip-kind">kube.chip.resources{&quot;count&quot;:4}</span>')
+    const chip = '<span class="kube-chip kube-chip-kind">kube.chip.resources{&quot;count&quot;:4}</span>'
+    expect(strip(k, { kind: 'same', resourceCount: 4 }, 'kustomization', { resourceCount: { overlay: '/p/envs/prod', count: 4 } })).toContain(chip)
+    // the chip's status is being asked again: the count stays
+    expect(strip(k, null, 'kustomization', { statusLoading: true, resourceCount: { overlay: '/p/envs/prod', count: 4 } })).toContain(chip)
+    // a count for another overlay, or none yet: nothing
+    expect(strip(k, null, 'kustomization', { resourceCount: { overlay: '/p/envs/dev', count: 4 } })).not.toContain('kube-chip-kind')
     expect(strip(k, null, 'kustomization')).not.toContain('kube-chip-kind')
   })
 
@@ -70,10 +80,8 @@ describe('resourceLabel: the kind-and-name chip', () => {
     expect(resourceLabel({ kind: 'Deployment', name: 'api-server' }, count)).toBe('Deployment · api-server')
     expect(resourceLabel({ kind: 'Job', name: null }, count)).toBe('Job')
     expect(resourceLabel({ count: 3 }, count)).toBe('3 resources')
-    // through an overlay: the latest status's rendered count, never the overlay's folder name (the overlay pill shows it)
-    expect(resourceLabel({ overlay: true as const }, count, { kind: 'same', resourceCount: 4 })).toBe('4 resources')
-    expect(resourceLabel({ overlay: true as const }, count, { kind: 'unknown', reason: 'no-target' })).toBeNull()
-    expect(resourceLabel({ overlay: true as const }, count, null)).toBeNull()
+    // through an overlay: how many resources it renders once known (the overlay pill names the overlay)
+    expect(resourceLabel({ overlay: true as const }, count, 4)).toBe('4 resources')
     expect(resourceLabel({ overlay: true as const }, count)).toBeNull()
     expect(resourceLabel(null, count)).toBeNull()
   })

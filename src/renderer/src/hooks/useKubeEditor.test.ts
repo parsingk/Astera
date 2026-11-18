@@ -1,6 +1,6 @@
 // The pure parts are called directly. The hook itself runs with a stand-in for React's state, ref and effect hooks
 // (as KubernetesSettings.test does: this suite has no DOM), and its methods are called as the strip would.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { KubeContexts, KubeStatus, KubeTargetView } from '../../../core/kube/types'
 
 const hooks = vi.hoisted(() => {
@@ -111,7 +111,7 @@ const B = '/p/other/b.yaml'
 const M = '/p/apps/base/dep.yaml'
 const PROD = '/p/envs/prod'
 const MEMBER = view({ overlays: [PROD], overlay: PROD })
-const entry = (v: KubeTargetView): KubeEditorEntry => ({ view: v, status: null, statusLoading: false })
+const entry = (v: KubeTargetView): KubeEditorEntry => ({ view: v, status: null, statusLoading: false, resourceCount: null })
 const REQ = { projectRoot: '/p', context: 'kind-dev', pill: null }
 
 describe('kubeTabsAfterRun: which open files a finished apply or delete refreshes', () => {
@@ -207,6 +207,53 @@ describe("useKubeEditor: the explorer submenu's target", () => {
     views['/p/chart'] = view({ helmChart: true })
     views['/p/k8s'] = view()
     expect((await ed().resolveMenu(['/p/chart', '/p/k8s'], ['/p/chart', '/p/k8s'], '/p')).chartFolders).toEqual(['/p/chart'])
+  })
+})
+
+describe("useKubeEditor: the Kustomize kind chip's count", () => {
+  const DEV = '/p/envs/dev'
+
+  beforeEach(() => {
+    hooks.reset()
+    vi.clearAllMocks()
+    views[A] = view()
+    views[B] = view()
+    views[M] = MEMBER
+    api.status.mockImplementation(async (path: string) => (path === M ? { kind: 'same', resourceCount: 3 } : { kind: 'same' }))
+    ;(globalThis as { window?: unknown }).window = { api: { kube: api } }
+  })
+  afterEach(() => {
+    api.status.mockImplementation(async () => ({ kind: 'same' }))
+  })
+
+  it('is kept while the chip is asked again for the same overlay, and dropped when the overlay changes', async () => {
+    const ed = await mount()
+    expect(ed().entries[M].resourceCount).toEqual({ overlay: PROD, count: 3 })
+
+    let release: (s: KubeStatus) => void = () => {}
+    api.status.mockImplementationOnce(() => new Promise<KubeStatus>((r) => (release = r)))
+    ed().onSaved(M)
+    await flush()
+    expect(ed().entries[M]).toMatchObject({ status: null, statusLoading: true, resourceCount: { overlay: PROD, count: 3 } })
+    release({ kind: 'different', resources: 1, resourceCount: 5 })
+    await flush()
+    expect(ed().entries[M].resourceCount).toEqual({ overlay: PROD, count: 5 })
+
+    // another overlay picked: the old count is not this overlay's
+    views[M] = view({ overlays: [PROD, DEV], overlay: DEV })
+    api.status.mockImplementationOnce(() => new Promise<KubeStatus>((r) => (release = r)))
+    await ed().pickOverlay(M, DEV)
+    await flush()
+    expect(ed().entries[M].resourceCount).toBeNull()
+    release({ kind: 'same', resourceCount: 2 })
+    await flush()
+    expect(ed().entries[M].resourceCount).toEqual({ overlay: DEV, count: 2 })
+
+    // a new status that has no count (the render failed) leaves none
+    ed().onSaved(M)
+    api.status.mockResolvedValueOnce({ kind: 'unknown', reason: 'Error: accumulating resources' })
+    await flush()
+    expect(ed().entries[M].resourceCount).toBeNull()
   })
 })
 

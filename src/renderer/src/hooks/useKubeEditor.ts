@@ -22,11 +22,13 @@ export interface KubeTab {
   kind: KubeFileKind
 }
 
-/** What was asked about an open Kubernetes file. `view: null` until its target first arrives. */
+/** What was asked about an open Kubernetes file. `view: null` until its target first arrives. `resourceCount`: how
+ *  many resources its overlay renders, for the kind chip, kept while the chip is asked again for the same overlay. */
 export interface KubeEditorEntry {
   view: KubeTargetView | null
   status: KubeStatus | null
   statusLoading: boolean
+  resourceCount: { overlay: string; count: number } | null
 }
 
 /** Per open file, for as long as its tab is open (spec 4.2): a context or namespace chosen without remembering it,
@@ -48,7 +50,15 @@ export interface KubeMenuInfo {
 /** A Helm template shows only its notice; these two ask the cluster. */
 const asksCluster = (k: KubeFileKind): boolean => k === 'manifest' || k === 'kustomization'
 
-const EMPTY: KubeEditorEntry = { view: null, status: null, statusLoading: false }
+const EMPTY: KubeEditorEntry = { view: null, status: null, statusLoading: false, resourceCount: null }
+
+/** The kind chip's count once a new target arrives: kept for the same overlay, dropped for another one (or none). */
+export const countForView = (prev: KubeEditorEntry['resourceCount'], view: KubeTargetView): KubeEditorEntry['resourceCount'] =>
+  prev !== null && view.overlay === prev.overlay ? prev : null
+
+/** The kind chip's count from a new status: what it says the overlay renders, or none. */
+export const countFromStatus = (view: KubeTargetView | null | undefined, status: KubeStatus): KubeEditorEntry['resourceCount'] =>
+  view?.overlay && status.resourceCount !== undefined ? { overlay: view.overlay, count: status.resourceCount } : null
 
 /** Which target and chip answers still count, per path. One counter for every ask, so a late answer never matches a
  *  later ask of the same path, also after the path was forgotten and asked again. */
@@ -146,15 +156,13 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
       return
     }
     patchEntry(path, { statusLoading: true })
-    window.api.kube.status(path, tab.projectRoot, override?.context).then(
-      (status) => {
-        if (isLatest(asks.current, 'status', path, seq)) patchEntry(path, { status, statusLoading: false })
-      },
-      (err: unknown) => {
-        if (isLatest(asks.current, 'status', path, seq))
-          patchEntry(path, { status: { kind: 'unknown', reason: errText(err) }, statusLoading: false })
-      }
-    )
+    const settle = (status: KubeStatus): void => {
+      if (!isLatest(asks.current, 'status', path, seq)) return
+      patchEntry(path, { status, statusLoading: false, resourceCount: countFromStatus(entriesRef.current[path]?.view, status) })
+    }
+    window.api.kube.status(path, tab.projectRoot, override?.context).then(settle, (err: unknown) => {
+      settle({ kind: 'unknown', reason: errText(err) })
+    })
   }
 
   const refreshTarget = (path: string): void => {
@@ -167,7 +175,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     window.api.kube.target(path, tab.projectRoot).then(
       (view) => {
         if (!isLatest(asks.current, 'target', path, seq)) return
-        patchEntry(path, { view })
+        patchEntry(path, { view, resourceCount: countForView(entriesRef.current[path]?.resourceCount ?? null, view) })
         refreshStatus(path)
       },
       () => {
