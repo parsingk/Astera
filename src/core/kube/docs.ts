@@ -11,9 +11,14 @@ function str(value: unknown): string | null {
 export function parseManifestDocs(text: string): ManifestDoc[] {
   const out: ManifestDoc[] = []
   try {
-    parseAllDocuments(text.replace(/^﻿/, '')).forEach((doc, index) => {
+    parseAllDocuments(text.replace(new RegExp('^' + String.fromCharCode(0xfeff)), '')).forEach((doc, index) => {
       if (doc.errors.length > 0) return
-      const value = doc.toJS({ maxAliasCount: 100 }) as unknown
+      let value: unknown
+      try {
+        value = doc.toJS({ maxAliasCount: 100 })
+      } catch {
+        return // e.g. an alias bomb: skip this document, keep the later ones
+      }
       if (!value || typeof value !== 'object' || Array.isArray(value)) return
       const obj = value as Record<string, unknown>
       const apiVersion = str(obj.apiVersion)
@@ -23,7 +28,7 @@ export function parseManifestDocs(text: string): ManifestDoc[] {
       out.push({ index, apiVersion, kind, name: str(meta.name), namespace: str(meta.namespace) })
     })
   } catch {
-    // A parse that throws outright leaves whatever was collected before it.
+    // parseAllDocuments itself threw: keep what was collected before it.
   }
   return out
 }

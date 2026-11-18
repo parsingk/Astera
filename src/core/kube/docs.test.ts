@@ -47,6 +47,19 @@ describe('parseManifestDocs', () => {
     expect(docs[0]).toMatchObject({ index: 0, kind: 'Pod', name: 'a' })
   })
 
+  it('ignores a leading document separator', () => {
+    expect(parseManifestDocs('---\n' + TWO)).toEqual(parseManifestDocs(TWO))
+  })
+
+  it('skips a document that throws while converting and keeps the later ones', () => {
+    let bomb = 'a0: &a0 [x]\n'
+    for (let i = 1; i <= 12; i++) bomb += `a${i}: &a${i} [${Array.from({ length: 10 }, () => '*a' + (i - 1)).join(', ')}]\n`
+    const text = 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: bomb\n' + bomb + '---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: ok\n  namespace: web\n'
+    expect(parseManifestDocs(text)).toEqual([
+      { index: 1, apiVersion: 'v1', kind: 'Pod', name: 'ok', namespace: 'web' },
+    ])
+  })
+
   it('never throws on garbage', () => {
     expect(parseManifestDocs('')).toEqual([])
     expect(() => parseManifestDocs('{{{ \u0000 ]]]')).not.toThrow()
