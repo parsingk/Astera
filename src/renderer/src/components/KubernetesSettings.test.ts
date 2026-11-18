@@ -25,6 +25,11 @@ const hooks = vi.hoisted(() => {
       if (!(k in slots)) slots[k] = typeof init === 'function' ? (init as () => T)() : init
       return [slots[k] as T, (v) => void (slots[k] = typeof v === 'function' ? (v as (old: T) => T)(slots[k] as T) : v)]
     },
+    useRef<T>(init: T): { current: T } {
+      const k = at++
+      if (!(k in slots)) slots[k] = { current: init }
+      return slots[k] as { current: T }
+    },
     useEffect(run: () => unknown): void {
       effects.push(run)
     }
@@ -33,7 +38,7 @@ const hooks = vi.hoisted(() => {
 
 vi.mock('react', async (importOriginal) => {
   const real = await importOriginal<typeof import('react')>()
-  return { ...real, useState: hooks.useState, useEffect: hooks.useEffect }
+  return { ...real, useState: hooks.useState, useRef: hooks.useRef, useEffect: hooks.useEffect }
 })
 vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({ lang: 'en', t: (key: string, params?: Record<string, unknown>) => (params === undefined ? key : `${key} ${JSON.stringify(params)}`) })
@@ -70,7 +75,7 @@ const api = {
   kube: { recheck: vi.fn() },
   settings: {
     getKubectlPath: vi.fn(),
-    setKubectlPath: vi.fn(async () => {}),
+    setKubectlPath: vi.fn(async (_v: string | null) => {}),
     getKubeconfigFiles: vi.fn(),
     setKubeconfigFiles: vi.fn(async () => {})
   },
@@ -168,5 +173,50 @@ describe('KubernetesSettings', () => {
     add()
     await flush()
     expect(api.settings.setKubeconfigFiles).not.toHaveBeenCalled()
+  })
+
+  it('applies only the newest recheck when answers arrive out of order', async () => {
+    let first!: (v: unknown) => void
+    api.kube.recheck.mockReturnValueOnce(new Promise((r) => (first = r)))
+    hooks.render(KubernetesSettings) // mount recheck, still pending
+    await flush()
+    api.kube.recheck.mockResolvedValueOnce({ ok: true, path: '/new/kubectl', version: 'v1.31.0' })
+    const tree = hooks.render(KubernetesSettings, false) as ReactElement
+    ;(byLabel(tree, 'kube.settings.recheck').props.onClick as () => void)()
+    await flush()
+    first({ ok: true, path: '/old/kubectl', version: 'v1.20.0' })
+    await flush()
+    const text = textOf(hooks.render(KubernetesSettings, false) as ReactElement)
+    expect(text).toContain('/new/kubectl')
+    expect(text).not.toContain('/old/kubectl')
+  })
+
+  it('sends one save when Enter is followed by blur', async () => {
+    const tree = await mount()
+    const input = all(tree).find((e) => e.type === 'input')!
+    ;(input.props.onChange as (e: unknown) => void)({ target: { value: '/opt/kubectl' } })
+    const input2 = all(hooks.render(KubernetesSettings, false) as ReactElement).find((e) => e.type === 'input')!
+    ;(input2.props.onKeyDown as (e: unknown) => void)({ key: 'Enter' })
+    ;(input2.props.onBlur as () => void)()
+    await flush()
+    expect(api.settings.setKubectlPath).toHaveBeenCalledTimes(1)
+  })
+
+  it('a clear after typing is sent and wins: blur saves the typed path, then clear stores null', async () => {
+    const tree = await mount()
+    const input = all(tree).find((e) => e.type === 'input')!
+    ;(input.props.onChange as (e: unknown) => void)({ target: { value: '/typed/kubectl' } })
+    const tree2 = hooks.render(KubernetesSettings, false) as ReactElement
+    const stored: Array<string | null> = []
+    api.settings.setKubectlPath.mockImplementation(async (v: string | null) => {
+      await flush()
+      stored.push(v)
+    })
+    ;(all(tree2).find((e) => e.type === 'input')!.props.onBlur as () => void)() // the blur before the click
+    ;(byLabel(tree2, 'kube.settings.clearOverride').props.onClick as () => void)()
+    await flush()
+    await flush()
+    await flush()
+    expect(stored).toEqual(['/typed/kubectl', null])
   })
 })

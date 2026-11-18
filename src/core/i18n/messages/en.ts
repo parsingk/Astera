@@ -3025,5 +3025,6 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.settings.addFile': 'Add a kubeconfig file…',
   'kube.settings.removeFile': 'Remove {path} from the list',
   'kube.settings.filesHint': 'Added files are read together with KUBECONFIG or ~/.kube/config. Astera never writes a kubeconfig.',
+  'kube.settings.loadFailed': 'Could not read the settings: {detail}',
   'kube.settings.saveFailed': 'Could not save: {detail}'
 }

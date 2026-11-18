@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, X } from 'lucide-react'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -14,21 +14,36 @@ export function KubernetesSettings(): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState<string[]>([])
 
+  const [loadError, setLoadError] = useState<string | null>(null)
+  /** The newest recheck; an older one that resolves later must not overwrite its answer. */
+  const checkSeq = useRef(0)
+  /** The override last asked for (set before the save is awaited) and the one the file last accepted. */
+  const requested = useRef<string | null>(null)
+  const stored = useRef<string | null>(null)
+  /** Saves run one after another so the last request is the last write. */
+  const saveChain = useRef<Promise<void>>(Promise.resolve())
+
   const recheck = async (): Promise<void> => {
+    const mine = ++checkSeq.current
     setCheck(null)
+    let answer: Check
     try {
-      setCheck(await window.api.kube.recheck())
+      answer = await window.api.kube.recheck()
     } catch (err) {
-      setCheck({ ok: false, stderr: err instanceof Error ? err.message : String(err) })
+      answer = { ok: false, stderr: err instanceof Error ? err.message : String(err) }
     }
+    if (mine === checkSeq.current) setCheck(answer)
   }
 
   useEffect(() => {
-    void window.api.settings.getKubectlPath().then((p) => {
+    const failed = (err: unknown): void => setLoadError(err instanceof Error ? err.message : String(err))
+    window.api.settings.getKubectlPath().then((p) => {
+      requested.current = p
+      stored.current = p
       setOverride(p)
       setDraft(p ?? '')
-    })
-    void window.api.settings.getKubeconfigFiles().then(setFiles)
+    }, failed)
+    window.api.settings.getKubeconfigFiles().then(setFiles, failed)
     void recheck()
   }, [])
 
@@ -38,17 +53,24 @@ export function KubernetesSettings(): React.JSX.Element {
 
   const saveDraft = (): Promise<void> => saveOverride(draft.trim() === '' ? null : draft.trim())
 
-  const saveOverride = async (value: string | null): Promise<void> => {
-    if (value === override) return
-    try {
-      await window.api.settings.setKubectlPath(value)
-    } catch (err) {
-      fail(err)
-      return
+  const saveOverride = (value: string | null): Promise<void> => {
+    if (value === requested.current) return saveChain.current
+    requested.current = value
+    const run = async (): Promise<void> => {
+      try {
+        await window.api.settings.setKubectlPath(value)
+      } catch (err) {
+        requested.current = stored.current
+        fail(err)
+        return
+      }
+      stored.current = value
+      setOverride(value)
+      if (requested.current === value) setDraft(value ?? '')
+      await recheck()
     }
-    setOverride(value)
-    setDraft(value ?? '')
-    await recheck()
+    saveChain.current = saveChain.current.then(run)
+    return saveChain.current
   }
 
   const saveFiles = async (next: string[]): Promise<void> => {
@@ -61,9 +83,13 @@ export function KubernetesSettings(): React.JSX.Element {
   }
 
   const addFile = async (): Promise<void> => {
-    const picked = await window.api.system.pickFile()
-    if (picked === null || files.includes(picked)) return
-    await saveFiles([...files, picked])
+    try {
+      const picked = await window.api.system.pickFile()
+      if (picked === null || files.includes(picked)) return
+      await saveFiles([...files, picked])
+    } catch (err) {
+      fail(err)
+    }
   }
 
   const status =
@@ -127,6 +153,7 @@ export function KubernetesSettings(): React.JSX.Element {
           </button>
         </div>
       ))}
+      {loadError !== null && <span className="settings-hint is-warning">{t('kube.settings.loadFailed', { detail: loadError })}</span>}
       <span className="settings-hint">{t('kube.settings.filesHint')}</span>
     </>
   )

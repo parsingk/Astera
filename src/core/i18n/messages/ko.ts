@@ -3279,5 +3279,6 @@ export const ko = {
   'kube.settings.addFile': 'kubeconfig 파일 추가…',
   'kube.settings.removeFile': '{path} 목록에서 빼기',
   'kube.settings.filesHint': '추가한 파일은 KUBECONFIG 또는 ~/.kube/config 와 합쳐 읽으며, Astera 는 kubeconfig 를 직접 쓰지 않습니다.',
+  'kube.settings.loadFailed': '설정을 읽지 못했습니다: {detail}',
   'kube.settings.saveFailed': '저장하지 못했습니다: {detail}'
 } as const
