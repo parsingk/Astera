@@ -72,6 +72,15 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
 
   ipcMain.handle('kube.contexts', () => service.contexts())
 
+  // The extra kubeconfig files the picker's "add kubeconfig" appends to; the context list is re-read after a change.
+  ipcMain.handle('settings.getKubeconfigFiles', () => deps.settings.getKubeconfigFiles())
+  ipcMain.handle('settings.setKubeconfigFiles', async (_e, files) => {
+    if (!Array.isArray(files)) throw new Error('kube: files must be an array')
+    const list = files.map((f) => str(f, 'kubeconfig file'))
+    await deps.settings.setKubeconfigFiles(list)
+    service.invalidateContexts()
+  })
+
   ipcMain.handle('kube.target', async (_e, filePath, projectRoot) => {
     const file = str(filePath, 'filePath')
     const root = str(projectRoot, 'projectRoot')

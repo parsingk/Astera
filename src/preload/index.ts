@@ -199,6 +199,8 @@ const api = {
     newToken: invoke('mcpHttp.newToken')
   },
   settings: {
+    getKubeconfigFiles: invoke('settings.getKubeconfigFiles'),
+    setKubeconfigFiles: invoke('settings.setKubeconfigFiles'),
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),
     getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),

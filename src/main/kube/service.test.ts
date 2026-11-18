@@ -353,6 +353,54 @@ describe('target through an overlay (fix round 1)', () => {
   })
 })
 
+describe('target: lockedNamespace and rememberChoices (R6)', () => {
+  it('a plain manifest offers its folders up to the root, nearest first, and no locked namespace', async () => {
+    const h = harness({ [p('k8s', 'deep', 'a.yaml')]: MANIFEST })
+    const t = await createKubeService(h.deps).target(p('k8s', 'deep', 'a.yaml'), root)
+    expect(t.rememberChoices).toEqual([p('k8s', 'deep'), p('k8s'), root])
+    expect(t.lockedNamespace).toBeNull()
+  })
+
+  it('an overlay with namespace: locks it, and is the only place a choice can be remembered', async () => {
+    const h = harness({
+      ...OVERLAY_TREE,
+      [p('envs', 'prod', 'kustomization.yaml')]: 'namespace: shop-prod\nresources:\n  - ../../apps/base\n'
+    })
+    const svc = createKubeService(h.deps)
+    const member = await svc.target(p('apps', 'base', 'dep.yaml'), root)
+    expect(member.lockedNamespace).toBe('shop-prod')
+    expect(member.rememberChoices).toEqual([p('envs', 'prod')])
+    const k = await svc.target(p('envs', 'prod', 'kustomization.yaml'), root)
+    expect(k.lockedNamespace).toBe('shop-prod')
+    expect(k.rememberChoices).toEqual([p('envs', 'prod')])
+  })
+
+  it('an overlay without namespace: is not locked; no overlay picked yet offers nothing', async () => {
+    const h = harness({ ...OVERLAY_TREE, [p('envs', 'dev', 'kustomization.yaml')]: 'resources:\n  - ../../apps/base\n' })
+    const svc = createKubeService(h.deps)
+    const none = await svc.target(p('apps', 'base', 'dep.yaml'), root)
+    expect(none.lockedNamespace).toBeNull()
+    expect(none.rememberChoices).toEqual([])
+    await svc.setOverlay(p('apps', 'base', 'dep.yaml'), p('envs', 'dev'))
+    const picked = await svc.target(p('apps', 'base', 'dep.yaml'), root)
+    expect(picked.lockedNamespace).toBeNull()
+    expect(picked.rememberChoices).toEqual([p('envs', 'dev')])
+  })
+})
+
+describe('invalidateContexts (R7)', () => {
+  it('makes the next contexts() ask kubectl again', async () => {
+    const h = harness({})
+    const svc = createKubeService(h.deps)
+    await svc.contexts()
+    await svc.contexts()
+    expect(h.calls).toHaveLength(1)
+    svc.invalidateContexts()
+    await svc.contexts()
+    expect(h.calls).toHaveLength(2)
+  })
+})
+
 describe('invalidate by folder (fix round 1)', () => {
   it('a deleted overlay folder drops its overlays from the graph', async () => {
     const h = harness(OVERLAY_TREE)

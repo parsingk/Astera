@@ -22,8 +22,8 @@ import type {
   KubeFileKind,
   KubeReloadResult,
   KubeRenderResult,
-  Remembered,
-  TargetState
+  KubeTargetView,
+  Remembered
 } from '../../core/kube/types'
 import { createKubeOperations, isSkippedDir, UNREADABLE } from './operations'
 import type { KubeTargetStore } from './targetStore'
@@ -39,12 +39,7 @@ export interface KubeServiceDeps {
   store: KubeTargetStore
 }
 
-export interface KubeTargetView {
-  state: TargetState
-  rememberFolder: string
-  overlay: string | null
-  overlays: string[]
-}
+export type { KubeTargetView }
 
 export type KubeService = ReturnType<typeof createKubeService>
 
@@ -106,6 +101,11 @@ export function createKubeService(deps: KubeServiceDeps) {
     return value
   }
 
+  /** Forgets the contexts answer, e.g. after the kubeconfig file list changed. */
+  function invalidateContexts(): void {
+    contextsCache = null
+  }
+
   async function buildGraph(projectRoot: string): Promise<KustomizeGraph> {
     const roots: Record<string, KustomizationRefs> = {}
     const walk = async (dir: string): Promise<void> => {
@@ -160,7 +160,14 @@ export function createKubeService(deps: KubeServiceDeps) {
       // What runs is the overlay, so only the overlay's own chain decides the target: a member and the
       // overlay's kustomization file must agree. No overlay chosen yet means no target.
       if (overlay === null) {
-        return { state: { state: 'none' }, rememberFolder: defaultRememberFolder(filePath, projectRoot, null), overlay, overlays }
+        return {
+          state: { state: 'none' },
+          rememberFolder: defaultRememberFolder(filePath, projectRoot, null),
+          overlay,
+          overlays,
+          lockedNamespace: null,
+          rememberChoices: []
+        }
       }
       folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
     }
@@ -173,7 +180,9 @@ export function createKubeService(deps: KubeServiceDeps) {
       state: resolveTarget(folders, (f) => remembered.get(f), ctx),
       rememberFolder: defaultRememberFolder(filePath, projectRoot, overlay),
       overlay,
-      overlays
+      overlays,
+      lockedNamespace: overlay === null ? null : graph.namespaceOf(overlay),
+      rememberChoices: overlay === null ? foldersUpTo(filePath, projectRoot) : [overlay]
     }
   }
 
@@ -277,6 +286,7 @@ export function createKubeService(deps: KubeServiceDeps) {
   return {
     classify,
     contexts,
+    invalidateContexts,
     target,
     setTarget,
     setOverlay,

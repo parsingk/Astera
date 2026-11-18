@@ -8,9 +8,9 @@ import type {
   KubeRequest,
   KubeRunResult,
   KubeStatus,
+  KubeTargetView,
   KubeVerb,
-  Remembered,
-  TargetState
+  Remembered
 } from './kube/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
@@ -1422,10 +1422,7 @@ export interface CoreApi {
     /** Kinds of the YAML files among `paths` (other paths are left out of the answer). */
     classify(paths: string[]): Promise<Record<string, KubeFileKind>>
     contexts(): Promise<KubeContexts>
-    target(
-      filePath: string,
-      projectRoot: string
-    ): Promise<{ state: TargetState; rememberFolder: string; overlay: string | null; overlays: string[] }>
+    target(filePath: string, projectRoot: string): Promise<KubeTargetView>
     setTarget(folder: string, value: Remembered | null): Promise<void>
     setOverlay(filePath: string, overlayDir: string): Promise<void>
     useContext(context: string): Promise<{ ok: boolean; stdout: string; stderr: string; errorCode?: string }>
@@ -1537,6 +1534,9 @@ export interface CoreApi {
     newToken(): Promise<string>
   }
   settings: {
+    /** Extra kubeconfig files merged into the kube context list. Setting them re-reads the contexts. */
+    getKubeconfigFiles(): Promise<string[]>
+    setKubeconfigFiles(files: string[]): Promise<void>
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
     setLang(lang: Lang | null): Promise<void>

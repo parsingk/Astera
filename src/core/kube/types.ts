@@ -58,6 +58,17 @@ export type TargetState =
   | { state: 'missing'; context: string; folder: string }
   | { state: 'none' }
 
+/** What the editor strip needs about a file's target. `lockedNamespace`: the overlay's own `namespace:`, which a
+ *  pill cannot override. `rememberChoices`: the folders a choice may be remembered for, nearest first. */
+export interface KubeTargetView {
+  state: TargetState
+  rememberFolder: string
+  overlay: string | null
+  overlays: string[]
+  lockedNamespace: string | null
+  rememberChoices: string[]
+}
+
 export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'
 
 /** One resource of the confirmation dialog's side-by-side diff. `before`/`after` are the YAML shown (secrets masked). */
