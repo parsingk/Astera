@@ -40,18 +40,25 @@ describe('namespaceFlag', () => {
 })
 
 describe('isClusterScoped', () => {
-  it('knows the built-in cluster-scoped kinds and every Cluster* kind', () => {
+  it('knows the built-in cluster-scoped kinds and the listed cluster-scoped CRDs', () => {
     for (const k of ['Namespace', 'Node', 'PersistentVolume', 'StorageClass', 'CustomResourceDefinition', 'ClusterRole',
       'ClusterRoleBinding', 'PriorityClass', 'IngressClass', 'RuntimeClass', 'ValidatingWebhookConfiguration',
       'MutatingWebhookConfiguration', 'APIService', 'CSIDriver', 'CSINode', 'VolumeAttachment', 'ClusterIssuer',
-      'ClusterSecretStore']) {
-      expect(isClusterScoped(k)).toBe(true)
+      'ClusterSecretStore', 'ClusterPolicy', 'ClusterTriggerAuthentication', 'GatewayClass', 'VolumeSnapshotClass',
+      'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']) {
+      expect(isClusterScoped(k), k).toBe(true)
     }
   })
 
   it('treats every other kind as namespaced, the bare Cluster kind (Cluster API, CloudNativePG) too', () => {
     for (const k of ['Deployment', 'ConfigMap', 'Secret', 'Role', 'RoleBinding', 'PersistentVolumeClaim', 'Cluster', 'namespace']) {
       expect(isClusterScoped(k)).toBe(false)
+    }
+  })
+
+  it('has no Cluster* prefix rule: namespaced CRDs named Cluster... stay namespaced, an unknown one fails safe', () => {
+    for (const k of ['ClusterClass', 'ClusterResourceSet', 'ClusterServiceVersion', 'ClusterLogging', 'ClusterSomethingNew']) {
+      expect(isClusterScoped(k), k).toBe(false)
     }
   })
 })

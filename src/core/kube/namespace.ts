@@ -5,29 +5,41 @@ export type NamespaceFlag =
   | { ok: true; flag: string | null }
   | { ok: false; conflicts: { path: string; namespace: string }[] }
 
-/** Well-known kinds that live outside any namespace. Known by name only, with no discovery call. */
+/** Well-known kinds that live outside any namespace, built in and from widely used CRDs. Known by name only, with no
+ *  discovery call. There is no `Cluster…` prefix rule: ClusterClass, ClusterResourceSet, ClusterServiceVersion and
+ *  others are namespaced. A cluster-scoped kind missing here counts as namespaced, which fails safe: it can only add
+ *  a namespace conflict (a refusal) or a `-n` kubectl ignores for it. */
 const CLUSTER_SCOPED = new Set([
   'Namespace',
   'Node',
   'PersistentVolume',
   'StorageClass',
   'CustomResourceDefinition',
+  'ClusterRole',
+  'ClusterRoleBinding',
   'PriorityClass',
   'IngressClass',
   'RuntimeClass',
   'ValidatingWebhookConfiguration',
   'MutatingWebhookConfiguration',
+  'ValidatingAdmissionPolicy',
+  'ValidatingAdmissionPolicyBinding',
   'APIService',
   'CSIDriver',
   'CSINode',
-  'VolumeAttachment'
+  'VolumeAttachment',
+  'VolumeSnapshotClass',
+  'GatewayClass',
+  // cert-manager, external-secrets, kyverno, keda
+  'ClusterIssuer',
+  'ClusterSecretStore',
+  'ClusterPolicy',
+  'ClusterTriggerAuthentication'
 ])
 
-/** A cluster-scoped kind names no namespace and takes none, so it never decides `-n`. Every `Cluster…` kind counts
- *  (ClusterRole, ClusterRoleBinding, cert-manager's ClusterIssuer, …); the bare `Cluster` does not, as Cluster API
- *  and CloudNativePG use it for a namespaced resource. */
+/** A cluster-scoped kind names no namespace and takes none, so it never decides `-n`. */
 export function isClusterScoped(kind: string): boolean {
-  return CLUSTER_SCOPED.has(kind) || (kind.startsWith('Cluster') && kind.length > 'Cluster'.length)
+  return CLUSTER_SCOPED.has(kind)
 }
 
 export function namespaceFlag(
