@@ -23,10 +23,13 @@ export interface LeftOut {
   reason: 'plain-yaml' | 'base' | 'base-member' | 'helm' | 'unlisted'
 }
 
-/** `broken-kustomization`: the selection reaches into a kustomization that does not parse; `paths` are its folders. */
+/** `broken-kustomization`: the selection reaches into a kustomization that does not parse; `paths` are its folders.
+ *  `nothing`: nothing applicable was found; `paths` is the selection, `leftOut` what was found and why it is not
+ *  applied (empty when nothing was found at all). */
 export type OperationPlan =
   | { ok: true; commands: KubeCommand[]; leftOut: LeftOut[] }
-  | { ok: false; reason: 'nothing' | 'base-folder' | 'many-overlays' | 'broken-kustomization'; paths: string[] }
+  | { ok: false; reason: 'nothing'; paths: string[]; leftOut: LeftOut[] }
+  | { ok: false; reason: 'base-folder' | 'many-overlays' | 'broken-kustomization'; paths: string[] }
 
 /** `nsFlag` is the value for `-n`, or null when every resource names its namespace. */
 export type KubeTarget = { context: string; nsFlag: string | null }
@@ -79,6 +82,9 @@ export interface KubeTargetView {
   resource: { kind: string; name: string | null } | { count: number } | { overlay: string } | null
   /** The nearest folder over the file whose kustomization does not parse: every action is refused until it is fixed. */
   brokenKustomization: string | null
+  /** A file in or below a kustomization's folder that no kustomization lists, so the plan leaves it out (it may be a
+   *  patch or a transformer config): every action waits. Never a folder or a kustomization file. */
+  unlisted: boolean
 }
 
 export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'
@@ -178,7 +184,8 @@ export type KubeReloadResult =
 export type KubeRenderResult = { ok: true; text: string } | { ok: false; stderr: string }
 
 /** The editor chip (spec 4.9). `lines` for a plain manifest, `resources` for a Kustomize member's overlay.
- *  `reason` for `unknown`: kubectl's first stderr line, or one of not-manifest, no-target, no-overlay, namespace. */
+ *  `reason` for `unknown`: kubectl's first stderr line, or one of not-manifest, no-target, no-overlay, namespace,
+ *  broken-kustomization, unlisted. */
 export interface KubeStatus {
   kind: 'same' | 'different' | 'absent' | 'unknown'
   lines?: number

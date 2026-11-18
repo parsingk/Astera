@@ -154,6 +154,28 @@ describe('KubeConfirmDialog', () => {
     }
   })
 
+  it('nothing to apply lists each left-out path with its reason', () => {
+    const html = render({
+      ok: false,
+      reason: 'refused',
+      plan: {
+        ok: false,
+        reason: 'nothing',
+        paths: ['/p/chart'],
+        leftOut: [
+          { path: '/p/chart/templates/d.yaml', reason: 'helm' },
+          { path: '/p/app/transformer.yaml', reason: 'unlisted' }
+        ]
+      }
+    })
+    expect(html).toContain('kube.confirm.refused.nothing')
+    expect(html).toContain('/p/chart/templates/d.yaml')
+    expect(html).toContain('kube.confirm.leftOutReason.helm')
+    expect(html).toContain('/p/app/transformer.yaml')
+    expect(html).toContain('kube.confirm.leftOutReason.unlisted')
+    expect(html.indexOf('kube.confirm.refused.nothing')).toBeLessThan(html.indexOf('/p/chart/templates/d.yaml'))
+  })
+
   it('the namespace pill comes from the preview: one value, from the files, or several; the caller label while loading', () => {
     expect(render(null)).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;shop&quot;}')
     expect(render(okPreview(diff(), ['dev']))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
@@ -185,7 +207,7 @@ describe('KubeConfirmDialog', () => {
   })
 
   it('a refusal decided before the namespaces, or a failure with no commands, shows no namespace pill', () => {
-    const refusals: KubePreview[] = [
+    const refusals: Exclude<KubePreview, { ok: true }>[] = [
       { ok: false, reason: 'mixed-contexts', folders: ['/f1'] },
       { ok: false, reason: 'mixed-namespaces', namespace: 'shop', folders: [{ folder: '/p/web', namespace: 'web' }] },
       { ok: false, reason: 'namespace', conflicts: [{ path: '/p/a.yaml', namespace: 'dev' }] },

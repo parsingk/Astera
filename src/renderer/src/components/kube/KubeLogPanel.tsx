@@ -30,7 +30,10 @@ function refusalText(refused: NonNullable<KubeRunResult['refused']>, t: T): stri
       return `${t('kube.confirm.mixedNamespaces', { ns: refused.namespace })}: ${refused.folders.map((f) => `${f.folder} (${f.namespace})`).join(', ')}`
     case 'refused': {
       const plan = (refused as Extract<KubePreview, { reason: 'refused' }>).plan
-      return t(`kube.confirm.refused.${plan.ok ? 'nothing' : plan.reason}` as 'kube.confirm.refused.nothing')
+      const text = t(`kube.confirm.refused.${plan.ok ? 'nothing' : plan.reason}` as 'kube.confirm.refused.nothing')
+      if (plan.ok || plan.reason !== 'nothing' || plan.leftOut.length === 0) return text
+      const why = (r: string): string => t(`kube.confirm.leftOutReason.${r}` as 'kube.confirm.leftOutReason.helm')
+      return `${text}: ${plan.leftOut.map((l) => `${l.path} (${why(l.reason)})`).join(', ')}`
     }
     case 'kubectl':
       return refused.stderr

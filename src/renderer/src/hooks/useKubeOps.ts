@@ -251,10 +251,11 @@ export function kubeRequestOf(
 }
 
 /** Why reload, which puts the live object into the file's buffer, must not run on this file: a Kustomize member or
- *  kustomization holds a patch or a list, not the object (spec 4.3), and below a kustomization that does not parse
- *  every action waits. null when it may. */
-export function reloadRefusal(view: KubeTargetView): 'kustomize' | 'broken-kustomization' | null {
+ *  kustomization holds a patch or a list, not the object (spec 4.3), so may a file beside a kustomization that does
+ *  not list it, and below a kustomization that does not parse every action waits. null when it may. */
+export function reloadRefusal(view: KubeTargetView): 'kustomize' | 'broken-kustomization' | 'unlisted' | null {
   if (view.brokenKustomization !== null) return 'broken-kustomization'
+  if (view.unlisted) return 'unlisted'
   return view.overlays.length > 0 ? 'kustomize' : null
 }
 

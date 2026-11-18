@@ -158,7 +158,12 @@ describe('planOperation', () => {
       ]))
     })
     it('is left out when selected itself', () => {
-      expect(planOperation(['/u/app/transformer.yaml'], idx())).toEqual({ ok: false, reason: 'nothing', paths: ['/u/app/transformer.yaml'] })
+      expect(planOperation(['/u/app/transformer.yaml'], idx())).toEqual({
+        ok: false,
+        reason: 'nothing',
+        paths: ['/u/app/transformer.yaml'],
+        leftOut: [{ path: '/u/app/transformer.yaml', reason: 'unlisted' }]
+      })
       expect(planOperation(['/u/app/more/x.yaml', '/u/loose.yaml'], idx())).toEqual({
         ok: true,
         commands: [{ kind: 'files', files: ['/u/loose.yaml'] }],
@@ -167,9 +172,21 @@ describe('planOperation', () => {
     })
   })
 
-  it('values.yaml alone is nothing', () => {
+  it('values.yaml alone is nothing, and says it was left out as plain YAML', () => {
     expect(planOperation(['/p/values.yaml'], index({ '/p/values.yaml': 'plain' }))).toEqual({
-      ok: false, reason: 'nothing', paths: ['/p/values.yaml']
+      ok: false, reason: 'nothing', paths: ['/p/values.yaml'], leftOut: [{ path: '/p/values.yaml', reason: 'plain-yaml' }]
+    })
+  })
+  it('a folder of Helm templates only is nothing, listing each template', () => {
+    const idx = index({ '/c/templates/a.yaml': 'helm-template', '/c/templates/b.yaml': 'helm-template', '/d/x.md': 'plain' })
+    expect(planOperation(['/c'], idx)).toEqual({
+      ok: false,
+      reason: 'nothing',
+      paths: ['/c'],
+      leftOut: [
+        { path: '/c/templates/a.yaml', reason: 'helm' },
+        { path: '/c/templates/b.yaml', reason: 'helm' }
+      ]
     })
   })
   it('a file reached twice appears once', () => {

@@ -305,7 +305,13 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     // The menu cannot tell a Kustomize member from a plain manifest; its target can, before any cluster is asked for.
     const refusal = verb === 'reload' ? reloadRefusal(view) : null
     if (refusal) {
-      toast.error(t(refusal === 'kustomize' ? 'kube.ops.reloadKustomize' : 'kube.toolbar.brokenKustomization'))
+      const key =
+        refusal === 'kustomize'
+          ? 'kube.ops.reloadKustomize'
+          : refusal === 'unlisted'
+            ? 'kube.toolbar.unlisted'
+            : 'kube.toolbar.brokenKustomization'
+      toast.error(t(key))
       return
     }
     // An editor's session choice covers that one file (R11), never a multi-selection: those go by their own targets.

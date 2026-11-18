@@ -58,6 +58,7 @@ export function KubeEditorStrip({
       kubectlMissing={editor.kubectlMissing}
       reloadBlocked={view?.reloadBlocked ?? null}
       brokenKustomization={view?.brokenKustomization ?? null}
+      unlisted={view?.unlisted ?? false}
       renderOpen={editor.renderOpen(path)}
       onPickContext={() => editor.openPicker(path, 'context')}
       onPickNamespace={() => editor.openPicker(path, 'namespace')}

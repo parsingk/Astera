@@ -27,6 +27,7 @@ const base = {
   kubectlMissing: false,
   reloadBlocked: null,
   brokenKustomization: null as string | null,
+  unlisted: false,
   renderOpen: false,
   onPickContext: noop,
   onPickNamespace: noop,
@@ -187,6 +188,14 @@ describe('notices', () => {
     for (const k of ['compare', 'apply', 'delete']) expect(button(kustomize, `kube.toolbar.${k}`)).toContain('disabled')
     expect(kustomize).toContain('kube.toolbar.brokenKustomization')
     expect(render()).not.toContain('kube.toolbar.brokenKustomization')
+  })
+
+  it('a manifest no kustomization beside it lists disables every action, the chip too, and says why', () => {
+    const html = render({ unlisted: true, status: { kind: 'different', lines: 2 } })
+    for (const k of ['compare', 'apply', 'reload', 'delete']) expect(button(html, `kube.toolbar.${k}`)).toContain('disabled')
+    expect(html).toMatch(/<button[^>]*class="kube-chip kube-chip-btn"[^>]*disabled/)
+    expect(html).toContain('kube.toolbar.unlisted')
+    expect(render()).not.toContain('kube.toolbar.unlisted')
   })
 
   it('a missing kubectl shows the notice with a settings button', () => {

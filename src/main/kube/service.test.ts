@@ -1599,11 +1599,54 @@ describe('Helm charts under a selected folder (spec 4.4)', () => {
         { path: path.join(chart, 'templates', 'd.yaml'), reason: 'helm' }
       ])
     )
-    expect(await svc.preview('apply', request([path.join(chart, 'crds')]), HIDE)).toMatchObject({
+    expect(await svc.preview('apply', request([path.join(chart, 'crds')]), HIDE)).toEqual({
       ok: false,
       reason: 'refused',
-      plan: { ok: false, reason: 'nothing' }
+      plan: {
+        ok: false,
+        reason: 'nothing',
+        paths: [path.join(chart, 'crds')],
+        leftOut: [{ path: path.join(chart, 'crds', 'x.yaml'), reason: 'helm' }]
+      }
     })
+  })
+})
+
+describe('a manifest beside a kustomization that does not list it (unlisted)', () => {
+  const app = p('apps', 'app')
+  const transformer = p('apps', 'app', 'transformer.yaml')
+  const deeper = p('apps', 'app', 'more', 'x.yaml')
+  const listed = p('apps', 'app', 'deployment.yaml')
+  const loose = p('k8s', 'a.yaml')
+  const tree = {
+    [p('apps', 'app', 'kustomization.yaml')]: 'resources:\n  - deployment.yaml\ntransformers:\n  - transformer.yaml\n',
+    [listed]: yamlDocs(cm('a', {}, 'dev')),
+    [transformer]: yamlDocs(cm('t', {}, 'dev')),
+    [deeper]: yamlDocs(cm('x', {}, 'dev')),
+    [loose]: yamlDocs(cm('l', {}, 'dev'))
+  }
+
+  it('is unlisted in the target view, below the folder too; a listed member, a loose manifest and a folder are not', async () => {
+    const h = harness(tree, fakeKube({}))
+    const svc = createKubeService(h.deps)
+    expect((await svc.target(transformer, root)).unlisted).toBe(true)
+    expect((await svc.target(deeper, root)).unlisted).toBe(true)
+    expect((await svc.target(listed, root)).unlisted).toBe(false)
+    expect((await svc.target(p('apps', 'app', 'kustomization.yaml'), root)).unlisted).toBe(false)
+    expect((await svc.target(loose, root)).unlisted).toBe(false)
+    expect((await svc.target(app, root)).unlisted).toBe(false)
+  })
+
+  it('plans to nothing with the reason, and its chip compares nothing, before any cluster call', async () => {
+    const h = harness(tree, fakeKube({}))
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.preview('apply', request([transformer]), HIDE)).toEqual({
+      ok: false,
+      reason: 'refused',
+      plan: { ok: false, reason: 'nothing', paths: [transformer], leftOut: [{ path: transformer, reason: 'unlisted' }] }
+    })
+    expect(await svc.status(transformer, root)).toEqual({ kind: 'unknown', reason: 'unlisted' })
+    expect(clusterCalls(h.calls)).toEqual([])
   })
 })
 

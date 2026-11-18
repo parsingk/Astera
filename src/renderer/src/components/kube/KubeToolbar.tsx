@@ -29,6 +29,8 @@ export interface KubeToolbarProps {
   reloadBlocked: 'secret' | 'multi' | null
   /** The folder of a kustomization over this file that does not parse: every action waits until it is fixed. */
   brokenKustomization: string | null
+  /** No kustomization beside or above this file lists it, so it is never applied: every action is off. */
+  unlisted: boolean
   renderOpen: boolean
   /** Open the cluster picker / the namespace picker; the caller places them (pass them as children). */
   onPickContext(): void
@@ -84,7 +86,8 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
     p.target.state === 'missing' ||
     p.target.state === 'none' ||
     (isKustomize && p.overlay === null) ||
-    p.brokenKustomization !== null
+    p.brokenKustomization !== null ||
+    p.unlisted
 
   const contextName = p.target.state === 'none' ? null : p.target.context
   const short = contextName === null ? '' : displayContextName(contextName).short
@@ -221,6 +224,11 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
         <div className="kube-info">
           <span>{t('kube.toolbar.brokenKustomization')}</span>
           <code>{p.brokenKustomization}</code>
+        </div>
+      )}
+      {p.unlisted && (
+        <div className="kube-info">
+          <span>{t('kube.toolbar.unlisted')}</span>
         </div>
       )}
       {p.children}

@@ -105,6 +105,6 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
   const commands: KubeCommand[] = []
   if (files.size > 0) commands.push({ kind: 'files', files: [...files].sort(byPath) })
   for (const dir of [...overlays].sort(byPath)) commands.push({ kind: 'overlay', dir })
-  if (commands.length === 0) return { ok: false, reason: 'nothing', paths: [...selection] }
+  if (commands.length === 0) return { ok: false, reason: 'nothing', paths: [...selection], leftOut: [...leftOut.values()] }
   return { ok: true, commands, leftOut: [...leftOut.values()] }
 }

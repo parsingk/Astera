@@ -153,25 +153,38 @@ export function KubeConfirmDialog({
             </ul>
           </div>
         )
-      case 'refused':
+      case 'refused': {
+        const plan = preview.plan
+        // Nothing to apply: what was found is listed with why it is left out.
+        const leftOut = !plan.ok && plan.reason === 'nothing' ? plan.leftOut : []
         return (
           <div className="kube-fail">
-            <p>
-              {t(
-                `kube.confirm.refused.${preview.plan.ok ? 'nothing' : preview.plan.reason}` as 'kube.confirm.refused.nothing'
-              )}
-            </p>
-            {!preview.plan.ok && (
+            <p>{t(`kube.confirm.refused.${plan.ok ? 'nothing' : plan.reason}` as 'kube.confirm.refused.nothing')}</p>
+            {leftOut.length > 0 ? (
               <ul>
-                {preview.plan.paths.map((p) => (
-                  <li key={p} className="mono">
-                    {p}
+                {leftOut.map((l) => (
+                  <li key={`${l.reason}:${l.path}`}>
+                    <span className="mono">{l.path}</span>{' '}
+                    <span className="kube-leftout-reason">
+                      {t(`kube.confirm.leftOutReason.${l.reason}` as 'kube.confirm.leftOutReason.helm')}
+                    </span>
                   </li>
                 ))}
               </ul>
+            ) : (
+              !plan.ok && (
+                <ul>
+                  {plan.paths.map((p) => (
+                    <li key={p} className="mono">
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+              )
             )}
           </div>
         )
+      }
       case 'kubectl':
         return (
           <div className="kube-fail">

@@ -213,7 +213,8 @@ export function createKubeService(deps: KubeServiceDeps) {
           reloadBlocked: null,
           nsFromFile: false,
           resource: null,
-          brokenKustomization
+          brokenKustomization,
+          unlisted: false
         }
       }
       folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
@@ -236,7 +237,9 @@ export function createKubeService(deps: KubeServiceDeps) {
         : isDir
           ? { reloadBlocked: null, nsFromFile: false, resource: null }
           : await fileFacts(filePath)),
-      brokenKustomization
+      brokenKustomization,
+      // The planner's rule for a file it leaves out as unlisted (plan.ts takeLoose).
+      unlisted: !isDir && !isKustomization && !graph.isMember(filePath) && graph.inKustomization(filePath)
     }
   }
 

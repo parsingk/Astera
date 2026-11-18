@@ -117,6 +117,21 @@ describe('KubeLogPanel', () => {
     ])
     expect(namespaces).toContain('kube.confirm.mixedNamespaces{&quot;ns&quot;:&quot;shop&quot;}')
     expect(namespaces).toContain('/p/web (web)')
+    const nothing = render([
+      entry({
+        result: result({
+          ok: false,
+          ran: 0,
+          refused: {
+            ok: false,
+            reason: 'refused',
+            plan: { ok: false, reason: 'nothing', paths: ['/p/app'], leftOut: [{ path: '/p/app/transformer.yaml', reason: 'unlisted' }] }
+          }
+        })
+      })
+    ])
+    expect(nothing).toContain('kube.confirm.refused.nothing')
+    expect(nothing).toContain('/p/app/transformer.yaml (kube.confirm.leftOutReason.unlisted)')
   })
 
   it('lists newest first and opens only the newest finished entry', () => {

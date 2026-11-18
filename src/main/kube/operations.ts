@@ -520,6 +520,8 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const [graph, view] = await Promise.all([d.projectGraph(projectRoot), d.target(file, projectRoot)])
     // What the file is (a resource, or a patch of an overlay) is unknown until the kustomization parses.
     if (view.brokenKustomization !== null) return { kind: 'unknown', reason: 'broken-kustomization' }
+    // The plan leaves such a file out: comparing it as a resource would show what is never applied.
+    if (view.unlisted) return { kind: 'unknown', reason: 'unlisted' }
     let s: { context: string; namespace: string | null }
     if (context !== undefined) {
       const listed = (await d.contexts()).contexts.find((c) => c.name === context)

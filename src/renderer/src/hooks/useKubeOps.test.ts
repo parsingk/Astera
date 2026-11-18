@@ -376,6 +376,7 @@ const view = (over: Partial<KubeTargetView> = {}): KubeTargetView => ({
   nsFromFile: false,
   resource: null,
   brokenKustomization: null,
+  unlisted: false,
   ...over
 })
 
@@ -518,6 +519,10 @@ describe('reloadRefusal: why the explorer must not put the live object into a fi
 
   it('a file below a kustomization that does not parse is refused like every other action', () => {
     expect(reloadRefusal(view({ brokenKustomization: '/p/k8s' }))).toBe('broken-kustomization')
+  })
+
+  it('a manifest no kustomization beside it lists may be a patch: it is not reloaded either', () => {
+    expect(reloadRefusal(view({ unlisted: true }))).toBe('unlisted')
   })
 
   it('a plain manifest may reload', () => {

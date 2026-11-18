@@ -3213,6 +3213,7 @@ export const ko = {
   'kube.toolbar.openSettings': 'Kubernetes 설정 열기',
   'kube.toolbar.kustomizeNote': 'patch 파일은 혼자서는 리소스가 아니라서 overlay 단위로 적용합니다.',
   'kube.toolbar.brokenKustomization': '이 위의 kustomization 을 읽을 수 없습니다. kustomization.yaml 를 먼저 고치세요',
+  'kube.toolbar.unlisted': '이 파일은 kustomization 에 포함되어 있지 않아 적용하지 않습니다',
   'kube.render.title': '합쳐진 결과',
   'kube.render.readOnly': '읽기 전용',
   'kube.render.legend': '이 patch 가 바꾼 줄',

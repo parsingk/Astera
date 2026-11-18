@@ -2958,6 +2958,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.toolbar.kubectlMissing': 'kubectl was not found',
   'kube.toolbar.openSettings': 'Open Kubernetes settings',
   'kube.toolbar.kustomizeNote': 'A patch file is not a resource on its own, so it is applied per overlay.',
+  'kube.toolbar.unlisted': 'This file is not listed by the kustomization beside it, so it is not applied',
   'kube.toolbar.brokenKustomization': 'A kustomization above this file cannot be read. Fix the kustomization first',
   'kube.render.title': 'Merged result',
   'kube.render.readOnly': 'Read only',
