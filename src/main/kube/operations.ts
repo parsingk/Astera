@@ -9,6 +9,7 @@ import { namespaceFlag, type NamespaceFlag } from '../../core/kube/namespace'
 import { objectsFromYaml, pairObjects, type K8sObject } from '../../core/kube/objects'
 import { parseKubectlOutput } from '../../core/kube/output'
 import { planOperation, type FolderIndex } from '../../core/kube/plan'
+import { foldersUpTo } from '../../core/kube/target'
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { KustomizeGraph } from '../../core/kube/kustomize'
 import type {
@@ -128,18 +129,32 @@ function refusalText(p: Refusal): string {
 export function createKubeOperations(d: KubeOperationDeps) {
   const running = new Map<string, AbortController>()
 
+  /** Whether a folder above `dir`, up to the project root, is a Helm chart (holds Chart.yaml). */
+  async function insideChart(dir: string, root: string): Promise<boolean> {
+    for (const folder of foldersUpTo(dir, root)) {
+      const s = await d.stat(path.join(folder, 'Chart.yaml'))
+      if (s && !s.isDir) return true
+    }
+    return false
+  }
+
   /** What planOperation asks synchronously, gathered first: which selected paths are folders, the files under each
-   *  selected folder that is not itself a kustomization, and every kind. */
-  async function folderIndex(selection: string[], graph: KustomizeGraph): Promise<FolderIndex> {
+   *  selected folder that is not itself a kustomization, and every kind. A walk leaves a whole Helm chart out (spec
+   *  4.4): every file it finds under a chart root counts as Helm, CRDs, examples and values too. */
+  async function folderIndex(selection: string[], graph: KustomizeGraph, root: string): Promise<FolderIndex> {
     const dirs = new Set<string>()
     const under = new Map<string, string[]>()
-    const walk = async (dir: string, into: string[]): Promise<void> => {
+    const inChart = new Set<string>()
+    const walk = async (dir: string, into: string[], chart: boolean): Promise<void> => {
       const entries = await d.listDir(dir).catch(() => [])
+      const here = chart || entries.some((e) => !e.isDir && e.name === 'Chart.yaml')
       await Promise.all(
         entries.map(async (e) => {
           const full = path.join(dir, e.name)
-          if (!e.isDir) into.push(full)
-          else if (!isSkippedDir(e.name)) await walk(full, into)
+          if (!e.isDir) {
+            into.push(full)
+            if (here) inChart.add(full)
+          } else if (!isSkippedDir(e.name)) await walk(full, into, here)
         })
       )
     }
@@ -149,13 +164,13 @@ export function createKubeOperations(d: KubeOperationDeps) {
       dirs.add(item)
       if (graph.isOverlay(item) || graph.isBase(item)) continue
       const files: string[] = []
-      await walk(item, files)
+      await walk(item, files, await insideChart(item, root))
       under.set(item, files)
     }
     const kinds = await d.classify([...selection.filter((x) => !dirs.has(x)), ...[...under.values()].flat()])
     const known = (f: string): boolean => Object.hasOwn(kinds, f)
     return {
-      kindOf: (f) => (known(f) ? kinds[f] : 'plain'),
+      kindOf: (f) => (inChart.has(f) && known(f) ? 'helm-template' : known(f) ? kinds[f] : 'plain'),
       isDir: (f) => dirs.has(f),
       // Only YAML and kustomization names are classified; other files are not Kubernetes files at all.
       filesUnder: (dir) => (under.get(dir) ?? []).filter(known),
@@ -242,7 +257,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const root = req.projectRoot
     const graph = await d.projectGraph(root)
     const selection = req.selection.map((s) => d.onRoot(root, s))
-    const plan = planOperation(selection, await folderIndex(selection, graph))
+    const plan = planOperation(selection, await folderIndex(selection, graph, root))
     if (!plan.ok) return { ok: false, reason: 'refused', plan }
     // A folder skips C12 for everything under it, so the override takes one file or one overlay only.
     const [only] = plan.commands

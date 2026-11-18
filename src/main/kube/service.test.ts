@@ -1441,6 +1441,40 @@ describe('status', () => {
   })
 })
 
+describe('Helm charts under a selected folder (spec 4.4)', () => {
+  const a = p('deploy', 'a.yaml')
+  const chart = p('deploy', 'chart')
+  const tree = {
+    [a]: yamlDocs(cm('a', {}, 'dev')),
+    [path.join(chart, 'Chart.yaml')]: 'apiVersion: v2\nname: web\nversion: 0.1.0\n',
+    [path.join(chart, 'values.yaml')]: 'replicas: 2\n',
+    [path.join(chart, 'crds', 'x.yaml')]: yamlDocs({ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'xs.example.com' } }),
+    [path.join(chart, 'examples', 'cr.yaml')]: yamlDocs(cm('example', {}, 'dev')),
+    [path.join(chart, 'templates', 'd.yaml')]: yamlDocs(cm('{{ .Release.Name }}', {}, 'dev'))
+  }
+
+  it('leaves out every file of a chart, not only its templates, also when the folder picked lies inside the chart', async () => {
+    const h = harness(tree, fakeKube({}))
+    const svc = traced(createKubeService(h.deps))
+    const r = await svc.preview('apply', request([p('deploy')]), HIDE)
+    if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
+    expect(r.commandLines).toEqual([['apply', '--context', 'kind-dev', '-f', a]])
+    expect(r.plan.leftOut).toEqual(
+      expect.arrayContaining([
+        { path: path.join(chart, 'crds', 'x.yaml'), reason: 'helm' },
+        { path: path.join(chart, 'examples', 'cr.yaml'), reason: 'helm' },
+        { path: path.join(chart, 'values.yaml'), reason: 'helm' },
+        { path: path.join(chart, 'templates', 'd.yaml'), reason: 'helm' }
+      ])
+    )
+    expect(await svc.preview('apply', request([path.join(chart, 'crds')]), HIDE)).toMatchObject({
+      ok: false,
+      reason: 'refused',
+      plan: { ok: false, reason: 'nothing' }
+    })
+  })
+})
+
 describe('a kustomization that does not parse or cannot be read (fails closed)', () => {
   const app = p('apps', 'app')
   const patch = p('apps', 'app', 'patch.yaml')
