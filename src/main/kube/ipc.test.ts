@@ -1,15 +1,25 @@
 import { describe, it, expect, vi } from 'vitest'
 import { registerKubeIpc } from './ipc'
+import type { KubectlResult } from '../../core/kube/kubectl'
+
+const NL = String.fromCharCode(10)
 
 function setup() {
   const handlers = new Map<string, (e: unknown, ...a: unknown[]) => unknown>()
-  const settings = { getKubeconfigFiles: vi.fn(() => ['/a']), setKubeconfigFiles: vi.fn(async () => {}) }
+  const settings = {
+    getKubeconfigFiles: vi.fn(() => ['/a']),
+    setKubeconfigFiles: vi.fn(async () => {}),
+    getKubectlPath: vi.fn((): string | null => null),
+    setKubectlPath: vi.fn(async (_p: string | null) => {})
+  }
+  const run = vi.fn(async (_args: string[]): Promise<KubectlResult> => ({ ok: true, stdout: 'Client Version: v1.30.2'+NL+'Kustomize Version: v5.0.4'+NL, stderr: '' }))
+  const binPath = vi.fn(() => '/usr/bin/kubectl')
   const service = { invalidateContexts: vi.fn(), preview: vi.fn(async () => ({})), status: vi.fn(async () => ({})) }
   registerKubeIpc(
     { handle: (c, fn) => void handlers.set(c, fn) },
-    { service, assertAllowedPath: async (p: string) => p, settings } as never
+    { service, assertAllowedPath: async (p: string) => p, settings, run, binPath } as never
   )
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service }
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -55,5 +65,45 @@ describe('the editor override (R11) over IPC', () => {
     await expect(t.call('kube.status', '/p/a.yaml', '/p', '')).rejects.toThrow()
     await expect(t.call('kube.status', '/p/a.yaml', '/p', 3)).rejects.toThrow()
     expect(t.service.status).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('kubectl path setting and recheck', () => {
+  it('stores a trimmed path, null for an empty one, and clears the contexts cache each time', async () => {
+    const t = setup()
+    await t.call('settings.setKubectlPath', '  /opt/kubectl  ')
+    expect(t.settings.setKubectlPath).toHaveBeenLastCalledWith('/opt/kubectl')
+    await t.call('settings.setKubectlPath', '   ')
+    expect(t.settings.setKubectlPath).toHaveBeenLastCalledWith(null)
+    await t.call('settings.setKubectlPath', null)
+    expect(t.settings.setKubectlPath).toHaveBeenLastCalledWith(null)
+    expect(t.service.invalidateContexts).toHaveBeenCalledTimes(3)
+    expect(await t.call('settings.getKubectlPath')).toBeNull()
+  })
+
+  it('rejects a non-string, non-null path, storing nothing', async () => {
+    const t = setup()
+    await expect(t.call('settings.setKubectlPath', 3)).rejects.toThrow()
+    await expect(t.call('settings.setKubectlPath', undefined)).rejects.toThrow()
+    expect(t.settings.setKubectlPath).not.toHaveBeenCalled()
+    expect(t.service.invalidateContexts).not.toHaveBeenCalled()
+  })
+
+  it('recheck runs kubectl version --client and reports the binary used and the client version', async () => {
+    const t = setup()
+    expect(await t.call('kube.recheck')).toEqual({ ok: true, path: '/usr/bin/kubectl', version: 'v1.30.2' })
+    expect(t.run).toHaveBeenCalledWith(['version', '--client'], expect.anything())
+  })
+
+  it('recheck keeps ok with an empty version when no Client Version line is printed', async () => {
+    const t = setup()
+    t.run.mockResolvedValueOnce({ ok: true, stdout: 'something else'+NL, stderr: '' })
+    expect(await t.call('kube.recheck')).toEqual({ ok: true, path: '/usr/bin/kubectl', version: '' })
+  })
+
+  it('recheck passes a failure through with its error code and stderr', async () => {
+    const t = setup()
+    t.run.mockResolvedValueOnce({ ok: false, stdout: '', stderr: 'spawn kubectl ENOENT', errorCode: 'ENOENT' })
+    expect(await t.call('kube.recheck')).toEqual({ ok: false, errorCode: 'ENOENT', stderr: 'spawn kubectl ENOENT' })
   })
 })

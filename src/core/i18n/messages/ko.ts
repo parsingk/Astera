@@ -3267,5 +3267,17 @@ export const ko = {
   'kube.toast.timedOut': '{context} 작업이 시간 초과되었습니다',
   'kube.toast.refused': '{context} 작업이 거절되었습니다',
   'kube.toast.showLog': '기록 보기',
-  'kube.explorer.failed': '마지막 Kubernetes 작업이 실패했습니다'
+  'kube.explorer.failed': '마지막 Kubernetes 작업이 실패했습니다',
+  'kube.settings.status': 'kubectl',
+  'kube.settings.notFound': 'kubectl 을 찾을 수 없습니다',
+  'kube.settings.error': 'kubectl 을 실행하지 못했습니다: {detail}',
+  'kube.settings.recheck': '다시 확인',
+  'kube.settings.override': 'kubectl 경로 직접 지정',
+  'kube.settings.clearOverride': '지정한 경로 지우기',
+  'kube.settings.files': '추가한 kubeconfig 파일',
+  'kube.settings.filesNone': '추가한 파일이 없습니다',
+  'kube.settings.addFile': 'kubeconfig 파일 추가…',
+  'kube.settings.removeFile': '{path} 목록에서 빼기',
+  'kube.settings.filesHint': '추가한 파일은 KUBECONFIG 또는 ~/.kube/config 와 합쳐 읽으며, Astera 는 kubeconfig 를 직접 쓰지 않습니다.',
+  'kube.settings.saveFailed': '저장하지 못했습니다: {detail}'
 } as const

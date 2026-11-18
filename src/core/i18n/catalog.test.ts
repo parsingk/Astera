@@ -9,7 +9,8 @@ const placeholders = (s: string): string[] =>
  *  elsewhere in the app, in the CLIs, or on disk. */
 const LITERALS = [
   'Claude', 'Codex', 'Astera', 'Slack', 'GitHub', 'git', 'npm', 'PATH', 'Gradle', 'Maven', 'cargo', 'go',
-  'Python', 'pytest', 'Docker', 'Compose', '.NET', 'Jobs', 'DevTools', 'Design Mode'
+  'Python', 'pytest', 'Docker', 'Compose', '.NET', 'Jobs', 'DevTools', 'Design Mode',
+  'Kubernetes', 'Kustomize', 'kubectl', 'kubeconfig', 'Helm'
 ]
 
 describe('카탈로그 불변식', () => {

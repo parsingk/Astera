@@ -135,6 +135,7 @@ const api = {
     setWorkspace: invoke('higgsfield.setWorkspace')
   },
   kube: {
+    recheck: invoke('kube.recheck'),
     classify: invoke('kube.classify'),
     contexts: invoke('kube.contexts'),
     target: invoke('kube.target'),
@@ -199,6 +200,8 @@ const api = {
     newToken: invoke('mcpHttp.newToken')
   },
   settings: {
+    getKubectlPath: invoke('settings.getKubectlPath'),
+    setKubectlPath: invoke('settings.setKubectlPath'),
     getKubeconfigFiles: invoke('settings.getKubeconfigFiles'),
     setKubeconfigFiles: invoke('settings.setKubeconfigFiles'),
     getLang: invoke('settings.getLang'),

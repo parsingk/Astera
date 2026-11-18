@@ -3013,5 +3013,17 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.toast.timedOut': 'The operation on {context} timed out',
   'kube.toast.refused': 'The operation on {context} was refused',
   'kube.toast.showLog': 'Show log',
-  'kube.explorer.failed': 'The last Kubernetes operation failed'
+  'kube.explorer.failed': 'The last Kubernetes operation failed',
+  'kube.settings.status': 'kubectl',
+  'kube.settings.notFound': 'kubectl was not found',
+  'kube.settings.error': 'kubectl could not be run: {detail}',
+  'kube.settings.recheck': 'Check again',
+  'kube.settings.override': 'Set the kubectl path yourself',
+  'kube.settings.clearOverride': 'Clear the chosen path',
+  'kube.settings.files': 'Added kubeconfig files',
+  'kube.settings.filesNone': 'No files added',
+  'kube.settings.addFile': 'Add a kubeconfig file…',
+  'kube.settings.removeFile': 'Remove {path} from the list',
+  'kube.settings.filesHint': 'Added files are read together with KUBECONFIG or ~/.kube/config. Astera never writes a kubeconfig.',
+  'kube.settings.saveFailed': 'Could not save: {detail}'
 }

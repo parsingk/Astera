@@ -67,6 +67,7 @@ import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resum
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ReviewerSettings } from './components/ReviewerSettings'
 import { GithubSettings } from './components/GithubSettings'
+import { KubernetesSettings } from './components/KubernetesSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
@@ -720,6 +721,7 @@ export default function App(): React.JSX.Element {
     | 'slack'
     | 'notifications'
     | 'github'
+    | 'kubernetes'
     | 'remote'
     | 'plugins'
     | 'extensions'
@@ -3283,7 +3285,10 @@ export default function App(): React.JSX.Element {
               projectRoot={f.projectRoot}
               editor={kubeEditor}
               busy={kubeOps.busy}
-              onOpenSettings={() => setShowSettings(true)}
+              onOpenSettings={() => {
+                setSettingsTab('kubernetes')
+                setShowSettings(true)
+              }}
             />
           )}
           {/* markdown=false 여도 MarkdownSplit 은 항상 렌더된다 — {md ? <MarkdownSplit/> : editor}
@@ -5264,6 +5269,7 @@ export default function App(): React.JSX.Element {
                     ['slack', 'Slack'],
                     ['notifications', t('settings.tab.notifications')],
                     ['github', 'GitHub'],
+                    ['kubernetes', 'Kubernetes'],
                     ['worktree', 'Worktree'],
                     ['history', t('settings.tab.history')],
                     ['info', t('settings.tab.info')]
@@ -5694,6 +5700,7 @@ export default function App(): React.JSX.Element {
                 </div>
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
+                {settingsTab === 'kubernetes' && <KubernetesSettings />}
                 {settingsTab === 'remote' && (
                   <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} {...(runtimeFocus !== null ? { focusRuntimeId: runtimeFocus } : {})} />
                 )}

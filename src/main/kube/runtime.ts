@@ -1,5 +1,5 @@
 /** The real dependencies of the kube service: the file system, git layout and kubectl as spawned for this app. */
-import { promises as fs } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { KUBE_HEAD_BYTES } from '../../core/kube/detect'
@@ -16,6 +16,18 @@ export function kubeEnv(extraFiles: string[], parent: NodeJS.ProcessEnv, home: s
   const own = parent.KUBECONFIG
   const defaults = own ? own.split(path.delimiter).filter((f) => f !== '') : [path.join(home, '.kube', 'config')]
   return { ...parent, KUBECONFIG: [...new Set([...defaults, ...extraFiles])].join(path.delimiter) }
+}
+
+/** The kubectl a run would use, for display: the override, else where PATH finds it, else the bare name. */
+export function kubectlDisplayPath(override: string | null, env: NodeJS.ProcessEnv, exists: (p: string) => boolean = existsSync): string {
+  const bin = kubectlBin(override)
+  if (path.isAbsolute(bin) || /[\\/]/.test(bin)) return bin
+  for (const dir of (env.PATH ?? '').split(path.delimiter)) {
+    if (dir === '' || !path.isAbsolute(dir)) continue
+    const candidate = path.join(dir, bin)
+    if (exists(candidate)) return candidate
+  }
+  return bin
 }
 
 export function createRealKubeDeps(settings: AppSettingsStore, store: KubeTargetStore): KubeServiceDeps {

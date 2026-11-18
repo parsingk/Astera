@@ -1,5 +1,6 @@
 /** IPC for the kube feature. Every handler that receives a path asks assertAllowedPath first. */
 import type { KubeRequest, KubeVerb, Remembered } from '../../core/kube/types'
+import type { KubectlResult } from '../../core/kube/kubectl'
 import type { AppSettingsStore } from '../appSettingsStore'
 import type { KubeService } from './service'
 
@@ -7,7 +8,14 @@ export interface KubeIpcDeps {
   service: KubeService
   assertAllowedPath(p: string): Promise<string>
   settings: AppSettingsStore
+  /** Runs kubectl with the current override and kubeconfig files. */
+  run(args: string[], opts?: { timeoutMs?: number }): Promise<KubectlResult>
+  /** The binary `run` uses, as a path where PATH can say it. */
+  binPath(): string
 }
+
+/** `kubectl version --client` only reads its own build info; it never needs the cluster deadline. */
+const RECHECK_TIMEOUT_MS = 15_000
 
 type Handle = (channel: string, fn: (e: unknown, ...a: unknown[]) => unknown) => void
 
@@ -81,6 +89,22 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     const list = files.map((f) => str(f, 'kubeconfig file'))
     await deps.settings.setKubeconfigFiles(list)
     service.invalidateContexts()
+  })
+
+  ipcMain.handle('settings.getKubectlPath', () => deps.settings.getKubectlPath())
+  ipcMain.handle('settings.setKubectlPath', async (_e, value) => {
+    if (value !== null && typeof value !== 'string') throw new Error('kube: kubectl path must be null or a string')
+    // An empty string means "no override"; stored as null so the value agrees with what load keeps.
+    const trimmed = value === null ? '' : value.trim()
+    await deps.settings.setKubectlPath(trimmed === '' ? null : trimmed)
+    service.invalidateContexts()
+  })
+
+  ipcMain.handle('kube.recheck', async () => {
+    const r = await deps.run(['version', '--client'], { timeoutMs: RECHECK_TIMEOUT_MS })
+    if (!r.ok) return { ok: false, ...(r.errorCode ? { errorCode: r.errorCode } : {}), stderr: r.stderr }
+    const m = /Client Version:\s*(\S+)/.exec(r.stdout)
+    return { ok: true, path: deps.binPath(), version: m ? m[1] : '' }
   })
 
   ipcMain.handle('kube.target', async (_e, filePath, projectRoot) => {

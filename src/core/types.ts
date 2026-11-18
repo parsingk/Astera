@@ -1419,6 +1419,8 @@ export interface CoreApi {
     setWorkspace(id: string, workspaceId: string): Promise<void>
   }
   kube: {
+    /** Runs `kubectl version --client` with the binary in use; `path` is that binary. */
+    recheck(): Promise<{ ok: true; path: string; version: string } | { ok: false; errorCode?: string; stderr: string }>
     /** Kinds of the YAML files among `paths` (other paths are left out of the answer). */
     classify(paths: string[]): Promise<Record<string, KubeFileKind>>
     contexts(): Promise<KubeContexts>
@@ -1535,6 +1537,9 @@ export interface CoreApi {
     newToken(): Promise<string>
   }
   settings: {
+    /** The kubectl binary to use instead of the one on PATH; null = use PATH. Setting it re-reads the contexts. */
+    getKubectlPath(): Promise<string | null>
+    setKubectlPath(path: string | null): Promise<void>
     /** Extra kubeconfig files merged into the kube context list. Setting them re-reads the contexts. */
     getKubeconfigFiles(): Promise<string[]>
     setKubeconfigFiles(files: string[]): Promise<void>
