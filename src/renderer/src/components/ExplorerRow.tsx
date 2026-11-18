@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { resolveFileIcon, resolveFolderIcon } from '../../../core/files/icons'
 import type { GitState } from '../../../core/git/status'
+import type { KubeFileKind } from '../../../core/kube/types'
 import { FileIcon } from './FileIcon'
 import { RowLoading } from './ExplorerLoading'
 import { ROW_H } from './explorerRows'
@@ -55,6 +56,8 @@ export interface ExplorerRowProps {
   gitState: GitState | undefined
   /** folders only: number of changed files under it */
   gitCount: number
+  /** files only: what the Kubernetes classifier says about this YAML file (absent until answered) */
+  kubeKind?: KubeFileKind
   /** a delete or copy is working on (or into) this row, past ROW_SPINNER_DELAY_MS */
   busy: boolean
   /** folders only: a re-read of its children is out, past ROW_SPINNER_DELAY_MS */
@@ -76,6 +79,7 @@ export const ExplorerRow = memo(function ExplorerRow({
   dropInto,
   gitState,
   gitCount,
+  kubeKind,
   busy,
   loading,
   actions
@@ -109,7 +113,7 @@ export const ExplorerRow = memo(function ExplorerRow({
         {...common}
       >
         <span className="fx-caret" />
-        <FileIcon {...resolveFileIcon(entry.name)} />
+        <FileIcon {...resolveFileIcon(entry.name, kubeKind)} />
         <span className={`fx-name${gitState ? ` git-${gitState}` : ''}`}>{entry.name}</span>
         {/* a delete or copy working on this file, past ROW_SPINNER_DELAY_MS */}
         <RowLoading pending={busy} label="files.op.busy" />

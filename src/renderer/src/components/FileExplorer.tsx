@@ -30,6 +30,7 @@ import { useFileTree, type Entry, type DirState } from '../hooks/useFileTree'
 import { useExplorerSelection, type ExplorerSelection } from '../hooks/useExplorerSelection'
 import { useFileOps, errText } from '../hooks/useFileOps'
 import { useGitStatus } from '../hooks/useGitStatus'
+import { useKubeKinds } from '../hooks/useKubeKinds'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
 import { runnableKindForFile } from '../../../core/run/runFile'
@@ -651,6 +652,9 @@ export function FileExplorer({
   // The edit row grows by a line while it shows why the name is invalid — the same test editRow uses
   const editTall = !!editing && editValue !== '' && !!tm(validateName(editValue.trim()))
   const offsets = useMemo(() => rowOffsets(rows, editTall), [rows, editTall])
+  // Kubernetes kinds of the YAML rows the tree lists (non-YAML paths never reach the IPC)
+  const rowPaths = useMemo(() => entryPaths(rows), [rows])
+  const kubeKinds = useKubeKinds(root, rowPaths)
   const [viewport, setViewport] = useState({ top: 0, h: DEFAULT_VIEWPORT_H })
   const range = visibleRange(offsets, viewport.top, viewport.h, OVERSCAN)
   // What the scroll handler and the reveal compare against — the latest render's layout
@@ -793,6 +797,7 @@ export function FileExplorer({
             dropInto={isDir && dropDir === p}
             gitState={isDir ? undefined : gitStatus.fileState[p]}
             gitCount={isDir ? (gitStatus.folderCount[p] ?? 0) : 0}
+            kubeKind={isDir ? undefined : kubeKinds[p]}
             busy={ops.busyRows.has(p)}
             loading={isDir && tree.loading.has(p) && !!dirs[p]}
             actions={rowActions}

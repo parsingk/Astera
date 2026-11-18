@@ -150,6 +150,7 @@ import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
+import { useKubeKinds } from './hooks/useKubeKinds'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -2852,6 +2853,14 @@ export default function App(): React.JSX.Element {
   /** 사이드바와 실행 구성이 '어느 프로젝트인가'로 읽는 값 — 활성 탭이 이기고, 없으면 마지막 기억. */
   const currentProject = activeTabRoot ?? stickyRoot
 
+  /** Kubernetes kind of the open file tabs (tab icons now, the editor toolbar later). One instance here,
+   *  fed a memoised path list so the hook does not ask again on every render. */
+  const openFilePaths = useMemo(
+    () => fileTabs.filter((t) => t.projectRoot === currentProject).map((t) => t.path),
+    [fileTabs, currentProject]
+  )
+  const kubeKinds = useKubeKinds(currentProject, openFilePaths)
+
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
    *  ReferenceError 로 죽은 전례가 있고(타입체크는 잡지 못한다) 그 사고를 되풀이하지 않으려는
@@ -4796,6 +4805,7 @@ export default function App(): React.JSX.Element {
                 accounts={accounts}
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
+                kubeKinds={kubeKinds}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
