@@ -3536,7 +3536,6 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-pill-ctx, .kube-pill-ns, .kube-pill-overlay { background: transparent; cursor: pointer; font-family: inherit; }
 .kube-pill-ctx:hover, .kube-pill-ns:hover, .kube-pill-overlay:hover { background: var(--elevated); color: var(--text); }
 .kube-pill-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kube-pill-warn { color: var(--git-modified); border-color: var(--git-modified); }
 .kube-pill-bad { color: var(--danger); border-color: var(--danger); }
 .kube-pill-locked { cursor: default; }
 .kube-chips { display: flex; align-items: center; gap: 8px; margin-left: auto; }

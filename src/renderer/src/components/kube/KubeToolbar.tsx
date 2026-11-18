@@ -98,12 +98,9 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
       ? t('kube.toolbar.chooseCluster')
       : p.target.state === 'missing'
         ? t('kube.toolbar.missing', { name: short })
-        : p.target.state === 'current'
-          ? t('kube.toolbar.currentFallback', { name: short })
-          : short
+        : short
   const contextClass =
     'kube-pill kube-pill-ctx' +
-    (p.target.state === 'current' ? ' kube-pill-warn' : '') +
     (p.target.state === 'missing' ? ' kube-pill-bad' : '')
 
   const fromFile = p.nsFromFile ? fileNamespacePill(p.fileNamespaces, t) : null

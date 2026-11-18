@@ -2954,7 +2954,6 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.toolbar.chooseOverlay': 'Choose overlay',
   'kube.toolbar.chooseCluster': 'Choose cluster',
   'kube.toolbar.contextTitle': 'Change cluster',
-  'kube.toolbar.currentFallback': 'kubeconfig current · {name}',
   'kube.toolbar.missing': 'Cluster not found: {name}',
   'kube.toolbar.ns': 'ns {ns}',
   'kube.toolbar.nsTitle': 'Change namespace',

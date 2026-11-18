@@ -74,10 +74,11 @@ describe('KubeToolbar plain manifest', () => {
 })
 
 describe('target states', () => {
-  it('current shows the fallback label in the warning tint', () => {
+  it('current shows the plain short name, like a remembered cluster', () => {
     const html = render({ target: { state: 'current', context: 'kind-dev', namespace: null } })
-    expect(html).toContain('kube.toolbar.currentFallback{&quot;name&quot;:&quot;kind-dev&quot;}')
-    expect(html).toContain('kube-pill-warn')
+    expect(html).toContain('<span class="kube-pill-text">kind-dev</span>')
+    expect(html).not.toContain('currentFallback')
+    expect(html).not.toContain('kube-pill-warn')
     expect(button(html, 'kube.toolbar.apply')).not.toContain('disabled')
   })
 

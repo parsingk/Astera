@@ -3208,7 +3208,6 @@ export const ko = {
   'kube.toolbar.chooseOverlay': 'overlay 선택',
   'kube.toolbar.chooseCluster': '클러스터 선택',
   'kube.toolbar.contextTitle': '클러스터 바꾸기',
-  'kube.toolbar.currentFallback': 'kubeconfig 현재 · {name}',
   'kube.toolbar.missing': '없는 클러스터: {name}',
   'kube.toolbar.ns': 'ns {ns}',
   'kube.toolbar.nsTitle': 'namespace 바꾸기',
