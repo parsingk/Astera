@@ -1,6 +1,6 @@
 /** Reads kustomization.yaml references and works out which kustomizations are overlays and which files they reach. */
 import { resolve } from 'node:path'
-import { parse } from 'yaml'
+import { parseAllDocuments } from 'yaml'
 
 export interface KustomizationRefs {
   resources: string[]
@@ -37,13 +37,21 @@ function paths(value: unknown): string[] {
 
 /** Empty refs when the text does not parse. Remote entries are dropped; paths stay as written. */
 export function parseKustomization(text: string): KustomizationRefs {
-  let doc: unknown
+  // The first document that is a map wins; empty documents (`---` alone) and trailing documents are skipped.
+  let obj: Record<string, unknown> = {}
   try {
-    doc = parse(text.replace(new RegExp('^' + String.fromCharCode(0xfeff)), ''))
+    // The BOM is built from its code point so no invisible character sits in the source.
+    for (const d of parseAllDocuments(text.replace(new RegExp('^' + String.fromCharCode(0xfeff)), ''))) {
+      if (d.errors.length > 0) break
+      const v: unknown = d.toJS({ maxAliasCount: 100 })
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        obj = v as Record<string, unknown>
+        break
+      }
+    }
   } catch {
-    doc = null
+    obj = {}
   }
-  const obj = doc && typeof doc === 'object' && !Array.isArray(doc) ? (doc as Record<string, unknown>) : {}
   const ns = obj.namespace
   return {
     resources: [...strings(obj.resources), ...strings(obj.bases)],

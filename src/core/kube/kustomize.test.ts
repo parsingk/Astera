@@ -51,6 +51,15 @@ describe('parseKustomization', () => {
     expect(parseKustomization(DEV.replace(/\n/g, '\r\n'))).toEqual(parseKustomization(DEV))
   })
 
+  it('accepts a BOM, a leading --- and extra or empty documents', () => {
+    const lf = parseKustomization(DEV)
+    expect(parseKustomization(String.fromCharCode(0xfeff) + DEV)).toEqual(lf)
+    expect(parseKustomization('---\n' + DEV)).toEqual(lf)
+    expect(parseKustomization(DEV + '\n---\n')).toEqual(lf)
+    expect(parseKustomization('---\n---\n' + DEV)).toEqual(lf)
+    expect(parseKustomization(DEV + '\n---\nresources: [other]\n')).toEqual(lf)
+  })
+
   it('yields empty refs for unparsable text', () => {
     expect(parseKustomization('resources: [a\n  : : :')).toEqual({
       resources: [],
