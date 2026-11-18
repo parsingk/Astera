@@ -71,6 +71,13 @@ describe('카탈로그 불변식', () => {
   })
 })
 
+describe('the Kubernetes words', () => {
+  it('are in the same order in ko and en', () => {
+    const kube = (lang: 'ko' | 'en'): string[] => Object.keys(CATALOGS[lang].messages).filter((k) => k.startsWith('kube.'))
+    expect(kube('en')).toEqual(kube('ko'))
+  })
+})
+
 // Plugin Phase 5c (final review M8, M9): the new-Task window's words for completion check plugins
 describe('the completion check plugin words', () => {
   it('sit beside the words they belong with, in every catalog', () => {
