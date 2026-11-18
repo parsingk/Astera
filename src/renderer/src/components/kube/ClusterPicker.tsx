@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import { displayContextName } from '../../../../core/kube/contextName'
-import type { KubeContexts } from '../../../../core/kube/types'
+import type { KubeContext, KubeContexts } from '../../../../core/kube/types'
 import { nextCursor } from '../../../../core/ui/select'
 import { useI18n } from '../../i18n/I18nProvider'
 
@@ -18,6 +18,23 @@ export interface ClusterPickerProps {
   onAddKubeconfig(): void
   onOpenSettings(): void
   onClose(): void
+}
+
+/** The contexts whose full name or short name contains the trimmed query, case-insensitive, in their order. */
+export function filterContexts(contexts: KubeContext[], query: string): KubeContext[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return contexts
+  return contexts.filter((c) => c.name.toLowerCase().includes(q) || displayContextName(c.name).short.toLowerCase().includes(q))
+}
+
+/** The cursor after an arrow key: wraps at both ends; an out-of-range cursor (the list shrank) lands somewhere valid. */
+export function pickerCursor(cursor: number, count: number, key: 'ArrowDown' | 'ArrowUp'): number {
+  return nextCursor(cursor, count, key === 'ArrowDown' ? 1 : -1)
+}
+
+/** The context Enter picks: the one under the cursor (a stale cursor is clamped into the list), or null for an empty list. */
+export function pickerEnter(shown: KubeContext[], cursor: number): string | null {
+  return shown.length === 0 ? null : shown[nextCursor(cursor, shown.length, 0)].name
 }
 
 const PROVIDER_TAG = { eks: 'EKS', gke: 'GKE' } as const
@@ -57,24 +74,22 @@ export function ClusterPicker(p: ClusterPickerProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [remember, setRemember] = useState(true)
   const [folder, setFolder] = useState(p.rememberChoices.includes(p.rememberFolder) ? p.rememberFolder : (p.rememberChoices[0] ?? ''))
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return p.contexts.contexts.filter(
-      (c) => q === '' || c.name.toLowerCase().includes(q) || displayContextName(c.name).short.toLowerCase().includes(q)
-    )
-  }, [p.contexts.contexts, query])
+  const shown = useMemo(() => filterContexts(p.contexts.contexts, query), [p.contexts.contexts, query])
   const [cursor, setCursor] = useState(() => Math.max(0, shown.findIndex((c) => c.name === p.selected)))
   const canRemember = p.rememberChoices.length > 0
 
   const pick = (name: string): void => p.onPick(name, canRemember && remember ? { folder } : null)
 
-  const onKeyDown = (e: React.KeyboardEvent): void => {
+    const key = e.key
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      setCursor((c) => nextCursor(c, shown.length, e.key === 'ArrowDown' ? 1 : -1))
-    } else if (e.key === 'Enter' && shown.length > 0) {
+      setCursor((c) => pickerCursor(c, shown.length, key))
+    } else if (key === 'Enter') {
+      const name = pickerEnter(shown, cursor)
+      if (name === null) return
       e.preventDefault()
-      pick(shown[nextCursor(cursor, shown.length, 0)].name)
+      pick(name)
     }
   }
 

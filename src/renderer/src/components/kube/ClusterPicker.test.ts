@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { KubeContexts } from '../../../../core/kube/types'
-import { ClusterPicker, NamespacePicker } from './ClusterPicker'
+import { ClusterPicker, NamespacePicker, filterContexts, pickerCursor, pickerEnter } from './ClusterPicker'
 
 vi.mock('../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -103,5 +103,52 @@ describe('NamespacePicker', () => {
     )
     expect(html).toMatch(/<input[^>]*value="dev"/)
     expect(html).toContain('kube.picker.namespacePlaceholder')
+  })
+})
+
+describe('filterContexts', () => {
+  const names = (q: string): string[] => filterContexts(contexts.contexts, q).map((c) => c.name)
+
+  it('finds an EKS context by its short cluster name and by part of the ARN', () => {
+    expect(names('prod')).toEqual([ARN])
+    expect(names('123456')).toEqual([ARN])
+    expect(names('us-east')).toEqual([ARN])
+  })
+
+  it('finds a GKE context by its short name, ignoring case and surrounding spaces', () => {
+    expect(names('  STAGING ')).toEqual([GKE])
+  })
+
+  it('an empty or blank query returns everything in order', () => {
+    expect(names('')).toEqual(['kind-dev', ARN, GKE])
+    expect(names('   ')).toEqual(['kind-dev', ARN, GKE])
+  })
+
+  it('no match returns an empty list', () => {
+    expect(names('nope')).toEqual([])
+  })
+})
+
+describe('pickerCursor and pickerEnter', () => {
+  it('moves down and up, wrapping at both ends', () => {
+    expect(pickerCursor(0, 3, 'ArrowDown')).toBe(1)
+    expect(pickerCursor(2, 3, 'ArrowDown')).toBe(0)
+    expect(pickerCursor(0, 3, 'ArrowUp')).toBe(2)
+    expect(pickerCursor(2, 3, 'ArrowUp')).toBe(1)
+  })
+
+  it('clamps a stale cursor and stays at 0 for an empty list', () => {
+    expect(pickerCursor(7, 3, 'ArrowDown')).toBe(2)
+    expect(pickerCursor(0, 0, 'ArrowDown')).toBe(0)
+  })
+
+  it('Enter picks the item under the cursor, the first one at the start, a clamped one when stale', () => {
+    expect(pickerEnter(contexts.contexts, 0)).toBe('kind-dev')
+    expect(pickerEnter(contexts.contexts, 1)).toBe(ARN)
+    expect(pickerEnter(contexts.contexts, 5)).toBe(GKE)
+  })
+
+  it('Enter with an empty list picks nothing', () => {
+    expect(pickerEnter([], 0)).toBeNull()
   })
 })
