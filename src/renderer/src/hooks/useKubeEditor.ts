@@ -5,7 +5,15 @@ import { toast } from '../lib/toast'
 import { writeThrough } from '../lib/writeThrough'
 import { errText } from './useFileOps'
 import { isKubeCandidate } from './useKubeKinds'
-import { firstLine, kubeRequestOf, rememberedNamespaceFor, reloadRefusal, type KubeOverride, type useKubeOps } from './useKubeOps'
+import {
+  firstLine,
+  kubeRequestOf,
+  rememberedNamespaceFor,
+  reloadRefusal,
+  touchesSelection,
+  type KubeOverride,
+  type useKubeOps
+} from './useKubeOps'
 
 /** An open file tab the Kubernetes strip may show for. */
 export interface KubeTab {
@@ -65,6 +73,25 @@ export const isLatest = (t: KubeAskTracker, which: 'target' | 'status', path: st
 export function forgetAsks(t: KubeAskTracker, path: string): void {
   t.target.delete(path)
   t.status.delete(path)
+}
+
+/** The open Kubernetes files whose chip a finished apply or delete may have changed: each one selected or under a
+ *  selected folder, and each member of an overlay the request covers (selected, under a selected folder, or applied
+ *  by one of the run's `-k` commands). */
+export function kubeTabsAfterRun(
+  entries: Readonly<Record<string, KubeEditorEntry>>,
+  req: KubeRequest,
+  commandLines: readonly string[][],
+  platform?: string
+): string[] {
+  const overlayDirs = commandLines.flatMap((args) => args.flatMap((a, i) => (a === '-k' && i + 1 < args.length ? [args[i + 1]] : [])))
+  const covered = [...req.selection, ...overlayDirs]
+  return Object.entries(entries)
+    .filter(
+      ([path, e]) =>
+        touchesSelection(path, covered, platform) || (e.view?.overlays ?? []).some((o) => touchesSelection(o, covered, platform))
+    )
+    .map(([path]) => path)
 }
 
 /**
@@ -349,6 +376,10 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     /** A save of this file: its reload facts and its chip may have changed. */
     onSaved: (path: string): void => {
       if (entriesRef.current[path]) refreshTarget(path)
+    },
+    /** A finished apply or delete, whatever its outcome: the chips of the open files it covers are asked again. */
+    refreshAfterRun: (req: KubeRequest, commandLines: readonly string[][]): void => {
+      for (const path of kubeTabsAfterRun(entriesRef.current, req, commandLines)) refreshTarget(path)
     },
     toolbarAction,
     explorerAction

@@ -2930,7 +2930,10 @@ export default function App(): React.JSX.Element {
       if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
       kubeSeenRef.current.add(e.id)
       const result = e.result
-      if (result.verb !== 'reload') setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
+      if (result.verb !== 'reload') {
+        setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
+        kubeEditor.refreshAfterRun(e.req, result.commandLines)
+      }
       const note = kubeToastOf(result, t as never)
       if (!note) continue
       const show = note.kind === 'success' ? toast.success : toast.error
