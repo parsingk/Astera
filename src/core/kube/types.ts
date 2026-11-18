@@ -133,6 +133,9 @@ export type KubePreview =
   | { ok: false; reason: 'refused'; plan: OperationPlan }
   | { ok: false; reason: 'mixed-contexts'; folders: string[] }
   | { ok: false; reason: 'namespace'; conflicts: { path: string; namespace: string }[] }
+  /** Several items, some of whose own namespace (remembered, else their context's) is not `namespace`, the pill `-n`
+   *  would put their resources into: the folders and their namespaces. */
+  | { ok: false; reason: 'mixed-namespaces'; namespace: string; folders: { folder: string; namespace: string }[] }
   | { ok: false; reason: 'kubectl'; commandLines: string[][]; stderr: string; timedOut?: true }
 
 /** One finished operation. `ran` counts the commands executed: the first failing one stops the rest (C19). */

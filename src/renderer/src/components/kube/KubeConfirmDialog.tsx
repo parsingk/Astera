@@ -119,6 +119,19 @@ export function KubeConfirmDialog({
             </ul>
           </div>
         )
+      case 'mixed-namespaces':
+        return (
+          <div className="kube-fail">
+            <p>{t('kube.confirm.mixedNamespaces', { ns: preview.namespace })}</p>
+            <ul>
+              {preview.folders.map((f) => (
+                <li key={f.folder} className="mono">
+                  {f.folder} {'→'} {f.namespace}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
       case 'namespace':
         return (
           <div className="kube-fail">

@@ -103,6 +103,11 @@ describe('KubeConfirmDialog', () => {
     expect(render({ ok: false, reason: 'refused', plan: { ok: false, reason: 'base-folder', paths: ['/b'] } })).toContain(
       'kube.confirm.refused.base-folder'
     )
+    const mixedNs = render({ ok: false, reason: 'mixed-namespaces', namespace: 'shop', folders: [{ folder: '/p/web', namespace: 'web' }] })
+    expect(mixedNs).toContain('kube.confirm.mixedNamespaces{&quot;ns&quot;:&quot;shop&quot;}')
+    expect(mixedNs).toContain('/p/web')
+    expect(mixedNs).toContain('web')
+    expect(mixedNs).toMatch(/<button[^>]*class="primary"[^>]*disabled/)
   })
 
   it('a broken kustomization names its folder; a file no kustomization lists is left out with its own words', () => {

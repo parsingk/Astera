@@ -3181,6 +3181,7 @@ export const ko = {
   'kube.confirm.delete': '{context} 에서 삭제',
   'kube.confirm.mixedContexts': '서로 다른 클러스터의 파일이 섞여 있습니다',
   'kube.confirm.namespaceMismatch': 'namespace 가 맞지 않습니다',
+  'kube.confirm.mixedNamespaces': 'namespace {ns} 가 아닌 폴더가 섞여 있습니다. 따로 적용하세요',
   'kube.confirm.refused.nothing': '적용할 매니페스트가 없습니다',
   'kube.confirm.refused.base-folder': 'base 폴더입니다. 이 폴더를 쓰는 overlay 를 적용하세요',
   'kube.confirm.refused.many-overlays': '여러 overlay 가 쓰는 파일입니다. overlay 에서 적용하세요',

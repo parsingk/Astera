@@ -106,6 +106,17 @@ describe('KubeLogPanel', () => {
       entry({ result: result({ ok: false, ran: 0, refused: { ok: false, reason: 'mixed-contexts', folders: ['/p'] } }) })
     ])
     expect(mixed).toContain('kube.confirm.mixedContexts')
+    const namespaces = render([
+      entry({
+        result: result({
+          ok: false,
+          ran: 0,
+          refused: { ok: false, reason: 'mixed-namespaces', namespace: 'shop', folders: [{ folder: '/p/web', namespace: 'web' }] }
+        })
+      })
+    ])
+    expect(namespaces).toContain('kube.confirm.mixedNamespaces{&quot;ns&quot;:&quot;shop&quot;}')
+    expect(namespaces).toContain('/p/web (web)')
   })
 
   it('lists newest first and opens only the newest finished entry', () => {

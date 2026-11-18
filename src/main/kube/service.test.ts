@@ -820,6 +820,9 @@ describe('preview', () => {
       fakeKube({ kustomize: () => renderAnswer, live: fail('Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout') })
     )
     const svc = traced(createKubeService(h.deps))
+    // both folders go to shop, so the shared pill is each item's own
+    await svc.setTarget(p('k8s'), { context: 'kind-dev', namespace: 'shop' })
+    await svc.setTarget(p('envs'), { context: 'kind-dev', namespace: 'shop' })
     const req = request([a, prod], 'kind-dev', 'shop')
     expect(await svc.preview('apply', req, HIDE)).toEqual({
       ok: false,
@@ -894,6 +897,7 @@ describe('preview', () => {
       fakeKube({ live: yamlList(stored(cm('a', { v: '1' }, 'shop')), stored(namespace)) })
     )
     const svc = traced(createKubeService(h.deps))
+    await svc.setTarget(p('k8s'), { context: 'kind-dev', namespace: 'shop' })
     const r = await svc.preview('delete', request([a, ns], 'kind-dev', 'shop'), HIDE)
     if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
     expect(r.commandLines).toEqual([['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-n', 'shop', '-f', a, '-f', ns]])
@@ -1163,6 +1167,71 @@ describe('preview: the namespace each command uses', () => {
 
     h.files.set(p('k8s', 'both.yaml'), { text: yamlDocs({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'app' } }, deploy('app', 'app')), mtimeMs: 1 })
     expect((await svc.target(p('k8s', 'both.yaml'), root)).nsFromFile).toBe(true)
+  })
+})
+
+describe('several items whose own namespaces differ from the pill', () => {
+  const x = p('x', 'a.yaml')
+  const y = p('y', 'b.yaml')
+  const z = p('z', 'c.yaml')
+  const files = { [x]: yamlDocs(cm('a', {})), [y]: yamlDocs(cm('b', {})), [z]: yamlDocs(cm('c', {})) }
+
+  async function setup(over: Record<string, string> = {}): Promise<{ h: Harness; svc: ReturnType<typeof createKubeService> }> {
+    const h = harness({ ...files, ...over }, fakeKube({}))
+    const svc = traced(createKubeService(h.deps))
+    await svc.setTarget(p('x'), { context: 'kind-dev', namespace: 'shop' })
+    await svc.setTarget(p('y'), { context: 'kind-dev', namespace: 'web' })
+    return { h, svc }
+  }
+
+  it('refuses, naming each folder whose namespace is not the pill, in preview and in run, before any cluster call', async () => {
+    const { h, svc } = await setup()
+    // z remembers nothing: the current context's namespace (dev) is its own
+    const refusal = {
+      ok: false,
+      reason: 'mixed-namespaces',
+      namespace: 'shop',
+      folders: [
+        { folder: p('y'), namespace: 'web' },
+        { folder: p('z'), namespace: 'dev' }
+      ]
+    }
+    expect(await svc.preview('apply', request([x, y, z], 'kind-dev', 'shop'), HIDE)).toEqual(refusal)
+    expect(await svc.run('m1', 'apply', request([x, y, z], 'kind-dev', 'shop'), STALE)).toMatchObject({ ok: false, ran: 0, refused: refusal })
+    // a folder whose subfolders remember other namespaces is several items too
+    expect(await svc.preview('delete', request([p('y'), p('x')], 'kind-dev', 'web'), HIDE)).toMatchObject({
+      ok: false,
+      reason: 'mixed-namespaces',
+      folders: [{ folder: p('x'), namespace: 'shop' }]
+    })
+    expect(clusterCalls(h.calls)).toEqual([])
+  })
+
+  it('a folder picked whole is checked per subfolder', async () => {
+    const { svc } = await setup({ [p('x', 'sub', 'd.yaml')]: yamlDocs(cm('d', {})) })
+    await svc.setTarget(p('x', 'sub'), { context: 'kind-dev', namespace: 'other' })
+    expect(await svc.preview('apply', request([p('x')], 'kind-dev', 'shop'), HIDE)).toMatchObject({
+      ok: false,
+      reason: 'mixed-namespaces',
+      folders: [{ folder: p('x', 'sub'), namespace: 'other' }]
+    })
+  })
+
+  it('does not refuse items whose resources all name their namespace, nor one item, nor agreeing ones', async () => {
+    // every resource names its namespace: no -n, nothing taken from any folder
+    const named = await setup({ [x]: yamlDocs(cm('a', {}, 'shop')), [y]: yamlDocs(cm('b', {}, 'web')) })
+    expect(await named.svc.preview('apply', request([x, y], 'kind-dev', 'shop'), HIDE)).toMatchObject({ ok: true })
+    // y names the pill's namespace itself, so its folder's namespace does not matter; z's does
+    const { svc } = await setup({ [y]: yamlDocs(cm('b', {}, 'shop')) })
+    expect(await svc.preview('apply', request([x, y], 'kind-dev', 'shop'), HIDE)).toMatchObject({ ok: true })
+    expect(await svc.preview('apply', request([x, y, z], 'kind-dev', 'shop'), HIDE)).toMatchObject({
+      ok: false,
+      folders: [{ folder: p('z'), namespace: 'dev' }]
+    })
+    // one item: the pill may be a namespace chosen for its editor
+    expect(await svc.preview('apply', request([x], 'kind-dev', 'elsewhere'), HIDE)).toMatchObject({ ok: true })
+    await svc.setTarget(p('z'), { context: 'kind-dev', namespace: 'shop' })
+    expect(await svc.preview('apply', request([x, z], 'kind-dev', 'shop'), HIDE)).toMatchObject({ ok: true })
   })
 })
 

@@ -2927,6 +2927,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.confirm.delete': 'Delete from {context}',
   'kube.confirm.mixedContexts': 'These files belong to different clusters',
   'kube.confirm.namespaceMismatch': 'The namespaces do not match',
+  'kube.confirm.mixedNamespaces': 'Some folders go to another namespace than {ns}. Apply them separately',
   'kube.confirm.refused.nothing': 'There is no manifest to apply',
   'kube.confirm.refused.base-folder': 'This is a base folder. Apply an overlay that uses it',
   'kube.confirm.refused.many-overlays': 'Several overlays use this file. Apply from an overlay',

@@ -26,6 +26,8 @@ function refusalText(refused: NonNullable<KubeRunResult['refused']>, t: T): stri
       return t('kube.confirm.mixedContexts')
     case 'namespace':
       return t('kube.confirm.namespaceMismatch')
+    case 'mixed-namespaces':
+      return `${t('kube.confirm.mixedNamespaces', { ns: refused.namespace })}: ${refused.folders.map((f) => `${f.folder} (${f.namespace})`).join(', ')}`
     case 'refused': {
       const plan = (refused as Extract<KubePreview, { reason: 'refused' }>).plan
       return t(`kube.confirm.refused.${plan.ok ? 'nothing' : plan.reason}` as 'kube.confirm.refused.nothing')

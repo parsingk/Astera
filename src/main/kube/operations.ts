@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { kubectlArgs, kustomizeArgs } from '../../core/kube/args'
 import { parseManifestDocs } from '../../core/kube/docs'
-import { namespaceFlag, type NamespaceFlag } from '../../core/kube/namespace'
+import { isClusterScoped, namespaceFlag, type NamespaceFlag } from '../../core/kube/namespace'
 import { objectsFromYaml, pairObjects, type K8sObject } from '../../core/kube/objects'
 import { parseKubectlOutput } from '../../core/kube/output'
 import { planOperation, type FolderIndex } from '../../core/kube/plan'
@@ -121,6 +121,8 @@ function refusalText(p: Refusal): string {
       return `the selection resolves to more than one context: ${p.folders.join(', ')}`
     case 'namespace':
       return `namespace conflict: ${p.conflicts.map((c) => `${c.path} (${c.namespace})`).join(', ')}`
+    case 'mixed-namespaces':
+      return `the selection targets other namespaces than ${p.namespace}: ${p.folders.map((f) => `${f.folder} (${f.namespace})`).join(', ')}`
     case 'kubectl':
       return p.stderr
   }
@@ -200,6 +202,43 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const agrees = (s: TargetState): boolean => (s.state === 'remembered' || s.state === 'current') && s.context === req.context
     if (states.every(agrees)) return null
     return [...new Set(states.map((s, i) => ('folder' in s ? s.folder : items[i].folder)))].sort(byPath)
+  }
+
+  /** For several items: the namespace each would get on its own, as its editor's pill shows it (remembered, else its
+   *  context's, else default), where it is not the pill `-n` would put it into. Only items the pill fills in count:
+   *  an overlay whose command sends `-n`, and each folder of a -f file holding a namespaced resource naming none. */
+  async function namespaceConflicts(
+    decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[],
+    req: KubeRequest,
+    ctx: KubeContexts
+  ): Promise<{ folder: string; namespace: string }[]> {
+    const items: { file: string; folder: string }[] = []
+    const seen = new Set<string>()
+    for (const { cmd, flag, src } of decided) {
+      if (flag === null || !src) continue
+      if (cmd.kind === 'overlay') {
+        items.push({ file: path.join(cmd.dir, 'kustomization.yaml'), folder: cmd.dir })
+        continue
+      }
+      for (const [file, text] of src.texts) {
+        const folder = path.dirname(file)
+        if (seen.has(folder)) continue
+        if (!parseManifestDocs(text).some((doc) => doc.namespace === null && !isClusterScoped(doc.kind))) continue
+        seen.add(folder)
+        items.push({ file, folder })
+      }
+    }
+    const states = await Promise.all(items.map((i) => d.target(i.file, req.projectRoot).then((t) => t.state)))
+    const out = new Map<string, { folder: string; namespace: string }>()
+    states.forEach((s, i) => {
+      // contextConflicts has refused any other state already.
+      if (s.state !== 'remembered' && s.state !== 'current') return
+      const remembered = s.state === 'remembered' ? s.namespace : null
+      const namespace = remembered ?? ctx.contexts.find((c) => c.name === s.context)?.namespace ?? 'default'
+      const folder = s.state === 'remembered' ? s.folder : items[i].folder
+      if (namespace !== req.pill) out.set(`${folder}\0${namespace}`, { folder, namespace })
+    })
+    return [...out.values()].sort((a, b) => byPath(a.folder, b.folder))
   }
 
   /** Reads what one command applies. Every overlay is rendered, a locked one too: its output feeds the fingerprint
@@ -297,6 +336,12 @@ export function createKubeOperations(d: KubeOperationDeps) {
     }
     if (renderFailure) return failedPreview(renderFailure, commandLines)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
+    // One item's pill is its own (or one chosen for its editor); several items share the first one's, which must then
+    // be every item's own.
+    if (!oneItem && req.pill !== null) {
+      const folders = await namespaceConflicts(decided, req, ctx)
+      if (folders.length > 0) return { ok: false, reason: 'mixed-namespaces', namespace: req.pill, folders }
+    }
     const contextNs = ctx.contexts.find((c) => c.name === req.context)?.namespace ?? 'default'
     // Every command was read (no render failed), so every src is set here.
     const steps: Step[] = decided.flatMap((x) =>
