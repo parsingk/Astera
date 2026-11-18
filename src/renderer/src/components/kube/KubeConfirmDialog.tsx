@@ -28,7 +28,8 @@ const commandText = (args: string[]): string => `kubectl ${args.map((a) => shell
 
 /** The namespace pill of a shown preview: the one `-n` its commands send, "from the files" when none sends one, or
  *  "several" with the values as its tooltip; a failed dry run's planned commands count the same. Before a preview, the
- *  caller's label. null (no pill) for a refusal made before the namespaces were decided, or a failure with no commands. */
+ *  caller's label. null (no pill) for a refusal made before the namespaces were decided, a failure whose namespaces
+ *  were not all decided (`nsFlags` null), or one with no commands. */
 function namespacePill(
   preview: KubePreview | null,
   namespaceLabel: string,
@@ -36,6 +37,7 @@ function namespacePill(
 ): { text: string; title?: string } | null {
   if (preview === null) return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
   if (!preview.ok && (preview.reason !== 'kubectl' || preview.commandLines.length === 0)) return null
+  if (preview.nsFlags === null) return null
   const values = [...new Set(preview.nsFlags.filter((n): n is string => n !== null))]
   if (values.length === 0) return { text: t('kube.toolbar.nsFromFile') }
   if (values.length === 1) return { text: t('kube.confirm.namespace', { ns: values[0] }) }

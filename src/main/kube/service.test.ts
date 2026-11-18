@@ -845,7 +845,8 @@ describe('preview', () => {
       ],
       stderr: 'reading the cluster failed: Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout'
     })
-    // An overlay that does not render has no namespace to decide: its command is listed without -n.
+    // An overlay that does not render has no namespace to decide: its command is listed without -n, and the preview
+    // says the namespaces were not all decided (nsFlags null) rather than that the overlay sends none.
     renderAnswer = fail('Error: accumulating resources: missing.yaml')
     expect(await svc.preview('delete', req, HIDE)).toEqual({
       ok: false,
@@ -854,7 +855,7 @@ describe('preview', () => {
         ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-n', 'shop', '-f', a],
         ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-k', prod]
       ],
-      nsFlags: ['shop', null],
+      nsFlags: null,
       checkCommandLines: [['kustomize', prod]],
       stderr: 'kustomize failed: Error: accumulating resources: missing.yaml'
     })
@@ -893,6 +894,21 @@ describe('preview', () => {
       commandLines: [applyA(a)],
       nsFlags: [null],
       checkCommandLines: [],
+      stderr: 'listing contexts failed: spawn kubectl ENOENT'
+    })
+  })
+
+  it('a kubectl failure with a namespace conflict still pending has no decided namespaces either', async () => {
+    const b = p('k8s', 'b.yaml')
+    const h = harness(
+      { [a]: yamlDocs(cm('a', {})), [b]: yamlDocs(cm('b', {}, 'other')) },
+      () => ({ ok: false, stdout: '', stderr: 'spawn kubectl ENOENT', errorCode: 'ENOENT' })
+    )
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.preview('apply', request([a, b], 'kind-dev', 'shop'), HIDE)).toMatchObject({
+      ok: false,
+      reason: 'kubectl',
+      nsFlags: null,
       stderr: 'listing contexts failed: spawn kubectl ENOENT'
     })
   })

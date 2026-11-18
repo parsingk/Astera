@@ -130,8 +130,9 @@ export interface KubeRequest {
 
 /** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the
  *  binary), also on a `kubectl` failure, whose `stderr` starts with the step that failed (`dry run failed: …`).
- *  `nsFlags[i]` is the `-n` value of `commandLines[i]`, null when it sends none (also on a `kubectl` failure, whose
- *  namespaces were decided before the step that failed). `checkCommandLines` are the read-only commands the preview
+ *  `nsFlags[i]` is the `-n` value of `commandLines[i]`, null when it sends none. A `kubectl` failure carries them when
+ *  every command's namespace was decided before the step that failed, else `nsFlags` is null (a render failed, or a
+ *  namespace conflict was still pending), so nothing reads an undecided command as sending no `-n`. `checkCommandLines` are the read-only commands the preview
  *  ran, in order (each overlay's `kustomize`, then each command's live read and dry run), up to the one that failed;
  *  a compare shows these. `fingerprint` goes back to `run`, which refuses to write anything other than what this
  *  preview read; it binds `commandLines`, never `checkCommandLines`. */
@@ -155,7 +156,7 @@ export type KubePreview =
       ok: false
       reason: 'kubectl'
       commandLines: string[][]
-      nsFlags: (string | null)[]
+      nsFlags: (string | null)[] | null
       checkCommandLines: string[][]
       stderr: string
       timedOut?: true

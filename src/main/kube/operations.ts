@@ -78,9 +78,10 @@ function stepFailure(step: string, r: KubectlResult): StepFailure {
   return { failed: step, stderr: r.stderr, ...(r.timedOut ? { timedOut: true as const } : {}) }
 }
 
-/** The preview of a failed step: `commandLines` stay the commands confirm would run with their `-n` values (`nsFlags`),
- *  `checks` are the read-only commands run up to the failure, the step goes into stderr. */
-function failedPreview(f: StepFailure, commandLines: string[][], nsFlags: (string | null)[], checks: string[][]): Failure {
+/** The preview of a failed step: `commandLines` stay the commands confirm would run with their `-n` values (`nsFlags`,
+ *  null when not every one was decided), `checks` are the read-only commands run up to the failure, the step goes into
+ *  stderr. */
+function failedPreview(f: StepFailure, commandLines: string[][], nsFlags: (string | null)[] | null, checks: string[][]): Failure {
   return {
     ok: false,
     reason: 'kubectl',
@@ -331,10 +332,12 @@ export function createKubeOperations(d: KubeOperationDeps) {
     }
     const commandLines = decided.map((x) => kubectlArgs(verb, x.cmd, { context: req.context, nsFlag: x.flag }))
     const nsFlags = decided.map((x) => x.flag)
+    // A command after a failed render, or one whose namespace conflicts, has no decided flag: a failure says so.
+    const shownFlags = renderFailure || conflicts.size > 0 ? null : nsFlags
 
     // target() needs the contexts, and a kubectl that cannot run is not a context mismatch.
     const ctx = await d.contexts()
-    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines, nsFlags, checks)
+    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines, shownFlags, checks)
     if (req.override) {
       // The item's own remembered or current context need not agree, but kubeconfig must still have this one.
       if (!ctx.contexts.some((c) => c.name === req.context)) return overrideRefusal
@@ -342,7 +345,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       const folders = await contextConflicts(plan.commands, req)
       if (folders) return { ok: false, reason: 'mixed-contexts', folders }
     }
-    if (renderFailure) return failedPreview(renderFailure, commandLines, nsFlags, checks)
+    if (renderFailure) return failedPreview(renderFailure, commandLines, null, checks)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
     // One item's pill is its own (or one chosen for its editor); several items share one pill (the first item's, or
     // the picked folder's), which must then be every item's own.

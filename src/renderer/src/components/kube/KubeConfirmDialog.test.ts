@@ -213,7 +213,16 @@ describe('KubeConfirmDialog', () => {
       { ok: false, reason: 'namespace', conflicts: [{ path: '/p/a.yaml', namespace: 'dev' }] },
       { ok: false, reason: 'refused', plan: { ok: false, reason: 'broken-kustomization', paths: ['/p/app'] } },
       { ok: false, reason: 'refused', plan: { ok: false, reason: 'base-folder', paths: ['/b'] } },
-      { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], checkCommandLines: [], stderr: 'ipc failed' }
+      { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], checkCommandLines: [], stderr: 'ipc failed' },
+      // a render failed before every command's namespace was decided: not "from the files"
+      {
+        ok: false,
+        reason: 'kubectl',
+        commandLines: [['apply', '-k', '/p/o']],
+        nsFlags: null,
+        checkCommandLines: [['kustomize', '/p/o']],
+        stderr: 'kustomize failed: x'
+      }
     ]
     for (const r of refusals) {
       const html = render(r)
