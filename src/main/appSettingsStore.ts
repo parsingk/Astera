@@ -114,6 +114,10 @@ export class AppSettingsStore {
    *  is inverted from the toggles above — the file is user-editable, so only an explicit false
    *  reads as off, and anything else (absent, corrupt) reads as on. */
   private githubPolling = true
+  /** Override for the kubectl binary; null means resolve it from PATH. */
+  private kubectlPath: string | null = null
+  /** Extra kubeconfig files to merge into the kube context list. */
+  private kubeconfigFiles: string[] = []
   /** 설명을 누가·무엇으로 만드는가. 비어 있으면 생성하지 않는다 (설계 D2) */
   private generator: GeneratorSettings = {}
   private resumeStrategy: ResumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
@@ -193,6 +197,13 @@ export class AppSettingsStore {
       this.jobContinuityEnabled =
         (parsed as { jobContinuityEnabled?: unknown }).jobContinuityEnabled === true
       this.githubPolling = (parsed as { githubPolling?: unknown }).githubPolling !== false
+      // Narrowed on read, the file is user-editable: anything but a non-empty string / string list is "not set".
+      const kubectlPath = (parsed as { kubectlPath?: unknown }).kubectlPath
+      this.kubectlPath = typeof kubectlPath === 'string' && kubectlPath !== '' ? kubectlPath : null
+      const kubeconfigFiles = (parsed as { kubeconfigFiles?: unknown }).kubeconfigFiles
+      this.kubeconfigFiles = Array.isArray(kubeconfigFiles)
+        ? kubeconfigFiles.filter((f): f is string => typeof f === 'string' && f !== '')
+        : []
       // Narrowed on read, like generator and terminalFont and for the same reason: the file is
       // user-editable, and the narrowing is per flag's own default (see readDesktopNotify).
       this.desktopNotify = readDesktopNotify((parsed as { desktopNotify?: unknown }).desktopNotify)
@@ -262,6 +273,8 @@ export class AppSettingsStore {
         this.orchAlwaysOnMigrated = false
         this.jobContinuityEnabled = false
         this.githubPolling = true
+        this.kubectlPath = null
+        this.kubeconfigFiles = []
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
         this.generator = {}
         this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
@@ -295,6 +308,8 @@ export class AppSettingsStore {
       this.orchAlwaysOnMigrated = false
       this.jobContinuityEnabled = false
       this.githubPolling = true
+      this.kubectlPath = null
+      this.kubeconfigFiles = []
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
       this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
@@ -510,6 +525,24 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getKubectlPath(): string | null {
+    return this.kubectlPath
+  }
+
+  async setKubectlPath(p: string | null): Promise<void> {
+    this.kubectlPath = p
+    await this.persist()
+  }
+
+  getKubeconfigFiles(): string[] {
+    return [...this.kubeconfigFiles]
+  }
+
+  async setKubeconfigFiles(files: string[]): Promise<void> {
+    this.kubeconfigFiles = [...files]
+    await this.persist()
+  }
+
   getDesktopNotify(): DesktopNotifySettings {
     return { ...this.desktopNotify }
   }
@@ -632,6 +665,8 @@ export class AppSettingsStore {
       orchestrationEnabled?: true
       jobContinuityEnabled?: boolean
       githubPolling?: boolean
+      kubectlPath?: string
+      kubeconfigFiles?: string[]
       desktopNotify?: DesktopNotifySettings
       generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
@@ -669,6 +704,8 @@ export class AppSettingsStore {
       data.orchestrationEnabled = true
     if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
+    if (this.kubectlPath !== null) data.kubectlPath = this.kubectlPath
+    if (this.kubeconfigFiles.length > 0) data.kubeconfigFiles = this.kubeconfigFiles
     // Written only while the question is still open, which is the same one-sided rule as the two
     // below — and here it carries the difference between a new install and an old one, so an absent
     // key has to keep meaning "asked". See the field's own note.
