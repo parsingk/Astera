@@ -200,6 +200,20 @@ describe('KubeConfirmDialog', () => {
     expect(many).toContain('title="dev, web"')
   })
 
+  it('cluster-scoped resources name no namespace, whatever their diff says; a label with none shows no pill', () => {
+    const preview: KubePreview = {
+      ...(okPreview(diff(), [null]) as Extract<KubePreview, { ok: true }>),
+      resources: [
+        { command: 0, diff: diff({ namespace: 'web' }) },
+        { command: 0, diff: diff({ kind: 'ClusterRole', name: 'r', namespace: 'stray' }) }
+      ]
+    }
+    const html = render(preview)
+    expect(html).toContain('kube.toolbar.ns{&quot;ns&quot;:&quot;web&quot;}')
+    expect(html).not.toContain('stray')
+    expect(render(null, { namespaceLabel: [] })).not.toContain('kube-pill mono')
+  })
+
   it('before the preview answers, a label of file namespaces reads like the answered pill, with the lock and tooltip', () => {
     const html = render(null, { namespaceLabel: ['web', 'api'] })
     expect(html).toContain('kube.toolbar.nsMore{&quot;first&quot;:&quot;api&quot;,&quot;n&quot;:1}')
@@ -218,6 +232,11 @@ describe('KubeConfirmDialog', () => {
     })
     const fromFiles = render(failed([null, null]))
     expect(fromFiles).not.toContain('kube.confirm.namespace{')
+    // namespaces decided as "no -n": the resources' own, which the caller's label names (a failed preview has no resources)
+    const failedFromFiles = render(failed([null, null]), { namespaceLabel: ['web', 'api'] })
+    expect(failedFromFiles).toContain('kube.toolbar.nsMore{&quot;first&quot;:&quot;api&quot;,&quot;n&quot;:1}')
+    expect(failedFromFiles).toContain('title="kube.toolbar.nsFromFile\napi, web"')
+    expect(render(failed([null]), { namespaceLabel: 'shop' })).not.toContain('kube-pill mono')
     expect(render(failed(['dev']))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
     expect(render(failed(['dev', 'web']))).toContain('title="dev, web"')
     // the caller's label is never shown for a preview that answered

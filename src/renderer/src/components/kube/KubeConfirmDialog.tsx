@@ -5,6 +5,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { backdropProps } from '../../lib/backdrop'
 import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
+import { isClusterScoped } from '../../../../core/kube/namespace'
 import { fileNamespacePill, type NamespaceLabel } from './fileNamespacePill'
 import { SideBySideDiff } from './SideBySideDiff'
 
@@ -46,10 +47,13 @@ function namespacePill(
   const values = [...new Set(preview.nsFlags.filter((n): n is string => n !== null))]
   if (values.length === 0) {
     // No `-n`: the resources name their own namespaces (cluster-scoped ones have none).
-    const named = fileNamespacePill(
-      !preview.ok ? [] : preview.resources.flatMap((r) => (r.diff.namespace !== null ? [r.diff.namespace] : [])),
-      t
-    )
+    // A failed preview has no resources, so the caller's label names them (an array when the file's resources do).
+    const names = preview.ok
+      ? preview.resources.flatMap((r) => (r.diff.namespace !== null && !isClusterScoped(r.diff.kind) ? [r.diff.namespace] : []))
+      : Array.isArray(namespaceLabel)
+        ? namespaceLabel
+        : []
+    const named = fileNamespacePill(names, t)
     return named === null ? null : { ...named, fromFile: true }
   }
   if (values.length === 1) return { text: t('kube.confirm.namespace', { ns: values[0] }) }

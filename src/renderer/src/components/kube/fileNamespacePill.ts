@@ -25,5 +25,6 @@ export function fileNamespacePill(
  *  else the pill's namespace. */
 export function namespaceLabelOf(view: Pick<KubeTargetView, 'lockedNamespace' | 'nsFromFile' | 'fileNamespaces'>, pill: string | null): NamespaceLabel {
   if (view.lockedNamespace !== null) return view.lockedNamespace
-  return view.nsFromFile && view.fileNamespaces.length > 0 ? view.fileNamespaces : (pill ?? 'default')
+  // Every resource names its namespace (none when all are cluster-scoped): no `-n`, so the pill is not the label.
+  return view.nsFromFile ? view.fileNamespaces : (pill ?? 'default')
 }
