@@ -75,7 +75,9 @@ export function kubeToastOf(
   if (result.cancelled) return { kind: 'error', message: t('kube.toast.cancelled' as never, { context }) }
   if (result.timedOut) return { kind: 'error', message: t('kube.toast.timedOut' as never, { context }) }
   const ok = result.outcomes.filter((o) => SUCCESS.has(o.outcome)).length
-  return { kind: 'error', message: t('kube.toast.partial' as never, { done, ok, failed: Math.max(1, errorCount(result)) }) }
+  const failed = Math.max(1, errorCount(result))
+  const key = result.verb === 'delete' ? 'kube.toast.deleteFailed' : 'kube.toast.applyFailed'
+  return { kind: 'error', message: t(key as never, { context, ok, failed }) }
 }
 
 /** "HH:MM:SS" in local time. */

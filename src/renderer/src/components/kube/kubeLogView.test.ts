@@ -85,13 +85,13 @@ describe('kubeToastOf', () => {
     expect(kubeToastOf(result({ verb: 'delete' }), t as never)?.message).toBe('kube.toast.deleted{"context":"c"}')
     expect(kubeToastOf(result({ verb: 'reload' }), t as never)?.message).toBe('kube.toast.reloaded{"context":"c"}')
   })
-  it('reports the counts of a partial failure', () => {
+  it('says a failure did not apply (or delete), with the counts, never that it applied', () => {
     const r = result({ ok: false, outcomes: [{ ref: 'a/b', outcome: 'created' }, { ref: 'c/d', outcome: 'unchanged' }, err('/f')] })
     const note = kubeToastOf(r, t as never)
-    expect(note?.kind).toBe('error')
-    expect(note?.message).toContain('kube.toast.partial')
-    expect(note?.message).toContain('"ok":2')
-    expect(note?.message).toContain('"failed":1')
+    expect(note).toEqual({ kind: 'error', message: 'kube.toast.applyFailed{"context":"c","ok":2,"failed":1}' })
+    expect(note?.message).not.toContain('kube.toast.applied')
+    const del = kubeToastOf(result({ verb: 'delete', ok: false, outcomes: [{ ref: 'a/b', outcome: 'deleted' }, err('/g'), err('/h')] }), t as never)
+    expect(del).toEqual({ kind: 'error', message: 'kube.toast.deleteFailed{"context":"c","ok":1,"failed":2}' })
   })
   it('has its own wording for timeout, stop and refusal, and stays silent where the dialog or another toast speaks', () => {
     expect(kubeToastOf(result({ ok: false, timedOut: true }), t as never)?.message).toContain('timedOut')
