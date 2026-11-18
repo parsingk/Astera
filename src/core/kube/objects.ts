@@ -1,5 +1,5 @@
 /** Cluster objects as the diff sees them: parsed from kubectl output, stripped of server noise, masked, paired. */
-import { parseAllDocuments, stringify } from 'yaml'
+import { LineCounter, parseAllDocuments, stringify } from 'yaml'
 import { lineDiff } from './lineDiff'
 import type { ResourceDiff } from './types'
 
@@ -32,17 +32,22 @@ function asObject(v: unknown, where: string): K8sObject {
 }
 
 /** Objects in kubectl's YAML output; `kind: List` is expanded, empty output and empty documents give nothing.
- *  Throws (naming the document) rather than dropping what it cannot read: a dropped object would misreport the diff. */
+ *  Throws (naming the document) rather than dropping what it cannot read: a dropped object would misreport the diff.
+ *  Messages carry only the error code and line, never source text, which may be a Secret value. */
 export function objectsFromYaml(text: string): K8sObject[] {
   const out: K8sObject[] = []
-  parseAllDocuments(text).forEach((doc, index) => {
+  const lineCounter = new LineCounter()
+  parseAllDocuments(text, { prettyErrors: false, lineCounter }).forEach((doc, index) => {
     const where = `document ${index}`
-    if (doc.errors.length > 0) throw new Error(`${where} does not parse: ${doc.errors[0].message}`)
+    if (doc.errors.length > 0) {
+      const err = doc.errors[0]
+      throw new Error(`${where} does not parse: ${err.code} at line ${lineCounter.linePos(err.pos[0]).line}`)
+    }
     let value: unknown
     try {
       value = doc.toJS({ maxAliasCount: 100 })
     } catch (e) {
-      throw new Error(`${where} cannot be read: ${e instanceof Error ? e.message : String(e)}`)
+      throw new Error(`${where} cannot be read: ${e instanceof Error ? e.name : 'error'}`)
     }
     if (value === null || value === undefined) return
     if (isRecord(value) && value.kind === 'List' && Array.isArray(value.items)) {

@@ -62,6 +62,18 @@ describe('objectsFromYaml failures', () => {
     expect(() => objectsFromYaml(LIVE_DEPLOY + '---\na: [unclosed\n')).toThrow(/document 1 does not parse/)
   })
 
+  it('does not put a Secret value from a malformed line into the error', () => {
+    const text = 'apiVersion: v1NLkind: SecretNLdata:NL  token: c2VjcmV0dmFsdWU= : x : yNL  a: bNL'.replace(/NL/g, String.fromCharCode(10))
+    let message = ''
+    try {
+      objectsFromYaml(text)
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e)
+    }
+    expect(message).toMatch(/document 0/)
+    expect(message).not.toContain('c2VjcmV0dmFsdWU')
+  })
+
   it('throws when toJS fails (too many aliases)', () => {
     const bomb = 'a: &a [x]\nb: [' + Array(101).fill('*a').join(',') + ']\n'
     expect(() => objectsFromYaml(bomb)).toThrow(/document 0 cannot be read/)
