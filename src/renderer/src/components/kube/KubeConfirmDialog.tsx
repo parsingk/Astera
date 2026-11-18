@@ -3,6 +3,7 @@ import { Check, Copy } from 'lucide-react'
 import type { KubePreview, KubeVerb, ResourceDiff, ResourceState } from '../../../../core/kube/types'
 import { useI18n } from '../../i18n/I18nProvider'
 import { backdropProps } from '../../lib/backdrop'
+import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
 import { SideBySideDiff } from './SideBySideDiff'
 
@@ -22,8 +23,8 @@ const STATE_KEY = {
   'not-found': 'kube.confirm.state.notFound'
 } as const
 
-const quote = (arg: string): string => (/[\s"']/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg)
-const commandText = (args: string[]): string => `kubectl ${args.map(quote).join(' ')}`
+const platform = (): string => (typeof window === 'undefined' ? 'linux' : window.api.platform)
+const commandText = (args: string[]): string => `kubectl ${args.map((a) => shellQuote(a, platform())).join(' ')}`
 
 /** The confirmation that starts every cluster write (spec 4.6): what changes, the exact commands, one button.
  *  `compare` is the same view read-only. State and IPC live with the caller. */

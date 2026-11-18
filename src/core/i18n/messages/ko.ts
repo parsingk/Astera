@@ -3161,7 +3161,7 @@ export const ko = {
   'kube.confirm.state.changed': '{count}줄 변경',
   'kube.confirm.state.unchanged': '변경 없음',
   'kube.confirm.state.new': '새로 만듦',
-  'kube.confirm.state.delete': '삭제됨',
+  'kube.confirm.state.delete': '삭제 예정',
   'kube.confirm.state.notFound': '클러스터에 없음',
   'kube.confirm.validated': '서버 검증 통과 (dry-run)',
   'kube.confirm.serverFields': '서버가 붙이는 필드도 보기',
