@@ -220,7 +220,9 @@ export function kubeRequestOf(
 ): KubeRequest | null {
   const context = kubeContextOf(view, override)
   if (context === null) return null
-  return { selection, projectRoot, context, pill: kubePill(view, override, contexts) }
+  const req: KubeRequest = { selection, projectRoot, context, pill: kubePill(view, override, contexts) }
+  // R11: the service checks a session context against kubeconfig instead of the file's own target.
+  return override?.context ? { ...req, override: true } : req
 }
 
 /** What the context pill shows: a session override as a plain choice (no fallback tint), else the target. */

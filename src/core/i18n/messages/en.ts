@@ -2969,6 +2969,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.picker.settings': 'Kubernetes settings',
   'kube.picker.namespacePlaceholder': 'Type a namespace and press Enter',
   'kube.ops.scopeFiles': '{count} files',
+  'kube.chip.resources': '{count} resources',
   'kube.ops.chooseCluster': 'Choose a cluster first',
   'kube.ops.changedSincePreview': 'The files changed after the preview, so it was compared again. Check it and confirm again.',
   'kube.ops.reloadAbsent': 'Not in the cluster',

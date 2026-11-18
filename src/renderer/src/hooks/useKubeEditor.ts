@@ -69,20 +69,22 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     window.api.kube.contexts().then(setContexts, () => {}) // the picker keeps the last list
   }
 
-  /** The chip (spec 4.9): asked when the target arrives or changes and after a save; never polled. It compares the
-   *  file's own target, so it shows nothing while a session choice sends the file elsewhere. */
+  /** The chip (spec 4.9): asked when the target arrives or changes and after a save; never polled. A context chosen
+   *  for this editor is compared on (R11). A namespace chosen for this editor has no way into `status`, which uses the
+   *  context's own, so the chip shows nothing then rather than a comparison in another namespace. */
   const refreshStatus = (path: string): void => {
     const seq = ++seqRef.current
     statusSeq.current.set(path, seq)
     const tab = tabOf(path)
     const view = entriesRef.current[path]?.view
-    const usable = view?.state.state === 'remembered' || view?.state.state === 'current'
-    if (!tab || !usable || sessionRef.current[path]?.override) {
+    const override = sessionRef.current[path]?.override
+    const usable = override?.context !== undefined || view?.state.state === 'remembered' || view?.state.state === 'current'
+    if (!tab || !view || !usable || override?.namespace !== undefined) {
       patchEntry(path, { status: null, statusLoading: false })
       return
     }
     patchEntry(path, { statusLoading: true })
-    window.api.kube.status(path, tab.projectRoot).then(
+    window.api.kube.status(path, tab.projectRoot, override?.context).then(
       (status) => {
         if (statusSeq.current.get(path) === seq) patchEntry(path, { status, statusLoading: false })
       },
@@ -164,13 +166,14 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     toast.error(t('kube.ops.failed', { detail: errText(err) }))
   }
 
-  /** Picker: remembered for a folder (with the namespace the pill shows), or for this editor only. */
+  /** Picker: remembered for a folder (with the namespace the pill shows), or for this editor only, where the pill
+   *  then follows the chosen context's own namespace (what its chip compares in). */
   const pickContext = async (path: string, context: string, remember: { folder: string } | null): Promise<void> => {
     setPicker(null)
     const pill = pillOf(path)
     if (pill === null) return
     if (!remember) {
-      setOverride(path, { context, namespace: pill })
+      setOverride(path, { context })
       refreshTarget(path)
       return
     }
@@ -273,7 +276,9 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     })
     if (!resolved) return
     const [view, ctx] = resolved
-    const req = kubeRequestOf(selection, projectRoot, view, sessionRef.current[selection[0]]?.override, ctx)
+    // An editor's session choice covers that one file (R11), never a multi-selection: those go by their own targets.
+    const override = selection.length === 1 ? sessionRef.current[selection[0]]?.override : undefined
+    const req = kubeRequestOf(selection, projectRoot, view, override, ctx)
     if (!req) {
       toast.info(t('kube.ops.chooseCluster'))
       const file = selection.find(isKubeCandidate)

@@ -62,7 +62,8 @@ export type TargetState =
  *  pill cannot override. `rememberChoices`: the folders a choice may be remembered for, nearest first.
  *  `reloadBlocked` and `nsFromFile` describe a plain manifest's own text (null and false through an overlay):
  *  reload refuses a Secret and a file of other than one resource; `nsFromFile` when every resource names its
- *  namespace. */
+ *  namespace. `resource` feeds the kind-and-name chip: the file's one resource (`name` null for a generateName),
+ *  how many it holds, or through an overlay the overlay's folder name; null when there is nothing to name. */
 export interface KubeTargetView {
   state: TargetState
   rememberFolder: string
@@ -72,6 +73,7 @@ export interface KubeTargetView {
   rememberChoices: string[]
   reloadBlocked: 'secret' | 'multi' | null
   nsFromFile: boolean
+  resource: { kind: string; name: string | null } | { count: number } | { overlay: string } | null
 }
 
 export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'
@@ -106,6 +108,9 @@ export interface KubeRequest {
   context: string
   /** The namespace pill: `-n` for resources that name none (C20), or null to leave it to kubectl. */
   pill: string | null
+  /** R11: `context` was chosen for one open editor without remembering it. Only for a single item, whose own
+   *  resolved target then need not agree; the context must still be listed in kubeconfig. */
+  override?: true
 }
 
 /** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the

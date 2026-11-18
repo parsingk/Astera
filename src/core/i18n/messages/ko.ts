@@ -3223,6 +3223,7 @@ export const ko = {
   'kube.picker.settings': 'Kubernetes 설정',
   'kube.picker.namespacePlaceholder': 'namespace 입력 후 Enter',
   'kube.ops.scopeFiles': '파일 {count}개',
+  'kube.chip.resources': '리소스 {count}개',
   'kube.ops.chooseCluster': '클러스터를 먼저 고르세요',
   'kube.ops.changedSincePreview': '미리 본 뒤에 파일이 바뀌어 다시 비교했습니다. 확인한 뒤 다시 누르세요',
   'kube.ops.reloadAbsent': '클러스터에 없습니다',

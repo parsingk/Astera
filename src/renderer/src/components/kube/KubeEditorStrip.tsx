@@ -1,8 +1,20 @@
-import type { KubeFileKind } from '../../../../core/kube/types'
+import type { KubeFileKind, KubeTargetView } from '../../../../core/kube/types'
 import type { useKubeEditor } from '../../hooks/useKubeEditor'
 import { displayTarget, kubePill } from '../../hooks/useKubeOps'
+import { useI18n } from '../../i18n/I18nProvider'
 import { ClusterPicker, NamespacePicker } from './ClusterPicker'
 import { KubeToolbar } from './KubeToolbar'
+
+/** The kind-and-name chip (spec 4.3): "Deployment · api", a resource count, or the overlay's folder. */
+export function resourceLabel(
+  resource: KubeTargetView['resource'],
+  count: (n: number) => string
+): string | null {
+  if (resource === null) return null
+  if ('overlay' in resource) return resource.overlay
+  if ('count' in resource) return count(resource.count)
+  return resource.name === null ? resource.kind : `${resource.kind} · ${resource.name}`
+}
 
 /** The toolbar of one open Kubernetes file, fed from useKubeEditor, with its pickers mounted only while open (the
  *  picker seeds its folder choice once). Nothing until the target first arrives, except a Helm notice or a missing
@@ -22,6 +34,7 @@ export function KubeEditorStrip({
   busy: boolean
   onOpenSettings: () => void
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   const entry = editor.entries[path]
   const view = entry?.view ?? null
   if (view === null && kind !== 'helm-template' && !editor.kubectlMissing) return null
@@ -40,7 +53,7 @@ export function KubeEditorStrip({
       nsFromFile={view?.nsFromFile ?? false}
       status={entry?.status ?? null}
       statusLoading={entry?.statusLoading ?? false}
-      resourceLabel={null}
+      resourceLabel={view ? resourceLabel(view.resource, (count) => t('kube.chip.resources', { count })) : null}
       busy={busy}
       kubectlMissing={editor.kubectlMissing}
       reloadBlocked={view?.reloadBlocked ?? null}

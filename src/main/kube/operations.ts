@@ -223,6 +223,9 @@ export function createKubeOperations(d: KubeOperationDeps) {
   ): Promise<
     { ok: true; plan: Extract<OperationPlan, { ok: true }>; steps: Step[]; commandLines: string[][]; fingerprint: string } | Refusal
   > {
+    // R11: a context chosen for one editor applies to that one item only.
+    const overrideRefusal: Refusal = { ok: false, reason: 'mixed-contexts', folders: [...req.selection] }
+    if (req.override && req.selection.length !== 1) return overrideRefusal
     const root = req.projectRoot
     const graph = await d.projectGraph(root)
     const selection = req.selection.map((s) => d.onRoot(root, s))
@@ -253,8 +256,13 @@ export function createKubeOperations(d: KubeOperationDeps) {
     // target() needs the contexts, and a kubectl that cannot run is not a context mismatch.
     const ctx = await d.contexts()
     if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines)
-    const folders = await contextConflicts(plan.commands, req)
-    if (folders) return { ok: false, reason: 'mixed-contexts', folders }
+    if (req.override) {
+      // The item's own remembered or current context need not agree, but kubeconfig must still have this one.
+      if (!ctx.contexts.some((c) => c.name === req.context)) return overrideRefusal
+    } else {
+      const folders = await contextConflicts(plan.commands, req)
+      if (folders) return { ok: false, reason: 'mixed-contexts', folders }
+    }
     if (renderFailure) return failedPreview(renderFailure, commandLines)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
     const contextNs = ctx.contexts.find((c) => c.name === req.context)?.namespace ?? 'default'
@@ -262,17 +270,19 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const steps: Step[] = decided.flatMap((x) =>
       x.src ? [{ cmd: x.cmd, t: { context: req.context, nsFlag: x.flag }, src: x.src, fallbackNs: x.flag ?? contextNs }] : []
     )
-    return { ok: true, plan, steps, commandLines, fingerprint: fingerprintOf(commandLines, steps) }
+    return { ok: true, plan, steps, commandLines, fingerprint: fingerprintOf(req, commandLines, steps) }
   }
 
-  /** Ties a run to the preview that was confirmed (C1, 5.2): the command lines, every file's path and text (sorted by
-   *  path), and every overlay's path and rendered output. Anything that would change what is written changes it. */
-  function fingerprintOf(commandLines: string[][], steps: Step[]): string {
+  /** Ties a run to the preview that was confirmed (C1, 5.2): the override flag and context (R11), the command lines,
+   *  every file's path and text (sorted by path), and every overlay's path and rendered output. Anything that would
+   *  change what is written, or how its target was decided, changes it. */
+  function fingerprintOf(req: KubeRequest, commandLines: string[][], steps: Step[]): string {
     const files = steps
       .flatMap((s) => (s.cmd.kind === 'files' ? s.src.texts : []))
       .sort((x, y) => byPath(x[0], y[0]))
     const overlays = steps.flatMap((s) => (s.cmd.kind === 'overlay' ? s.src.texts : []))
-    return createHash('sha256').update(JSON.stringify([commandLines, files, overlays])).digest('hex')
+    const decided = [req.override === true, req.context]
+    return createHash('sha256').update(JSON.stringify([decided, commandLines, files, overlays])).digest('hex')
   }
 
   /** What one command would change. apply: the cluster now against the server dry run. delete: the dry run as
@@ -395,14 +405,21 @@ export function createKubeOperations(d: KubeOperationDeps) {
     running.get(id)?.abort()
   }
 
-  /** The editor chip for one file: a plain manifest compares itself, a Kustomize member or kustomization its overlay. */
-  async function status(rawFilePath: string, projectRoot: string): Promise<KubeStatus> {
+  /** The editor chip for one file: a plain manifest compares itself, a Kustomize member or kustomization its overlay.
+   *  `context` is one chosen for the editor without remembering it (R11): it must be listed, and its own kubeconfig
+   *  namespace stands in for a remembered one. */
+  async function status(rawFilePath: string, projectRoot: string, context?: string): Promise<KubeStatus> {
     const file = d.onRoot(projectRoot, rawFilePath)
     const kind = (await d.classify([file]))[file]
     if (kind !== 'manifest' && kind !== 'kustomization') return { kind: 'unknown', reason: 'not-manifest' }
     const [graph, view] = await Promise.all([d.projectGraph(projectRoot), d.target(file, projectRoot)])
-    const s = view.state
-    if (s.state !== 'remembered' && s.state !== 'current') return { kind: 'unknown', reason: 'no-target' }
+    let s: { context: string; namespace: string | null }
+    if (context !== undefined) {
+      const listed = (await d.contexts()).contexts.find((c) => c.name === context)
+      if (!listed) return { kind: 'unknown', reason: 'no-target' }
+      s = { context, namespace: listed.namespace }
+    } else if (view.state.state === 'remembered' || view.state.state === 'current') s = view.state
+    else return { kind: 'unknown', reason: 'no-target' }
     let cmd: KubeCommand
     if (view.overlay) cmd = { kind: 'overlay', dir: view.overlay }
     else if (kind === 'kustomization' || graph.isMember(file)) return { kind: 'unknown', reason: 'no-overlay' }

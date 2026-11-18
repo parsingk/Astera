@@ -317,6 +317,7 @@ const view = (over: Partial<KubeTargetView> = {}): KubeTargetView => ({
   rememberChoices: ['/p/k8s', '/p'],
   reloadBlocked: null,
   nsFromFile: false,
+  resource: null,
   ...over
 })
 
@@ -350,6 +351,18 @@ describe('kubeRequestOf: the target and the namespace pill', () => {
     expect(kubeRequestOf(sel, '/p', view({ state: { state: 'remembered', context: 'stage', namespace: null, folder: '/p' } }), undefined, CONTEXTS)?.pill).toBe('web')
     expect(kubeRequestOf(sel, '/p', noNs, undefined, CONTEXTS)?.pill).toBe('default')
     expect(kubeRequestOf(sel, '/p', noNs, undefined, null)?.pill).toBe('default')
+  })
+
+  it('a request on a session override of the context carries override: true (R11); a namespace-only one does not', () => {
+    expect(kubeRequestOf(sel, '/p', remembered, { context: 'stage' }, CONTEXTS)).toEqual({
+      selection: sel,
+      projectRoot: '/p',
+      context: 'stage',
+      pill: 'web',
+      override: true
+    })
+    expect(kubeRequestOf(sel, '/p', view(), { namespace: 'x' }, CONTEXTS)).not.toHaveProperty('override')
+    expect(kubeRequestOf(sel, '/p', view(), undefined, CONTEXTS)).not.toHaveProperty('override')
   })
 
   it('a session override of the context wins, and the remembered namespace (of another context) is not used', () => {

@@ -35,15 +35,17 @@ function pillOf(v: unknown): string | null {
 }
 
 function request(v: unknown): KubeRequest {
-  const r = v as { selection?: unknown; projectRoot?: unknown; context?: unknown; pill?: unknown } | undefined
+  const r = v as { selection?: unknown; projectRoot?: unknown; context?: unknown; pill?: unknown; override?: unknown } | undefined
   if (!r || !Array.isArray(r.selection) || r.selection.length === 0) {
     throw new Error('kube: request must be { selection, projectRoot, context, pill } with a non-empty selection')
   }
+  if (r.override !== undefined && r.override !== true) throw new Error('kube: override must be true or absent')
   return {
     selection: r.selection.map((p) => str(p, 'selection path')),
     projectRoot: str(r.projectRoot, 'projectRoot'),
     context: str(r.context, 'context'),
-    pill: pillOf(r.pill)
+    pill: pillOf(r.pill),
+    ...(r.override === true ? { override: true as const } : {})
   }
 }
 
@@ -136,11 +138,12 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     return service.render(dir)
   })
 
-  ipcMain.handle('kube.status', async (_e, filePath, projectRoot) => {
+  ipcMain.handle('kube.status', async (_e, filePath, projectRoot, context) => {
     const file = str(filePath, 'filePath')
     const root = str(projectRoot, 'projectRoot')
+    const ctx = context === undefined ? undefined : str(context, 'context')
     await assertAllowedPath(file)
     await assertAllowedPath(root)
-    return service.status(file, root)
+    return service.status(file, root, ctx)
   })
 }

@@ -147,13 +147,14 @@ export function createKubeService(deps: KubeServiceDeps) {
     return path.join(projectRoot, rel)
   }
 
-  /** What the editor strip needs from a plain manifest's own text (R10): why reload cannot run on it, and whether
-   *  every resource names its namespace. Unreadable text counts as no resource. */
-  async function fileFacts(filePath: string): Promise<Pick<KubeTargetView, 'reloadBlocked' | 'nsFromFile'>> {
+  /** What the editor strip needs from a plain manifest's own text (R10): why reload cannot run on it, whether every
+   *  resource names its namespace, and what the kind-and-name chip shows. Unreadable text counts as no resource. */
+  async function fileFacts(filePath: string): Promise<Pick<KubeTargetView, 'reloadBlocked' | 'nsFromFile' | 'resource'>> {
     const docs = parseManifestDocs(await deps.readText(filePath).catch(() => ''))
     return {
       reloadBlocked: docs.some((d) => d.kind === 'Secret') ? 'secret' : docs.length !== 1 ? 'multi' : null,
-      nsFromFile: docs.length > 0 && docs.every((d) => d.namespace !== null)
+      nsFromFile: docs.length > 0 && docs.every((d) => d.namespace !== null),
+      resource: docs.length === 1 ? { kind: docs[0].kind, name: docs[0].name } : docs.length > 1 ? { count: docs.length } : null
     }
   }
 
@@ -181,7 +182,8 @@ export function createKubeService(deps: KubeServiceDeps) {
           lockedNamespace: null,
           rememberChoices: [],
           reloadBlocked: null,
-          nsFromFile: false
+          nsFromFile: false,
+          resource: null
         }
       }
       folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
@@ -199,7 +201,11 @@ export function createKubeService(deps: KubeServiceDeps) {
       lockedNamespace: overlay === null ? null : graph.namespaceOf(overlay),
       rememberChoices: overlay === null ? foldersUpTo(filePath, projectRoot) : [overlay],
       // Reload and the "from files" pill are a plain manifest's; what an overlay applies is its rendered output.
-      ...(overlay === null && !isDir ? await fileFacts(filePath) : { reloadBlocked: null, nsFromFile: false })
+      ...(overlay !== null
+        ? { reloadBlocked: null, nsFromFile: false, resource: { overlay: path.basename(overlay) } }
+        : isDir
+          ? { reloadBlocked: null, nsFromFile: false, resource: null }
+          : await fileFacts(filePath))
     }
   }
 

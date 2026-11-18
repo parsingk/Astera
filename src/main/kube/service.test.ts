@@ -435,6 +435,34 @@ describe('target: reloadBlocked and nsFromFile (R10)', () => {
   })
 })
 
+describe('target: the resource chip', () => {
+  it('a plain manifest names its one resource, counts several, and has none without a resource', async () => {
+    const two = `${MANIFEST}---\n${MANIFEST.replace('name: a', 'name: b')}`
+    const h = harness({
+      [p('k8s', 'a.yaml')]: MANIFEST,
+      [p('k8s', 'gen.yaml')]: 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  generateName: run-\n',
+      [p('k8s', 'two.yaml')]: two,
+      [p('k8s', 'values.yaml')]: 'replicas: 2\n'
+    })
+    const svc = createKubeService(h.deps)
+    expect((await svc.target(p('k8s', 'a.yaml'), root)).resource).toEqual({ kind: 'ConfigMap', name: 'a' })
+    expect((await svc.target(p('k8s', 'gen.yaml'), root)).resource).toEqual({ kind: 'Job', name: null })
+    expect((await svc.target(p('k8s', 'two.yaml'), root)).resource).toEqual({ count: 2 })
+    expect((await svc.target(p('k8s', 'values.yaml'), root)).resource).toBeNull()
+  })
+
+  it("through an overlay it is the overlay's folder name; none before an overlay is picked or for a folder", async () => {
+    const h = harness({ ...OVERLAY_TREE, [p('envs', 'dev', 'kustomization.yaml')]: 'resources:\n  - ../../apps/base\n' })
+    const svc = createKubeService(h.deps)
+    const member = p('apps', 'base', 'dep.yaml')
+    expect((await svc.target(member, root)).resource).toBeNull()
+    await svc.setOverlay(member, p('envs', 'prod'))
+    expect((await svc.target(member, root)).resource).toEqual({ overlay: 'prod' })
+    expect((await svc.target(p('envs', 'dev', 'kustomization.yaml'), root)).resource).toEqual({ overlay: 'dev' })
+    expect((await svc.target(p('apps'), root)).resource).toBeNull()
+  })
+})
+
 describe('target of a folder (explorer selection)', () => {
   it('a folder resolves over its own chain, so a context remembered for the folder itself is found', async () => {
     const h = harness({ [p('k8s', 'a.yaml')]: MANIFEST })
@@ -1029,6 +1057,61 @@ describe('run', () => {
   })
 })
 
+describe('a context chosen for one editor without remembering it (R11)', () => {
+  const a = p('k8s', 'a.yaml')
+  const b = p('k8s', 'b.yaml')
+  const files = { [a]: yamlDocs(cm('a', {}, 'dev')), [b]: yamlDocs(cm('b', {}, 'dev')) }
+  const kube = (): FakeRun => fakeKube({ apply: 'configmap/a configured\n' })
+  const overridden = (selection: string[], context = ARN): KubeRequest => ({ ...request(selection, context), override: true })
+
+  it('previews and runs one file on the chosen context, which the file does not resolve to', async () => {
+    const h = harness(files, kube())
+    const svc = traced(createKubeService(h.deps))
+    await svc.setTarget(p('k8s'), { context: 'kind-dev', namespace: null })
+    // without the flag the remembered context wins (C12)
+    expect(await svc.preview('apply', request([a], ARN), HIDE)).toMatchObject({ ok: false, reason: 'mixed-contexts' })
+    const r = await svc.preview('apply', overridden([a]), HIDE)
+    if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
+    expect(r.commandLines).toEqual([['apply', '--context', ARN, '-f', a]])
+    const ran = await svc.run('o1', 'apply', overridden([a]), r.fingerprint)
+    expect(ran).toMatchObject({ ok: true, ran: 1, context: ARN })
+    expect(h.calls.filter(isWrite)).toEqual([['apply', '--context', ARN, '-f', a]])
+  })
+
+  it('refuses two files, naming the selection, in preview and in run, before any cluster call', async () => {
+    const h = harness(files, kube())
+    const svc = traced(createKubeService(h.deps))
+    const refusal = { ok: false, reason: 'mixed-contexts', folders: [a, b] }
+    expect(await svc.preview('apply', overridden([a, b]), HIDE)).toEqual(refusal)
+    expect(await svc.run('o2', 'apply', overridden([a, b]), STALE)).toMatchObject({ ok: false, ran: 0, refused: refusal })
+    expect(clusterCalls(h.calls)).toEqual([])
+  })
+
+  it('refuses a context kubeconfig does not list, in preview and in run', async () => {
+    const h = harness(files, kube())
+    const svc = traced(createKubeService(h.deps))
+    const gone = overridden([a], 'arn:aws:eks:eu-west-1:1:cluster/gone')
+    const refusal = { ok: false, reason: 'mixed-contexts', folders: [a] }
+    expect(await svc.preview('apply', gone, HIDE)).toEqual(refusal)
+    expect(await svc.run('o3', 'apply', gone, STALE)).toMatchObject({ ok: false, ran: 0, refused: refusal })
+    expect(clusterCalls(h.calls)).toEqual([])
+  })
+
+  it('a run with the flag refuses the fingerprint of a preview without it, as changed', async () => {
+    const h = harness(files, kube())
+    const svc = traced(createKubeService(h.deps))
+    const plain = await svc.preview('apply', request([a]), HIDE)
+    if (!plain.ok) throw new Error(`preview failed: ${plain.reason}`)
+    const flagged: KubeRequest = { ...request([a]), override: true }
+    expect(await svc.run('o4', 'apply', flagged, plain.fingerprint)).toMatchObject({
+      ok: false,
+      ran: 0,
+      refused: { reason: 'changed' }
+    })
+    expect(h.calls.filter(isWrite)).toEqual([])
+  })
+})
+
 describe('reload', () => {
   const f = p('k8s', 'a.yaml')
 
@@ -1199,6 +1282,25 @@ describe('status', () => {
     expect(await svc.status(values, root)).toEqual({ kind: 'unknown', reason: 'not-manifest' })
     await svc.setTarget(p('k8s'), { context: 'gone', namespace: null })
     expect(await svc.status(f, root)).toEqual({ kind: 'unknown', reason: 'no-target' })
+    expect(clusterCalls(h.calls)).toEqual([])
+  })
+
+  it('compares on a context chosen for the editor (R11), also where the remembered one is gone', async () => {
+    const h = statusOf(stringify(stored(cm('a', { v: '1' }))), yamlDocs(cm('a', { v: '2' })))
+    const svc = traced(createKubeService(h.deps))
+    await svc.setTarget(p('k8s'), { context: 'gone', namespace: null })
+    expect(await svc.status(f, root, ARN)).toEqual({ kind: 'different', lines: 1 })
+    // the chosen context's own namespace: ARN names none, so no -n
+    expect(clusterCalls(h.calls)).toEqual([
+      ['get', '--ignore-not-found', '-o', 'yaml', '--context', ARN, '-f', f],
+      ['apply', '--dry-run=server', '-o', 'yaml', '--context', ARN, '-f', f]
+    ])
+  })
+
+  it('an editor context kubeconfig does not list has no target, without a cluster call', async () => {
+    const h = statusOf('')
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.status(f, root, 'not-listed')).toEqual({ kind: 'unknown', reason: 'no-target' })
     expect(clusterCalls(h.calls)).toEqual([])
   })
 

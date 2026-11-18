@@ -1436,7 +1436,8 @@ export interface CoreApi {
     reload(filePath: string, context: string, pill: string | null): Promise<KubeReloadResult>
     /** `kubectl kustomize <overlayDir>`. */
     render(overlayDir: string): Promise<KubeRenderResult>
-    status(filePath: string, projectRoot: string): Promise<KubeStatus>
+    /** `context`: one chosen for the editor without remembering it (R11), which must be listed in kubeconfig. */
+    status(filePath: string, projectRoot: string, context?: string): Promise<KubeStatus>
   }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */
