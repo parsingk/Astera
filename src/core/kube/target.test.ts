@@ -94,7 +94,17 @@ describe('targetKey', () => {
     expect(b).toBe(a)
   })
   it('uses forward slashes on Windows paths', () => {
-    expect(targetKey(win('C:/r/deploy/k8s'), { top: win('C:/r'), commonDir: 'C:/r/.git' })).toBe('C:/r/.git|deploy/k8s')
+    expect(targetKey(win('C:/r/deploy/k8s'), { top: win('C:/r'), commonDir: 'C:/r/.git' })).toBe('c:/r/.git|deploy/k8s')
+  })
+  it('is the same however the Windows paths are spelled', () => {
+    const a = targetKey('C:/r/Deploy/K8s'.split('/').join(BS), { top: 'C:/r'.split('/').join(BS), commonDir: 'C:/r/.git' })
+    const b = targetKey('c:/r/deploy/k8s'.split('/').join(BS), { top: 'c:/R'.split('/').join(BS), commonDir: win('c:/r/.git') })
+    expect(a).toBe('c:/r/.git|deploy/k8s')
+    expect(b).toBe(a)
+  })
+  it('falls back to the folded absolute path for a folder outside the top', () => {
+    expect(targetKey('/w/other/x', { top: '/w/main', commonDir: '/w/main/.git' })).toBe(foldPathCase('/w/other/x'))
+    expect(targetKey(win('D:/x'), { top: win('C:/r'), commonDir: 'C:/r/.git' })).toBe(win('d:/x'))
   })
   it('is empty after the bar at the top of the repository', () => {
     expect(targetKey('/w/main', { top: '/w/main', commonDir: '/w/main/.git' })).toBe('/w/main/.git|')

@@ -113,11 +113,25 @@ export function resolveTarget(
   return { state: 'none' }
 }
 
-/** Store key for a folder: shared by every worktree of a repository, or the folded absolute path outside git. */
+/** Case rule for a key part: Windows-style paths are always case-insensitive, the rest follow the host (foldPathCase). */
+function foldKeyPart(p: string, flavored: typeof path.posix): string {
+  return flavored === path.win32 ? p.toLowerCase() : foldPathCase(p)
+}
+
+function slashes(p: string): string {
+  return p.split(String.fromCharCode(92)).join('/')
+}
+
+/** Store key for a folder: shared by every worktree of a repository, or the folded absolute path outside git
+ *  (also for a folder that is not under the repository top). Stable however the caller spells the paths. */
 export function targetKey(folder: string, repo: { top: string; commonDir: string } | null): string {
-  if (!repo) return foldPathCase(flavor(folder).resolve(folder))
-  const rel = flavor(repo.top).relative(repo.top, folder).split(String.fromCharCode(92)).join('/')
-  return `${repo.commonDir}|${rel}`
+  const outside = foldKeyPart(flavor(folder).resolve(folder), flavor(folder))
+  if (!repo) return outside
+  const p = flavor(repo.top)
+  const rel = p.relative(repo.top, folder)
+  if (rel === '..' || rel.startsWith('..' + p.sep) || p.isAbsolute(rel)) return outside
+  const common = foldKeyPart(slashes(flavor(repo.commonDir).resolve(repo.commonDir)), flavor(repo.commonDir))
+  return `${common}|${foldKeyPart(slashes(rel), p)}`
 }
 
 /** Short and detail text for a context name: EKS ARN -> cluster + region, GKE -> cluster + zone. */
