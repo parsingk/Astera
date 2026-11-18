@@ -45,7 +45,9 @@ describe('isClusterScoped', () => {
       'ClusterRoleBinding', 'PriorityClass', 'IngressClass', 'RuntimeClass', 'ValidatingWebhookConfiguration',
       'MutatingWebhookConfiguration', 'APIService', 'CSIDriver', 'CSINode', 'VolumeAttachment', 'ClusterIssuer',
       'ClusterSecretStore', 'ClusterPolicy', 'ClusterTriggerAuthentication', 'GatewayClass', 'VolumeSnapshotClass',
-      'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']) {
+      'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'ClusterTrustBundle', 'CertificateSigningRequest',
+      'FlowSchema', 'PriorityLevelConfiguration', 'VolumeAttributesClass', 'MutatingAdmissionPolicy',
+      'MutatingAdmissionPolicyBinding', 'ServiceCIDR', 'IPAddress']) {
       expect(isClusterScoped(k), k).toBe(true)
     }
   })
