@@ -33,7 +33,7 @@ export interface KubeOperationDeps extends Pick<KubeServiceDeps, 'run' | 'readTe
   contexts(): Promise<KubeContexts>
   target(filePath: string, projectRoot: string): Promise<KubeTargetView>
   projectGraph(projectRoot: string): Promise<KustomizeGraph>
-  /** The path spelled the way the project root is, so the case-sensitive graph finds it. */
+  /** The path spelled the way the project root is, as the paths projectGraph returns are. */
   onRoot(projectRoot: string, filePath: string): string
 }
 

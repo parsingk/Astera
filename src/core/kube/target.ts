@@ -4,7 +4,7 @@ import { foldPathCase } from '../files/paths'
 import type { KubeContext, KubeContexts, KubeProvider, Remembered, TargetState } from './types'
 
 /** Windows paths (drive letter or backslash) use win32 rules whatever the host is; the rest use POSIX. */
-function flavor(p: string): typeof path.posix {
+export function flavor(p: string): typeof path.posix {
   return /^[A-Za-z]:|\\/.test(p) ? path.win32 : path.posix
 }
 
@@ -114,7 +114,7 @@ export function resolveTarget(
 }
 
 /** Case rule for a key part: Windows-style paths are always case-insensitive, the rest follow the host (foldPathCase). */
-function foldKeyPart(p: string, flavored: typeof path.posix): string {
+export function foldKeyPart(p: string, flavored: typeof path.posix): string {
   return flavored === path.win32 ? p.toLowerCase() : foldPathCase(p)
 }
 

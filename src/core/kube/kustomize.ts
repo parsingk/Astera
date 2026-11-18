@@ -1,6 +1,6 @@
 /** Reads kustomization.yaml references and works out which kustomizations are overlays and which files they reach. */
-import { resolve } from 'node:path'
 import { parseAllDocuments } from 'yaml'
+import { flavor, foldKeyPart } from './target'
 
 export interface KustomizationRefs {
   resources: string[]
@@ -65,20 +65,29 @@ export function parseKustomization(text: string): KustomizationRefs {
   }
 }
 
-/** `roots` keys are absolute kustomization folders. */
+/** The one spelling every key and lookup goes through: resolved (against `base` when given), and case-folded where
+ *  the paths ignore case (Windows-style paths always, the rest as the host does), so a root spelled `d:/proj` finds
+ *  what `D:/Proj` built. */
+function norm(p: string, base?: string): string {
+  const f = flavor(base ?? p)
+  return foldKeyPart(base === undefined ? f.resolve(p) : f.resolve(base, p), f)
+}
+
+/** `roots` keys are absolute kustomization folders. Lookups match any spelling of a path; the paths returned are the
+ *  keys as given. */
 export function buildKustomizeGraph(roots: Record<string, KustomizationRefs>): KustomizeGraph {
   const original = new Map<string, string>() // normalized folder -> key as given
-  for (const key of Object.keys(roots)) original.set(resolve(key), key)
+  for (const key of Object.keys(roots)) original.set(norm(key), key)
 
   const childDirs = new Map<string, string[]>()
   const ownFiles = new Map<string, string[]>()
   const referenced = new Set<string>()
   for (const [key, refs] of Object.entries(roots)) {
-    const dir = resolve(key)
+    const dir = norm(key)
     const dirs: string[] = []
     const files: string[] = []
     for (const entry of [...refs.resources, ...refs.components]) {
-      const target = resolve(dir, entry)
+      const target = norm(entry, dir)
       if (original.has(target)) {
         if (target !== dir) {
           dirs.push(target)
@@ -88,7 +97,7 @@ export function buildKustomizeGraph(roots: Record<string, KustomizationRefs>): K
         files.push(target)
       }
     }
-    for (const patch of refs.patchFiles) files.push(resolve(dir, patch))
+    for (const patch of refs.patchFiles) files.push(norm(patch, dir))
     childDirs.set(dir, dirs)
     ownFiles.set(dir, files)
   }
@@ -115,10 +124,10 @@ export function buildKustomizeGraph(roots: Record<string, KustomizationRefs>): K
 
   return {
     overlays: () => overlayDirs.map((dir) => original.get(dir) as string),
-    isBase: (dir) => referenced.has(resolve(dir)),
-    isOverlay: (dir) => overlayDirs.includes(resolve(dir)),
+    isBase: (dir) => referenced.has(norm(dir)),
+    isOverlay: (dir) => overlayDirs.includes(norm(dir)),
     overlaysReaching: (path) => {
-      const target = resolve(path)
+      const target = norm(path)
       return overlayDirs
         .filter((dir) => {
           const r = reaches.get(dir) as { dirs: Set<string>; files: Set<string> }
@@ -126,7 +135,7 @@ export function buildKustomizeGraph(roots: Record<string, KustomizationRefs>): K
         })
         .map((dir) => original.get(dir) as string)
     },
-    isMember: (path) => members.has(resolve(path)),
-    namespaceOf: (dir) => roots[original.get(resolve(dir)) ?? '']?.namespace ?? null
+    isMember: (path) => members.has(norm(path)),
+    namespaceOf: (dir) => roots[original.get(norm(dir)) ?? '']?.namespace ?? null
   }
 }

@@ -531,6 +531,18 @@ describe('path spelling and the extensionless name (fix round 1)', () => {
     expect(t.overlays).toEqual([p('envs', 'prod')])
   })
 
+  it.skipIf(process.platform !== 'win32')('a graph built under one spelling of the root answers another, in its spelling', async () => {
+    const h = harness(OVERLAY_TREE)
+    const svc = createKubeService(h.deps)
+    await svc.projectGraph(root)
+    const lower = root.toLowerCase()
+    const t = await svc.target(path.join(lower, 'apps', 'base', 'dep.yaml'), lower)
+    expect(t.overlays).toEqual([path.join(lower, 'envs', 'prod')])
+    const g = await svc.projectGraph(lower)
+    expect(g.overlays()).toEqual([path.join(lower, 'envs', 'prod')])
+    expect(g.isBase(path.join(lower, 'apps', 'base'))).toBe(true)
+  })
+
   it('classifies a file named Kustomization', async () => {
     const f = p('k', 'Kustomization')
     const h = harness({ [f]: 'resources: []\n' })

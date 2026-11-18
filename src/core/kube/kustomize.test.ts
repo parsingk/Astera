@@ -112,6 +112,24 @@ describe('buildKustomizeGraph', () => {
     expect(graph.namespaceOf('/p/base')).toBeNull()
   })
 
+  it('answers whatever the case of a Windows path, and returns paths as they were given', () => {
+    const bs = String.fromCharCode(92)
+    const w = (...parts: string[]): string => ['D:', 'Proj', ...parts].join(bs)
+    const low = (s: string): string => s.toLowerCase()
+    const win = buildKustomizeGraph({
+      [w('base')]: refs({ resources: ['dep.yaml'] }),
+      [w('overlays', 'dev')]: refs({ resources: ['../../base'], patchFiles: ['patch.yaml'], namespace: 'dev' })
+    })
+    expect(win.isMember(low(w('base', 'dep.yaml')))).toBe(true)
+    expect(win.isMember(low(w('overlays', 'dev', 'patch.yaml')))).toBe(true)
+    expect(win.isBase(low(w('base')))).toBe(true)
+    expect(win.isOverlay(low(w('overlays', 'dev')))).toBe(true)
+    expect(win.overlaysReaching(low(w('base', 'dep.yaml')))).toEqual([w('overlays', 'dev')])
+    expect(win.overlaysReaching('d:/proj/overlays/dev/patch.yaml')).toEqual([w('overlays', 'dev')])
+    expect(win.namespaceOf(low(w('overlays', 'dev')))).toBe('dev')
+    expect(win.overlays()).toEqual([w('overlays', 'dev')])
+  })
+
   it('does not loop on a cycle and reports both as bases', () => {
     const cyc = buildKustomizeGraph({
       '/c/a': refs({ resources: ['../b', 'x.yaml'] }),

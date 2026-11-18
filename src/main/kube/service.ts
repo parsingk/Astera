@@ -135,6 +135,8 @@ export function createKubeService(deps: KubeServiceDeps) {
     return buildKustomizeGraph(roots)
   }
 
+  /** The project's graph, built once per root whatever its spelling. The graph matches any spelling of a path; the
+   *  overlays it returns are spelled the way this caller spells the root. */
   function projectGraph(projectRoot: string): Promise<KustomizeGraph> {
     const key = foldPathCase(projectRoot)
     let g = graphs.get(key)
@@ -142,14 +144,18 @@ export function createKubeService(deps: KubeServiceDeps) {
       g = buildGraph(projectRoot)
       graphs.set(key, g)
     }
-    return g
+    return g.then((graph) => ({
+      ...graph,
+      overlays: () => graph.overlays().map((d) => onRoot(projectRoot, d)),
+      overlaysReaching: (p) => graph.overlaysReaching(p).map((d) => onRoot(projectRoot, d))
+    }))
   }
 
   async function keyOf(folder: string): Promise<string> {
     return targetKey(folder, await deps.layoutOf(folder))
   }
 
-  /** The path spelled the way the project root is, so the case-sensitive graph finds it. */
+  /** The path spelled the way the project root is, as the paths projectGraph returns are. */
   function onRoot(projectRoot: string, filePath: string): string {
     const rel = path.relative(projectRoot, filePath)
     if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return filePath
