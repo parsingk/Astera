@@ -140,7 +140,13 @@ const api = {
     target: invoke('kube.target'),
     setTarget: invoke('kube.setTarget'),
     setOverlay: invoke('kube.setOverlay'),
-    useContext: invoke('kube.useContext')
+    useContext: invoke('kube.useContext'),
+    preview: invoke('kube.preview'),
+    run: invoke('kube.run'),
+    cancel: invoke('kube.cancel'),
+    reload: invoke('kube.reload'),
+    render: invoke('kube.render'),
+    status: invoke('kube.status')
   },
   github: {
     status: invoke('github.status'),

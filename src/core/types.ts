@@ -1,5 +1,17 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
-import type { KubeContexts, KubeFileKind, Remembered, TargetState } from './kube/types'
+import type {
+  KubeContexts,
+  KubeFileKind,
+  KubePreview,
+  KubeReloadResult,
+  KubeRenderResult,
+  KubeRequest,
+  KubeRunResult,
+  KubeStatus,
+  KubeVerb,
+  Remembered,
+  TargetState
+} from './kube/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -1417,6 +1429,15 @@ export interface CoreApi {
     setTarget(folder: string, value: Remembered | null): Promise<void>
     setOverlay(filePath: string, overlayDir: string): Promise<void>
     useContext(context: string): Promise<{ ok: boolean; stdout: string; stderr: string; errorCode?: string }>
+    /** Plan, one-context check, namespace and server-side dry run; never writes. */
+    preview(verb: KubeVerb, req: KubeRequest, opts: { keepServerFields: boolean }): Promise<KubePreview>
+    /** The only write: re-plans, then runs the commands in order until one fails. Cancellable by `id`. */
+    run(id: string, verb: KubeVerb, req: KubeRequest): Promise<KubeRunResult>
+    cancel(id: string): Promise<void>
+    reload(filePath: string, context: string): Promise<KubeReloadResult>
+    /** `kubectl kustomize <overlayDir>`. */
+    render(overlayDir: string): Promise<KubeRenderResult>
+    status(filePath: string, projectRoot: string): Promise<KubeStatus>
   }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */

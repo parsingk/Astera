@@ -1,6 +1,7 @@
-/** The kube service: what the renderer asks about Kubernetes files, contexts and targets.
+/** The kube service: what the renderer asks about Kubernetes files, contexts, targets and operations.
  *  Every dependency is injected so the tests run against a fake kubectl and an in-memory file system. */
 import path from 'node:path'
+import { stringify } from 'yaml'
 import { classifyYamlHead, helmChartRootOf, isKustomizationName, isYamlName } from '../../core/kube/detect'
 import { buildKustomizeGraph, parseKustomization, type KustomizeGraph, type KustomizationRefs } from '../../core/kube/kustomize'
 import {
@@ -10,11 +11,21 @@ import {
   resolveTarget,
   targetKey
 } from '../../core/kube/target'
-import { configViewArgs, useContextArgs } from '../../core/kube/args'
+import { configViewArgs, getOneArgs, kustomizeArgs, useContextArgs } from '../../core/kube/args'
+import { parseManifestDocs } from '../../core/kube/docs'
+import { normalizeObject, objectsFromYaml, type K8sObject } from '../../core/kube/objects'
 import { foldPathCase } from '../../core/files/paths'
 import type { FileChange } from '../../core/files/changeBatch'
 import type { KubectlResult } from '../../core/kube/kubectl'
-import type { KubeContexts, KubeFileKind, Remembered, TargetState } from '../../core/kube/types'
+import type {
+  KubeContexts,
+  KubeFileKind,
+  KubeReloadResult,
+  KubeRenderResult,
+  Remembered,
+  TargetState
+} from '../../core/kube/types'
+import { createKubeOperations, isSkippedDir, UNREADABLE } from './operations'
 import type { KubeTargetStore } from './targetStore'
 
 export interface KubeServiceDeps {
@@ -103,7 +114,7 @@ export function createKubeService(deps: KubeServiceDeps) {
         entries.map(async (e) => {
           const full = path.join(dir, e.name)
           if (e.isDir) {
-            if (e.name === 'node_modules' || e.name.startsWith('.')) return
+            if (isSkippedDir(e.name)) return
             await walk(full)
           } else if (isKustomizationName(e.name)) {
             roots[dir] = parseKustomization(await deps.readText(full).catch(() => ''))
@@ -206,5 +217,63 @@ export function createKubeService(deps: KubeServiceDeps) {
     }
   }
 
-  return { classify, contexts, target, setTarget, setOverlay, useContext, projectGraph, invalidate }
+  /** The live object of a file holding exactly one nameable resource, as text for the editor buffer. */
+  async function reload(filePath: string, context: string): Promise<KubeReloadResult> {
+    const docs = parseManifestDocs(await deps.readText(filePath))
+    // A nameless resource (generateName) has nothing to fetch either.
+    if (docs.length !== 1 || docs[0].name === null) return { ok: false, reason: 'not-single' }
+    const { kind, name, namespace } = docs[0]
+    // C22: live Secret values never go into a buffer of a file that may be committed.
+    if (kind === 'Secret') return { ok: false, reason: 'secret' }
+    // kind and name are positional: from a file, one starting with a dash would be read by kubectl as a flag.
+    if (kind.startsWith('-') || name.startsWith('-')) return { ok: false, reason: 'kubectl', stderr: 'invalid kind or name' }
+    const r = await deps.run(getOneArgs(kind, name, namespace, context))
+    if (!r.ok) return { ok: false, reason: 'kubectl', stderr: r.stderr }
+    // getOneArgs carries --ignore-not-found: nothing printed means the cluster has no such object.
+    if (r.stdout.trim() === '') return { ok: false, reason: 'absent' }
+    let objs: K8sObject[]
+    try {
+      objs = objectsFromYaml(r.stdout)
+    } catch {
+      return { ok: false, reason: 'kubectl', stderr: UNREADABLE }
+    }
+    // The answer is checked too: the file's kind may name Secrets by another spelling.
+    if (objs.some((o) => o.kind === 'Secret')) return { ok: false, reason: 'secret' }
+    if (objs.length !== 1) return { ok: false, reason: 'kubectl', stderr: UNREADABLE }
+    return { ok: true, text: stringify(normalizeObject(objs[0], { keepServerFields: false })) }
+  }
+
+  async function render(overlayDir: string): Promise<KubeRenderResult> {
+    const r = await deps.run(kustomizeArgs(overlayDir))
+    return r.ok ? { ok: true, text: r.stdout } : { ok: false, stderr: r.stderr }
+  }
+
+  const { preview, run, cancel, status } = createKubeOperations({
+    run: deps.run,
+    readText: deps.readText,
+    stat: deps.stat,
+    listDir: deps.listDir,
+    classify,
+    contexts,
+    target,
+    projectGraph,
+    onRoot
+  })
+
+  return {
+    classify,
+    contexts,
+    target,
+    setTarget,
+    setOverlay,
+    useContext,
+    projectGraph,
+    invalidate,
+    preview,
+    run,
+    cancel,
+    reload,
+    render,
+    status
+  }
 }

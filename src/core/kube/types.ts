@@ -80,3 +80,60 @@ export interface ResourceOutcome {
   message?: string
   file?: string
 }
+
+export type KubeVerb = 'apply' | 'delete'
+
+/** One apply or delete as the renderer asks for it: everything selected goes to `context` (C12). */
+export interface KubeRequest {
+  selection: string[]
+  projectRoot: string
+  context: string
+  /** The namespace pill: `-n` for resources that name none (C20), or null to leave it to kubectl. */
+  pill: string | null
+}
+
+/** What the confirmation shows. `commandLines` are kubectl's arguments without the binary: on success the commands
+ *  confirming will run, on a `kubectl` failure the call that failed. */
+export type KubePreview =
+  | {
+      ok: true
+      plan: Extract<OperationPlan, { ok: true }>
+      commandLines: string[][]
+      resources: { command: number; diff: ResourceDiff }[]
+    }
+  | { ok: false; reason: 'refused'; plan: OperationPlan }
+  | { ok: false; reason: 'mixed-contexts'; folders: string[] }
+  | { ok: false; reason: 'namespace'; conflicts: { path: string; namespace: string }[] }
+  | { ok: false; reason: 'kubectl'; commandLines: string[][]; stderr: string; timedOut?: true }
+
+/** One finished operation. `ran` counts the commands executed: the first failing one stops the rest (C19). */
+export interface KubeRunResult {
+  id: string
+  verb: KubeVerb | 'reload'
+  context: string
+  commandLines: string[][]
+  ran: number
+  outcomes: ResourceOutcome[]
+  ok: boolean
+  stderr: string
+  timedOut?: true
+  cancelled?: true
+  startedAt: number
+  finishedAt: number
+}
+
+/** `absent`: the cluster has no such object. */
+export type KubeReloadResult =
+  | { ok: true; text: string }
+  | { ok: false; reason: 'not-single' | 'secret' | 'absent' | 'kubectl'; stderr?: string }
+
+export type KubeRenderResult = { ok: true; text: string } | { ok: false; stderr: string }
+
+/** The editor chip (spec 4.9). `lines` for a plain manifest, `resources` for a Kustomize member's overlay.
+ *  `reason` for `unknown`: kubectl's first stderr line, or one of not-manifest, no-target, no-overlay, namespace. */
+export interface KubeStatus {
+  kind: 'same' | 'different' | 'absent' | 'unknown'
+  lines?: number
+  resources?: number
+  reason?: string
+}

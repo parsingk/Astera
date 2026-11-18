@@ -1,5 +1,5 @@
 /** IPC for the kube feature. Every handler that receives a path asks assertAllowedPath first. */
-import type { Remembered } from '../../core/kube/types'
+import type { KubeRequest, KubeVerb, Remembered } from '../../core/kube/types'
 import type { AppSettingsStore } from '../appSettingsStore'
 import type { KubeService } from './service'
 
@@ -25,8 +25,39 @@ function remembered(v: unknown): Remembered | null {
   return { context: r.context, namespace: r.namespace }
 }
 
+function verb(v: unknown): KubeVerb {
+  if (v !== 'apply' && v !== 'delete') throw new Error('kube: verb must be apply or delete')
+  return v
+}
+
+function request(v: unknown): KubeRequest {
+  const r = v as { selection?: unknown; projectRoot?: unknown; context?: unknown; pill?: unknown } | undefined
+  if (!r || !Array.isArray(r.selection) || r.selection.length === 0) {
+    throw new Error('kube: request must be { selection, projectRoot, context, pill } with a non-empty selection')
+  }
+  return {
+    selection: r.selection.map((p) => str(p, 'selection path')),
+    projectRoot: str(r.projectRoot, 'projectRoot'),
+    context: str(r.context, 'context'),
+    pill: r.pill === null ? null : str(r.pill, 'pill')
+  }
+}
+
+function previewOpts(v: unknown): { keepServerFields: boolean } {
+  const o = v as { keepServerFields?: unknown } | undefined
+  if (!o || typeof o.keepServerFields !== 'boolean') throw new Error('kube: opts must be { keepServerFields }')
+  return { keepServerFields: o.keepServerFields }
+}
+
 export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps): void {
   const { service, assertAllowedPath } = deps
+
+  const allowedRequest = async (v: unknown): Promise<KubeRequest> => {
+    const req = request(v)
+    for (const p of req.selection) await assertAllowedPath(p)
+    await assertAllowedPath(req.projectRoot)
+    return req
+  }
 
   ipcMain.handle('kube.classify', async (_e, paths) => {
     if (!Array.isArray(paths)) throw new Error('kube: paths must be an array')
@@ -61,4 +92,40 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   })
 
   ipcMain.handle('kube.useContext', (_e, context) => service.useContext(str(context, 'context')))
+
+  ipcMain.handle('kube.preview', async (_e, v, req, opts) => {
+    const op = verb(v)
+    const o = previewOpts(opts)
+    return service.preview(op, await allowedRequest(req), o)
+  })
+
+  // The only channel that writes to a cluster; the renderer reaches it from the confirmation (spec 4.6).
+  ipcMain.handle('kube.run', async (_e, id, v, req) => {
+    const runId = str(id, 'id')
+    const op = verb(v)
+    return service.run(runId, op, await allowedRequest(req))
+  })
+
+  ipcMain.handle('kube.cancel', (_e, id) => service.cancel(str(id, 'id')))
+
+  ipcMain.handle('kube.reload', async (_e, filePath, context) => {
+    const file = str(filePath, 'filePath')
+    const ctx = str(context, 'context')
+    await assertAllowedPath(file)
+    return service.reload(file, ctx)
+  })
+
+  ipcMain.handle('kube.render', async (_e, overlayDir) => {
+    const dir = str(overlayDir, 'overlayDir')
+    await assertAllowedPath(dir)
+    return service.render(dir)
+  })
+
+  ipcMain.handle('kube.status', async (_e, filePath, projectRoot) => {
+    const file = str(filePath, 'filePath')
+    const root = str(projectRoot, 'projectRoot')
+    await assertAllowedPath(file)
+    await assertAllowedPath(root)
+    return service.status(file, root)
+  })
 }
