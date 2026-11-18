@@ -121,6 +121,7 @@ export function FileExplorer({
   onPathDeleted,
   onRunFile,
   onKube,
+  kubeFailed,
   revealFolder,
   onRevealDone
 }: {
@@ -148,6 +149,8 @@ export function FileExplorer({
   onRunFile: (path: string) => void
   /** A Kubernetes verb picked from the context menu, with the operation targets. Absent: no Kubernetes item. */
   onKube?: (verb: KubeVerb, selection: string[]) => void
+  /** Files whose last Kubernetes operation failed: their rows carry a warning mark. */
+  kubeFailed?: ReadonlySet<string>
   /** A folder a terminal link named under this root (D2, 2026-10-14), as its names below the root: each level is
    *  expanded and the folder selected and scrolled to. A new `seq` asks again for the same folder. */
   revealFolder?: FolderReveal | null
@@ -867,6 +870,7 @@ export function FileExplorer({
             gitState={isDir ? undefined : gitStatus.fileState[p]}
             gitCount={isDir ? (gitStatus.folderCount[p] ?? 0) : 0}
             kubeKind={isDir ? undefined : kubeKinds[p]}
+            kubeFailed={isDir ? undefined : kubeFailed?.has(p)}
             busy={ops.busyRows.has(p)}
             loading={isDir && tree.loading.has(p) && !!dirs[p]}
             actions={rowActions}

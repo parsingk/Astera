@@ -5,6 +5,10 @@ import { RunPanel } from './RunPanel'
 import { RunTabStrip } from './RunTabStrip'
 import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
+import { FileIcon } from './FileIcon'
+import { KubeLogPanel } from './kube/KubeLogPanel'
+import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
+import type { KubeLogEntry } from '../hooks/useKubeOps'
 import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 
 /**
@@ -35,7 +39,11 @@ export function BottomPanel({
   onSelectTab,
   onNewTerminal,
   onCloseTerminal,
-  onCollapse
+  onCollapse,
+  kubeLog = [],
+  onKubeRerun,
+  onKubeCancel,
+  onKubeClear
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -70,6 +78,11 @@ export function BottomPanel({
   onNewTerminal: () => void
   onCloseTerminal: (id: string) => void
   onCollapse: () => void
+  /** The session's Kubernetes operations. The Kubernetes tab is there only while this is not empty. */
+  kubeLog?: KubeLogEntry[]
+  onKubeRerun?: (id: string) => void
+  onKubeCancel?: (id: string) => void
+  onKubeClear?: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -92,6 +105,7 @@ export function BottomPanel({
     return () => clearInterval(id)
   }, [anyRunning])
 
+  const kubeFailures = kubeFailureCount(kubeLog)
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
   // so it is a span and keyboard access is wired by hand. A key that bubbled up from the nested ✕ has
@@ -120,6 +134,24 @@ export function BottomPanel({
             >
               {anyRunning && <span className="run-live-dot" />}
               {t('run.panel.tab')}
+            </span>
+          )}
+          {kubeLog.length > 0 && (
+            <span
+              role="tab"
+              aria-selected={activeTab === 'kube'}
+              tabIndex={0}
+              className={activeTab === 'kube' ? 'bottom-tab on' : 'bottom-tab'}
+              onClick={() => onSelectTab('kube')}
+              onKeyDown={tabKeyDown('kube')}
+            >
+              <FileIcon id="kubernetes" tone="blue" />
+              {t('kube.log.tab')}
+              {kubeFailures > 0 && (
+                <span className="bottom-tab-badge" title={t('kube.log.tabFailures', { count: kubeFailures })} aria-label={t('kube.log.tabFailures', { count: kubeFailures })}>
+                  {kubeFailures}
+                </span>
+              )}
             </span>
           )}
           {terminals.map((term, i) => (
@@ -159,7 +191,7 @@ export function BottomPanel({
         <span className="run-panel-actions">
           {/* On the Run tab, stop and clear live in the rail beside the console; the header keeps them
               for terminal tabs, which have no rail. */}
-          {activeTab !== 'run' && (
+          {activeTab !== 'run' && activeTab !== 'kube' && (
             <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
               <Delete size={12} />
             </button>
@@ -215,6 +247,21 @@ export function BottomPanel({
             hidden wraps at that width, but opening the tab makes the ResizeObserver refit and corrects it
             — cosmetic and self-correcting. The same applies to a RunPanel mounted for a tab that is not
             selected. */}
+        {kubeLog.length > 0 && (
+          <div className="bottom-body kube-body" style={{ display: activeTab === 'kube' ? 'flex' : 'none' }}>
+            <KubeLogPanel
+              log={kubeLog}
+              onRerun={(id) => onKubeRerun?.(id)}
+              onCancel={(id) => onKubeCancel?.(id)}
+              onCopy={(id) => {
+                const e = kubeLog.find((x) => x.id === id)
+                if (e) window.api.clipboard.writeText(e.commandLines.map((a) => kubeCommandText(a, window.api.platform)).join(String.fromCharCode(10)))
+              }}
+              onClear={() => onKubeClear?.()}
+              onOpenFile={(path) => onOpenFile(path, {})}
+            />
+          </div>
+        )}
         {terminals.map((term) => (
           <div
             key={term.id}

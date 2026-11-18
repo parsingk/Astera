@@ -91,7 +91,9 @@ describe('kubeOpsReducer: the apply flow', () => {
         scope: '1 file',
         commandLines: LINES,
         startedAt: 10,
-        state: 'running'
+        state: 'running',
+        req: REQ,
+        namespaceLabel: 'dev'
       }
     ])
 
@@ -299,6 +301,8 @@ describe('kubeOpsReducer: compare and reload entries', () => {
         commandLines: LINES,
         startedAt: 5,
         state: 'done',
+        req: REQ,
+        namespaceLabel: 'dev',
         compare: { changed: 1, unchanged: 2, created: 1 }
       }
     ])
@@ -323,7 +327,7 @@ describe('kubeOpsReducer: compare and reload entries', () => {
   it('a reload is a running entry, then done with its result; clear empties the log', () => {
     const s1 = step(initialKubeOps, { type: 'reload', id: 'rl', context: 'kind-dev', scope: '/p/k8s/a.yaml', at: 3 })
     expect(s1.log).toEqual([
-      { id: 'rl', verb: 'reload', context: 'kind-dev', scope: '/p/k8s/a.yaml', commandLines: [], startedAt: 3, state: 'running' }
+      { id: 'rl', verb: 'reload', context: 'kind-dev', scope: '/p/k8s/a.yaml', commandLines: [], startedAt: 3, state: 'running', req: { selection: ['/p/k8s/a.yaml'], projectRoot: '', context: 'kind-dev', pill: null }, namespaceLabel: '' }
     ])
     const result = runResult({ id: 'rl', verb: 'reload', commandLines: [] })
     const s2 = step(s1, { type: 'ran', result })

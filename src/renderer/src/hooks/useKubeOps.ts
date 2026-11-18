@@ -27,6 +27,10 @@ export interface KubeLogEntry {
   state: 'running' | 'done'
   result?: KubeRunResult
   compare?: { changed: number; unchanged: number; created: number }
+  /** What the entry was started with, so the log can open the same operation's preview again. A reload's request
+   *  names the file alone (`projectRoot` is empty). */
+  req: KubeRequest
+  namespaceLabel: string
 }
 
 /** The confirmation dialog (spec 4.6). `preview: null` while the first answer loads. `phase` is `previewing` while
@@ -76,7 +80,7 @@ export type KubeOpsAction =
   | { type: 'confirm'; id: string; at: number; scope: string }
   | { type: 'cancel' }
   | { type: 'ran'; result: KubeRunResult }
-  | { type: 'reload'; id: string; context: string; scope: string; at: number }
+  | { type: 'reload'; id: string; context: string; scope: string; at: number; pill?: string | null }
   | { type: 'close' }
   | { type: 'clear' }
 
@@ -142,6 +146,8 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         commandLines: a.preview.commandLines,
         startedAt: d.startedAt,
         state: 'done',
+        req: d.req,
+        namespaceLabel: d.namespaceLabel,
         compare: compareCounts(a.preview)
       }
       const log = s.log.some((e) => e.id === d.id) ? s.log.map((e) => (e.id === d.id ? entry : e)) : [entry, ...s.log]
@@ -161,7 +167,9 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         scope: a.scope,
         commandLines: (d.preview as OkPreview).commandLines,
         startedAt: a.at,
-        state: 'running'
+        state: 'running',
+        req: d.req,
+        namespaceLabel: d.namespaceLabel
       }
       return { ...s, dialog: { ...d, phase: 'running', runId: a.id, cancelling: false }, log: [entry, ...s.log] }
     }
@@ -182,7 +190,9 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         scope: a.scope,
         commandLines: [],
         startedAt: a.at,
-        state: 'running'
+        state: 'running',
+        req: { selection: [a.scope], projectRoot: '', context: a.context, pill: a.pill ?? null },
+        namespaceLabel: a.pill ?? ''
       }
       return { ...s, log: [entry, ...s.log] }
     }
@@ -387,7 +397,7 @@ export function useKubeOps(deps: KubeOpsDeps) {
     if (!(await depsRef.current.save([path]))) return
     const id = crypto.randomUUID()
     const startedAt = Date.now()
-    dispatch({ type: 'reload', id, context, scope: path, at: startedAt })
+    dispatch({ type: 'reload', id, context, scope: path, at: startedAt, pill })
     const r = await window.api.kube
       .reload(path, context, pill)
       .catch((err: unknown) => ({ ok: false as const, reason: 'kubectl' as const, stderr: errText(err) }))

@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react'
 import { resolveFileIcon, resolveFolderIcon } from '../../../core/files/icons'
 import type { GitState } from '../../../core/git/status'
 import type { KubeFileKind } from '../../../core/kube/types'
@@ -58,6 +58,8 @@ export interface ExplorerRowProps {
   gitCount: number
   /** files only: what the Kubernetes classifier says about this YAML file (absent until answered) */
   kubeKind?: KubeFileKind
+  /** files only: the last Kubernetes operation that covered this file failed on it */
+  kubeFailed?: boolean
   /** a delete or copy is working on (or into) this row, past ROW_SPINNER_DELAY_MS */
   busy: boolean
   /** folders only: a re-read of its children is out, past ROW_SPINNER_DELAY_MS */
@@ -80,6 +82,7 @@ export const ExplorerRow = memo(function ExplorerRow({
   gitState,
   gitCount,
   kubeKind,
+  kubeFailed,
   busy,
   loading,
   actions
@@ -117,6 +120,11 @@ export const ExplorerRow = memo(function ExplorerRow({
         <span className={`fx-name${gitState ? ` git-${gitState}` : ''}`}>{entry.name}</span>
         {/* a delete or copy working on this file, past ROW_SPINNER_DELAY_MS */}
         <RowLoading pending={busy} label="files.op.busy" />
+        {kubeFailed && (
+          <span className="fx-kube-failed" title={t('kube.explorer.failed')} aria-label={t('kube.explorer.failed')}>
+            <TriangleAlert size={12} />
+          </span>
+        )}
         {gitState && (
           <span className={`fx-git-mark git-${gitState}`} title={t(GIT_LABEL[gitState])} aria-label={t(GIT_LABEL[gitState])}>
             {GIT_MARK[gitState]}

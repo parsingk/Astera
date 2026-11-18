@@ -156,6 +156,7 @@ import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
+import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -2654,7 +2655,7 @@ export default function App(): React.JSX.Element {
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
-  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | terminalId
+  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
     const v = Number(localStorage.getItem('cm.runPanelHeight'))
     return v >= 120 && v <= 800 ? v : 220
@@ -2917,6 +2918,44 @@ export default function App(): React.JSX.Element {
   const allFilePaths = useMemo(() => fileTabs.map((t) => t.path), [fileTabs])
   const kubeEditor = useKubeEditor(kubeTabs, allFilePaths, kubeOps)
   onFileSavedRef.current = kubeEditor.onSaved
+
+  /** Files whose last Kubernetes operation failed (the explorer's warning mark), and the finished entries already
+   *  accounted for, so a log that re-renders never toasts or marks twice. */
+  const [failedKubePaths, setFailedKubePaths] = useState<ReadonlySet<string>>(() => new Set())
+  const kubeSeenRef = useRef(new Set<string>())
+  useEffect(() => {
+    for (const e of kubeOps.log) {
+      if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
+      kubeSeenRef.current.add(e.id)
+      const result = e.result
+      if (result.verb !== 'reload') setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
+      const note = kubeToastOf(result, t as never)
+      if (!note) continue
+      if (note.kind === 'success') toast.success(note.message)
+      else {
+        const id = toast.error(note.message, {
+          action: {
+            label: t('kube.toast.showLog'),
+            onClick: () => {
+              dismiss(id)
+              setRunPanelOpen(true)
+              setBottomTab('kube')
+            }
+          }
+        })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kubeOps.log])
+  /** The Kubernetes log's rerun: the same operation's preview opens again, never a run without one (C1). */
+  const kubeRerun = (id: string): void => {
+    const e = kubeOps.log.find((x) => x.id === id)
+    if (!e) return
+    if (e.verb === 'reload') kubeOps.startReload(e.req.selection[0], e.req.context, e.req.pill)
+    else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel)
+    else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel)
+    else kubeOps.startDelete(e.req, e.namespaceLabel)
+  }
 
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
@@ -3649,9 +3688,15 @@ export default function App(): React.JSX.Element {
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
-  const bottomTabShown = runAvailable
-    ? bottomTab
-    : (terminals.find((x) => x.id === bottomTab)?.id ?? terminals[0]?.id ?? 'run')
+  // The Kubernetes tab exists only while its log has entries; once it is cleared the tab falls back like a closed terminal.
+  const kubeTabGone = bottomTab === 'kube' && kubeOps.log.length === 0
+  const bottomTabWanted = kubeTabGone ? 'run' : bottomTab
+  const bottomTabShown =
+    bottomTabWanted === 'kube'
+      ? 'kube'
+      : runAvailable
+        ? bottomTabWanted
+        : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
 
   // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
@@ -3978,7 +4023,7 @@ export default function App(): React.JSX.Element {
         if (cancelled) return
         setTerminals(list)
         // If a tab that does not belong to this project is still active, fall back to Run
-        setBottomTab((cur) => (cur === 'run' || list.some((x) => x.id === cur) ? cur : 'run'))
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])
@@ -4661,6 +4706,7 @@ export default function App(): React.JSX.Element {
                 onKube={(verb, selection) => {
                   if (currentProject) void kubeEditor.explorerAction(verb, selection, currentProject, openFile)
                 }}
+                kubeFailed={failedKubePaths}
                 revealFolder={explorerReveal}
                 onRevealDone={(seq) => setExplorerReveal((r) => (r !== null && r.seq === seq ? null : r))}
               />
@@ -5006,6 +5052,10 @@ export default function App(): React.JSX.Element {
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
                     onCollapse={() => setRunPanelOpen(false)}
+                    kubeLog={kubeOps.log}
+                    onKubeRerun={kubeRerun}
+                    onKubeCancel={kubeOps.cancel}
+                    onKubeClear={kubeOps.clear}
                   />
                 )}
               </div>

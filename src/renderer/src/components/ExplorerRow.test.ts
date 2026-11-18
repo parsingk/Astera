@@ -21,7 +21,7 @@ const actions: RowActions = {
   drop: noop
 }
 
-const render = (name: string, kubeKind?: KubeFileKind): string => {
+const render = (name: string, kubeKind?: KubeFileKind, kubeFailed?: boolean): string => {
   const props: ExplorerRowProps = {
     entry: { name, path: `/p/${name}`, isDir: false } as ExplorerRowProps['entry'],
     depth: 0,
@@ -36,7 +36,8 @@ const render = (name: string, kubeKind?: KubeFileKind): string => {
     busy: false,
     loading: false,
     actions,
-    kubeKind
+    kubeKind,
+    kubeFailed
   }
   return renderToStaticMarkup(React.createElement(ExplorerRow, props))
 }
@@ -54,6 +55,18 @@ describe('ExplorerRow Kubernetes icon', () => {
 
   it('a row with no kind yet keeps the purple gear', () => {
     expect(render('deploy.yaml')).toContain('fi--purple')
+  })
+})
+
+describe('ExplorerRow failure mark', () => {
+  it('a file whose last Kubernetes operation failed carries the warning glyph with its tooltip', () => {
+    const html = render('deploy.yaml', 'manifest', true)
+    expect(html).toContain('class="fx-kube-failed"')
+    expect(html).toContain('title="kube.explorer.failed"')
+  })
+
+  it('no mark otherwise', () => {
+    expect(render('deploy.yaml', 'manifest')).not.toContain('fx-kube-failed')
   })
 })
 
