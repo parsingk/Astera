@@ -3477,3 +3477,48 @@ kbd.shortcut-conflict { color: var(--fi-red); border-color: var(--fi-red); }
 .media-viewer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #111; }
 .media-viewer-media { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
 .media-viewer-empty { color: var(--text-dim); font-size: 13px; }
+
+/* Kubernetes confirmation dialog (board 2): resource list, side-by-side diff, exact commands */
+.modal.kube-confirm { width: 980px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); overflow: auto; }
+.kube-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.kube-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--line-soft); border-radius: 999px; font-size: 11.5px; color: var(--text-dim); }
+.kube-valid { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 11.5px; color: var(--ok); }
+.kube-loading { display: flex; align-items: center; gap: 8px; padding: 24px 0; font-size: 12.5px; color: var(--text-dim); }
+.kube-fail { margin: 4px 0 10px; font-size: 12.5px; color: var(--text); }
+.kube-fail p { margin: 0 0 6px; color: var(--danger); }
+.kube-fail ul { margin: 0; padding-left: 18px; font-size: 11.5px; }
+.kube-main { display: grid; grid-template-columns: 260px 1fr; gap: 12px; min-height: 0; margin-bottom: 10px; }
+.kube-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow: auto; }
+.kube-list-title { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+.kube-list-group { font-size: 10.5px; color: var(--text-faint); margin: 6px 0 2px; }
+.kube-res { display: grid; grid-template-columns: 14px 1fr; column-gap: 6px; width: 100%; text-align: left; padding: 4px 6px; background: transparent; border: 1px solid transparent; border-radius: var(--radius); color: var(--text); }
+.kube-res:hover { background: var(--elevated); }
+.kube-res.selected { background: var(--elevated); border-color: var(--line-soft); }
+.kube-res-name { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kube-res-state { grid-column: 2; font-size: 10.5px; color: var(--text-faint); }
+.kube-mark { font-family: var(--mono); font-weight: 600; }
+.kube-mark.changed { color: var(--git-modified); }
+.kube-mark.new { color: var(--ok); }
+.kube-mark.delete, .kube-mark.not-found { color: var(--danger); }
+.kube-mark.unchanged { color: var(--text-faint); }
+.kube-diff-pane { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.kube-diff-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.kube-diff { border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
+.kube-diff-head, .kube-diff-row { display: grid; grid-template-columns: 1fr 1fr; }
+.kube-diff-head { font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--line-soft); }
+.kube-diff-head span { padding: 4px 8px; }
+.kube-diff-body { max-height: 320px; overflow: auto; font-family: var(--mono); font-size: 11.5px; }
+.kube-diff-cell { display: flex; min-width: 0; }
+.kube-diff-cell.del { background: var(--danger-bg); }
+.kube-diff-cell.add { background: var(--ok-bg); }
+.kube-diff-no { flex: none; width: 36px; padding: 0 6px; text-align: right; color: var(--text-faint); user-select: none; }
+.kube-diff-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.kube-diff-large { padding: 16px; font-size: 12px; color: var(--text-dim); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.kube-leftout { margin-bottom: 10px; }
+.kube-leftout ul { margin: 0; padding: 0; list-style: none; font-size: 11.5px; }
+.kube-leftout li { display: flex; gap: 8px; }
+.kube-leftout-reason { color: var(--text-faint); }
+.kube-commands { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 12px; padding: 8px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.kube-cmd-text { flex: 1; margin: 0; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+button.primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.primary.danger:disabled { background: var(--elevated); border-color: var(--line-soft); color: var(--text-faint); }
