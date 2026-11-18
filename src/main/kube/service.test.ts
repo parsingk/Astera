@@ -799,8 +799,8 @@ describe('preview', () => {
       ok: false,
       reason: 'kubectl',
       commandLines: [
-        ['delete', '--ignore-not-found', '--context', 'kind-dev', '-n', 'shop', '-f', a],
-        ['delete', '--ignore-not-found', '--context', 'kind-dev', '-k', prod]
+        ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-n', 'shop', '-f', a],
+        ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-k', prod]
       ],
       stderr: 'kustomize failed: Error: accumulating resources: missing.yaml'
     })
@@ -859,7 +859,7 @@ describe('preview', () => {
     const svc = traced(createKubeService(h.deps))
     const r = await svc.preview('delete', request([a, ns], 'kind-dev', 'shop'), HIDE)
     if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
-    expect(r.commandLines).toEqual([['delete', '--ignore-not-found', '--context', 'kind-dev', '-n', 'shop', '-f', a, '-f', ns]])
+    expect(r.commandLines).toEqual([['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-n', 'shop', '-f', a, '-f', ns]])
     // one row per resource: no not-found row beside a live-only delete row, also for the cluster-scoped Namespace
     expect(r.resources.map((x) => [x.diff.ref, x.diff.state])).toEqual([
       ['ConfigMap/shop/a', 'delete'],
@@ -893,7 +893,7 @@ describe('preview', () => {
     expect(await svc.preview('delete', request([a]), HIDE)).toEqual({
       ok: false,
       reason: 'kubectl',
-      commandLines: [['delete', '--ignore-not-found', '--context', 'kind-dev', '-f', a]],
+      commandLines: [['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-f', a]],
       stderr: 'dry run failed: error: unable to recognize "a.yaml"'
     })
     expect(clusterCalls(h.calls).map(opOf)).toEqual(['dry-delete'])
@@ -1380,8 +1380,8 @@ describe('writes', () => {
     expect(h.calls.filter(isWrite)).toEqual([])
     await confirmRun(svc, 'w1', 'delete', req)
     expect(h.calls.filter(isWrite)).toEqual([
-      ['delete', '--ignore-not-found', '--context', 'kind-dev', '-f', a],
-      ['delete', '--ignore-not-found', '--context', 'kind-dev', '-k', prod]
+      ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-f', a],
+      ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-k', prod]
     ])
   })
 })

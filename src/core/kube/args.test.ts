@@ -15,10 +15,13 @@ describe('kubectlArgs', () => {
       'apply', '--dry-run=server', '-o', 'yaml', '--context', 'ctx', '-n', 'api', '-f', 'a.yaml', '-f', 'b.yaml'
     ])
   })
-  it('delete and dry-delete ignore missing objects', () => {
-    expect(kubectlArgs('delete', files, t)).toEqual(['delete', '--ignore-not-found', '--context', 'ctx', '-n', 'api', '-f', 'a.yaml', '-f', 'b.yaml'])
+  it('delete and dry-delete ignore missing objects; only the real delete does not wait for finalizers', () => {
+    expect(kubectlArgs('delete', files, t)).toEqual([
+      'delete', '--ignore-not-found', '--wait=false', '--context', 'ctx', '-n', 'api', '-f', 'a.yaml', '-f', 'b.yaml'
+    ])
     expect(kubectlArgs('dry-delete', files, t).slice(0, 2)).toEqual(['delete', '--dry-run=server'])
     expect(kubectlArgs('dry-delete', files, t)).toContain('--ignore-not-found')
+    expect(kubectlArgs('dry-delete', files, t)).not.toContain('--wait=false')
   })
   it('live reads the cluster state as yaml', () => {
     expect(kubectlArgs('live', files, t)).toEqual([

@@ -15,7 +15,8 @@ export function kubectlArgs(op: KubeOp, cmd: KubeCommand, t: KubeTarget): string
     case 'dry-apply':
       return ['apply', '--dry-run=server', '-o', 'yaml', '--context', t.context, ...ns, ...source(cmd)]
     case 'delete':
-      return ['delete', '--ignore-not-found', '--context', t.context, ...ns, ...source(cmd)]
+      // Without --wait=false kubectl waits for finalizers and then reports its own timeout as a failure.
+      return ['delete', '--ignore-not-found', '--wait=false', '--context', t.context, ...ns, ...source(cmd)]
     case 'dry-delete':
       return ['delete', '--dry-run=server', '--ignore-not-found', '--context', t.context, ...ns, ...source(cmd)]
     case 'live':
