@@ -111,7 +111,8 @@ describe('targetKey', () => {
   })
   it('is the case-folded absolute path outside git', () => {
     expect(targetKey('/Some/Dir', null)).toBe(foldPathCase('/Some/Dir'))
-    expect(targetKey(win('C:/Some/Dir'), null)).toBe(foldPathCase(win('C:/Some/Dir')))
+    // A Windows path folds on every host (foldKeyPart), not only where the host folds case
+    expect(targetKey(win('C:/Some/Dir'), null)).toBe(win('c:/some/dir'))
   })
 })
 
