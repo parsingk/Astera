@@ -1,4 +1,17 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type {
+  KubeContexts,
+  KubeFileKind,
+  KubePreview,
+  KubeReloadResult,
+  KubeRenderResult,
+  KubeRequest,
+  KubeRunResult,
+  KubeStatus,
+  KubeTargetView,
+  KubeVerb,
+  Remembered
+} from './kube/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -1405,6 +1418,29 @@ export interface CoreApi {
     /** Runs `workspace set <workspaceId>` under that account. */
     setWorkspace(id: string, workspaceId: string): Promise<void>
   }
+  kube: {
+    /** Runs `kubectl version --client` with the binary in use; `path` is that binary. */
+    recheck(): Promise<{ ok: true; path: string; version: string } | { ok: false; errorCode?: string; stderr: string }>
+    /** Kinds of the YAML files among `paths` (other paths are left out of the answer). */
+    classify(paths: string[]): Promise<Record<string, KubeFileKind>>
+    contexts(): Promise<KubeContexts>
+    target(filePath: string, projectRoot: string): Promise<KubeTargetView>
+    setTarget(folder: string, value: Remembered | null): Promise<void>
+    setOverlay(filePath: string, overlayDir: string): Promise<void>
+    useContext(context: string): Promise<{ ok: boolean; stdout: string; stderr: string; errorCode?: string }>
+    /** Plan, one-context check, namespace and server-side dry run; never writes. */
+    preview(verb: KubeVerb, req: KubeRequest, opts: { keepServerFields: boolean }): Promise<KubePreview>
+    /** The only write: re-plans, refuses unless it matches the confirmed preview's `fingerprint`, then runs the
+     *  commands in order until one fails. Cancellable by `id`. */
+    run(id: string, verb: KubeVerb, req: KubeRequest, fingerprint: string): Promise<KubeRunResult>
+    cancel(id: string): Promise<void>
+    /** `pill` is the namespace for a resource that names none (else the context's, else default). */
+    reload(filePath: string, context: string, pill: string | null): Promise<KubeReloadResult>
+    /** `kubectl kustomize <overlayDir>`. */
+    render(overlayDir: string): Promise<KubeRenderResult>
+    /** `context`: one chosen for the editor without remembering it (R11), which must be listed in kubeconfig. */
+    status(filePath: string, projectRoot: string, context?: string): Promise<KubeStatus>
+  }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */
     status(): Promise<GhProbe>
@@ -1501,6 +1537,12 @@ export interface CoreApi {
     newToken(): Promise<string>
   }
   settings: {
+    /** The kubectl binary to use instead of the one on PATH; null = use PATH. Setting it re-reads the contexts. */
+    getKubectlPath(): Promise<string | null>
+    setKubectlPath(path: string | null): Promise<void>
+    /** Extra kubeconfig files merged into the kube context list. Setting them re-reads the contexts. */
+    getKubeconfigFiles(): Promise<string[]>
+    setKubeconfigFiles(files: string[]): Promise<void>
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
     setLang(lang: Lang | null): Promise<void>

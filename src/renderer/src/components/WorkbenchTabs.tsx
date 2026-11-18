@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SandboxKind, SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
+import type { KubeFileKind } from '../../../core/kube/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, Terminal } from 'lucide-react'
@@ -69,6 +70,8 @@ export type WorkbenchTab =
       /** 같은 이름의 파일이 다른 탭에도 열려 있을 때만 채워진다 (core/files/tabLabel.ts) */
       hint: string | null
       dirty: boolean
+      /** What the Kubernetes classifier says about this YAML file; absent until answered or for other files */
+      kubeKind?: KubeFileKind
     }
   | {
       tabId: string
@@ -340,7 +343,7 @@ ${tab.profileTooltip}`
           onDragEnd={endDrag}
         >
           {tab.kind === 'file' ? (
-            <FileIcon {...resolveFileIcon(tab.title)} />
+            <FileIcon {...resolveFileIcon(tab.title, tab.kubeKind)} />
           ) : tab.kind === 'browser' ? (
             tab.loading ? (
               <span className="tab-dot busy bp-tab-busy" title={tab.agentRunning ? t('preview.agent.running') : undefined} />

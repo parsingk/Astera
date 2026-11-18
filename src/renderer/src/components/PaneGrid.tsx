@@ -23,6 +23,7 @@ import { sessionKindOf } from '../../../core/sessions/kind'
 import type { RecordStatus } from '../../../core/understanding/types'
 import { displayHostOf } from '../../../core/preview/url'
 import { browserSlotDraw } from './browserSlot'
+import type { KubeFileKind } from '../../../core/kube/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAgentProfilesNaming } from '../lib/agentProfiles'
 import { profileNameOf } from './agentProfilesText'
@@ -62,6 +63,7 @@ export function PaneGrid({
   accounts,
   fileTabs,
   dirtyFileIds,
+  kubeKinds,
   recordTabs,
   recordStatuses,
   browserTabs,
@@ -113,6 +115,8 @@ export function PaneGrid({
   /** Every open file tab, whichever pane holds it. The name hint is computed over all of them at once */
   fileTabs: FileTab[]
   dirtyFileIds: Set<string>
+  /** Kubernetes kind per open file path (App's one useKubeKinds); a path with no entry is not a manifest */
+  kubeKinds?: Record<string, KubeFileKind>
   /** Every open record tab, whichever pane holds it — same place, same reason as fileTabs. The title
    *  and the project come from this record, so a record tab from another project keeps its name and
    *  its × too. */
@@ -689,7 +693,8 @@ export function PaneGrid({
               path: f.path,
               title: labels.get(f.path)?.name ?? f.title,
               hint: labels.get(f.path)?.hint ?? null,
-              dirty: dirtyFileIds.has(f.id)
+              dirty: dirtyFileIds.has(f.id),
+              kubeKind: kubeKinds?.[f.path]
             }
           })
           .filter((x): x is WorkbenchTab => x != null)

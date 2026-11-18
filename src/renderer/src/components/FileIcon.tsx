@@ -107,6 +107,22 @@ const SHAPES: Record<IconId, React.JSX.Element> = {
       <rect x="5.1" y="4.2" width="5.7" height="4" rx=".6" />
     </>
   ),
+  // Kubernetes: a heptagon around a ring with seven spokes (r 1.1 to 4.2 from the heptagon's centre)
+  kubernetes: (
+    <>
+      <path d="M8 1.4 13.2 3.9 14.5 9.5 10.9 14H5.1L1.5 9.5 2.8 3.9Z" />
+      <circle cx="8" cy="8.3" r="2.9" />
+      <path d="M8.0 7.2L8.0 4.1M8.86 7.61L11.28 5.68M9.07 8.54L12.09 9.23M8.48 9.29L9.82 12.08M7.52 9.29L6.18 12.08M6.93 8.54L3.91 9.23M7.14 7.61L4.72 5.68" />
+    </>
+  ),
+  // lucide's `layers` on the 16-unit grid: three stacked rhombi
+  layers: (
+    <>
+      <path d="M8 2 14 5 8 8 2 5Z" />
+      <path d="M2 8l6 3 6-3" />
+      <path d="M2 11l6 3 6-3" />
+    </>
+  ),
   image: (
     <>
       <rect x="1.9" y="3.1" width="12.2" height="9.8" rx="1.1" />

@@ -67,6 +67,7 @@ import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resum
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ReviewerSettings } from './components/ReviewerSettings'
 import { GithubSettings } from './components/GithubSettings'
+import { KubernetesSettings } from './components/KubernetesSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
@@ -150,6 +151,13 @@ import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
+import { useKubeKinds } from './hooks/useKubeKinds'
+import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
+import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
+import { KustomizePreview } from './components/kube/KustomizePreview'
+import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
+import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -713,6 +721,7 @@ export default function App(): React.JSX.Element {
     | 'slack'
     | 'notifications'
     | 'github'
+    | 'kubernetes'
     | 'remote'
     | 'plugins'
     | 'extensions'
@@ -2008,16 +2017,27 @@ export default function App(): React.JSX.Element {
     if (cur) fileBuffersRef.current = { ...fileBuffersRef.current, [id]: { ...cur, content } }
   }
 
-  const saveFile = (id: string): void => {
+  /** Told of every successful save (the Kubernetes chip re-checks then, spec 4.9). Set below, where its hook is. */
+  const onFileSavedRef = useRef<(path: string) => void>(() => {})
+  /** Resolves false when the write failed (already toasted), true when it was written or nothing needed writing —
+   *  so a caller can wait for its writes (Kubernetes C10). Callers that ignore it are unchanged. */
+  const saveFile = (id: string): Promise<boolean> => {
     flushPendingEdits()
     const buf = fileBuffersRef.current[id]
     const tab = fileTabsRef.current.find((t) => t.id === id)
-    if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return
+    if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return Promise.resolve(true)
     // 디스크에는 그 파일 본래의 줄바꿈으로 되돌려 쓴다. savedContent는 LF 그대로 둔다 — 버퍼끼리의
     // 비교(더티 판정)는 전부 LF 기준이고, 디스크와의 비교는 읽어 올 때 toLf를 거친다
-    window.api.files.write(tab.path, applyEol(buf.content, buf.eol)).then(
-      () => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev)),
-      (err) => toast.error(t('files.save.failed', { detail: err instanceof Error ? err.message : String(err) }))
+    return window.api.files.write(tab.path, applyEol(buf.content, buf.eol)).then(
+      () => {
+        setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev))
+        onFileSavedRef.current(tab.path)
+        return true
+      },
+      (err) => {
+        toast.error(t('files.save.failed', { detail: err instanceof Error ? err.message : String(err) }))
+        return false
+      }
     )
   }
 
@@ -2637,7 +2657,7 @@ export default function App(): React.JSX.Element {
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
-  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | terminalId
+  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
     const v = Number(localStorage.getItem('cm.runPanelHeight'))
     return v >= 120 && v <= 800 ? v : 220
@@ -2851,6 +2871,97 @@ export default function App(): React.JSX.Element {
 
   /** 사이드바와 실행 구성이 '어느 프로젝트인가'로 읽는 값 — 활성 탭이 이기고, 없으면 마지막 기억. */
   const currentProject = activeTabRoot ?? stickyRoot
+
+  /** Kubernetes kind of the open file tabs (tab icons now, the editor toolbar later). One instance here,
+   *  fed a memoised path list so the hook does not ask again on every render. */
+  const openFilePaths = useMemo(
+    () => fileTabs.filter((t) => t.projectRoot === currentProject).map((t) => t.path),
+    [fileTabs, currentProject]
+  )
+  const kubeKinds = useKubeKinds(currentProject, openFilePaths)
+  /** A reloaded object into an open, loaded buffer: through the editor when it shows the file, so it is one undoable
+   *  edit, else straight into the buffer. */
+  const applyKubeReload = (id: string, text: string): void => {
+    const pane = layoutRef.current ? leaves(layoutRef.current).find((l) => l.activeTabId === id) : undefined
+    const view = pane ? mdViews[pane.id] : null
+    if (view) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+    else setBufferContent(id, text)
+  }
+  /** Reloads that came back for a file still opening (an explorer reload opens it), by path: applied once its buffer
+   *  has loaded, dropped with a toast when the read failed or the tab closed first. */
+  const [pendingKubeReloads, setPendingKubeReloads] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (Object.keys(pendingKubeReloads).length === 0) return
+    const { apply, drop, keep } = settlePendingReloads(pendingKubeReloads, fileTabs, fileBuffers)
+    if (apply.length === 0 && drop.length === 0) return
+    for (const r of apply) applyKubeReload(r.id, r.text)
+    for (const path of drop) toast.error(t('kube.ops.reloadDropped', { path }))
+    setPendingKubeReloads(keep)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKubeReloads, fileTabs, fileBuffers])
+  /** Compare, apply, delete and reload (hooks/useKubeOps.ts). Before one starts, the open buffers it covers are saved
+   *  and waited for (C10). */
+  const kubeOps = useKubeOps({
+    save: async (paths) => {
+      const ids = fileTabsRef.current.filter((t) => touchesSelection(t.path, paths)).map((t) => t.id)
+      return (await Promise.all(ids.map((id) => saveFile(id)))).every(Boolean)
+    },
+    setBuffer: (path, text) => {
+      const tab = fileTabsRef.current.find((t) => t.path === path)
+      const buf = tab ? fileBuffersRef.current[tab.id] : undefined
+      if (tab && buf && !buf.loading && !buf.error) applyKubeReload(tab.id, text)
+      else setPendingKubeReloads((prev) => ({ ...prev, [path]: text }))
+    }
+  })
+  const kubeTabs = useMemo(
+    () => fileTabs.flatMap((t): KubeTab[] => (kubeKinds[t.path] ? [{ path: t.path, projectRoot: t.projectRoot, kind: kubeKinds[t.path] }] : [])),
+    [fileTabs, kubeKinds]
+  )
+  const allFilePaths = useMemo(() => fileTabs.map((t) => t.path), [fileTabs])
+  const kubeEditor = useKubeEditor(kubeTabs, allFilePaths, kubeOps)
+  onFileSavedRef.current = kubeEditor.onSaved
+
+  /** Files whose last Kubernetes operation failed (the explorer's warning mark), and the finished entries already
+   *  accounted for, so a log that re-renders never toasts or marks twice. */
+  const [failedKubePaths, setFailedKubePaths] = useState<ReadonlySet<string>>(() => new Set())
+  const kubeSeenRef = useRef(new Set<string>())
+  useEffect(() => {
+    for (const e of kubeOps.log) {
+      if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
+      kubeSeenRef.current.add(e.id)
+      const result = e.result
+      if (result.verb !== 'reload') {
+        setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
+        kubeEditor.refreshAfterRun(e.req, result.commandLines)
+      }
+      const note = kubeToastOf(result, t as never)
+      if (!note) continue
+      const show = note.kind === 'success' ? toast.success : toast.error
+      if (!note.showLog) show(note.message)
+      else {
+        const id = show(note.message, {
+          action: {
+            label: t('kube.toast.showLog'),
+            onClick: () => {
+              dismiss(id)
+              setRunPanelOpen(true)
+              setBottomTab('kube')
+            }
+          }
+        })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kubeOps.log])
+  /** The Kubernetes log's rerun: the same operation's preview opens again, never a run without one (C1). */
+  const kubeRerun = (id: string): void => {
+    const e = kubeOps.log.find((x) => x.id === id)
+    if (!e) return
+    if (e.verb === 'reload') kubeOps.startReload(e.req.selection[0], e.req.context, e.req.pill)
+    else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel, e.involved)
+    else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel, e.involved)
+    else kubeOps.startDelete(e.req, e.namespaceLabel, e.involved)
+  }
 
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
@@ -3078,7 +3189,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -3127,6 +3238,8 @@ export default function App(): React.JSX.Element {
     const f = fileTabs.find((t) => t.id === fileTabId)
     const buf = fileBuffers[fileTabId]
     if (!f || !buf) return null
+    /** The overlay the rendered view shows: the toolbar's eye is on and the file has an overlay to apply through. */
+    const renderOverlay = kubeEditor.renderOpen(f.path) ? (kubeEditor.entries[f.path]?.view?.overlay ?? null) : null
     const editor = (
       <FileEditor
         path={f.path}
@@ -3168,6 +3281,20 @@ export default function App(): React.JSX.Element {
               <button onClick={() => setFileBuffers((prev) => (prev[f.id] ? { ...prev, [f.id]: { ...prev[f.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
             </div>
           )}
+          {/* A stable slot beside the banners: the editor's parent chain below never changes element type. */}
+          {kubeKinds[f.path] !== undefined && kubeKinds[f.path] !== 'plain' && (
+            <KubeEditorStrip
+              path={f.path}
+              kind={kubeKinds[f.path]}
+              projectRoot={f.projectRoot}
+              editor={kubeEditor}
+              busy={kubeOps.busy}
+              onOpenSettings={() => {
+                setSettingsTab('kubernetes')
+                setShowSettings(true)
+              }}
+            />
+          )}
           {/* markdown=false 여도 MarkdownSplit 은 항상 렌더된다 — {md ? <MarkdownSplit/> : editor}
               삼항연산자였을 때는 이 자리의 엘리먼트 타입이 파일을 오갈 때마다 MarkdownSplit↔FileEditor
               로 바뀌어, 같은 페인에서 .md 파일과 비-.md 파일 사이를 전환하기만 해도 리액트가 FileEditor
@@ -3184,6 +3311,8 @@ export default function App(): React.JSX.Element {
             onSave={() => saveFile(f.id)}
             editor={editor}
             editorView={mdViews[paneId] ?? null}
+            asideOpen={renderOverlay !== null}
+            aside={renderOverlay !== null && <KustomizePreview overlayDir={renderOverlay} patchText={buf.content} refreshKey={buf.savedContent} />}
           />
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
           {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
@@ -3568,9 +3697,15 @@ export default function App(): React.JSX.Element {
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
-  const bottomTabShown = runAvailable
-    ? bottomTab
-    : (terminals.find((x) => x.id === bottomTab)?.id ?? terminals[0]?.id ?? 'run')
+  // The Kubernetes tab exists only while its log has entries; once it is cleared the tab falls back like a closed terminal.
+  const kubeTabGone = bottomTab === 'kube' && kubeOps.log.length === 0
+  const bottomTabWanted = kubeTabGone ? 'run' : bottomTab
+  const bottomTabShown =
+    bottomTabWanted === 'kube'
+      ? 'kube'
+      : runAvailable
+        ? bottomTabWanted
+        : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
 
   // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
@@ -3897,7 +4032,7 @@ export default function App(): React.JSX.Element {
         if (cancelled) return
         setTerminals(list)
         // If a tab that does not belong to this project is still active, fall back to Run
-        setBottomTab((cur) => (cur === 'run' || list.some((x) => x.id === cur) ? cur : 'run'))
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])
@@ -4577,6 +4712,15 @@ export default function App(): React.JSX.Element {
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
                 onRunFile={runFile}
+                onKube={(verb, selection) => {
+                  if (currentProject) void kubeEditor.explorerAction(verb, selection, currentProject, openFile)
+                }}
+                resolveKube={(selection, folders) =>
+                  currentProject
+                    ? kubeEditor.resolveMenu(selection, folders, currentProject)
+                    : Promise.resolve({ target: null, chartFolders: [] })
+                }
+                kubeFailed={failedKubePaths}
                 revealFolder={explorerReveal}
                 onRevealDone={(seq) => setExplorerReveal((r) => (r !== null && r.seq === seq ? null : r))}
               />
@@ -4796,6 +4940,7 @@ export default function App(): React.JSX.Element {
                 accounts={accounts}
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
+                kubeKinds={kubeKinds}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
@@ -4921,6 +5066,10 @@ export default function App(): React.JSX.Element {
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
                     onCollapse={() => setRunPanelOpen(false)}
+                    kubeLog={kubeOps.log}
+                    onKubeRerun={kubeRerun}
+                    onKubeCancel={kubeOps.cancel}
+                    onKubeClear={kubeOps.clear}
                   />
                 )}
               </div>
@@ -5067,6 +5216,22 @@ export default function App(): React.JSX.Element {
           onCancel={() => setRemoteDialog(null)}
         />
       )}
+      {kubeOps.dialog && (
+        <KubeConfirmDialog
+          verb={kubeOps.dialog.verb}
+          context={kubeOps.dialog.req.context}
+          namespaceLabel={kubeOps.dialog.namespaceLabel}
+          preview={kubeOps.dialog.preview}
+          keepServerFields={kubeOps.dialog.keepServerFields}
+          onToggleServerFields={kubeOps.toggleServerFields}
+          onConfirm={kubeOps.confirm}
+          onCancel={kubeOps.close}
+          stale={kubeOps.dialog.stale}
+          running={kubeOps.dialog.phase === 'running'}
+          cancelling={kubeOps.dialog.cancelling}
+          onAbort={kubeOps.abort}
+        />
+      )}
       {showSettings && (
         <div className="modal-backdrop" {...backdropProps(() => setShowSettings(false))}>
           <div className="modal settings" onClick={(e) => e.stopPropagation()}>
@@ -5113,6 +5278,7 @@ export default function App(): React.JSX.Element {
                     ['slack', 'Slack'],
                     ['notifications', t('settings.tab.notifications')],
                     ['github', 'GitHub'],
+                    ['kubernetes', 'Kubernetes'],
                     ['worktree', 'Worktree'],
                     ['history', t('settings.tab.history')],
                     ['info', t('settings.tab.info')]
@@ -5543,6 +5709,7 @@ export default function App(): React.JSX.Element {
                 </div>
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
+                {settingsTab === 'kubernetes' && <KubernetesSettings />}
                 {settingsTab === 'remote' && (
                   <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} {...(runtimeFocus !== null ? { focusRuntimeId: runtimeFocus } : {})} />
                 )}

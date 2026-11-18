@@ -28,6 +28,7 @@ import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { RollConfigStore } from '../core/rolling/config'
 import { SchedulerConfigStore } from '../core/scheduler/config'
 import { RunConfigStore } from './runConfigStore'
+import { KubeTargetStore } from './kube/targetStore'
 import { RunManager } from '../core/run/runManager'
 import { TerminalManager } from './terminalManager'
 import { WorktreeRegistry, defaultWorktreeRoot } from '../core/worktrees/registry'
@@ -140,6 +141,7 @@ export interface Core {
    *  history resume of a conversation no tab holds starts as its profile again. */
   profileConversations: ProfileConversations
   runConfig: RunConfigStore // User run config persistence
+  kubeTargets: KubeTargetStore // Remembered kube target per folder, overlay per kustomize file
   run: RunManager // Project run management
   terminal: TerminalManager // Project terminal management
   worktrees: WorktreeRegistry // git worktree registry for sessions
@@ -487,6 +489,8 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
   })
   const runConfig = new RunConfigStore(path.join(userDataDir, 'run-configs.json'))
   await runConfig.load()
+  const kubeTargets = new KubeTargetStore(path.join(userDataDir, 'kube-targets.json'))
+  await kubeTargets.load()
   const worktrees = new WorktreeRegistry(
     path.join(userDataDir, 'worktrees.json'),
     // The default root carries the app name. It only steers new worktrees — a root saved in
@@ -663,6 +667,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     schedulerConfigLoad,
     profileConversations: conversationProfiles,
     runConfig,
+    kubeTargets,
     run,
     terminal,
     worktrees,

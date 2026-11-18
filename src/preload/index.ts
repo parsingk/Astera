@@ -134,6 +134,21 @@ const api = {
     setCurrent: invoke('higgsfield.setCurrent'),
     setWorkspace: invoke('higgsfield.setWorkspace')
   },
+  kube: {
+    recheck: invoke('kube.recheck'),
+    classify: invoke('kube.classify'),
+    contexts: invoke('kube.contexts'),
+    target: invoke('kube.target'),
+    setTarget: invoke('kube.setTarget'),
+    setOverlay: invoke('kube.setOverlay'),
+    useContext: invoke('kube.useContext'),
+    preview: invoke('kube.preview'),
+    run: invoke('kube.run'),
+    cancel: invoke('kube.cancel'),
+    reload: invoke('kube.reload'),
+    render: invoke('kube.render'),
+    status: invoke('kube.status')
+  },
   github: {
     status: invoke('github.status'),
     recheck: invoke('github.recheck'),
@@ -185,6 +200,10 @@ const api = {
     newToken: invoke('mcpHttp.newToken')
   },
   settings: {
+    getKubectlPath: invoke('settings.getKubectlPath'),
+    setKubectlPath: invoke('settings.setKubectlPath'),
+    getKubeconfigFiles: invoke('settings.getKubeconfigFiles'),
+    setKubeconfigFiles: invoke('settings.setKubeconfigFiles'),
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),
     getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),

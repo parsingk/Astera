@@ -9,7 +9,8 @@ const placeholders = (s: string): string[] =>
  *  elsewhere in the app, in the CLIs, or on disk. */
 const LITERALS = [
   'Claude', 'Codex', 'Astera', 'Slack', 'GitHub', 'git', 'npm', 'PATH', 'Gradle', 'Maven', 'cargo', 'go',
-  'Python', 'pytest', 'Docker', 'Compose', '.NET', 'Jobs', 'DevTools', 'Design Mode'
+  'Python', 'pytest', 'Docker', 'Compose', '.NET', 'Jobs', 'DevTools', 'Design Mode',
+  'Kubernetes', 'Kustomize', 'kubectl', 'kubeconfig', 'Helm'
 ]
 
 describe('카탈로그 불변식', () => {
@@ -67,6 +68,13 @@ describe('카탈로그 불변식', () => {
         expect(value, `${lang}:${key}`).toBe(ko[key as keyof typeof ko])
       }
     }
+  })
+})
+
+describe('the Kubernetes words', () => {
+  it('are in the same order in ko and en', () => {
+    const kube = (lang: 'ko' | 'en'): string[] => Object.keys(CATALOGS[lang].messages).filter((k) => k.startsWith('kube.'))
+    expect(kube('en')).toEqual(kube('ko'))
   })
 })
 

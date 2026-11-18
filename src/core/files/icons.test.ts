@@ -88,6 +88,27 @@ describe('IconTone ↔ CSS', () => {
   })
 })
 
+describe('resolveFileIcon — Kubernetes', () => {
+  it('manifest and helm-template files get the blue Kubernetes icon', () => {
+    expect(resolveFileIcon('deployment.yaml', 'manifest')).toEqual({ id: 'kubernetes', tone: 'blue' })
+    expect(resolveFileIcon('deployment.yaml', 'helm-template')).toEqual({ id: 'kubernetes', tone: 'blue' })
+  })
+
+  it('a kustomization gets the layers icon', () => {
+    expect(resolveFileIcon('kustomization.yaml', 'kustomization')).toEqual({ id: 'layers', tone: 'blue' })
+  })
+
+  it('plain YAML and an unknown kind keep the generic gear', () => {
+    expect(resolveFileIcon('values.yaml', 'plain')).toEqual(resolveFileIcon('values.yaml'))
+    expect(resolveFileIcon('values.yaml', 'plain')).toEqual({ id: 'gear', tone: 'purple' })
+  })
+
+  it('the new ids are known shapes', () => {
+    expect(ICON_IDS).toContain('kubernetes')
+    expect(ICON_IDS).toContain('layers')
+  })
+})
+
 describe('resolveFileIcon — 우선순위', () => {
   it('정확한 이름이 확장자보다 우선', () => {
     expect(resolveFileIcon('package.json')).toEqual({ id: 'code-braces', tone: 'red' })

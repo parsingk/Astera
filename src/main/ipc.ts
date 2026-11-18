@@ -299,6 +299,9 @@ import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { registerHiggsfieldIpc } from './higgsfield'
+import { registerKubeIpc } from './kube/ipc'
+import { createKubeService } from './kube/service'
+import { createRealKubeDeps, kubectlDisplayPath } from './kube/runtime'
 import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { fillFromCommits } from '../core/github/fill'
@@ -4548,6 +4551,17 @@ export function registerIpc(
     throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
   }
 
+  // Kubernetes manifests: classification, contexts and targets. The watcher batch below calls kubeService.invalidate.
+  const kubeDeps = createRealKubeDeps(core.appSettings, core.kubeTargets)
+  const kubeService = createKubeService(kubeDeps)
+  registerKubeIpc(ipcMain, {
+    service: kubeService,
+    assertAllowedPath,
+    settings: core.appSettings,
+    run: kubeDeps.run,
+    binPath: () => kubectlDisplayPath(core.appSettings.getKubectlPath(), process.env)
+  })
+
   /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
    *  — 그 아래 전부가 아니다.
    *
@@ -5603,9 +5617,14 @@ export function registerIpc(
   // The live-update watcher: watches the explorer root and refreshes the tree and viewer through
   // files:changedBatch — one message per batching window, not one per event. The path guard is reused —
   // watching an arbitrary path is refused.
-  const fileWatcher = new FileWatcher((batch) => send('files:changedBatch', batch))
+  const fileWatcher = new FileWatcher((batch) => {
+    kubeService.invalidate(batch.changes)
+    send('files:changedBatch', batch)
+  })
   ipcMain.handle('files.watch', async (_e, root: string) => {
     await assertAllowedPath(root)
+    // What changed in the project while nothing watched it (a pull, a checkout) reaches the Kustomize graph too.
+    kubeService.forgetGraph(root)
     await fileWatcher.watch(root)
   })
   ipcMain.handle('files.unwatch', () => fileWatcher.unwatch())
