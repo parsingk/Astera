@@ -78,11 +78,11 @@ export function ClusterPicker(p: ClusterPickerProps): React.JSX.Element {
   const [cursor, setCursor] = useState(() => Math.max(0, shown.findIndex((c) => c.name === p.selected)))
   const canRemember = p.rememberChoices.length > 0
 
-  const pick = (name: string): void => p.onPick(name, canRemember && remember ? { folder } : null)
 
+  const pick = (name: string): void => p.onPick(name, canRemember && remember ? { folder } : null)
+  const onKeyDown = (e: React.KeyboardEvent): void => {
     const key = e.key
     if (key === 'ArrowDown' || key === 'ArrowUp') {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
       setCursor((c) => pickerCursor(c, shown.length, key))
     } else if (key === 'Enter') {
