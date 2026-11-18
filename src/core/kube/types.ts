@@ -1,3 +1,5 @@
+import type { DiffRow } from './lineDiff'
+
 /** What a file is, as far as Kubernetes tooling is concerned. */
 export type KubeFileKind = 'manifest' | 'kustomization' | 'helm-template' | 'plain'
 
@@ -55,3 +57,18 @@ export type TargetState =
   | { state: 'current'; context: string; namespace: string | null }
   | { state: 'missing'; context: string; folder: string }
   | { state: 'none' }
+
+export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'
+
+/** One resource of the confirmation dialog's side-by-side diff. `before`/`after` are the YAML shown (secrets masked). */
+export interface ResourceDiff {
+  ref: string
+  kind: string
+  name: string
+  namespace: string | null
+  state: ResourceState
+  before: string
+  after: string
+  rows: DiffRow[] | { tooLarge: true; added: number; removed: number }
+  changedLines: number
+}
