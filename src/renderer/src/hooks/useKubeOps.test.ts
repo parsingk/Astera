@@ -117,7 +117,7 @@ describe('kubeOpsReducer: the apply flow', () => {
     const failed = step(loading, {
       type: 'previewed',
       seq: loading.dialog!.seq,
-      preview: { ok: false, reason: 'kubectl', commandLines: [], stderr: 'dry run failed: boom' },
+      preview: { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], stderr: 'dry run failed: boom' },
       scope: ''
     })
     expect(canConfirm(failed.dialog)).toBe(false)
@@ -335,7 +335,7 @@ describe('kubeOpsReducer: compare and reload entries', () => {
     const s2 = step(s1, {
       type: 'previewed',
       seq: s1.dialog!.seq,
-      preview: { ok: false, reason: 'kubectl', commandLines: [], stderr: 'unreachable' },
+      preview: { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], stderr: 'unreachable' },
       scope: ''
     })
     expect(s2.log).toEqual([])

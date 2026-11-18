@@ -800,6 +800,7 @@ describe('preview', () => {
       ok: false,
       reason: 'kubectl',
       commandLines: [applyA(a)],
+      nsFlags: [null],
       stderr: `dry run failed: ${denied}`
     })
     answer = { ok: false, stdout: '', stderr: 'timed out', timedOut: true }
@@ -807,6 +808,7 @@ describe('preview', () => {
       ok: false,
       reason: 'kubectl',
       commandLines: [applyA(a)],
+      nsFlags: [null],
       stderr: 'dry run failed: timed out',
       timedOut: true
     })
@@ -831,6 +833,7 @@ describe('preview', () => {
         ['apply', '--context', 'kind-dev', '-n', 'shop', '-f', a],
         ['apply', '--context', 'kind-dev', '-n', 'shop', '-k', prod]
       ],
+      nsFlags: ['shop', 'shop'],
       stderr: 'reading the cluster failed: Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout'
     })
     // An overlay that does not render has no namespace to decide: its command is listed without -n.
@@ -842,6 +845,7 @@ describe('preview', () => {
         ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-n', 'shop', '-f', a],
         ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-k', prod]
       ],
+      nsFlags: ['shop', null],
       stderr: 'kustomize failed: Error: accumulating resources: missing.yaml'
     })
   })
@@ -859,6 +863,7 @@ describe('preview', () => {
         ok: false,
         reason: 'kubectl',
         commandLines: [applyA(a)],
+        nsFlags: [null],
         stderr: 'dry run failed: unreadable output from kubectl'
       })
       expect(await svc.status(a, root)).toEqual({ kind: 'unknown', reason: 'unreadable output from kubectl' })
@@ -875,6 +880,7 @@ describe('preview', () => {
       ok: false,
       reason: 'kubectl',
       commandLines: [applyA(a)],
+      nsFlags: [null],
       stderr: 'listing contexts failed: spawn kubectl ENOENT'
     })
   })
@@ -935,6 +941,7 @@ describe('preview', () => {
       ok: false,
       reason: 'kubectl',
       commandLines: [['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-f', a]],
+      nsFlags: [null],
       stderr: 'dry run failed: error: unable to recognize "a.yaml"'
     })
     expect(clusterCalls(h.calls).map(opOf)).toEqual(['dry-delete'])

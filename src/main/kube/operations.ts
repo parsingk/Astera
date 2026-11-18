@@ -78,12 +78,14 @@ function stepFailure(step: string, r: KubectlResult): StepFailure {
   return { failed: step, stderr: r.stderr, ...(r.timedOut ? { timedOut: true as const } : {}) }
 }
 
-/** The preview of a failed step: `commandLines` stay the commands confirm would run, the step goes into stderr. */
-function failedPreview(f: StepFailure, commandLines: string[][]): Failure {
+/** The preview of a failed step: `commandLines` stay the commands confirm would run with their `-n` values (`nsFlags`),
+ *  the step goes into stderr. */
+function failedPreview(f: StepFailure, commandLines: string[][], nsFlags: (string | null)[]): Failure {
   return {
     ok: false,
     reason: 'kubectl',
     commandLines,
+    nsFlags,
     stderr: `${f.failed} failed: ${f.stderr}`,
     ...(f.timedOut ? { timedOut: true as const } : {})
   }
@@ -323,10 +325,11 @@ export function createKubeOperations(d: KubeOperationDeps) {
       decided.push({ cmd, flag, src })
     }
     const commandLines = decided.map((x) => kubectlArgs(verb, x.cmd, { context: req.context, nsFlag: x.flag }))
+    const nsFlags = decided.map((x) => x.flag)
 
     // target() needs the contexts, and a kubectl that cannot run is not a context mismatch.
     const ctx = await d.contexts()
-    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines)
+    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines, nsFlags)
     if (req.override) {
       // The item's own remembered or current context need not agree, but kubeconfig must still have this one.
       if (!ctx.contexts.some((c) => c.name === req.context)) return overrideRefusal
@@ -334,7 +337,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       const folders = await contextConflicts(plan.commands, req)
       if (folders) return { ok: false, reason: 'mixed-contexts', folders }
     }
-    if (renderFailure) return failedPreview(renderFailure, commandLines)
+    if (renderFailure) return failedPreview(renderFailure, commandLines, nsFlags)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
     // One item's pill is its own (or one chosen for its editor); several items share one pill (the first item's, or
     // the picked folder's), which must then be every item's own.
@@ -347,7 +350,6 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const steps: Step[] = decided.flatMap((x) =>
       x.src ? [{ cmd: x.cmd, t: { context: req.context, nsFlag: x.flag }, src: x.src, fallbackNs: x.flag ?? contextNs }] : []
     )
-    const nsFlags = decided.map((x) => x.flag)
     return { ok: true, plan, steps, commandLines, nsFlags, fingerprint: fingerprintOf(req, commandLines, steps) }
   }
 
@@ -406,7 +408,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const resources: { command: number; diff: ResourceDiff }[] = []
     for (const [command, step] of p.steps.entries()) {
       const diffs = await diffStep(verb, step, opts)
-      if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines)
+      if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines, p.nsFlags)
       for (const diff of diffs) resources.push({ command, diff })
     }
     return { ok: true, plan: p.plan, commandLines: p.commandLines, nsFlags: p.nsFlags, resources, fingerprint: p.fingerprint }

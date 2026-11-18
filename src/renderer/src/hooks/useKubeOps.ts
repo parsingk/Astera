@@ -314,6 +314,7 @@ const failedPreview = (err: unknown): KubePreview => ({
   ok: false,
   reason: 'kubectl',
   commandLines: [],
+  nsFlags: [],
   stderr: errText(err)
 })
 

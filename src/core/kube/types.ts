@@ -120,8 +120,9 @@ export interface KubeRequest {
 
 /** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the
  *  binary), also on a `kubectl` failure, whose `stderr` starts with the step that failed (`dry run failed: …`).
- *  `nsFlags[i]` is the `-n` value of `commandLines[i]`, null when it sends none. `fingerprint` goes back to `run`,
- *  which refuses to write anything other than what this preview read. */
+ *  `nsFlags[i]` is the `-n` value of `commandLines[i]`, null when it sends none (also on a `kubectl` failure, whose
+ *  namespaces were decided before the step that failed). `fingerprint` goes back to `run`, which refuses to write
+ *  anything other than what this preview read. */
 export type KubePreview =
   | {
       ok: true
@@ -137,7 +138,7 @@ export type KubePreview =
   /** Several items, some of whose own namespace (remembered, else their context's) is not `namespace`, the pill `-n`
    *  would put their resources into: the folders and their namespaces. */
   | { ok: false; reason: 'mixed-namespaces'; namespace: string; folders: { folder: string; namespace: string }[] }
-  | { ok: false; reason: 'kubectl'; commandLines: string[][]; stderr: string; timedOut?: true }
+  | { ok: false; reason: 'kubectl'; commandLines: string[][]; nsFlags: (string | null)[]; stderr: string; timedOut?: true }
 
 /** One finished operation. `ran` counts the commands executed: the first failing one stops the rest (C19). */
 export interface KubeRunResult {

@@ -27,13 +27,15 @@ const platform = (): string => (typeof window === 'undefined' ? 'linux' : window
 const commandText = (args: string[]): string => `kubectl ${args.map((a) => shellQuote(a, platform())).join(' ')}`
 
 /** The namespace pill of a shown preview: the one `-n` its commands send, "from the files" when none sends one, or
- *  "several" with the values as its tooltip. Before a preview, the caller's label. */
+ *  "several" with the values as its tooltip; a failed dry run's planned commands count the same. Before a preview, the
+ *  caller's label. null (no pill) for a refusal made before the namespaces were decided, or a failure with no commands. */
 function namespacePill(
   preview: KubePreview | null,
   namespaceLabel: string,
   t: ReturnType<typeof useI18n>['t']
-): { text: string; title?: string } {
-  if (!preview?.ok) return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
+): { text: string; title?: string } | null {
+  if (preview === null) return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
+  if (!preview.ok && (preview.reason !== 'kubectl' || preview.commandLines.length === 0)) return null
   const values = [...new Set(preview.nsFlags.filter((n): n is string => n !== null))]
   if (values.length === 0) return { text: t('kube.toolbar.nsFromFile') }
   if (values.length === 1) return { text: t('kube.confirm.namespace', { ns: values[0] }) }
@@ -185,9 +187,11 @@ export function KubeConfirmDialog({
             <FileIcon id="kubernetes" tone="blue" />
             <span className="mono">{context}</span>
           </span>
-          <span className="kube-pill mono" title={ns.title}>
-            {ns.text}
-          </span>
+          {ns !== null && (
+            <span className="kube-pill mono" title={ns.title}>
+              {ns.text}
+            </span>
+          )}
           {preview?.ok && (
             <span className="kube-pill">{t('kube.confirm.counts', { files, resources: preview.resources.length })}</span>
           )}

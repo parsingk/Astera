@@ -61,7 +61,7 @@ const render = (preview: KubePreview | null, over: Record<string, unknown> = {})
 
 describe('KubeConfirmDialog', () => {
   it('a kubectl failure shows stderr and a disabled primary button', () => {
-    const html = render({ ok: false, reason: 'kubectl', commandLines: [['apply']], stderr: 'boom: no route', timedOut: true })
+    const html = render({ ok: false, reason: 'kubectl', commandLines: [['apply']], nsFlags: [null], stderr: 'boom: no route', timedOut: true })
     expect(html).toContain('boom: no route')
     expect(html).toContain('kube.confirm.timedOut')
     expect(html).toMatch(/<button[^>]*class="primary"[^>]*disabled/)
@@ -134,6 +134,40 @@ describe('KubeConfirmDialog', () => {
     const many = render(okPreview(diff(), ['dev', null, 'web']))
     expect(many).toContain('kube.confirm.nsMany')
     expect(many).toContain('title="dev, web"')
+  })
+
+  it("a failed dry run's namespace pill comes from its planned commands, as an ok preview's does", () => {
+    const failed = (nsFlags: (string | null)[]): KubePreview => ({
+      ok: false,
+      reason: 'kubectl',
+      commandLines: nsFlags.map(() => ['apply']),
+      nsFlags,
+      stderr: 'dry run failed: boom'
+    })
+    const fromFiles = render(failed([null, null]))
+    expect(fromFiles).toContain('kube.toolbar.nsFromFile')
+    expect(fromFiles).not.toContain('kube.confirm.namespace{')
+    expect(render(failed(['dev']))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
+    expect(render(failed(['dev', 'web']))).toContain('title="dev, web"')
+    // the caller's label is never shown for a preview that answered
+    expect(render(failed(['dev']))).not.toContain('&quot;ns&quot;:&quot;shop&quot;')
+  })
+
+  it('a refusal decided before the namespaces, or a failure with no commands, shows no namespace pill', () => {
+    const refusals: KubePreview[] = [
+      { ok: false, reason: 'mixed-contexts', folders: ['/f1'] },
+      { ok: false, reason: 'mixed-namespaces', namespace: 'shop', folders: [{ folder: '/p/web', namespace: 'web' }] },
+      { ok: false, reason: 'namespace', conflicts: [{ path: '/p/a.yaml', namespace: 'dev' }] },
+      { ok: false, reason: 'refused', plan: { ok: false, reason: 'broken-kustomization', paths: ['/p/app'] } },
+      { ok: false, reason: 'refused', plan: { ok: false, reason: 'base-folder', paths: ['/b'] } },
+      { ok: false, reason: 'kubectl', commandLines: [], nsFlags: [], stderr: 'ipc failed' }
+    ]
+    for (const r of refusals) {
+      const html = render(r)
+      expect(html, r.reason).not.toContain('kube.confirm.namespace{')
+      expect(html, r.reason).not.toContain('kube.toolbar.nsFromFile')
+      expect(html, r.reason).not.toContain('kube.confirm.nsMany')
+    }
   })
 
   it('running: the primary shows progress and is disabled, the other button stops the run', () => {
