@@ -1360,6 +1360,62 @@ describe('status', () => {
   })
 })
 
+describe("Secret values in kubectl's stderr (C22)", () => {
+  const SECRET = 'aHVudGVyMg=='
+  const bs = String.fromCharCode(92)
+  const lastApplied = `{"data":{"password":"${SECRET}"},"kind":"Secret"}`.split('"').join(bs + '"')
+  // What kubectl prints when the server rejects the patch of a Secret: the patch, then where it went.
+  const PATCH_ERROR = [
+    'Error from server (Invalid): error when applying patch:',
+    `{"data":{"password":"${SECRET}"},"metadata":{"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"${lastApplied}"}}}`,
+    'to:',
+    'Resource: "/v1, Resource=secrets", GroupVersionKind: "/v1, Kind=Secret"',
+    'Name: "db", Namespace: "shop"',
+    'for: "k8s/s.yaml": error when patching "k8s/s.yaml": Secret "db" is invalid'
+  ].join('\n')
+  // A line of a Secret's data first, so the chip's first-line reason would carry it.
+  const DATA_FIRST = `"data":{"password":"${SECRET}"}\nerror: rejected`
+  const a = p('k8s', 'a.yaml')
+  const prod = p('envs', 'prod')
+  const clean = (v: unknown): void => expect(JSON.stringify(v)).not.toContain(SECRET)
+
+  it('never reaches a preview failure, a run result or its outcomes, reload, render, status or the contexts error', async () => {
+    const h = harness(
+      { ...OVERLAY_TREE, [a]: yamlDocs(cm('a', {}, 'dev')) },
+      fakeKube({
+        'dry-apply': fail(PATCH_ERROR),
+        'dry-delete': '',
+        delete: fail(PATCH_ERROR),
+        'get-one': fail(PATCH_ERROR),
+        kustomize: (args) => (args[1] === prod ? fail(DATA_FIRST) : { ok: true, stdout: '', stderr: '' }),
+        live: fail(DATA_FIRST)
+      })
+    )
+    const svc = traced(createKubeService(h.deps))
+    const previewed = await svc.preview('apply', request([a]), HIDE)
+    expect(previewed).toMatchObject({ ok: false, reason: 'kubectl' })
+    clean(previewed)
+    clean(await svc.reload(a, 'kind-dev', null))
+    clean(await svc.render(prod))
+    clean(await svc.status(a, root))
+    const chip = harness({ [a]: yamlDocs(cm('a', {}, 'dev')) }, fakeKube({ 'dry-apply': fail(DATA_FIRST) }))
+    expect(await traced(createKubeService(chip.deps)).status(a, root)).toEqual({ kind: 'unknown', reason: '<omitted>' })
+
+    // A delete whose dry run passed and whose write fails with the patch error.
+    const live = harness({ [a]: yamlDocs(cm('a', {}, 'dev')) }, fakeKube({ delete: fail(PATCH_ERROR) }))
+    const s2 = traced(createKubeService(live.deps))
+    const ran = await confirmRun(s2, 'leak', 'delete', request([a]))
+    expect(ran).toMatchObject({ ok: false, ran: 1 })
+    expect(ran.outcomes.length).toBeGreaterThan(0)
+    clean(ran)
+
+    const broken = harness({}, () => fail(DATA_FIRST))
+    const contexts = await createKubeService(broken.deps).contexts()
+    expect(contexts.error?.stderr).toBe('<omitted>\nerror: rejected')
+    clean(contexts)
+  })
+})
+
 describe('writes', () => {
   it('no method other than run sends a non-dry apply or delete', async () => {
     const a = p('k8s', 'a.yaml')

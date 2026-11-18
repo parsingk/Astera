@@ -13,6 +13,7 @@ import {
 } from '../../core/kube/target'
 import { configViewArgs, getOneArgs, kustomizeArgs, useContextArgs } from '../../core/kube/args'
 import { parseManifestDocs } from '../../core/kube/docs'
+import { redactKubectlStderr } from '../../core/kube/redact'
 import { maskSecretPair, normalizeObject, objectsFromYaml, type K8sObject } from '../../core/kube/objects'
 import { foldPathCase } from '../../core/files/paths'
 import type { FileChange } from '../../core/files/changeBatch'
@@ -51,6 +52,13 @@ export function createKubeService(deps: KubeServiceDeps) {
   const kinds = new Map<string, { mtimeMs: number; kind: KubeFileKind }>()
   let contextsCache: { at: number; value: KubeContexts } | null = null
   const graphs = new Map<string, Promise<KustomizeGraph>>()
+
+  /** Every kubectl call of the feature: stderr is redacted here, before any result, outcome or reason is built from it,
+   *  so a Secret's values in a patch error never leave the main process (C22). */
+  const kubectl: KubeServiceDeps['run'] = async (args, opts) => {
+    const r = await deps.run(args, opts)
+    return r.stderr === '' ? r : { ...r, stderr: redactKubectlStderr(r.stderr) }
+  }
 
   async function helmRoot(filePath: string): Promise<string | null> {
     // helmChartRootOf asks synchronously; learn which folders it asks about, look them up, then ask again.
@@ -91,7 +99,7 @@ export function createKubeService(deps: KubeServiceDeps) {
 
   async function contexts(): Promise<KubeContexts> {
     if (contextsCache && Date.now() - contextsCache.at < CONTEXTS_TTL_MS) return contextsCache.value
-    const r = await deps.run(configViewArgs(), { timeoutMs: CONFIG_VIEW_TIMEOUT_MS })
+    const r = await kubectl(configViewArgs(), { timeoutMs: CONFIG_VIEW_TIMEOUT_MS })
     if (!r.ok) {
       // Not cached: fixing kubectl or the kubeconfig should show at the next ask.
       return { contexts: [], current: null, error: { errorCode: r.errorCode, stderr: r.stderr } }
@@ -222,7 +230,7 @@ export function createKubeService(deps: KubeServiceDeps) {
     if (context === '' || context.startsWith('-')) {
       return { ok: false, stdout: '', stderr: 'invalid context name', errorCode: 'EINVAL' }
     }
-    const r = await deps.run(useContextArgs(context))
+    const r = await kubectl(useContextArgs(context))
     contextsCache = null
     return r
   }
@@ -263,7 +271,7 @@ export function createKubeService(deps: KubeServiceDeps) {
     // else default. A cluster-scoped kind cannot be told apart here; kubectl ignores -n for it.
     const ns =
       namespace ?? pill ?? (await contexts()).contexts.find((c) => c.name === context)?.namespace ?? 'default'
-    const r = await deps.run(getOneArgs(kind, name, ns, context))
+    const r = await kubectl(getOneArgs(kind, name, ns, context))
     if (!r.ok) return { ok: false, reason: 'kubectl', stderr: r.stderr }
     // getOneArgs carries --ignore-not-found: nothing printed means the cluster has no such object.
     if (r.stdout.trim() === '') return { ok: false, reason: 'absent' }
@@ -282,7 +290,7 @@ export function createKubeService(deps: KubeServiceDeps) {
   /** The overlay's output for the read-only rendered view. A secretGenerator puts values into it, so every Secret's
    *  data and stringData values and its last-applied annotation are masked, as in the diff (C13, C22). */
   async function render(overlayDir: string): Promise<KubeRenderResult> {
-    const r = await deps.run(kustomizeArgs(overlayDir))
+    const r = await kubectl(kustomizeArgs(overlayDir))
     if (!r.ok) return { ok: false, stderr: r.stderr }
     let objs: K8sObject[]
     try {
@@ -295,7 +303,7 @@ export function createKubeService(deps: KubeServiceDeps) {
   }
 
   const { preview, run, cancel, status } = createKubeOperations({
-    run: deps.run,
+    run: kubectl,
     readText: deps.readText,
     stat: deps.stat,
     listDir: deps.listDir,
