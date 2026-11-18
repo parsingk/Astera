@@ -72,3 +72,11 @@ export interface ResourceDiff {
   rows: DiffRow[] | { tooLarge: true; added: number; removed: number }
   changedLines: number
 }
+
+/** One line of `kubectl apply`/`delete` output, per resource. `ref` is empty for an error that names no resource. */
+export interface ResourceOutcome {
+  ref: string
+  outcome: 'created' | 'configured' | 'unchanged' | 'deleted' | 'error'
+  message?: string
+  file?: string
+}
