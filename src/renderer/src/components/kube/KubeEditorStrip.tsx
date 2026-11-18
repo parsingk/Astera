@@ -1,17 +1,19 @@
-import type { KubeFileKind, KubeTargetView } from '../../../../core/kube/types'
+import type { KubeFileKind, KubeStatus, KubeTargetView } from '../../../../core/kube/types'
 import type { useKubeEditor } from '../../hooks/useKubeEditor'
 import { displayTarget, kubePill } from '../../hooks/useKubeOps'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ClusterPicker, NamespacePicker } from './ClusterPicker'
 import { KubeToolbar } from './KubeToolbar'
 
-/** The kind-and-name chip (spec 4.3): "Deployment · api", a resource count, or the overlay's folder. */
+/** The kind-and-name chip (spec 4.3): "Deployment · api", a resource count, or through an overlay how many resources
+ *  it renders, from the latest `status` (nothing until that is known; the overlay pill names the overlay). */
 export function resourceLabel(
   resource: KubeTargetView['resource'],
-  count: (n: number) => string
+  count: (n: number) => string,
+  status: KubeStatus | null = null
 ): string | null {
   if (resource === null) return null
-  if ('overlay' in resource) return resource.overlay
+  if ('overlay' in resource) return status?.resourceCount === undefined ? null : count(status.resourceCount)
   if ('count' in resource) return count(resource.count)
   return resource.name === null ? resource.kind : `${resource.kind} · ${resource.name}`
 }
@@ -53,7 +55,7 @@ export function KubeEditorStrip({
       nsFromFile={view?.nsFromFile ?? false}
       status={entry?.status ?? null}
       statusLoading={entry?.statusLoading ?? false}
-      resourceLabel={view ? resourceLabel(view.resource, (count) => t('kube.chip.resources', { count })) : null}
+      resourceLabel={view ? resourceLabel(view.resource, (count) => t('kube.chip.resources', { count }), entry?.status ?? null) : null}
       busy={busy}
       kubectlMissing={editor.kubectlMissing}
       reloadBlocked={view?.reloadBlocked ?? null}

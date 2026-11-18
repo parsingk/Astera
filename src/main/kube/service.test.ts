@@ -1558,7 +1558,7 @@ describe('status', () => {
     expect(clusterCalls(h.calls)).toEqual([])
   })
 
-  it('a Kustomize member reports its overlay, by resources', async () => {
+  it('a Kustomize member reports its overlay, by resources, with how many resources the overlay renders', async () => {
     const h = harness(
       OVERLAY_TREE,
       fakeKube({
@@ -1568,8 +1568,26 @@ describe('status', () => {
       })
     )
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.status(p('apps', 'base', 'dep.yaml'), root)).toEqual({ kind: 'different', resources: 1 })
+    expect(await svc.status(p('apps', 'base', 'dep.yaml'), root)).toEqual({ kind: 'different', resources: 1, resourceCount: 2 })
+    expect(await svc.status(p('envs', 'prod', 'kustomization.yaml'), root)).toEqual({ kind: 'different', resources: 1, resourceCount: 2 })
     expect(h.calls).toContainEqual(['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-k', p('envs', 'prod')])
+  })
+
+  it('the rendered count stays known when the cluster cannot be reached; a failed render or a plain manifest has none', async () => {
+    let render: KubectlResult = { ok: true, stdout: yamlDocs(cm('a', {}, 'prod'), cm('b', {}, 'prod'), cm('c', {}, 'prod')), stderr: '' }
+    const h = harness(
+      { ...OVERLAY_TREE, [f]: yamlDocs(cm('a', { v: '1' })) },
+      fakeKube({ kustomize: () => render, live: fail('Unable to connect to the server') })
+    )
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.status(p('apps', 'base', 'dep.yaml'), root)).toEqual({
+      kind: 'unknown',
+      reason: 'Unable to connect to the server',
+      resourceCount: 3
+    })
+    render = fail('Error: accumulating resources')
+    expect(await svc.status(p('apps', 'base', 'dep.yaml'), root)).toEqual({ kind: 'unknown', reason: 'Error: accumulating resources' })
+    expect(await svc.status(f, root)).not.toHaveProperty('resourceCount')
   })
 })
 

@@ -535,15 +535,17 @@ export function createKubeOperations(d: KubeOperationDeps) {
     else cmd = { kind: 'files', files: [file] }
     const src = await sourcesOf(cmd)
     if ('failed' in src) return { kind: 'unknown', reason: firstLine(src.stderr) }
+    // An overlay's kind chip counts what it renders (spec 4.3), known from here on whatever the cluster answers.
+    const counted = (st: KubeStatus): KubeStatus => (src.rendered ? { ...st, resourceCount: src.rendered.length } : st)
     const ns = namespaceOf(cmd, src, s.namespace, graph)
-    if (!ns.ok) return { kind: 'unknown', reason: 'namespace' }
+    if (!ns.ok) return counted({ kind: 'unknown', reason: 'namespace' })
     const step: Step = { cmd, t: { context: s.context, nsFlag: ns.flag }, src, fallbackNs: 'default' }
     const diffs = await diffStep('apply', step, { keepServerFields: false })
-    if (!Array.isArray(diffs)) return { kind: 'unknown', reason: firstLine(diffs.stderr) }
+    if (!Array.isArray(diffs)) return counted({ kind: 'unknown', reason: firstLine(diffs.stderr) })
     const changed = diffs.filter((x) => x.state !== 'unchanged')
-    if (changed.length === 0) return { kind: 'same' }
-    if (changed.length === diffs.length && diffs.every((x) => x.state === 'new')) return { kind: 'absent' }
-    if (cmd.kind === 'overlay') return { kind: 'different', resources: changed.length }
+    if (changed.length === 0) return counted({ kind: 'same' })
+    if (changed.length === diffs.length && diffs.every((x) => x.state === 'new')) return counted({ kind: 'absent' })
+    if (cmd.kind === 'overlay') return counted({ kind: 'different', resources: changed.length })
     return { kind: 'different', lines: changed.reduce((n, x) => n + x.changedLines, 0) }
   }
 

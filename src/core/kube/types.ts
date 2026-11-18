@@ -68,8 +68,8 @@ export type TargetState =
  *  `reloadBlocked` and `nsFromFile` describe a plain manifest's own text (null and false through an overlay):
  *  reload refuses a Secret and a file of other than one resource; `nsFromFile` when every resource names its
  *  namespace or is cluster-scoped. `resource` feeds the kind-and-name chip: the file's one resource (`name` null
- *  for a generateName), how many it holds, or through an overlay the overlay's folder name; null when there is
- *  nothing to name. */
+ *  for a generateName), how many it holds, or through an overlay the overlay's folder name (the chip then shows how
+ *  many resources the latest status says the overlay renders); null when there is nothing to name. */
 export interface KubeTargetView {
   state: TargetState
   rememberFolder: string
@@ -185,10 +185,12 @@ export type KubeRenderResult = { ok: true; text: string } | { ok: false; stderr:
 
 /** The editor chip (spec 4.9). `lines` for a plain manifest, `resources` for a Kustomize member's overlay.
  *  `reason` for `unknown`: kubectl's first stderr line, or one of not-manifest, no-target, no-overlay, namespace,
- *  broken-kustomization, unlisted. */
+ *  broken-kustomization, unlisted. `resourceCount`: how many resources the overlay renders, for the kind chip (spec
+ *  4.3), whenever the render succeeded, also when the cluster could not be compared. */
 export interface KubeStatus {
   kind: 'same' | 'different' | 'absent' | 'unknown'
   lines?: number
   resources?: number
   reason?: string
+  resourceCount?: number
 }
