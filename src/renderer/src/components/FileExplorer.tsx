@@ -33,8 +33,10 @@ import { useGitStatus } from '../hooks/useGitStatus'
 import { useKubeKinds } from '../hooks/useKubeKinds'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
+import type { KubeFileKind } from '../../../core/kube/types'
+import type { MessageKey } from '../../../core/i18n'
 import { runnableKindForFile } from '../../../core/run/runFile'
-import { RefreshCw, X } from 'lucide-react'
+import { CloudUpload, GitCompare, RefreshCw, Trash2, X } from 'lucide-react'
 import { deleteKey, isMac, modKey } from '../lib/platformKeys'
 import { isWindowsPath, revealFor, treeKeysTo, type FolderReveal } from '../lib/folderLink'
 
@@ -62,6 +64,51 @@ const CURSOR_KEYS: Record<string, CursorKey> = {
   PageDown: 'pageDown'
 }
 
+export type KubeVerb = 'compare' | 'apply' | 'reload' | 'delete'
+
+/** The "Kubernetes" group item of the context menu, or null when nothing in the selection can be a target.
+ *  A manifest, a kustomization or a folder (which may hold manifests; the real planning is the main
+ *  process's) is a target. Helm templates are not: when they are all there is, the group still shows,
+ *  disabled, saying why. Reload is for exactly one manifest file. */
+export function kubeMenuItems(args: {
+  selection: string[]
+  kinds: Record<string, KubeFileKind>
+  isDir(p: string): boolean
+  heading: string
+  t: (k: MessageKey, p?: Record<string, string | number>) => string
+  on: Record<KubeVerb, () => void>
+}): MenuItem | null {
+  const { selection, kinds, isDir, heading, t, on } = args
+  const applicable = selection.some(
+    (p) => isDir(p) || kinds[p] === 'manifest' || kinds[p] === 'kustomization'
+  )
+  const helmOnly = !applicable && selection.some((p) => kinds[p] === 'helm-template')
+  if (!applicable && !helmOnly) return null
+  const onlyManifest = selection.length === 1 && !isDir(selection[0]) && kinds[selection[0]] === 'manifest'
+  const helmTitle = helmOnly ? t('kube.menu.helm') : undefined
+  const reloadOff = helmOnly || !onlyManifest
+  return {
+    label: t('kube.menu.group'),
+    icon: <FileIcon id="kubernetes" tone="blue" />,
+    submenu: [
+      { heading },
+      { label: t('kube.menu.compare'), icon: <GitCompare size={14} />, onSelect: on.compare, disabled: helmOnly, title: helmTitle },
+      { label: t('kube.menu.apply'), icon: <CloudUpload size={14} />, onSelect: on.apply, disabled: helmOnly, title: helmTitle },
+      {
+        label: t('kube.menu.reload'),
+        icon: <RefreshCw size={14} />,
+        onSelect: on.reload,
+        disabled: reloadOff,
+        title: helmOnly ? helmTitle : reloadOff ? t('kube.menu.reloadOnlyOne') : undefined
+      },
+      'separator',
+      { label: t('kube.menu.delete'), icon: <Trash2 size={14} />, onSelect: on.delete, danger: true, disabled: helmOnly, title: helmTitle },
+      'separator',
+      { heading: t('kube.menu.footnote') }
+    ]
+  }
+}
+
 /** File explorer. Root = the active session's cwd, lazy loading — files.list is called only when a folder is expanded. */
 export function FileExplorer({
   root,
@@ -73,6 +120,7 @@ export function FileExplorer({
   onPathRenamed,
   onPathDeleted,
   onRunFile,
+  onKube,
   revealFolder,
   onRevealDone
 }: {
@@ -98,6 +146,8 @@ export function FileExplorer({
   /** Runs a file from the context menu. The explorer does not own the run panel, so what a started run
    *  does to the screen stays in one place — the App's own run-start path. */
   onRunFile: (path: string) => void
+  /** A Kubernetes verb picked from the context menu, with the operation targets. Absent: no Kubernetes item. */
+  onKube?: (verb: KubeVerb, selection: string[]) => void
   /** A folder a terminal link named under this root (D2, 2026-10-14), as its names below the root: each level is
    *  expanded and the folder selected and scrolled to. A new `seq` asks again for the same folder. */
   revealFolder?: FolderReveal | null
@@ -427,6 +477,25 @@ export function FileExplorer({
         label: t('run.explorer.runFile', { name: entry.name }),
         onSelect: () => onRunFile(entry.path)
       })
+    }
+    // Kubernetes targets are the selected rows. A right-click outside the selection acts on that row alone.
+    if (entry && onKube) {
+      const paths = sel.selection.has(entry.path) ? sel.selectionPaths() : [entry.path]
+      const dirPaths = new Set(rows.flatMap((r) => (r.kind === 'entry' && r.entry.isDir ? [r.entry.path] : [])))
+      const kube = kubeMenuItems({
+        selection: paths,
+        kinds: kubeKinds,
+        isDir: (p) => dirPaths.has(p),
+        heading: t('kube.menu.heading', { count: paths.length }),
+        t,
+        on: {
+          compare: () => onKube('compare', paths),
+          apply: () => onKube('apply', paths),
+          reload: () => onKube('reload', paths),
+          delete: () => onKube('delete', paths)
+        }
+      })
+      if (kube) items.push('separator', kube)
     }
     // The history is per-project, so this is always shown regardless of entry — it sits outside the
     // if (entry) block above and therefore also appears in the root empty-space menu (entry===null).

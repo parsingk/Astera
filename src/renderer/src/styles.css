@@ -1589,6 +1589,15 @@ input.settings-reviewer-line { color: var(--text); }
 .context-menu-item.danger { color: #d3706b; }
 .context-menu-item.disabled { color: var(--text-faint); cursor: default; }
 .context-menu-sep { height: 1px; margin: 3px 6px; background: var(--line-soft); }
+.context-menu-item { display: flex; align-items: center; gap: 8px; position: relative; }
+.context-menu-icon { display: inline-flex; width: 14px; flex: none; }
+.context-menu-arrow { margin-left: auto; padding-left: 12px; color: var(--text-faint); }
+/* a heading names what the group below acts on; as the last child it is the small footnote */
+.context-menu-heading { padding: 4px 10px; color: var(--text-faint); font-size: 11px; cursor: default; }
+.context-menu-heading:last-child:not(:first-child) { max-width: 240px; line-height: 1.45; white-space: normal; }
+/* the nested menu hangs off its group item, to the right or, when the right is full, to the left */
+.context-submenu { position: absolute; top: -4px; left: 100%; margin-left: 2px; min-width: 200px; }
+.context-submenu.flip-left { left: auto; right: 100%; margin-left: 0; margin-right: 2px; }
 /* the rolling resume prompt input */
 .roll-prompt-field { display: flex; flex-direction: column; gap: 3px; margin-top: -2px; }
 .roll-prompt-input { width: 100%; font-size: 12px; }

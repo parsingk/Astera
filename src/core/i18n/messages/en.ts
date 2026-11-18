@@ -2888,5 +2888,14 @@ export const en: Record<keyof typeof ko, string> = {
   'runReport.card.copy': 'Copy',
   'runReport.card.copied': 'Copied the report.',
   'runReport.card.commentFailed': 'The pull request comment could not be posted: {error}',
-  'runReport.card.accounts': 'Accounts used: {names}.'
+  'runReport.card.accounts': 'Accounts used: {names}.',
+  'kube.menu.group': 'Kubernetes',
+  'kube.menu.heading': '{count} files',
+  'kube.menu.compare': 'Compare',
+  'kube.menu.apply': 'Apply…',
+  'kube.menu.reload': 'Reload from cluster',
+  'kube.menu.reloadOnlyOne': 'Only one file can be picked',
+  'kube.menu.delete': 'Delete from cluster…',
+  'kube.menu.helm': 'Helm template: apply through Helm (not yet supported)',
+  'kube.menu.footnote': 'A folder stands for every manifest inside it. Kustomize folders are grouped by overlay.'
 }

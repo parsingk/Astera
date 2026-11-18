@@ -3142,5 +3142,14 @@ export const ko = {
   'runReport.card.copy': '복사',
   'runReport.card.copied': '복사했습니다.',
   'runReport.card.commentFailed': 'PR 댓글을 남기지 못했습니다: {error}',
-  'runReport.card.accounts': '사용한 계정: {names}.'
+  'runReport.card.accounts': '사용한 계정: {names}.',
+  'kube.menu.group': 'Kubernetes',
+  'kube.menu.heading': '파일 {count}개',
+  'kube.menu.compare': '비교',
+  'kube.menu.apply': '적용…',
+  'kube.menu.reload': '클러스터에서 다시 불러오기',
+  'kube.menu.reloadOnlyOne': '파일 하나만 고를 수 있습니다',
+  'kube.menu.delete': '클러스터에서 삭제…',
+  'kube.menu.helm': 'Helm 템플릿은 Helm 으로 적용합니다 (아직 지원하지 않음)',
+  'kube.menu.footnote': '폴더를 고르면 그 안의 매니페스트 전부가 대상이 됩니다. Kustomize 폴더는 overlay 단위로 묶습니다.'
 } as const
