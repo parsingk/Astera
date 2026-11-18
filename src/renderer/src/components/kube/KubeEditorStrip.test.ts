@@ -49,7 +49,7 @@ const strip = (view: Partial<KubeTargetView>, status: KubeStatus | null = null, 
 
 describe('KubeEditorStrip', () => {
   it("a Kustomize file's kind chip counts the overlay's resources from the latest status", () => {
-    const k = { overlays: ['/p/envs/prod'], overlay: '/p/envs/prod', resource: { overlay: 'prod' } }
+    const k = { overlays: ['/p/envs/prod'], overlay: '/p/envs/prod', resource: { overlay: true as const } }
     const html = strip(k, { kind: 'same', resourceCount: 4 }, 'kustomization')
     expect(html).toContain('<span class="kube-chip kube-chip-kind">kube.chip.resources{&quot;count&quot;:4}</span>')
     expect(strip(k, null, 'kustomization')).not.toContain('kube-chip-kind')
@@ -71,10 +71,10 @@ describe('resourceLabel: the kind-and-name chip', () => {
     expect(resourceLabel({ kind: 'Job', name: null }, count)).toBe('Job')
     expect(resourceLabel({ count: 3 }, count)).toBe('3 resources')
     // through an overlay: the latest status's rendered count, never the overlay's folder name (the overlay pill shows it)
-    expect(resourceLabel({ overlay: 'prod' }, count, { kind: 'same', resourceCount: 4 })).toBe('4 resources')
-    expect(resourceLabel({ overlay: 'prod' }, count, { kind: 'unknown', reason: 'no-target' })).toBeNull()
-    expect(resourceLabel({ overlay: 'prod' }, count, null)).toBeNull()
-    expect(resourceLabel({ overlay: 'prod' }, count)).toBeNull()
+    expect(resourceLabel({ overlay: true as const }, count, { kind: 'same', resourceCount: 4 })).toBe('4 resources')
+    expect(resourceLabel({ overlay: true as const }, count, { kind: 'unknown', reason: 'no-target' })).toBeNull()
+    expect(resourceLabel({ overlay: true as const }, count, null)).toBeNull()
+    expect(resourceLabel({ overlay: true as const }, count)).toBeNull()
     expect(resourceLabel(null, count)).toBeNull()
   })
 })

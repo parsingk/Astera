@@ -476,14 +476,14 @@ describe('target: the resource chip', () => {
     expect((await svc.target(p('k8s', 'values.yaml'), root)).resource).toBeNull()
   })
 
-  it("through an overlay it is the overlay's folder name; none before an overlay is picked or for a folder", async () => {
+  it('through an overlay it only marks that (the status counts what it renders); none before an overlay is picked or for a folder', async () => {
     const h = harness({ ...OVERLAY_TREE, [p('envs', 'dev', 'kustomization.yaml')]: 'resources:\n  - ../../apps/base\n' })
     const svc = createKubeService(h.deps)
     const member = p('apps', 'base', 'dep.yaml')
     expect((await svc.target(member, root)).resource).toBeNull()
     await svc.setOverlay(member, p('envs', 'prod'))
-    expect((await svc.target(member, root)).resource).toEqual({ overlay: 'prod' })
-    expect((await svc.target(p('envs', 'dev', 'kustomization.yaml'), root)).resource).toEqual({ overlay: 'dev' })
+    expect((await svc.target(member, root)).resource).toEqual({ overlay: true })
+    expect((await svc.target(p('envs', 'dev', 'kustomization.yaml'), root)).resource).toEqual({ overlay: true })
     expect((await svc.target(p('apps'), root)).resource).toBeNull()
   })
 })

@@ -68,8 +68,9 @@ export type TargetState =
  *  `reloadBlocked` and `nsFromFile` describe a plain manifest's own text (null and false through an overlay):
  *  reload refuses a Secret and a file of other than one resource; `nsFromFile` when every resource names its
  *  namespace or is cluster-scoped. `resource` feeds the kind-and-name chip: the file's one resource (`name` null
- *  for a generateName), how many it holds, or through an overlay the overlay's folder name (the chip then shows how
- *  many resources the latest status says the overlay renders); null when there is nothing to name. */
+ *  for a generateName), how many it holds, or `{ overlay: true }` through an overlay (the chip then shows how many
+ *  resources the latest status says the overlay renders; the overlay pill names the overlay); null when there is
+ *  nothing to name. */
 export interface KubeTargetView {
   state: TargetState
   rememberFolder: string
@@ -79,7 +80,7 @@ export interface KubeTargetView {
   rememberChoices: string[]
   reloadBlocked: 'secret' | 'multi' | null
   nsFromFile: boolean
-  resource: { kind: string; name: string | null } | { count: number } | { overlay: string } | null
+  resource: { kind: string; name: string | null } | { count: number } | { overlay: true } | null
   /** The nearest folder over the file whose kustomization does not parse: every action is refused until it is fixed. */
   brokenKustomization: string | null
   /** A file in or below a kustomization's folder that no kustomization lists, so the plan leaves it out (it may be a

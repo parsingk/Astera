@@ -245,7 +245,7 @@ export function createKubeService(deps: KubeServiceDeps) {
       rememberChoices: overlay === null ? foldersUpTo(filePath, projectRoot) : [overlay],
       // Reload and the "from files" pill are a plain manifest's; what an overlay applies is its rendered output.
       ...(overlay !== null
-        ? { reloadBlocked: null, nsFromFile: false, resource: { overlay: path.basename(overlay) } }
+        ? { reloadBlocked: null, nsFromFile: false, resource: { overlay: true as const } }
         : isDir
           ? { reloadBlocked: null, nsFromFile: false, resource: null }
           : await fileFacts(filePath)),
