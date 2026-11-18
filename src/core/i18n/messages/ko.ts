@@ -3175,7 +3175,7 @@ export const ko = {
   'kube.confirm.leftOutReason.base': 'base 는 overlay 로 적용',
   'kube.confirm.leftOutReason.base-member': 'overlay 로 적용되는 파일',
   'kube.confirm.leftOutReason.helm': 'Helm 템플릿',
-  'kube.confirm.leftOutReason.unlisted': '같은 폴더의 kustomization 에 적히지 않은 파일',
+  'kube.confirm.leftOutReason.unlisted': 'kustomization 폴더 안에 있지만 어느 kustomization 에도 적히지 않은 파일',
   'kube.confirm.command': '명령 {n}',
   'kube.confirm.copyCommands': '명령 복사',
   'kube.confirm.apply': '{context} 에 적용',

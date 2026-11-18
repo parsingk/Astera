@@ -2921,7 +2921,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.confirm.leftOutReason.base': 'A base is applied through an overlay',
   'kube.confirm.leftOutReason.base-member': 'Applied through an overlay',
   'kube.confirm.leftOutReason.helm': 'Helm template',
-  'kube.confirm.leftOutReason.unlisted': 'Not listed by the kustomization of its folder',
+  'kube.confirm.leftOutReason.unlisted': 'Inside a kustomization folder but listed by no kustomization',
   'kube.confirm.command': 'Command {n}',
   'kube.confirm.copyCommands': 'Copy commands',
   'kube.confirm.apply': 'Apply to {context}',

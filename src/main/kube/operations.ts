@@ -336,8 +336,8 @@ export function createKubeOperations(d: KubeOperationDeps) {
     }
     if (renderFailure) return failedPreview(renderFailure, commandLines)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
-    // One item's pill is its own (or one chosen for its editor); several items share the first one's, which must then
-    // be every item's own.
+    // One item's pill is its own (or one chosen for its editor); several items share one pill (the first item's, or
+    // the picked folder's), which must then be every item's own.
     if (!oneItem && req.pill !== null) {
       const folders = await namespaceConflicts(decided, req, ctx)
       if (folders.length > 0) return { ok: false, reason: 'mixed-namespaces', namespace: req.pill, folders }
