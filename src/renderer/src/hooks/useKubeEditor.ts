@@ -302,6 +302,12 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     })
     if (!resolved) return
     const [view, ctx] = resolved
+    // The menu cannot tell a Kustomize member from a plain manifest; its target can, before any cluster is asked for.
+    const refusal = verb === 'reload' ? reloadRefusal(view) : null
+    if (refusal) {
+      toast.error(t(refusal === 'kustomize' ? 'kube.ops.reloadKustomize' : 'kube.toolbar.brokenKustomization'))
+      return
+    }
     // An editor's session choice covers that one file (R11), never a multi-selection: those go by their own targets.
     const override = selection.length === 1 ? sessionRef.current[selection[0]]?.override : undefined
     const req = kubeRequestOf(selection, projectRoot, view, override, ctx)
@@ -311,15 +317,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
       if (file) openFile(file)
       return
     }
-    if (verb === 'reload') {
-      // The menu cannot tell a Kustomize member from a plain manifest; its target can.
-      const refusal = reloadRefusal(view)
-      if (refusal) {
-        toast.error(t(refusal === 'kustomize' ? 'kube.ops.reloadKustomize' : 'kube.toolbar.brokenKustomization'))
-        return
-      }
-      openFile(selection[0])
-    }
+    if (verb === 'reload') openFile(selection[0])
     start(verb, req, labelOf(view, req.pill))
   }
 
