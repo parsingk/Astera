@@ -83,8 +83,9 @@ export interface KubeTargetView {
   resource: { kind: string; name: string | null } | { count: number } | { overlay: true } | null
   /** The nearest folder over the file whose kustomization does not parse: every action is refused until it is fixed. */
   brokenKustomization: string | null
-  /** A file in or below a kustomization's folder that no kustomization lists, so the plan leaves it out (it may be a
-   *  patch or a transformer config): every action waits. Never a folder or a kustomization file. */
+  /** A manifest file in or below a kustomization's folder that no kustomization lists, so the plan leaves it out (it
+   *  may be a patch or a transformer config): every action waits. Never a folder, a kustomization, plain YAML or a
+   *  Helm template. */
   unlisted: boolean
   /** A folder that is a Helm chart or lies in one (Chart.yaml in it or a folder above it, up to the project root):
    *  the plan leaves everything under it out. Never a file; a file's kind says helm-template. */

@@ -1661,12 +1661,14 @@ describe('a manifest beside a kustomization that does not list it (unlisted)', (
   const deeper = p('apps', 'app', 'more', 'x.yaml')
   const listed = p('apps', 'app', 'deployment.yaml')
   const loose = p('k8s', 'a.yaml')
+  const config = p('apps', 'app', 'config.yaml')
   const tree = {
     [p('apps', 'app', 'kustomization.yaml')]: 'resources:\n  - deployment.yaml\ntransformers:\n  - transformer.yaml\n',
     [listed]: yamlDocs(cm('a', {}, 'dev')),
     [transformer]: yamlDocs(cm('t', {}, 'dev')),
     [deeper]: yamlDocs(cm('x', {}, 'dev')),
-    [loose]: yamlDocs(cm('l', {}, 'dev'))
+    [loose]: yamlDocs(cm('l', {}, 'dev')),
+    [config]: 'replicas: 2\n'
   }
 
   it('is unlisted in the target view, below the folder too; a listed member, a loose manifest and a folder are not', async () => {
@@ -1678,6 +1680,8 @@ describe('a manifest beside a kustomization that does not list it (unlisted)', (
     expect((await svc.target(p('apps', 'app', 'kustomization.yaml'), root)).unlisted).toBe(false)
     expect((await svc.target(loose, root)).unlisted).toBe(false)
     expect((await svc.target(app, root)).unlisted).toBe(false)
+    // the planner leaves plain YAML out as plain-yaml, not as unlisted: only a manifest is unlisted
+    expect((await svc.target(config, root)).unlisted).toBe(false)
   })
 
   it('plans to nothing with the reason, and its chip compares nothing, before any cluster call', async () => {

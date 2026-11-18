@@ -250,8 +250,14 @@ export function createKubeService(deps: KubeServiceDeps) {
           ? { reloadBlocked: null, nsFromFile: false, resource: null }
           : await fileFacts(filePath)),
       brokenKustomization,
-      // The planner's rule for a file it leaves out as unlisted (plan.ts takeLoose).
-      unlisted: !isDir && !isKustomization && !graph.isMember(filePath) && graph.inKustomization(filePath),
+      // The planner's rule for a manifest file it leaves out as unlisted (plan.ts takeLoose); plain YAML and Helm
+      // templates are left out for their own reasons, so only a manifest is classified (cached per mtime) and counts.
+      unlisted:
+        !isDir &&
+        !isKustomization &&
+        !graph.isMember(filePath) &&
+        graph.inKustomization(filePath) &&
+        (await classifyOne(filePath).catch(() => null)) === 'manifest',
       helmChart
     }
   }
