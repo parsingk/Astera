@@ -1,7 +1,7 @@
 import type { KubeRequest, KubeRunResult } from '../../../../core/kube/types'
 import { resolveRelative } from '../../../../core/files/paths'
 import { shellQuote } from '../../lib/shellQuote'
-import { touchesSelection, type KubeLogEntry } from '../../hooks/useKubeOps'
+import { normKubePath, touchesSelection, type KubeLogEntry } from '../../hooks/useKubeOps'
 
 const SUCCESS = new Set(['created', 'configured', 'unchanged', 'deleted'])
 
@@ -44,16 +44,15 @@ export function failedFiles(result: KubeRunResult, projectRoot: string): string[
   return out
 }
 
-/** The explorer's failure marks after a finished run: its error files are added, and the selection's files that had no
- *  error are removed. A refused run touched nothing; a cancelled or timed-out one proves nothing about the files that
- *  did not report, so it only adds. */
+/** The explorer's failure marks after a finished run, keyed by `normKubePath`: its error files are added, and the
+ *  selection's marks are removed only when the run succeeded. A failed, cancelled or timed-out run proves nothing about
+ *  the files that did not report, so it only adds; a refused one changes nothing. */
 export function nextFailedPaths(prev: ReadonlySet<string>, result: KubeRunResult, req: KubeRequest | undefined): Set<string> {
   if (result.refused || !req) return new Set(prev)
-  const failed = failedFiles(result, req.projectRoot)
+  const failed = new Set(failedFiles(result, req.projectRoot).map((f) => normKubePath(f)))
   const next = new Set(prev)
-  if (!result.cancelled && !result.timedOut) {
-    for (const p of prev) if (touchesSelection(p, req.selection) && !failed.includes(p)) next.delete(p)
-  }
+  // A mark stays until the next successful operation on its file: a failure that names no file proves nothing.
+  if (result.ok) for (const p of prev) if (touchesSelection(p, req.selection) && !failed.has(p)) next.delete(p)
   for (const f of failed) next.add(f)
   return next
 }

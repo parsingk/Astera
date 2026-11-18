@@ -31,6 +31,7 @@ import { useExplorerSelection, type ExplorerSelection } from '../hooks/useExplor
 import { useFileOps, errText } from '../hooks/useFileOps'
 import { useGitStatus } from '../hooks/useGitStatus'
 import { useKubeKinds } from '../hooks/useKubeKinds'
+import { normKubePath } from '../hooks/useKubeOps'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
 import type { KubeFileKind } from '../../../core/kube/types'
@@ -870,7 +871,7 @@ export function FileExplorer({
             gitState={isDir ? undefined : gitStatus.fileState[p]}
             gitCount={isDir ? (gitStatus.folderCount[p] ?? 0) : 0}
             kubeKind={isDir ? undefined : kubeKinds[p]}
-            kubeFailed={isDir ? undefined : kubeFailed?.has(p)}
+            kubeFailed={isDir ? undefined : kubeFailed?.has(normKubePath(p))}
             busy={ops.busyRows.has(p)}
             loading={isDir && tree.loading.has(p) && !!dirs[p]}
             actions={rowActions}

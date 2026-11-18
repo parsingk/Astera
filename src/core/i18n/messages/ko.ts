@@ -3254,14 +3254,11 @@ export const ko = {
   'kube.log.verb.reload': '다시 읽기',
   'kube.log.compareSummary': '{changed}개 변경, {unchanged}개 같음, {created}개 새로 만듦',
   'kube.log.refusedChanged': '미리 본 뒤에 파일이 바뀌어 아무것도 적용하지 않았습니다',
-  'kube.log.expand': '펼치기',
-  'kube.log.collapse': '접기',
   'kube.log.rerun': '다시 실행',
   'kube.log.cancel': '중단',
   'kube.log.copy': '명령 복사',
   'kube.log.clear': '기록 지우기',
   'kube.log.rail': 'Kubernetes 기록 도구',
-  'kube.log.openFile': '파일 열기',
   'kube.toast.applied': '{context} 에 적용했습니다',
   'kube.toast.deleted': '{context} 에서 삭제했습니다',
   'kube.toast.reloaded': '클러스터 내용으로 다시 읽었습니다',
@@ -3270,6 +3267,5 @@ export const ko = {
   'kube.toast.timedOut': '{context} 작업이 시간 초과되었습니다',
   'kube.toast.refused': '{context} 작업이 거절되었습니다',
   'kube.toast.showLog': '기록 보기',
-  'kube.toast.openFile': '파일 열기',
   'kube.explorer.failed': '마지막 Kubernetes 작업이 실패했습니다'
 } as const

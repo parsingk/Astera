@@ -93,7 +93,8 @@ describe('kubeOpsReducer: the apply flow', () => {
         startedAt: 10,
         state: 'running',
         req: REQ,
-        namespaceLabel: 'dev'
+        namespaceLabel: 'dev',
+        involved: REQ.selection
       }
     ])
 
@@ -143,6 +144,21 @@ describe('kubeOpsReducer: the apply flow', () => {
       watch: ['/p/base/patch.yaml', '/p/envs/prod']
     })
     expect(s.dialog!.watch).toEqual(['/p/base/patch.yaml', '/p/envs/prod'])
+  })
+
+  it('the log entry keeps the paths the dialog watched, so a rerun watches them too', () => {
+    const watch = ['/p/base/patch.yaml', '/p/envs/prod']
+    const s1 = step(initialKubeOps, {
+      type: 'preview',
+      verb: 'apply',
+      req: { ...REQ, selection: ['/p/envs/prod'] },
+      namespaceLabel: 'dev',
+      id: 'd1',
+      at: 5,
+      watch
+    })
+    const s2 = step(s1, { type: 'previewed', seq: s1.dialog!.seq, preview: okPreview(), scope: 'x' })
+    expect(step(s2, { type: 'confirm', id: 'run1', at: 6, scope: 'x' }).log[0].involved).toEqual(watch)
   })
 
   it('newest log entry first', () => {
@@ -303,6 +319,7 @@ describe('kubeOpsReducer: compare and reload entries', () => {
         state: 'done',
         req: REQ,
         namespaceLabel: 'dev',
+        involved: REQ.selection,
         compare: { changed: 1, unchanged: 2, created: 1 }
       }
     ])

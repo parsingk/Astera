@@ -3000,14 +3000,11 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.log.verb.reload': 'Reload',
   'kube.log.compareSummary': '{changed} changed, {unchanged} unchanged, {created} new',
   'kube.log.refusedChanged': 'The files changed after the preview, so nothing was applied',
-  'kube.log.expand': 'Expand',
-  'kube.log.collapse': 'Collapse',
   'kube.log.rerun': 'Run again',
   'kube.log.cancel': 'Stop',
   'kube.log.copy': 'Copy command',
   'kube.log.clear': 'Clear log',
   'kube.log.rail': 'Kubernetes log tools',
-  'kube.log.openFile': 'Open file',
   'kube.toast.applied': 'Applied to {context}',
   'kube.toast.deleted': 'Deleted from {context}',
   'kube.toast.reloaded': 'Reloaded from the cluster',
@@ -3016,6 +3013,5 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.toast.timedOut': 'The operation on {context} timed out',
   'kube.toast.refused': 'The operation on {context} was refused',
   'kube.toast.showLog': 'Show log',
-  'kube.toast.openFile': 'Open file',
   'kube.explorer.failed': 'The last Kubernetes operation failed'
 }

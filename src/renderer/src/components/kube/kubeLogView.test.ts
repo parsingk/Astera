@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { KubeRequest, KubeRunResult } from '../../../../core/kube/types'
-import type { KubeLogEntry } from '../../hooks/useKubeOps'
+import { normKubePath, type KubeLogEntry } from '../../hooks/useKubeOps'
 import { defaultExpandedId, failedFiles, kubeBadge, kubeFailureCount, kubeToastOf, nextFailedPaths } from './kubeLogView'
 
 const t = (key: string, p?: Record<string, unknown>): string => (p ? `${key}${JSON.stringify(p)}` : key)
@@ -44,10 +44,26 @@ describe('failed paths', () => {
       '/x/b.yaml'
     ])
   })
-  it('adds the error files and removes the selection files that had none', () => {
+  it('a failed run adds its error files and keeps every earlier mark', () => {
     const prev = new Set(['/p/k8s/old.yaml', '/p/k8s/a.yaml', '/other/z.yaml'])
     const next = nextFailedPaths(prev, result({ ok: false, outcomes: [err('/p/k8s/a.yaml'), err('/p/k8s/new.yaml')] }), REQ)
-    expect([...next].sort()).toEqual(['/other/z.yaml', '/p/k8s/a.yaml', '/p/k8s/new.yaml'])
+    expect([...next].sort()).toEqual(['/other/z.yaml', '/p/k8s/a.yaml', '/p/k8s/new.yaml', '/p/k8s/old.yaml'])
+  })
+  it('a whole-run failure naming no file neither adds nor removes marks', () => {
+    const prev = new Set(['/p/k8s/a.yaml'])
+    const next = nextFailedPaths(prev, result({ ok: false, stderr: 'Unable to connect to the server', outcomes: [err(undefined)] }), REQ)
+    expect([...next]).toEqual(['/p/k8s/a.yaml'])
+  })
+  it('a successful run that errored on one file clears the others of its selection', () => {
+    const prev = new Set(['/p/k8s/old.yaml', '/p/k8s/a.yaml'])
+    const next = nextFailedPaths(prev, result({ ok: true, outcomes: [err('/p/k8s/a.yaml')] }), REQ)
+    expect([...next]).toEqual(['/p/k8s/a.yaml'])
+  })
+  it('keys marks by the normalised path, so a differently written path finds them', () => {
+    const bs = String.fromCharCode(92)
+    expect(normKubePath(`C:${bs}proj${bs}a.yaml`, 'win32')).toBe(normKubePath('c:/proj/a.yaml', 'win32'))
+    const next = nextFailedPaths(new Set(), result({ ok: false, outcomes: [err(`/p/k8s${bs}a.yaml`)] }), REQ)
+    expect(next.has(normKubePath('/p/k8s/a.yaml'))).toBe(true)
   })
   it('a successful run clears its selection only', () => {
     const next = nextFailedPaths(new Set(['/p/k8s/a.yaml', '/other/z.yaml']), result(), REQ)

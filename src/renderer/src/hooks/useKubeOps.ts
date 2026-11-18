@@ -31,6 +31,8 @@ export interface KubeLogEntry {
    *  names the file alone (`projectRoot` is empty). */
   req: KubeRequest
   namespaceLabel: string
+  /** The paths whose disk change made the dialog stale, so a rerun watches the same files. */
+  involved?: string[]
 }
 
 /** The confirmation dialog (spec 4.6). `preview: null` while the first answer loads. `phase` is `previewing` while
@@ -148,6 +150,7 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         state: 'done',
         req: d.req,
         namespaceLabel: d.namespaceLabel,
+        involved: d.watch,
         compare: compareCounts(a.preview)
       }
       const log = s.log.some((e) => e.id === d.id) ? s.log.map((e) => (e.id === d.id ? entry : e)) : [entry, ...s.log]
@@ -169,7 +172,8 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         startedAt: a.at,
         state: 'running',
         req: d.req,
-        namespaceLabel: d.namespaceLabel
+        namespaceLabel: d.namespaceLabel,
+        involved: d.watch
       }
       return { ...s, dialog: { ...d, phase: 'running', runId: a.id, cancelling: false }, log: [entry, ...s.log] }
     }
@@ -279,13 +283,14 @@ export function displayTarget(view: KubeTargetView, override: KubeOverride | und
   return { state: 'remembered', context: override.context, namespace: override.namespace ?? null, folder: '' }
 }
 
-const norm = (p: string, platform: string): string => foldPathCase(p.split('\\').join('/').replace(/\/+$/, ''), platform)
+/** A path as compared across the Kubernetes code: slashes unified, no trailing slash, case folded where the platform does. */
+export const normKubePath = (p: string, platform: string = runtimePlatform()): string => foldPathCase(p.split('\\').join('/').replace(/\/+$/, ''), platform)
 
 /** Whether a changed path is a selected file or lies under a selected folder. */
 export function touchesSelection(changed: string, selection: readonly string[], platform: string = runtimePlatform()): boolean {
-  const c = norm(changed, platform)
+  const c = normKubePath(changed, platform)
   return selection.some((s) => {
-    const n = norm(s, platform)
+    const n = normKubePath(s, platform)
     return c === n || c.startsWith(n + '/')
   })
 }

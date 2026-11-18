@@ -2952,9 +2952,9 @@ export default function App(): React.JSX.Element {
     const e = kubeOps.log.find((x) => x.id === id)
     if (!e) return
     if (e.verb === 'reload') kubeOps.startReload(e.req.selection[0], e.req.context, e.req.pill)
-    else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel)
-    else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel)
-    else kubeOps.startDelete(e.req, e.namespaceLabel)
+    else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel, e.involved)
+    else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel, e.involved)
+    else kubeOps.startDelete(e.req, e.namespaceLabel, e.involved)
   }
 
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
