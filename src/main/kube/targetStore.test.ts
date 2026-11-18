@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -94,15 +94,84 @@ describe('KubeTargetStore', () => {
     expect(store.get('a')).toBeUndefined()
   })
 
-  it('two quick set calls leave the newer value on disk', async () => {
+  it('writes are serialised: a slow older write cannot land after a newer one', async () => {
     const a = new KubeTargetStore(file())
     await a.load()
-    await Promise.all([
-      a.set('k', { context: 'old', namespace: null }),
-      a.set('k', { context: 'new', namespace: null })
-    ])
+    const realWriteFile = fs.writeFile.bind(fs)
+    let calls = 0
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
+      // The first write has already taken its snapshot (old) when it is held back. Unserialised,
+      // the second write would then finish first and the old snapshot would replace it.
+      if (calls++ === 0) await new Promise((r) => setTimeout(r, 80))
+      return (realWriteFile as (...a: unknown[]) => Promise<void>)(...args)
+    })
+    try {
+      const first = a.set('k', { context: 'old', namespace: null })
+      await new Promise((r) => setTimeout(r, 20))
+      await Promise.all([first, a.set('k', { context: 'new', namespace: null })])
+    } finally {
+      spy.mockRestore()
+    }
     const b = new KubeTargetStore(file())
     await b.load()
     expect(b.get('k')).toEqual({ context: 'new', namespace: null })
+  })
+
+  it('a rejected write does not block the next one, which still lands on disk', async () => {
+    const a = new KubeTargetStore(file())
+    await a.load()
+    const realRename = fs.rename.bind(fs)
+    let calls = 0
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (calls++ === 0) throw new Error('disk full')
+      return realRename(from, to)
+    })
+    try {
+      const first = a.set('k', { context: 'one', namespace: null })
+      const second = a.set('k2', { context: 'two', namespace: 'n' })
+      await expect(first).rejects.toThrow('disk full')
+      await second
+    } finally {
+      spy.mockRestore()
+    }
+    const b = new KubeTargetStore(file())
+    await b.load()
+    expect(b.get('k2')).toEqual({ context: 'two', namespace: 'n' })
+  })
+
+  it('inherited Object.prototype names are not entries', async () => {
+    const a = new KubeTargetStore(file())
+    await a.load()
+    expect(a.get('constructor')).toBeUndefined()
+    expect(a.get('toString')).toBeUndefined()
+    expect(a.getOverlay('hasOwnProperty')).toBeUndefined()
+  })
+
+  it('a __proto__ key is an ordinary entry and round-trips', async () => {
+    const a = new KubeTargetStore(file())
+    await a.load()
+    await a.set('__proto__', { context: 'p', namespace: null })
+    await a.setOverlay('__proto__', 'ov')
+    expect(a.get('__proto__')).toEqual({ context: 'p', namespace: null })
+    expect(a.get('other')).toBeUndefined()
+    const b = new KubeTargetStore(file())
+    await b.load()
+    expect(b.get('__proto__')).toEqual({ context: 'p', namespace: null })
+    expect(b.getOverlay('__proto__')).toBe('ov')
+    expect(b.get('context')).toBeUndefined()
+  })
+
+  it('a hand-edited file with a __proto__ key loads it as an ordinary entry', async () => {
+    await fs.writeFile(
+      file(),
+      '{"targets":{"__proto__":{"context":"c","namespace":null}},"overlays":{"__proto__":"o"}}',
+      'utf8'
+    )
+    const store = new KubeTargetStore(file())
+    expect(await store.load()).toEqual({ recovered: false })
+    expect(store.get('__proto__')).toEqual({ context: 'c', namespace: null })
+    expect(store.getOverlay('__proto__')).toBe('o')
+    expect(store.get('context')).toBeUndefined()
+    expect(({} as Record<string, unknown>).context).toBeUndefined()
   })
 })

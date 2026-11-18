@@ -16,8 +16,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /** Remembered kube target (context + namespace) per folder, and the chosen overlay per kustomize file.
  *  Keys are opaque strings here. Follows the RunConfigStore pattern. */
 export class KubeTargetStore {
-  private targets: Record<string, Remembered> = {}
-  private overlays: Record<string, string> = {}
+  // Maps, not plain objects: keys are opaque and may be 'constructor' or '__proto__'.
+  private targets = new Map<string, Remembered>()
+  private overlays = new Map<string, string>()
   private writing: Promise<void> = Promise.resolve()
 
   constructor(private filePath: string) {}
@@ -27,24 +28,24 @@ export class KubeTargetStore {
       const parsed: unknown = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
       if (!isRecord(parsed)) throw new Error('invalid schema')
       // A wrong-shaped entry drops only itself; only a file that is not an object is a recovery.
-      const targets: Record<string, Remembered> = {}
+      const targets = new Map<string, Remembered>()
       if (isRecord(parsed.targets)) {
         for (const [k, v] of Object.entries(parsed.targets)) {
-          if (isRemembered(v)) targets[k] = { context: v.context, namespace: v.namespace }
+          if (isRemembered(v)) targets.set(k, { context: v.context, namespace: v.namespace })
         }
       }
-      const overlays: Record<string, string> = {}
+      const overlays = new Map<string, string>()
       if (isRecord(parsed.overlays)) {
         for (const [k, v] of Object.entries(parsed.overlays)) {
-          if (typeof v === 'string') overlays[k] = v
+          if (typeof v === 'string') overlays.set(k, v)
         }
       }
       this.targets = targets
       this.overlays = overlays
       return { recovered: false }
     } catch (err) {
-      this.targets = {}
-      this.overlays = {}
+      this.targets = new Map()
+      this.overlays = new Map()
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       return { recovered: true }
@@ -52,22 +53,22 @@ export class KubeTargetStore {
   }
 
   get(key: string): Remembered | undefined {
-    return this.targets[key]
+    return this.targets.get(key)
   }
 
   async set(key: string, value: Remembered | null): Promise<void> {
-    if (value === null) delete this.targets[key]
-    else this.targets[key] = value
+    if (value === null) this.targets.delete(key)
+    else this.targets.set(key, value)
     await this.persist()
   }
 
   getOverlay(fileKey: string): string | undefined {
-    return this.overlays[fileKey]
+    return this.overlays.get(fileKey)
   }
 
   async setOverlay(fileKey: string, overlayDir: string | null): Promise<void> {
-    if (overlayDir === null) delete this.overlays[fileKey]
-    else this.overlays[fileKey] = overlayDir
+    if (overlayDir === null) this.overlays.delete(fileKey)
+    else this.overlays.set(fileKey, overlayDir)
     await this.persist()
   }
 
@@ -81,7 +82,12 @@ export class KubeTargetStore {
   private async write(): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.${randomUUID()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify({ targets: this.targets, overlays: this.overlays }, null, 2), 'utf8')
+    await fs.writeFile(tmp, JSON.stringify(
+        // fromEntries defines own properties, so a '__proto__' key is written as an ordinary one.
+        { targets: Object.fromEntries(this.targets), overlays: Object.fromEntries(this.overlays) },
+        null,
+        2
+      ), 'utf8')
     await fs.rename(tmp, this.filePath)
   }
 }
