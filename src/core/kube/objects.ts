@@ -23,28 +23,34 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
 
-function asObject(v: unknown): K8sObject | null {
-  if (!isRecord(v) || typeof v.apiVersion !== 'string' || typeof v.kind !== 'string') return null
+function asObject(v: unknown, where: string): K8sObject {
+  if (!isRecord(v) || typeof v.apiVersion !== 'string' || typeof v.kind !== 'string') {
+    throw new Error(`${where} is not an object with string apiVersion and kind`)
+  }
   if (!isRecord(v.metadata)) return { ...v, metadata: {} } as K8sObject
   return v as K8sObject
 }
 
-/** Objects in kubectl's YAML output; `kind: List` is expanded, empty output gives `[]`. */
+/** Objects in kubectl's YAML output; `kind: List` is expanded, empty output and empty documents give nothing.
+ *  Throws (naming the document) rather than dropping what it cannot read: a dropped object would misreport the diff. */
 export function objectsFromYaml(text: string): K8sObject[] {
   const out: K8sObject[] = []
-  for (const doc of parseAllDocuments(text)) {
-    if (doc.errors.length > 0) continue
-    const value: unknown = doc.toJS({ maxAliasCount: 100 })
-    if (isRecord(value) && value.kind === 'List' && Array.isArray(value.items)) {
-      for (const item of value.items) {
-        const o = asObject(item)
-        if (o) out.push(o)
-      }
-    } else {
-      const o = asObject(value)
-      if (o) out.push(o)
+  parseAllDocuments(text).forEach((doc, index) => {
+    const where = `document ${index}`
+    if (doc.errors.length > 0) throw new Error(`${where} does not parse: ${doc.errors[0].message}`)
+    let value: unknown
+    try {
+      value = doc.toJS({ maxAliasCount: 100 })
+    } catch (e) {
+      throw new Error(`${where} cannot be read: ${e instanceof Error ? e.message : String(e)}`)
     }
-  }
+    if (value === null || value === undefined) return
+    if (isRecord(value) && value.kind === 'List' && Array.isArray(value.items)) {
+      value.items.forEach((item, i) => out.push(asObject(item, `${where} item ${i}`)))
+    } else {
+      out.push(asObject(value, where))
+    }
+  })
   return out
 }
 
@@ -119,8 +125,10 @@ export function pairObjects(
   return entries.map(({ l, a, id }) => {
     const ns = id.metadata.namespace ?? null
     const name = id.metadata.name ?? ''
+    // The dry run answers in the version the file asks for, so the live side is shown in that version too.
+    const liveShown = l && a && mode === 'apply' ? { ...l, apiVersion: a.apiVersion } : l
     const [lo, ao] = maskSecretPair(
-      l ? normalizeObject(l, opts) : null,
+      liveShown ? normalizeObject(liveShown, opts) : null,
       mode === 'apply' && a ? normalizeObject(a, opts) : null
     )
     const beforeText = toYaml(lo)

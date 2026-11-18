@@ -52,6 +52,33 @@ items:
   })
 })
 
+describe('objectsFromYaml failures', () => {
+  it('skips empty documents', () => {
+    expect(objectsFromYaml('---\n---\n')).toEqual([])
+    expect(objectsFromYaml(LIVE_DEPLOY + '---\n')).toHaveLength(1)
+  })
+
+  it('throws naming the document when one does not parse', () => {
+    expect(() => objectsFromYaml(LIVE_DEPLOY + '---\na: [unclosed\n')).toThrow(/document 1 does not parse/)
+  })
+
+  it('throws when toJS fails (too many aliases)', () => {
+    const bomb = 'a: &a [x]\nb: [' + Array(101).fill('*a').join(',') + ']\n'
+    expect(() => objectsFromYaml(bomb)).toThrow(/document 0 cannot be read/)
+  })
+
+  it('throws for a document without apiVersion and kind', () => {
+    expect(() => objectsFromYaml('foo: bar\n')).toThrow(/document 0 is not an object/)
+    expect(() => objectsFromYaml('- a\n- b\n')).toThrow(/document 0 is not an object/)
+  })
+
+  it('throws for a List item that is not an object', () => {
+    expect(() => objectsFromYaml('apiVersion: v1\nkind: List\nitems:\n  - {metadata: {name: x}}\n')).toThrow(
+      /document 0 item 0/
+    )
+  })
+})
+
 describe('normalizeObject', () => {
   it('drops server fields and an emptied annotations map', () => {
     const [o] = objectsFromYaml(LIVE_DEPLOY)
@@ -131,7 +158,8 @@ describe('pairObjects', () => {
 
   it('apply: matches across versions of the same group', () => {
     const [d] = pairObjects([deploy(2, 'apps/v1beta2')], [deploy(2)], 'apply', opts)
-    expect(d.state).not.toBe('new')
+    expect(d.state).toBe('unchanged')
+    expect(d.changedLines).toBe(0)
   })
 
   it('apply: an object only in after is new', () => {
