@@ -71,22 +71,33 @@ export function failKubeRequest(t: KubeTracker, req: KubeRequest): void {
   }
 }
 
-/** Merges one answer into the kinds. A path is applied only if this was its latest request and the
- *  generation is still current; a path missing from the answer is dropped (deleted, or not YAML). */
-export function applyKubeResults(
-  kinds: Record<string, KubeFileKind>,
-  results: Record<string, KubeFileKind>,
-  req: KubeRequest,
-  t: KubeTracker
-): Record<string, KubeFileKind> {
-  if (req.gen !== t.gen) return kinds
-  const next = { ...kinds }
-  let changed = false
+/** Tracker bookkeeping for one answer, done synchronously when it arrives (never inside a state updater,
+ *  which React may run twice or later). Returns the paths whose answer is accepted: this was the path's
+ *  latest request, the generation is current, and the path is still listed. */
+export function acceptKubeResults(req: KubeRequest, t: KubeTracker, listed: ReadonlySet<string>): string[] {
+  if (req.gen !== t.gen) return []
+  const accepted: string[] = []
   for (const p of req.paths) {
     if (t.latest.get(p) !== req.seq) continue
     t.latest.delete(p)
     t.pending.delete(p)
+    if (!listed.has(p)) continue
     t.asked.add(p)
+    accepted.push(p)
+  }
+  return accepted
+}
+
+/** Pure merge of accepted answers into the kinds; a path missing from the answer is dropped (deleted, or
+ *  not YAML). Safe to run any number of times with the same input. */
+export function mergeKubeKinds(
+  kinds: Record<string, KubeFileKind>,
+  results: Record<string, KubeFileKind>,
+  accepted: readonly string[]
+): Record<string, KubeFileKind> {
+  const next = { ...kinds }
+  let changed = false
+  for (const p of accepted) {
     const k = results[p]
     if (k === undefined) {
       if (p in next) {
@@ -101,13 +112,16 @@ export function applyKubeResults(
   return changed ? next : kinds
 }
 
-/** Drops the kinds (and bookkeeping) of paths that are no longer listed. */
-export function pruneKubeKinds(
-  kinds: Record<string, KubeFileKind>,
-  keep: ReadonlySet<string>,
-  t: KubeTracker
-): Record<string, KubeFileKind> {
+/** Forgets the answered-state of paths that are no longer listed (tracker only). */
+export function pruneKubeTracker(t: KubeTracker, keep: ReadonlySet<string>): void {
   for (const p of [...t.asked]) if (!keep.has(p)) t.asked.delete(p)
+}
+
+/** Pure: the kinds without the paths that are no longer listed. */
+export function dropUnlistedKinds(
+  kinds: Record<string, KubeFileKind>,
+  keep: ReadonlySet<string>
+): Record<string, KubeFileKind> {
   const stale = Object.keys(kinds).filter((p) => !keep.has(p))
   if (stale.length === 0) return kinds
   const next = { ...kinds }
@@ -130,7 +144,10 @@ export function useKubeKinds(root: string | null, paths: string[]): Record<strin
       const req = beginKubeRequest(tracker.current, chunk)
       window.api.kube
         .classify(chunk)
-        .then((res) => setKinds((prev) => applyKubeResults(prev, res, req, tracker.current)))
+        .then((res) => {
+          const accepted = acceptKubeResults(req, tracker.current, listed.current)
+          if (accepted.length > 0) setKinds((prev) => mergeKubeKinds(prev, res, accepted))
+        })
         .catch(() => failKubeRequest(tracker.current, req)) // keep the previous kinds; the name-based icon is always safe
     }
   }
@@ -143,7 +160,9 @@ export function useKubeKinds(root: string | null, paths: string[]): Record<strin
   useEffect(() => {
     const list = root ? kubeCandidates(paths) : []
     listed.current = new Set(list)
-    setKinds((prev) => pruneKubeKinds(prev, listed.current, tracker.current))
+    const keep = listed.current
+    pruneKubeTracker(tracker.current, keep)
+    setKinds((prev) => dropUnlistedKinds(prev, keep))
     classify(planKubeRequests(list, tracker.current))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, paths])
