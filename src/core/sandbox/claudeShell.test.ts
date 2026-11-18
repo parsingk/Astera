@@ -3,7 +3,7 @@
 // through Git Bash against a fake codex: a bash script that records its arguments, folder and environment, then runs what
 // follows `--` as `codex sandbox` would.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -163,7 +163,8 @@ interface Kit {
 // A folder whose name holds a space and a single quote, so every path the wrapper embeds is one that needs quoting
 function kit(over: Partial<ClaudeShellPlan> = {}): Kit {
   const bash = gitBash as string
-  const dir = slashed(mkdtempSync(path.join(os.tmpdir(), "astera claude'shell-")))
+  // Spelled long: GitHub's Windows runner gives TEMP as C:\Users\RUNNER~1\..., and bash reports folders by their long name
+  const dir = slashed(realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "astera claude'shell-"))))
   dirs.push(dir)
   const root = `${dir}/root`
   mkdirSync(`${root}/sub`, { recursive: true })
