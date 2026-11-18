@@ -3542,6 +3542,10 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-chips { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .kube-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
 .kube-chip-kind { font-family: var(--mono); color: var(--text-faint); }
+.kube-chip-btn { background: transparent; border: 0; padding: 2px 6px; margin: -2px -6px; border-radius: 4px; font-family: inherit; cursor: pointer; }
+.kube-chip-btn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+.kube-chip-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.kube-chip-btn:disabled { cursor: default; }
 .kube-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
 .kube-dot.same { background: var(--ok); }
 .kube-dot.different { background: var(--git-modified); }

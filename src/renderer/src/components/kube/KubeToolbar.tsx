@@ -206,7 +206,7 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
           ))}
 
         <div className="kube-chips">
-          <StatusChip status={p.status} loading={p.statusLoading} />
+          <StatusChip status={p.status} loading={p.statusLoading} onCompare={p.onCompare} disabled={off} />
           {p.resourceLabel !== null && <span className="kube-chip kube-chip-kind">{p.resourceLabel}</span>}
         </div>
       </div>
@@ -228,7 +228,19 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
   )
 }
 
-function StatusChip({ status, loading }: { status: KubeStatus | null; loading: boolean }): React.JSX.Element | null {
+/** The same/different chip (spec 4.9). "different" and "not in cluster" open the comparison when clicked; `disabled`
+ *  follows the compare action. */
+export function StatusChip({
+  status,
+  loading,
+  onCompare,
+  disabled
+}: {
+  status: KubeStatus | null
+  loading: boolean
+  onCompare: () => void
+  disabled: boolean
+}): React.JSX.Element | null {
   const { t } = useI18n()
   if (loading) {
     return (
@@ -249,6 +261,22 @@ function StatusChip({ status, loading }: { status: KubeStatus | null; loading: b
         : status.kind === 'absent'
           ? t('kube.chip.absent')
           : t('kube.chip.unknown')
+  if (status.kind === 'different' || status.kind === 'absent') {
+    const label = t('kube.chip.openCompare', { status: text })
+    return (
+      <button
+        type="button"
+        className="kube-chip kube-chip-btn"
+        title={label}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onCompare}
+      >
+        <span className={`kube-dot ${status.kind}`} aria-hidden="true" />
+        {text}
+      </button>
+    )
+  }
   return (
     <span className="kube-chip" title={status.kind === 'unknown' ? status.reason : undefined}>
       <span className={`kube-dot ${status.kind}`} aria-hidden="true" />

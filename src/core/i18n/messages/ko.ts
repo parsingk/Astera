@@ -3223,6 +3223,7 @@ export const ko = {
   'kube.chip.absent': '클러스터에 없음',
   'kube.chip.unknown': '확인 불가',
   'kube.chip.loading': '확인하는 중…',
+  'kube.chip.openCompare': '{status} · 비교 보기',
   'kube.picker.search': '클러스터 검색',
   'kube.picker.current': 'kubeconfig 현재',
   'kube.picker.empty': '맞는 클러스터가 없습니다',

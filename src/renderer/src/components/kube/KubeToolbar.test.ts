@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeToolbar } from './KubeToolbar'
+import { KubeToolbar, StatusChip } from './KubeToolbar'
 
 vi.mock('../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -208,6 +208,28 @@ describe('status chip', () => {
     const u = chip({ kind: 'unknown', reason: 'no-target' })
     expect(u).toContain('kube.chip.unknown')
     expect(u).toContain('title="no-target"')
+  })
+
+  it('different and not in cluster are buttons that open the comparison; same and unknown are not', () => {
+    for (const status of [{ kind: 'different', lines: 4 }, { kind: 'absent' }]) {
+      const html = chip(status)
+      expect(html).toMatch(/<button[^>]*class="kube-chip kube-chip-btn"/)
+      const b = /<button[^>]*class="kube-chip kube-chip-btn"[^>]*>/.exec(html)?.[0] ?? ''
+      expect(b).toMatch(/title="kube\.chip\.openCompare[^"]*"/)
+      expect(b.match(/title="([^"]*)"/)?.[1]).toBe(b.match(/aria-label="([^"]*)"/)?.[1])
+      expect(b).not.toContain('disabled')
+      // waits like the compare button does
+      expect(chip(status, { busy: true })).toMatch(/<button[^>]*class="kube-chip kube-chip-btn"[^>]*disabled/)
+    }
+    expect(chip({ kind: 'same' })).not.toContain('kube-chip-btn')
+    expect(chip({ kind: 'unknown', reason: 'x' })).not.toContain('kube-chip-btn')
+
+    const onCompare = vi.fn()
+    const el = StatusChip({ status: { kind: 'different', lines: 2 }, loading: false, onCompare, disabled: false }) as React.ReactElement<{
+      onClick: () => void
+    }>
+    el.props.onClick()
+    expect(onCompare).toHaveBeenCalledTimes(1)
   })
 
   it('a loading status shows a spinner instead', () => {

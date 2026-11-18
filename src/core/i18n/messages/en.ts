@@ -2969,6 +2969,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.chip.absent': 'Not in cluster',
   'kube.chip.unknown': 'Cannot tell',
   'kube.chip.loading': 'Checking…',
+  'kube.chip.openCompare': '{status} · open the comparison',
   'kube.picker.search': 'Search clusters',
   'kube.picker.current': 'kubeconfig current',
   'kube.picker.empty': 'No matching cluster',
