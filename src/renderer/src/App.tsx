@@ -2933,9 +2933,10 @@ export default function App(): React.JSX.Element {
       if (result.verb !== 'reload') setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
       const note = kubeToastOf(result, t as never)
       if (!note) continue
-      if (note.kind === 'success') toast.success(note.message)
+      const show = note.kind === 'success' ? toast.success : toast.error
+      if (!note.showLog) show(note.message)
       else {
-        const id = toast.error(note.message, {
+        const id = show(note.message, {
           action: {
             label: t('kube.toast.showLog'),
             onClick: () => {

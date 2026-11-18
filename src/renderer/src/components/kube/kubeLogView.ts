@@ -60,24 +60,31 @@ export function nextFailedPaths(prev: ReadonlySet<string>, result: KubeRunResult
 type T = (key: never, params?: Record<string, string | number>) => string
 
 /** The toast a finished apply, delete or reload gets, or null when none is due (compare, or a run whose preview
- *  asked again because the files changed: the dialog says so itself). */
+ *  asked again because the files changed: the dialog says so itself). An apply or delete names its target and counts
+ *  (spec 4.8) and offers the log (`showLog`); a reload's success keeps its own words. */
 export function kubeToastOf(
   result: KubeRunResult,
   t: T
-): { kind: 'success' | 'error'; message: string } | null {
+): { kind: 'success' | 'error'; message: string; showLog: boolean } | null {
   if (result.refused?.reason === 'changed') return null
   const context = result.context
-  const done = t(`kube.toast.${result.verb === 'delete' ? 'deleted' : result.verb === 'reload' ? 'reloaded' : 'applied'}` as never, { context })
-  if (result.ok) return { kind: 'success', message: done }
+  if (result.ok && result.verb === 'reload') return { kind: 'success', message: t('kube.toast.reloaded' as never, { context }), showLog: false }
+  if (result.ok) {
+    // A warning line names no resource of its own.
+    const count = result.outcomes.filter((o) => o.outcome !== 'warning').length
+    const key = result.verb === 'delete' ? 'kube.toast.deleted' : 'kube.toast.applied'
+    return { kind: 'success', message: t(key as never, { context, count }), showLog: true }
+  }
   // A failed reload already has its own toast with the reason.
   if (result.verb === 'reload') return null
-  if (result.refused) return { kind: 'error', message: t('kube.toast.refused' as never, { context }) }
-  if (result.cancelled) return { kind: 'error', message: t('kube.toast.cancelled' as never, { context }) }
-  if (result.timedOut) return { kind: 'error', message: t('kube.toast.timedOut' as never, { context }) }
+  const error = (message: string): { kind: 'error'; message: string; showLog: boolean } => ({ kind: 'error', message, showLog: true })
+  if (result.refused) return error(t('kube.toast.refused' as never, { context }))
+  if (result.cancelled) return error(t('kube.toast.cancelled' as never, { context }))
+  if (result.timedOut) return error(t('kube.toast.timedOut' as never, { context }))
   const ok = result.outcomes.filter((o) => SUCCESS.has(o.outcome)).length
   const failed = Math.max(1, errorCount(result))
   const key = result.verb === 'delete' ? 'kube.toast.deleteFailed' : 'kube.toast.applyFailed'
-  return { kind: 'error', message: t(key as never, { context, ok, failed }) }
+  return error(t(key as never, { context, ok, failed }))
 }
 
 /** "HH:MM:SS" in local time. */

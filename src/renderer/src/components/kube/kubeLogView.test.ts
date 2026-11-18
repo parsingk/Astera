@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import type { KubeRequest, KubeRunResult } from '../../../../core/kube/types'
 import { normKubePath, type KubeLogEntry } from '../../hooks/useKubeOps'
 import { defaultExpandedId, failedFiles, kubeBadge, kubeFailureCount, kubeToastOf, nextFailedPaths } from './kubeLogView'
+import { en } from '../../../../core/i18n/messages/en'
+import { ko } from '../../../../core/i18n/messages/ko'
 
 const t = (key: string, p?: Record<string, unknown>): string => (p ? `${key}${JSON.stringify(p)}` : key)
 const REQ: KubeRequest = { selection: ['/p/k8s'], projectRoot: '/p', context: 'c', pill: null }
@@ -80,18 +82,41 @@ describe('failed paths', () => {
 })
 
 describe('kubeToastOf', () => {
-  it('words success per verb', () => {
-    expect(kubeToastOf(result(), t as never)).toEqual({ kind: 'success', message: 'kube.toast.applied{"context":"c"}' })
-    expect(kubeToastOf(result({ verb: 'delete' }), t as never)?.message).toBe('kube.toast.deleted{"context":"c"}')
-    expect(kubeToastOf(result({ verb: 'reload' }), t as never)?.message).toBe('kube.toast.reloaded{"context":"c"}')
+  it('words success per verb, counting the resources that are not warnings, and offers the log for an apply or delete', () => {
+    const outcomes = [
+      { ref: 'a/b', outcome: 'configured' as const },
+      { ref: 'c/d', outcome: 'unchanged' as const },
+      { ref: '', outcome: 'warning' as const, message: 'Warning: deprecated' },
+      { ref: 'e/f', outcome: 'created' as const }
+    ]
+    expect(kubeToastOf(result({ outcomes }), t as never)).toEqual({
+      kind: 'success',
+      message: 'kube.toast.applied{"context":"c","count":3}',
+      showLog: true
+    })
+    expect(kubeToastOf(result({ verb: 'delete', outcomes: [{ ref: 'a/b', outcome: 'deleted' }] }), t as never)).toEqual({
+      kind: 'success',
+      message: 'kube.toast.deleted{"context":"c","count":1}',
+      showLog: true
+    })
+    // reload is unchanged: its own words, no counts and no log button
+    expect(kubeToastOf(result({ verb: 'reload' }), t as never)).toEqual({
+      kind: 'success',
+      message: 'kube.toast.reloaded{"context":"c"}',
+      showLog: false
+    })
+    for (const key of ['kube.toast.applied', 'kube.toast.deleted'] as const) {
+      expect(ko[key]).toContain('{count}')
+      expect(en[key]).toContain('{count}')
+    }
   })
   it('says a failure did not apply (or delete), with the counts, never that it applied', () => {
     const r = result({ ok: false, outcomes: [{ ref: 'a/b', outcome: 'created' }, { ref: 'c/d', outcome: 'unchanged' }, err('/f')] })
     const note = kubeToastOf(r, t as never)
-    expect(note).toEqual({ kind: 'error', message: 'kube.toast.applyFailed{"context":"c","ok":2,"failed":1}' })
+    expect(note).toEqual({ kind: 'error', message: 'kube.toast.applyFailed{"context":"c","ok":2,"failed":1}', showLog: true })
     expect(note?.message).not.toContain('kube.toast.applied')
     const del = kubeToastOf(result({ verb: 'delete', ok: false, outcomes: [{ ref: 'a/b', outcome: 'deleted' }, err('/g'), err('/h')] }), t as never)
-    expect(del).toEqual({ kind: 'error', message: 'kube.toast.deleteFailed{"context":"c","ok":1,"failed":2}' })
+    expect(del).toEqual({ kind: 'error', message: 'kube.toast.deleteFailed{"context":"c","ok":1,"failed":2}', showLog: true })
   })
   it('has its own wording for timeout, stop and refusal, and stays silent where the dialog or another toast speaks', () => {
     expect(kubeToastOf(result({ ok: false, timedOut: true }), t as never)?.message).toContain('timedOut')
