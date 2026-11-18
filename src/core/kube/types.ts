@@ -26,3 +26,32 @@ export type OperationPlan =
 
 /** `nsFlag` is the value for `-n`, or null when every resource names its namespace. */
 export type KubeTarget = { context: string; nsFlag: string | null }
+
+export type KubeProvider = 'eks' | 'gke'
+
+/** One context of the kubeconfig, as `kubectl config view` lists it. */
+export interface KubeContext {
+  name: string
+  namespace: string | null
+  cluster: string
+  provider: KubeProvider | null
+}
+
+/** `error` is set by the service when kubectl itself failed; parseConfigView never sets it. */
+export interface KubeContexts {
+  contexts: KubeContext[]
+  current: string | null
+  error?: { errorCode?: string; stderr: string }
+}
+
+/** What is remembered for a folder. */
+export interface Remembered {
+  context: string
+  namespace: string | null
+}
+
+export type TargetState =
+  | { state: 'remembered'; context: string; namespace: string | null; folder: string }
+  | { state: 'current'; context: string; namespace: string | null }
+  | { state: 'missing'; context: string; folder: string }
+  | { state: 'none' }
