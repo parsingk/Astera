@@ -5,6 +5,7 @@ import type { KubeFileKind, KubeStatus, TargetState } from '../../../../core/kub
 import { useI18n } from '../../i18n/I18nProvider'
 import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
+import { fileNamespacePill } from './fileNamespacePill'
 
 export interface KubeToolbarProps {
   kind: KubeFileKind
@@ -18,6 +19,7 @@ export interface KubeToolbarProps {
   nsLocked: string | null
   /** Every resource names its namespace, so no `-n` is sent. */
   nsFromFile: boolean
+  fileNamespaces: string[]
   status: KubeStatus | null
   statusLoading: boolean
   /** "Kind · name" of the file's one resource, or null. */
@@ -104,8 +106,9 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
     (p.target.state === 'current' ? ' kube-pill-warn' : '') +
     (p.target.state === 'missing' ? ' kube-pill-bad' : '')
 
+  const fromFile = p.nsFromFile ? fileNamespacePill(p.fileNamespaces, t) : null
   const nsText = p.nsFromFile
-    ? t('kube.toolbar.nsFromFile')
+    ? (fromFile?.text ?? null)
     : p.nsLocked !== null
       ? t('kube.toolbar.ns', { ns: p.nsLocked })
       : p.pill !== null
@@ -199,7 +202,8 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
               <span className="kube-pill-text">{nsText}</span>
             </span>
           ) : p.nsFromFile ? (
-            <span className="kube-pill kube-pill-ns-static">
+            <span className="kube-pill kube-pill-locked" title={fromFile?.title}>
+              <Lock size={11} aria-hidden="true" />
               <span className="kube-pill-text">{nsText}</span>
             </span>
           ) : (

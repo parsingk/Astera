@@ -181,8 +181,20 @@ describe('KubeConfirmDialog', () => {
     expect(render(okPreview(diff(), ['dev']))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
     expect(render(okPreview(diff(), ['dev', 'dev', null]))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
     const fromFiles = render(okPreview(diff(), [null, null]))
-    expect(fromFiles).toContain('kube.toolbar.nsFromFile')
+    expect(fromFiles).toContain('title="kube.toolbar.nsFromFile"')
+    expect(fromFiles).toContain('kube.toolbar.ns{&quot;ns&quot;:&quot;shop&quot;}')
     expect(fromFiles).not.toContain('kube.confirm.namespace{')
+    const severalFiles: KubePreview = {
+      ...(okPreview(diff(), [null, null]) as Extract<KubePreview, { ok: true }>),
+      resources: [
+        { command: 0, diff: diff({ namespace: 'web' }) },
+        { command: 1, diff: diff({ namespace: 'api' }) },
+        { command: 1, diff: diff({ namespace: null, kind: 'Namespace' }) }
+      ]
+    }
+    const manyFiles = render(severalFiles)
+    expect(manyFiles).toContain('kube.toolbar.nsMore{&quot;first&quot;:&quot;api&quot;,&quot;n&quot;:1}')
+    expect(manyFiles).toContain('title="kube.toolbar.nsFromFile\napi, web"')
     const many = render(okPreview(diff(), ['dev', null, 'web']))
     expect(many).toContain('kube.confirm.nsMany')
     expect(many).toContain('title="dev, web"')
@@ -198,7 +210,6 @@ describe('KubeConfirmDialog', () => {
       stderr: 'dry run failed: boom'
     })
     const fromFiles = render(failed([null, null]))
-    expect(fromFiles).toContain('kube.toolbar.nsFromFile')
     expect(fromFiles).not.toContain('kube.confirm.namespace{')
     expect(render(failed(['dev']))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
     expect(render(failed(['dev', 'web']))).toContain('title="dev, web"')

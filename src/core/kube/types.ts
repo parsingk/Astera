@@ -80,6 +80,8 @@ export interface KubeTargetView {
   rememberChoices: string[]
   reloadBlocked: 'secret' | 'multi' | null
   nsFromFile: boolean
+  /** The distinct, sorted namespaces a plain manifest names (cluster-scoped kinds excluded); empty through an overlay. */
+  fileNamespaces: string[]
   resource: { kind: string; name: string | null } | { count: number } | { overlay: true } | null
   /** The nearest folder over the file whose kustomization does not parse: every action is refused until it is fixed. */
   brokenKustomization: string | null

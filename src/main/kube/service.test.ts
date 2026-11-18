@@ -424,6 +424,20 @@ describe('target: reloadBlocked and nsFromFile (R10)', () => {
     expect(await svc.target(p('k8s', 'b.yaml'), root)).toMatchObject({ reloadBlocked: null, nsFromFile: true })
   })
 
+  it('fileNamespaces lists the distinct sorted namespaces the file names, cluster-scoped kinds left out', async () => {
+    const ns = (name: string, n: string): string => `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ${name}\n  namespace: ${n}\n`
+    const CLUSTER = 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: shop\n'
+    const h = harness({
+      [p('k8s', 'a.yaml')]: MANIFEST,
+      [p('k8s', 'one.yaml')]: `${ns('a', 'shop')}---\n${ns('b', 'shop')}---\n${CLUSTER}`,
+      [p('k8s', 'many.yaml')]: `${ns('a', 'web')}---\n${ns('b', 'api')}---\n${ns('c', 'web')}`
+    })
+    const svc = createKubeService(h.deps)
+    expect((await svc.target(p('k8s', 'a.yaml'), root)).fileNamespaces).toEqual([])
+    expect((await svc.target(p('k8s', 'one.yaml'), root)).fileNamespaces).toEqual(['shop'])
+    expect((await svc.target(p('k8s', 'many.yaml'), root)).fileNamespaces).toEqual(['api', 'web'])
+  })
+
   it('a Secret blocks reload, also among several resources; several resources block it as multi', async () => {
     const h = harness({
       [p('k8s', 's.yaml')]: SECRET,

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, Lock } from 'lucide-react'
 import type { KubePreview, KubeVerb, ResourceDiff, ResourceState } from '../../../../core/kube/types'
 import { useI18n } from '../../i18n/I18nProvider'
 import { backdropProps } from '../../lib/backdrop'
 import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
+import { fileNamespacePill } from './fileNamespacePill'
 import { SideBySideDiff } from './SideBySideDiff'
 
 const MARK: Record<ResourceState, string> = {
@@ -34,12 +35,19 @@ function namespacePill(
   preview: KubePreview | null,
   namespaceLabel: string,
   t: ReturnType<typeof useI18n>['t']
-): { text: string; title?: string } | null {
+): { text: string; title?: string; fromFile?: true } | null {
   if (preview === null) return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
   if (!preview.ok && (preview.reason !== 'kubectl' || preview.commandLines.length === 0)) return null
   if (preview.nsFlags === null) return null
   const values = [...new Set(preview.nsFlags.filter((n): n is string => n !== null))]
-  if (values.length === 0) return { text: t('kube.toolbar.nsFromFile') }
+  if (values.length === 0) {
+    // No `-n`: the resources name their own namespaces (cluster-scoped ones have none).
+    const named = fileNamespacePill(
+      !preview.ok ? [] : preview.resources.flatMap((r) => (r.diff.namespace !== null ? [r.diff.namespace] : [])),
+      t
+    )
+    return named === null ? null : { ...named, fromFile: true }
+  }
   if (values.length === 1) return { text: t('kube.confirm.namespace', { ns: values[0] }) }
   return { text: t('kube.confirm.nsMany'), title: values.join(', ') }
 }
@@ -210,6 +218,7 @@ export function KubeConfirmDialog({
           </span>
           {ns !== null && (
             <span className="kube-pill mono" title={ns.title}>
+              {ns.fromFile && <Lock size={11} aria-hidden="true" />}
               {ns.text}
             </span>
           )}

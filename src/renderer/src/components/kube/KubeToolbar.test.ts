@@ -20,6 +20,7 @@ const base = {
   pill: 'dev' as string | null,
   nsLocked: null as string | null,
   nsFromFile: false,
+  fileNamespaces: [] as string[],
   status: null,
   statusLoading: false,
   resourceLabel: null as string | null,
@@ -164,10 +165,24 @@ describe('namespace pill', () => {
     expect(render()).toMatch(/<button[^>]*kube-pill-ns/)
   })
 
-  it('reads "from the file" when every resource names its namespace', () => {
-    const html = render({ nsFromFile: true, pill: null })
-    expect(html).toContain('kube.toolbar.nsFromFile')
-    expect(html).not.toContain('kube.toolbar.ns{')
+  it('names the one namespace the file writes, locked, with the follows-the-file tooltip', () => {
+    const html = render({ nsFromFile: true, fileNamespaces: ['shop'], pill: null })
+    expect(html).toContain('kube.toolbar.ns{&quot;ns&quot;:&quot;shop&quot;}')
+    expect(html).toContain('title="kube.toolbar.nsFromFile"')
+    expect(html).toContain('kube-pill-locked')
+    expect(html).not.toMatch(/<button[^>]*kube-pill-ns/)
+  })
+
+  it('names the first of several namespaces and the count of the others, the full list in the tooltip', () => {
+    const html = render({ nsFromFile: true, fileNamespaces: ['api', 'web', 'zed'], pill: null })
+    expect(html).toContain('kube.toolbar.nsMore{&quot;first&quot;:&quot;api&quot;,&quot;n&quot;:2}')
+    expect(html).toContain('title="kube.toolbar.nsFromFile\napi, web, zed"')
+  })
+
+  it('shows no namespace pill when the file names none (only cluster-scoped resources)', () => {
+    const html = render({ nsFromFile: true, fileNamespaces: [], pill: null })
+    expect(html).not.toContain('kube-pill-ns')
+    expect(html).not.toContain('kube-pill-locked')
   })
 })
 

@@ -226,7 +226,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     setSession((prev) => ({ ...prev, [path]: { ...prev[path], override } }))
 
   const labelOf = (view: KubeTargetView, pill: string | null): string =>
-    view.lockedNamespace ?? (view.nsFromFile ? t('kube.toolbar.nsFromFile') : (pill ?? 'default'))
+    view.lockedNamespace ?? (view.nsFromFile && view.fileNamespaces.length > 0 ? view.fileNamespaces.join(', ') : (pill ?? 'default'))
 
   const failed = (err: unknown): void => {
     toast.error(t('kube.ops.failed', { detail: errText(err) }))

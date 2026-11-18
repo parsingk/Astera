@@ -56,6 +56,7 @@ export function KubeEditorStrip({
       pill={pill}
       nsLocked={view?.lockedNamespace ?? null}
       nsFromFile={view?.nsFromFile ?? false}
+      fileNamespaces={view?.fileNamespaces ?? []}
       status={entry?.status ?? null}
       statusLoading={entry?.statusLoading ?? false}
       resourceLabel={view ? resourceLabel(view.resource, (count) => t('kube.chip.resources', { count }), overlayCount) : null}

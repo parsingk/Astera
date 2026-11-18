@@ -99,6 +99,7 @@ const view = (over: Partial<KubeTargetView> = {}): KubeTargetView => ({
   rememberChoices: ['/p/k8s', '/p'],
   reloadBlocked: null,
   nsFromFile: false,
+  fileNamespaces: [],
   resource: null,
   brokenKustomization: null,
   unlisted: false,

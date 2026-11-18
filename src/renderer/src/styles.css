@@ -3538,7 +3538,7 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-pill-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kube-pill-warn { color: var(--git-modified); border-color: var(--git-modified); }
 .kube-pill-bad { color: var(--danger); border-color: var(--danger); }
-.kube-pill-locked, .kube-pill-ns-static { cursor: default; }
+.kube-pill-locked { cursor: default; }
 .kube-chips { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .kube-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
 .kube-chip-kind { font-family: var(--mono); color: var(--text-faint); }
