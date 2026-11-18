@@ -110,7 +110,7 @@ describe('classify', () => {
     h.files.set(f, { text: MANIFEST, mtimeMs: 2 })
     expect((await svc.classify([f]))[f]).toBe('manifest')
     expect(h.heads).toHaveLength(2)
-    svc.invalidate([f])
+    svc.invalidate([{ path: f, kind: 'change' }])
     await svc.classify([f])
     expect(h.heads).toHaveLength(3)
   })
@@ -261,9 +261,9 @@ describe('projectGraph', () => {
     expect((await svc.projectGraph(root)).overlays()).toEqual([p('a')])
     h.files.set(p('b', 'kustomization.yaml'), { text: 'resources: []\n', mtimeMs: 1 })
     expect((await svc.projectGraph(root)).overlays()).toEqual([p('a')])
-    svc.invalidate([p('a', 'dep.yaml')])
+    svc.invalidate([{ path: p('a', 'dep.yaml'), kind: 'change' }])
     expect((await svc.projectGraph(root)).overlays()).toEqual([p('a')])
-    svc.invalidate([p('b', 'kustomization.yaml')])
+    svc.invalidate([{ path: p('b', 'kustomization.yaml'), kind: 'add' }])
     expect([...(await svc.projectGraph(root)).overlays()].sort()).toEqual([p('a'), p('b')].sort())
   })
 })
@@ -278,7 +278,7 @@ describe('kubectl calls', () => {
     await svc.setTarget(p('k8s'), { context: ARN, namespace: null })
     await svc.setOverlay(p('k8s', 'a.yaml'), p('k8s'))
     await svc.projectGraph(root)
-    svc.invalidate([p('k8s', 'a.yaml')])
+    svc.invalidate([{ path: p('k8s', 'a.yaml'), kind: 'change' }])
     const isUse = (a: string[]): boolean => a[0] === 'config' && a[1] === 'use-context'
     expect(h.calls.filter(isUse)).toEqual([])
 
@@ -297,5 +297,76 @@ describe('kubectl calls', () => {
     const r = await svc.useContext('--kubeconfig=/etc/x')
     expect(r.ok).toBe(false)
     expect(h.calls).toEqual([])
+  })
+})
+
+const OVERLAY_TREE = {
+  [p('apps', 'base', 'kustomization.yaml')]: 'resources:\n  - dep.yaml\n',
+  [p('apps', 'base', 'dep.yaml')]: MANIFEST,
+  [p('envs', 'prod', 'kustomization.yaml')]: 'resources:\n  - ../../apps/base\n'
+}
+
+describe('target through an overlay (fix round 1)', () => {
+  it('a member and its overlay file resolve over the overlay chain only', async () => {
+    const h = harness(OVERLAY_TREE)
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('envs'), { context: ARN, namespace: null })
+    await svc.setTarget(p('apps'), { context: 'kind-dev', namespace: null })
+    const member = await svc.target(p('apps', 'base', 'dep.yaml'), root)
+    const k = await svc.target(p('envs', 'prod', 'kustomization.yaml'), root)
+    expect(member.state).toMatchObject({ state: 'remembered', context: ARN })
+    expect(k.state).toEqual(member.state)
+  })
+
+  it('has no target while several overlays are candidates and none is picked', async () => {
+    const h = harness({ ...OVERLAY_TREE, [p('envs', 'dev', 'kustomization.yaml')]: 'resources:\n  - ../../apps/base\n' })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('apps'), { context: ARN, namespace: null })
+    const t = await svc.target(p('apps', 'base', 'dep.yaml'), root)
+    expect(t.state).toEqual({ state: 'none' })
+    expect(t.overlay).toBeNull()
+    expect(t.overlays).toHaveLength(2)
+    await svc.setOverlay(p('apps', 'base', 'dep.yaml'), p('envs', 'dev'))
+    expect((await svc.target(p('apps', 'base', 'dep.yaml'), root)).overlay).toBe(p('envs', 'dev'))
+  })
+})
+
+describe('invalidate by folder (fix round 1)', () => {
+  it('a deleted overlay folder drops its overlays from the graph', async () => {
+    const h = harness(OVERLAY_TREE)
+    const svc = createKubeService(h.deps)
+    expect((await svc.projectGraph(root)).overlays()).toEqual([p('envs', 'prod')])
+    h.files.delete(p('envs', 'prod', 'kustomization.yaml'))
+    svc.invalidate([{ path: p('envs', 'prod'), kind: 'unlinkDir' }])
+    expect((await svc.projectGraph(root)).overlays()).toEqual([p('apps', 'base')])
+  })
+
+  it('a copied overlay folder shows up, also when reported as a file without extension', async () => {
+    const h = harness(OVERLAY_TREE)
+    const svc = createKubeService(h.deps)
+    await svc.projectGraph(root)
+    h.files.set(p('envs', 'stage', 'kustomization.yaml'), { text: 'resources:\n  - ../../apps/base\n', mtimeMs: 1 })
+    svc.invalidate([{ path: p('envs', 'stage'), kind: 'add' }])
+    expect([...(await svc.projectGraph(root)).overlays()].sort()).toEqual([p('envs', 'prod'), p('envs', 'stage')].sort())
+    h.files.set(p('envs', 'qa', 'kustomization.yaml'), { text: 'resources:\n  - ../../apps/base\n', mtimeMs: 1 })
+    svc.invalidate([{ path: p('envs', 'qa'), kind: 'addDir' }])
+    expect((await svc.projectGraph(root)).overlays()).toHaveLength(3)
+  })
+})
+
+describe('path spelling and the extensionless name (fix round 1)', () => {
+  it.skipIf(process.platform !== 'win32')('finds a member whose drive letter case differs from the root', async () => {
+    const h = harness(OVERLAY_TREE)
+    const svc = createKubeService(h.deps)
+    const swapped = (x: string): string => x[0].toLowerCase() + x.slice(1)
+    const t = await svc.target(swapped(p('apps', 'base', 'dep.yaml')), root)
+    expect(t.overlays).toEqual([p('envs', 'prod')])
+  })
+
+  it('classifies a file named Kustomization', async () => {
+    const f = p('k', 'Kustomization')
+    const h = harness({ [f]: 'resources: []\n' })
+    const svc = createKubeService(h.deps)
+    expect((await svc.classify([f]))[f]).toBe('kustomization')
   })
 })

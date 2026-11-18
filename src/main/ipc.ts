@@ -5611,7 +5611,7 @@ export function registerIpc(
   // files:changedBatch — one message per batching window, not one per event. The path guard is reused —
   // watching an arbitrary path is refused.
   const fileWatcher = new FileWatcher((batch) => {
-    kubeService.invalidate(batch.changes.map((c) => c.path))
+    kubeService.invalidate(batch.changes)
     send('files:changedBatch', batch)
   })
   ipcMain.handle('files.watch', async (_e, root: string) => {

@@ -1,7 +1,7 @@
 /** The kube service: what the renderer asks about Kubernetes files, contexts and targets.
  *  Every dependency is injected so the tests run against a fake kubectl and an in-memory file system. */
 import path from 'node:path'
-import { KUBE_HEAD_BYTES, classifyYamlHead, helmChartRootOf, isKustomizationName, isYamlName } from '../../core/kube/detect'
+import { classifyYamlHead, helmChartRootOf, isKustomizationName, isYamlName } from '../../core/kube/detect'
 import { buildKustomizeGraph, parseKustomization, type KustomizeGraph, type KustomizationRefs } from '../../core/kube/kustomize'
 import {
   defaultRememberFolder,
@@ -11,6 +11,8 @@ import {
   targetKey
 } from '../../core/kube/target'
 import { configViewArgs, useContextArgs } from '../../core/kube/args'
+import { foldPathCase } from '../../core/files/paths'
+import type { FileChange } from '../../core/files/changeBatch'
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { KubeContexts, KubeFileKind, Remembered, TargetState } from '../../core/kube/types'
 import type { KubeTargetStore } from './targetStore'
@@ -71,7 +73,8 @@ export function createKubeService(deps: KubeServiceDeps) {
 
   async function classify(paths: string[]): Promise<Record<string, KubeFileKind>> {
     const out: Record<string, KubeFileKind> = {}
-    const yaml = paths.filter((f) => isYamlName(path.basename(f)))
+    // The extensionless `Kustomization` is a kustomization too (spec 4.1).
+    const yaml = paths.filter((f) => isYamlName(path.basename(f)) || isKustomizationName(path.basename(f)))
     const results = await Promise.all(yaml.map((f) => classifyOne(f).catch(() => null)))
     yaml.forEach((f, i) => {
       const kind = results[i]
@@ -113,10 +116,11 @@ export function createKubeService(deps: KubeServiceDeps) {
   }
 
   function projectGraph(projectRoot: string): Promise<KustomizeGraph> {
-    let g = graphs.get(projectRoot)
+    const key = foldPathCase(projectRoot)
+    let g = graphs.get(key)
     if (!g) {
       g = buildGraph(projectRoot)
-      graphs.set(projectRoot, g)
+      graphs.set(key, g)
     }
     return g
   }
@@ -125,18 +129,30 @@ export function createKubeService(deps: KubeServiceDeps) {
     return targetKey(folder, await deps.layoutOf(folder))
   }
 
-  async function target(filePath: string, projectRoot: string): Promise<KubeTargetView> {
+  /** The path spelled the way the project root is, so the case-sensitive graph finds it. */
+  function onRoot(projectRoot: string, filePath: string): string {
+    const rel = path.relative(projectRoot, filePath)
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return filePath
+    return path.join(projectRoot, rel)
+  }
+
+  async function target(rawFilePath: string, projectRoot: string): Promise<KubeTargetView> {
+    const filePath = onRoot(projectRoot, rawFilePath)
     const [ctx, graph] = await Promise.all([contexts(), projectGraph(projectRoot)])
     const isKustomization = isKustomizationName(path.basename(filePath))
     const overlays = graph.overlaysReaching(isKustomization ? path.dirname(filePath) : filePath)
     let overlay: string | null = null
+    let folders = foldersUpTo(filePath, projectRoot)
     if (overlays.length > 0) {
       const pick = deps.store.getOverlay(await keyOf(filePath))
       overlay = pick !== undefined && overlays.includes(pick) ? pick : overlays.length === 1 ? overlays[0] : null
+      // What runs is the overlay, so only the overlay's own chain decides the target: a member and the
+      // overlay's kustomization file must agree. No overlay chosen yet means no target.
+      if (overlay === null) {
+        return { state: { state: 'none' }, rememberFolder: defaultRememberFolder(filePath, projectRoot, null), overlay, overlays }
+      }
+      folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
     }
-    const own = foldersUpTo(filePath, projectRoot)
-    // A choice made for an overlay is stored at the overlay folder, which need not lie on the file's own path.
-    const folders = overlay !== null && !own.includes(overlay) ? [overlay, ...own] : own
     const remembered = new Map<string, Remembered>()
     for (const folder of folders) {
       const r = deps.store.get(await keyOf(folder))
@@ -168,15 +184,24 @@ export function createKubeService(deps: KubeServiceDeps) {
     return r
   }
 
-  function invalidate(paths: string[]): void {
-    for (const f of paths) {
+  /** Drops what the changes may have made stale. A folder moved, copied or deleted can carry overlays, and
+   *  some watchers report it as a file, so a non-YAML add or unlink also clears the graphs. */
+  function invalidate(changes: FileChange[]): void {
+    for (const { path: f, kind } of changes) {
       kinds.delete(f)
       const name = path.basename(f)
-      if (isKustomizationName(name)) graphs.clear()
-      if (name === 'Chart.yaml') {
-        // A chart appearing or going changes which files are templates.
-        const chart = path.dirname(f) + path.sep
-        for (const k of kinds.keys()) if (k.startsWith(chart)) kinds.delete(k)
+      if (
+        kind === 'addDir' ||
+        kind === 'unlinkDir' ||
+        isKustomizationName(name) ||
+        ((kind === 'add' || kind === 'unlink') && !isYamlName(name))
+      ) {
+        graphs.clear()
+      }
+      if (name === 'Chart.yaml' || kind === 'unlinkDir') {
+        // A chart appearing or going changes which files are templates; a folder going takes its files.
+        const prefix = (kind === 'unlinkDir' ? f : path.dirname(f)) + path.sep
+        for (const k of kinds.keys()) if (k.startsWith(prefix)) kinds.delete(k)
       }
     }
   }
