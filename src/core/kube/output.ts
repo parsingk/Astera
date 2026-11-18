@@ -28,9 +28,10 @@ function success(ref: string, verb: string): ResourceOutcome | null {
 /**
  * One outcome per meaningful line of kubectl's stdout and stderr (kubectl mixes them).
  * A whitelisted success line gives its outcome, `Warning:` lines become `warning` outcomes,
- * and every other line becomes an `error` carrying the whole line, so nothing the person needs is dropped.
+ * and every other line carries the whole line, so nothing the person needs is dropped: an `error`, or a `warning`
+ * when kubectl exited 0 (`exitedOk`), as an exec plugin's notice on a successful run is no failure.
  */
-export function parseKubectlOutput(stdout: string, stderr: string): ResourceOutcome[] {
+export function parseKubectlOutput(stdout: string, stderr: string, exitedOk = false): ResourceOutcome[] {
   const outcomes: ResourceOutcome[] = []
   for (const raw of `${stdout}\n${stderr}`.split(/\r?\n/)) {
     const line = raw.trim()
@@ -55,7 +56,7 @@ export function parseKubectlOutput(stdout: string, stderr: string): ResourceOutc
       outcomes.push({ ref: '', outcome: 'error', file: fileError[1], message: fileError[2] })
       continue
     }
-    outcomes.push({ ref: '', outcome: 'error', message: line })
+    outcomes.push({ ref: '', outcome: exitedOk ? 'warning' : 'error', message: line })
   }
   return outcomes
 }

@@ -94,6 +94,16 @@ describe('parseKubectlOutput', () => {
     ])
   })
 
+  it('after a successful exit, a line it does not know is a warning, not an error', () => {
+    const notice = 'Please be patient while the credential plugin refreshes your token'
+    expect(parseKubectlOutput('configmap/a created\n', notice, true)).toEqual([
+      { ref: 'configmap/a', outcome: 'created' },
+      { ref: '', outcome: 'warning', message: notice }
+    ])
+    // the same line after a failed exit stays an error
+    expect(parseKubectlOutput('', notice, false)).toEqual([{ ref: '', outcome: 'error', message: notice }])
+  })
+
   it('parses Windows line endings the same', () => {
     const out = 'service/a created\r\nnamespace/b unchanged\r\n'
     const err = 'Error from server (Invalid): error when creating "a.yaml": bad\r\n'

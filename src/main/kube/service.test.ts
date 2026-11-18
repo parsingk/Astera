@@ -946,6 +946,18 @@ describe('run', () => {
     expect(h.calls.filter(isWrite)).toEqual([applyA, applyProd])
   })
 
+  it('a stray stderr line on a successful exit is a warning, and the run stays ok', async () => {
+    const notice = 'Please be patient while the credential plugin refreshes your token'
+    const h = harness({ [a]: yamlDocs(cm('a', {}, 'dev')) }, fakeKube({ apply: { ok: true, stdout: 'configmap/a configured\n', stderr: notice } }))
+    const svc = traced(createKubeService(h.deps))
+    const r = await confirmRun(svc, 'r-notice', 'apply', request([a]))
+    expect(r).toMatchObject({ ok: true, ran: 1 })
+    expect(r.outcomes).toEqual([
+      { ref: 'configmap/a', outcome: 'configured' },
+      { ref: '', outcome: 'warning', message: notice }
+    ])
+  })
+
   it('stops at the first failing command: ran 1, the overlay never sent', async () => {
     const forbidden = `Error from server (Forbidden): error when creating "${a}": configmaps is forbidden`
     const h = harness(tree, fakeKube({ kustomize, apply: (args) => (args.includes('-f') ? fail(forbidden) : { ok: true, stdout: 'configmap/a created\n', stderr: '' }) }))

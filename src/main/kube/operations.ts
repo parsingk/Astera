@@ -393,8 +393,8 @@ export function createKubeOperations(d: KubeOperationDeps) {
         last = await d.run(args, { signal: ctrl.signal })
         ran++
         if (last.stderr !== '') stderr.push(last.stderr)
-        // A killed kubectl's output is gone; its flag says what happened.
-        if (!last.timedOut && !last.cancelled) outcomes.push(...parseKubectlOutput(last.stdout, last.stderr))
+        // A killed kubectl's output is gone; its flag says what happened. After exit 0 a line it does not know warns.
+        if (!last.timedOut && !last.cancelled) outcomes.push(...parseKubectlOutput(last.stdout, last.stderr, last.ok))
         if (!last.ok) break
       }
       const timedOut = last?.timedOut === true
