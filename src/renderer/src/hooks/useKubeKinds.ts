@@ -12,64 +12,146 @@ export function kubeCandidates(paths: readonly string[]): string[] {
   return paths.filter(isKubeCandidate)
 }
 
+/** Most paths one classify call carries, so a large tree is not one unbounded batch. */
+export const KUBE_CHUNK = 200
+
+export function chunkPaths(paths: readonly string[], size = KUBE_CHUNK): string[][] {
+  const out: string[][] = []
+  for (let i = 0; i < paths.length; i += size) out.push(paths.slice(i, i + size))
+  return out
+}
+
+export interface KubeRequest {
+  gen: number
+  seq: number
+  paths: string[]
+}
+
+/** What the hook remembers about its requests. `gen` changes with the root; `latest` is the newest
+ *  request number per path; `pending` are paths with a request out; `asked` are paths already answered
+ *  once in this generation (even with "not a Kubernetes file"), so a row-list change does not ask again. */
+export interface KubeTracker {
+  gen: number
+  seq: number
+  latest: Map<string, number>
+  pending: Set<string>
+  asked: Set<string>
+}
+
+export const newTracker = (gen = 0): KubeTracker => ({
+  gen,
+  seq: 0,
+  latest: new Map(),
+  pending: new Set(),
+  asked: new Set()
+})
+
+/** Candidates that were not answered yet and have no request out — what a pure row-list change needs. */
+export function planKubeRequests(candidates: readonly string[], t: KubeTracker): string[] {
+  return candidates.filter((p) => !t.asked.has(p) && !t.pending.has(p))
+}
+
+/** Registers a request for `paths` and returns its identity (a later request for the same path wins). */
+export function beginKubeRequest(t: KubeTracker, paths: readonly string[]): KubeRequest {
+  const seq = ++t.seq
+  for (const p of paths) {
+    t.latest.set(p, seq)
+    t.pending.add(p)
+  }
+  return { gen: t.gen, seq, paths: [...paths] }
+}
+
+/** A request failed: nothing is applied; its paths stop being pending unless a newer request took over. */
+export function failKubeRequest(t: KubeTracker, req: KubeRequest): void {
+  if (req.gen !== t.gen) return
+  for (const p of req.paths) {
+    if (t.latest.get(p) !== req.seq) continue
+    t.latest.delete(p)
+    t.pending.delete(p)
+  }
+}
+
+/** Merges one answer into the kinds. A path is applied only if this was its latest request and the
+ *  generation is still current; a path missing from the answer is dropped (deleted, or not YAML). */
+export function applyKubeResults(
+  kinds: Record<string, KubeFileKind>,
+  results: Record<string, KubeFileKind>,
+  req: KubeRequest,
+  t: KubeTracker
+): Record<string, KubeFileKind> {
+  if (req.gen !== t.gen) return kinds
+  const next = { ...kinds }
+  let changed = false
+  for (const p of req.paths) {
+    if (t.latest.get(p) !== req.seq) continue
+    t.latest.delete(p)
+    t.pending.delete(p)
+    t.asked.add(p)
+    const k = results[p]
+    if (k === undefined) {
+      if (p in next) {
+        delete next[p]
+        changed = true
+      }
+    } else if (next[p] !== k) {
+      next[p] = k
+      changed = true
+    }
+  }
+  return changed ? next : kinds
+}
+
+/** Drops the kinds (and bookkeeping) of paths that are no longer listed. */
+export function pruneKubeKinds(
+  kinds: Record<string, KubeFileKind>,
+  keep: ReadonlySet<string>,
+  t: KubeTracker
+): Record<string, KubeFileKind> {
+  for (const p of [...t.asked]) if (!keep.has(p)) t.asked.delete(p)
+  const stale = Object.keys(kinds).filter((p) => !keep.has(p))
+  if (stale.length === 0) return kinds
+  const next = { ...kinds }
+  for (const p of stale) delete next[p]
+  return next
+}
+
 /**
  * Kubernetes kind of each YAML (or Kustomization) path in `paths`, for the file icon.
- * `paths` must be a stable (memoised) array: a new array identity re-runs the query.
- * The answer is kept on a failed query (e.g. a path guard) and dropped when `root` changes.
+ * `paths` must be a stable (memoised) array. Only paths not answered yet are asked for when it changes;
+ * a changed file is asked again by the watcher. A failed query keeps the previous kinds.
  */
 export function useKubeKinds(root: string | null, paths: string[]): Record<string, KubeFileKind> {
   const [kinds, setKinds] = useState<Record<string, KubeFileKind>>({})
-  const rootRef = useRef(root)
-  rootRef.current = root
-  const trackedRef = useRef<Set<string>>(new Set())
+  const tracker = useRef<KubeTracker>(newTracker())
+  const listed = useRef<Set<string>>(new Set())
 
   const classify = (list: string[]): void => {
-    if (list.length === 0) return
-    const r = root
-    window.api.kube
-      .classify(list)
-      .then((res) => {
-        if (rootRef.current !== r) return // the project changed while the answer was out
-        setKinds((prev) => {
-          const next = { ...prev }
-          let changed = false
-          for (const p of list) {
-            const k = res[p]
-            if (k === undefined) {
-              if (p in next) {
-                delete next[p]
-                changed = true
-              }
-            } else if (next[p] !== k) {
-              next[p] = k
-              changed = true
-            }
-          }
-          return changed ? next : prev
-        })
-      })
-      .catch(() => {
-        // Keep the previous kinds: the icon falls back to the name-based one, which is always safe
-      })
+    for (const chunk of chunkPaths(list)) {
+      const req = beginKubeRequest(tracker.current, chunk)
+      window.api.kube
+        .classify(chunk)
+        .then((res) => setKinds((prev) => applyKubeResults(prev, res, req, tracker.current)))
+        .catch(() => failKubeRequest(tracker.current, req)) // keep the previous kinds; the name-based icon is always safe
+    }
   }
 
   useEffect(() => {
+    tracker.current = newTracker(tracker.current.gen + 1) // late answers of an earlier visit are dropped
     setKinds({})
   }, [root])
 
   useEffect(() => {
     const list = root ? kubeCandidates(paths) : []
-    trackedRef.current = new Set(list)
-    classify(list)
+    listed.current = new Set(list)
+    setKinds((prev) => pruneKubeKinds(prev, listed.current, tracker.current))
+    classify(planKubeRequests(list, tracker.current))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, paths])
 
   useEffect(() => {
     if (!root) return
     return onFileChanges((batch) => {
-      const changed = batch.changes
-        .map((c) => c.path)
-        .filter((p) => trackedRef.current.has(p))
+      const changed = batch.changes.map((c) => c.path).filter((p) => listed.current.has(p))
       classify([...new Set(changed)])
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
