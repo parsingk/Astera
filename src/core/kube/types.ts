@@ -59,7 +59,10 @@ export type TargetState =
   | { state: 'none' }
 
 /** What the editor strip needs about a file's target. `lockedNamespace`: the overlay's own `namespace:`, which a
- *  pill cannot override. `rememberChoices`: the folders a choice may be remembered for, nearest first. */
+ *  pill cannot override. `rememberChoices`: the folders a choice may be remembered for, nearest first.
+ *  `reloadBlocked` and `nsFromFile` describe a plain manifest's own text (null and false through an overlay):
+ *  reload refuses a Secret and a file of other than one resource; `nsFromFile` when every resource names its
+ *  namespace. */
 export interface KubeTargetView {
   state: TargetState
   rememberFolder: string
@@ -67,6 +70,8 @@ export interface KubeTargetView {
   overlays: string[]
   lockedNamespace: string | null
   rememberChoices: string[]
+  reloadBlocked: 'secret' | 'multi' | null
+  nsFromFile: boolean
 }
 
 export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'

@@ -2967,5 +2967,13 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.picker.useContext': 'Set {name} as the kubeconfig current context',
   'kube.picker.addKubeconfig': 'Add kubeconfig file…',
   'kube.picker.settings': 'Kubernetes settings',
-  'kube.picker.namespacePlaceholder': 'Type a namespace and press Enter'
+  'kube.picker.namespacePlaceholder': 'Type a namespace and press Enter',
+  'kube.ops.scopeFiles': '{count} files',
+  'kube.ops.chooseCluster': 'Choose a cluster first',
+  'kube.ops.changedSincePreview': 'The files changed after the preview, so it was compared again. Check it and confirm again.',
+  'kube.ops.reloadAbsent': 'Not in the cluster',
+  'kube.ops.reloadFailed': 'Could not reload from the cluster: {detail}',
+  'kube.ops.useContextFailed': 'Could not set the kubeconfig current context: {detail}',
+  'kube.ops.addKubeconfigFailed': 'Could not add the kubeconfig file: {detail}',
+  'kube.ops.failed': 'Could not start the Kubernetes operation: {detail}'
 }

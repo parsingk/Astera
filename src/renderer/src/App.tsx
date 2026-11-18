@@ -151,6 +151,10 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
+import { touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
+import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
+import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -2009,16 +2013,27 @@ export default function App(): React.JSX.Element {
     if (cur) fileBuffersRef.current = { ...fileBuffersRef.current, [id]: { ...cur, content } }
   }
 
-  const saveFile = (id: string): void => {
+  /** Told of every successful save (the Kubernetes chip re-checks then, spec 4.9). Set below, where its hook is. */
+  const onFileSavedRef = useRef<(path: string) => void>(() => {})
+  /** Resolves false when the write failed (already toasted), true when it was written or nothing needed writing —
+   *  so a caller can wait for its writes (Kubernetes C10). Callers that ignore it are unchanged. */
+  const saveFile = (id: string): Promise<boolean> => {
     flushPendingEdits()
     const buf = fileBuffersRef.current[id]
     const tab = fileTabsRef.current.find((t) => t.id === id)
-    if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return
+    if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return Promise.resolve(true)
     // 디스크에는 그 파일 본래의 줄바꿈으로 되돌려 쓴다. savedContent는 LF 그대로 둔다 — 버퍼끼리의
     // 비교(더티 판정)는 전부 LF 기준이고, 디스크와의 비교는 읽어 올 때 toLf를 거친다
-    window.api.files.write(tab.path, applyEol(buf.content, buf.eol)).then(
-      () => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev)),
-      (err) => toast.error(t('files.save.failed', { detail: err instanceof Error ? err.message : String(err) }))
+    return window.api.files.write(tab.path, applyEol(buf.content, buf.eol)).then(
+      () => {
+        setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev))
+        onFileSavedRef.current(tab.path)
+        return true
+      },
+      (err) => {
+        toast.error(t('files.save.failed', { detail: err instanceof Error ? err.message : String(err) }))
+        return false
+      }
     )
   }
 
@@ -2860,6 +2875,29 @@ export default function App(): React.JSX.Element {
     [fileTabs, currentProject]
   )
   const kubeKinds = useKubeKinds(currentProject, openFilePaths)
+  /** Compare, apply, delete and reload (hooks/useKubeOps.ts). Before one starts, the open buffers it covers are saved
+   *  and waited for (C10); a reload lands in the editor as one undoable edit when the file is on screen. */
+  const kubeOps = useKubeOps({
+    save: async (paths) => {
+      const ids = fileTabsRef.current.filter((t) => touchesSelection(t.path, paths)).map((t) => t.id)
+      return (await Promise.all(ids.map((id) => saveFile(id)))).every(Boolean)
+    },
+    setBuffer: (path, text) => {
+      const tab = fileTabsRef.current.find((t) => t.path === path)
+      if (!tab) return
+      const pane = layoutRef.current ? leaves(layoutRef.current).find((l) => l.activeTabId === tab.id) : undefined
+      const view = pane ? mdViews[pane.id] : null
+      if (view) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+      else setBufferContent(tab.id, text)
+    }
+  })
+  const kubeTabs = useMemo(
+    () => fileTabs.flatMap((t): KubeTab[] => (kubeKinds[t.path] ? [{ path: t.path, projectRoot: t.projectRoot, kind: kubeKinds[t.path] }] : [])),
+    [fileTabs, kubeKinds]
+  )
+  const allFilePaths = useMemo(() => fileTabs.map((t) => t.path), [fileTabs])
+  const kubeEditor = useKubeEditor(kubeTabs, allFilePaths, kubeOps)
+  onFileSavedRef.current = kubeEditor.onSaved
 
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
@@ -3087,7 +3125,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -3176,6 +3214,17 @@ export default function App(): React.JSX.Element {
               <button onClick={() => reloadBufferFromDisk(f.id)}>{t('files.editor.reload')}</button>
               <button onClick={() => setFileBuffers((prev) => (prev[f.id] ? { ...prev, [f.id]: { ...prev[f.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
             </div>
+          )}
+          {/* A stable slot beside the banners: the editor's parent chain below never changes element type. */}
+          {kubeKinds[f.path] !== undefined && kubeKinds[f.path] !== 'plain' && (
+            <KubeEditorStrip
+              path={f.path}
+              kind={kubeKinds[f.path]}
+              projectRoot={f.projectRoot}
+              editor={kubeEditor}
+              busy={kubeOps.busy}
+              onOpenSettings={() => setShowSettings(true)}
+            />
           )}
           {/* markdown=false 여도 MarkdownSplit 은 항상 렌더된다 — {md ? <MarkdownSplit/> : editor}
               삼항연산자였을 때는 이 자리의 엘리먼트 타입이 파일을 오갈 때마다 MarkdownSplit↔FileEditor
@@ -4586,6 +4635,9 @@ export default function App(): React.JSX.Element {
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
                 onRunFile={runFile}
+                onKube={(verb, selection) => {
+                  if (currentProject) void kubeEditor.explorerAction(verb, selection, currentProject, openFile)
+                }}
                 revealFolder={explorerReveal}
                 onRevealDone={(seq) => setExplorerReveal((r) => (r !== null && r.seq === seq ? null : r))}
               />
@@ -5075,6 +5127,19 @@ export default function App(): React.JSX.Element {
             openRemoteSession(ref)
           }}
           onCancel={() => setRemoteDialog(null)}
+        />
+      )}
+      {kubeOps.dialog && (
+        <KubeConfirmDialog
+          verb={kubeOps.dialog.verb}
+          context={kubeOps.dialog.req.context}
+          namespaceLabel={kubeOps.dialog.namespaceLabel}
+          preview={kubeOps.dialog.preview}
+          keepServerFields={kubeOps.dialog.keepServerFields}
+          onToggleServerFields={kubeOps.toggleServerFields}
+          onConfirm={kubeOps.confirm}
+          onCancel={kubeOps.close}
+          stale={kubeOps.dialog.stale}
         />
       )}
       {showSettings && (

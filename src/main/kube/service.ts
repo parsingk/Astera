@@ -147,8 +147,21 @@ export function createKubeService(deps: KubeServiceDeps) {
     return path.join(projectRoot, rel)
   }
 
+  /** What the editor strip needs from a plain manifest's own text (R10): why reload cannot run on it, and whether
+   *  every resource names its namespace. Unreadable text counts as no resource. */
+  async function fileFacts(filePath: string): Promise<Pick<KubeTargetView, 'reloadBlocked' | 'nsFromFile'>> {
+    const docs = parseManifestDocs(await deps.readText(filePath).catch(() => ''))
+    return {
+      reloadBlocked: docs.some((d) => d.kind === 'Secret') ? 'secret' : docs.length !== 1 ? 'multi' : null,
+      nsFromFile: docs.length > 0 && docs.every((d) => d.namespace !== null)
+    }
+  }
+
   async function target(rawFilePath: string, projectRoot: string): Promise<KubeTargetView> {
-    const filePath = onRoot(projectRoot, rawFilePath)
+    const asked = onRoot(projectRoot, rawFilePath)
+    // A folder (an explorer selection) resolves over its own chain, as the kustomization it may hold would.
+    const isDir = (await deps.stat(asked))?.isDir === true
+    const filePath = isDir ? path.join(asked, 'kustomization.yaml') : asked
     const [ctx, graph] = await Promise.all([contexts(), projectGraph(projectRoot)])
     const isKustomization = isKustomizationName(path.basename(filePath))
     const overlays = graph.overlaysReaching(isKustomization ? path.dirname(filePath) : filePath)
@@ -166,7 +179,9 @@ export function createKubeService(deps: KubeServiceDeps) {
           overlay,
           overlays,
           lockedNamespace: null,
-          rememberChoices: []
+          rememberChoices: [],
+          reloadBlocked: null,
+          nsFromFile: false
         }
       }
       folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
@@ -182,7 +197,9 @@ export function createKubeService(deps: KubeServiceDeps) {
       overlay,
       overlays,
       lockedNamespace: overlay === null ? null : graph.namespaceOf(overlay),
-      rememberChoices: overlay === null ? foldersUpTo(filePath, projectRoot) : [overlay]
+      rememberChoices: overlay === null ? foldersUpTo(filePath, projectRoot) : [overlay],
+      // Reload and the "from files" pill are a plain manifest's; what an overlay applies is its rendered output.
+      ...(overlay === null && !isDir ? await fileFacts(filePath) : { reloadBlocked: null, nsFromFile: false })
     }
   }
 

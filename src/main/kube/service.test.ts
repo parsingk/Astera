@@ -388,6 +388,76 @@ describe('target: lockedNamespace and rememberChoices (R6)', () => {
   })
 })
 
+describe('target: reloadBlocked and nsFromFile (R10)', () => {
+  const SECRET = 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\n  namespace: a\n'
+  const NAMED = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: b\n  namespace: shop\n'
+
+  it('a plain manifest of one resource can reload; the namespace comes from the file only when it names one', async () => {
+    const h = harness({ [p('k8s', 'a.yaml')]: MANIFEST, [p('k8s', 'b.yaml')]: NAMED })
+    const svc = createKubeService(h.deps)
+    expect(await svc.target(p('k8s', 'a.yaml'), root)).toMatchObject({ reloadBlocked: null, nsFromFile: false })
+    expect(await svc.target(p('k8s', 'b.yaml'), root)).toMatchObject({ reloadBlocked: null, nsFromFile: true })
+  })
+
+  it('a Secret blocks reload, also among several resources; several resources block it as multi', async () => {
+    const h = harness({
+      [p('k8s', 's.yaml')]: SECRET,
+      [p('k8s', 'mixed.yaml')]: `${NAMED}---\n${SECRET}`,
+      [p('k8s', 'two.yaml')]: `${NAMED}---\n${MANIFEST}`,
+      [p('k8s', 'both.yaml')]: `${NAMED}---\n${NAMED.replace('name: b', 'name: c')}`
+    })
+    const svc = createKubeService(h.deps)
+    expect(await svc.target(p('k8s', 's.yaml'), root)).toMatchObject({ reloadBlocked: 'secret', nsFromFile: true })
+    expect((await svc.target(p('k8s', 'mixed.yaml'), root)).reloadBlocked).toBe('secret')
+    expect(await svc.target(p('k8s', 'two.yaml'), root)).toMatchObject({ reloadBlocked: 'multi', nsFromFile: false })
+    expect(await svc.target(p('k8s', 'both.yaml'), root)).toMatchObject({ reloadBlocked: 'multi', nsFromFile: true })
+  })
+
+  it('a file with no resource, or one that cannot be read, is multi and not from file', async () => {
+    const h = harness({ [p('k8s', 'empty.yaml')]: 'just: values\n' })
+    h.deps.readText = async (f) => {
+      if (f.endsWith('gone.yaml')) throw new Error('ENOENT')
+      return h.files.get(f)?.text ?? ''
+    }
+    const svc = createKubeService(h.deps)
+    expect(await svc.target(p('k8s', 'empty.yaml'), root)).toMatchObject({ reloadBlocked: 'multi', nsFromFile: false })
+    expect(await svc.target(p('k8s', 'gone.yaml'), root)).toMatchObject({ reloadBlocked: 'multi', nsFromFile: false })
+  })
+
+  it('a Kustomize member or kustomization reports neither, whatever the file holds', async () => {
+    const h = harness({ ...OVERLAY_TREE, [p('apps', 'base', 'dep.yaml')]: SECRET })
+    const svc = createKubeService(h.deps)
+    expect(await svc.target(p('apps', 'base', 'dep.yaml'), root)).toMatchObject({ reloadBlocked: null, nsFromFile: false })
+    expect(await svc.target(p('envs', 'prod', 'kustomization.yaml'), root)).toMatchObject({
+      reloadBlocked: null,
+      nsFromFile: false
+    })
+  })
+})
+
+describe('target of a folder (explorer selection)', () => {
+  it('a folder resolves over its own chain, so a context remembered for the folder itself is found', async () => {
+    const h = harness({ [p('k8s', 'a.yaml')]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect((await svc.target(p('k8s'), root)).state).toEqual({
+      state: 'remembered',
+      context: ARN,
+      namespace: 'x',
+      folder: p('k8s')
+    })
+  })
+
+  it('an overlay folder resolves as its overlay, as the plan applies it', async () => {
+    const h = harness(OVERLAY_TREE)
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('envs', 'prod'), { context: ARN, namespace: null })
+    const t = await svc.target(p('envs', 'prod'), root)
+    expect(t.overlay).toBe(p('envs', 'prod'))
+    expect(t.state).toMatchObject({ state: 'remembered', context: ARN })
+  })
+})
+
 describe('invalidateContexts (R7)', () => {
   it('makes the next contexts() ask kubectl again', async () => {
     const h = harness({})

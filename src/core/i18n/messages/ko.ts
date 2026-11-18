@@ -3221,5 +3221,13 @@ export const ko = {
   'kube.picker.useContext': '{name} 를 kubeconfig 현재 컨텍스트로 설정',
   'kube.picker.addKubeconfig': 'kubeconfig 파일 추가…',
   'kube.picker.settings': 'Kubernetes 설정',
-  'kube.picker.namespacePlaceholder': 'namespace 입력 후 Enter'
+  'kube.picker.namespacePlaceholder': 'namespace 입력 후 Enter',
+  'kube.ops.scopeFiles': '파일 {count}개',
+  'kube.ops.chooseCluster': '클러스터를 먼저 고르세요',
+  'kube.ops.changedSincePreview': '미리 본 뒤에 파일이 바뀌어 다시 비교했습니다. 확인한 뒤 다시 누르세요',
+  'kube.ops.reloadAbsent': '클러스터에 없습니다',
+  'kube.ops.reloadFailed': '클러스터에서 다시 불러오지 못했습니다: {detail}',
+  'kube.ops.useContextFailed': 'kubeconfig 현재 컨텍스트를 바꾸지 못했습니다: {detail}',
+  'kube.ops.addKubeconfigFailed': 'kubeconfig 파일을 추가하지 못했습니다: {detail}',
+  'kube.ops.failed': 'Kubernetes 작업을 시작하지 못했습니다: {detail}'
 } as const
