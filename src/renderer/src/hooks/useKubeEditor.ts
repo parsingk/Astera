@@ -5,6 +5,7 @@ import { toast } from '../lib/toast'
 import { writeThrough } from '../lib/writeThrough'
 import { errText } from './useFileOps'
 import { isKubeCandidate } from './useKubeKinds'
+import { namespaceLabelOf, type NamespaceLabel } from '../components/kube/fileNamespacePill'
 import {
   firstLine,
   kubeRequestOf,
@@ -225,9 +226,6 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
   const setOverride = (path: string, override: KubeOverride | undefined): void =>
     setSession((prev) => ({ ...prev, [path]: { ...prev[path], override } }))
 
-  const labelOf = (view: KubeTargetView, pill: string | null): string =>
-    view.lockedNamespace ?? (view.nsFromFile && view.fileNamespaces.length > 0 ? view.fileNamespaces.join(', ') : (pill ?? 'default'))
-
   const failed = (err: unknown): void => {
     toast.error(t('kube.ops.failed', { detail: errText(err) }))
   }
@@ -308,7 +306,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     refreshAll()
   }
 
-  const start = (verb: KubeAction, req: KubeRequest, namespaceLabel: string, involved?: string[]): void => {
+  const start = (verb: KubeAction, req: KubeRequest, namespaceLabel: NamespaceLabel, involved?: string[]): void => {
     if (verb === 'reload') ops.startReload(req.selection[0], req.context, req.pill)
     else if (verb === 'compare') ops.startCompare(req, namespaceLabel, involved)
     else if (verb === 'apply') ops.startApply(req, namespaceLabel, involved)
@@ -323,7 +321,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     const selection = view.overlay ? [view.overlay] : [path]
     const req = kubeRequestOf(selection, tab.projectRoot, view, sessionRef.current[path]?.override, contextsRef.current)
     if (!req) return // the toolbar disables its actions then
-    start(verb, req, labelOf(view, req.pill), view.overlay ? [path, view.overlay] : [path])
+    start(verb, req, namespaceLabelOf(view, req.pill), view.overlay ? [path, view.overlay] : [path])
   }
 
   /** The explorer's Kubernetes menu: the target of the first item decides; without one, say so and open the file.
@@ -366,7 +364,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
       return
     }
     if (verb === 'reload') openFile(selection[0])
-    start(verb, req, labelOf(view, req.pill))
+    start(verb, req, namespaceLabelOf(view, req.pill))
   }
 
   /** The explorer submenu's heading and Helm check: the first item's target as explorerAction resolves it (an editor's

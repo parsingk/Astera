@@ -14,6 +14,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { onFileChanges } from '../lib/fileChanges'
 import { toast } from '../lib/toast'
 import { writeThrough } from '../lib/writeThrough'
+import type { NamespaceLabel } from '../components/kube/fileNamespacePill'
 import { errText } from './useFileOps'
 
 /** One operation of the session's Kubernetes log (spec 4.8). `scope` is "3 files" or the overlay path. */
@@ -30,7 +31,7 @@ export interface KubeLogEntry {
   /** What the entry was started with, so the log can open the same operation's preview again. A reload's request
    *  names the file alone (`projectRoot` is empty). */
   req: KubeRequest
-  namespaceLabel: string
+  namespaceLabel: NamespaceLabel
   /** The paths whose disk change made the dialog stale, so a rerun watches the same files. */
   involved?: string[]
 }
@@ -43,7 +44,7 @@ export interface KubeLogEntry {
 export interface KubeDialogState {
   verb: 'compare' | KubeVerb
   req: KubeRequest
-  namespaceLabel: string
+  namespaceLabel: NamespaceLabel
   preview: KubePreview | null
   stale: boolean
   keepServerFields: boolean
@@ -71,7 +72,7 @@ export type KubeOpsAction =
       type: 'preview'
       verb: 'compare' | KubeVerb
       req: KubeRequest
-      namespaceLabel: string
+      namespaceLabel: NamespaceLabel
       id: string
       at: number
       watch?: string[]
@@ -352,7 +353,7 @@ export function useKubeOps(deps: KubeOpsDeps) {
       .then((preview) => dispatch({ type: 'previewed', seq, preview, scope: scopeText(preview) }))
   }
 
-  const start = async (verb: 'compare' | KubeVerb, req: KubeRequest, namespaceLabel: string, involved?: string[]): Promise<void> => {
+  const start = async (verb: 'compare' | KubeVerb, req: KubeRequest, namespaceLabel: NamespaceLabel, involved?: string[]): Promise<void> => {
     if (!(await depsRef.current.save(involved ?? req.selection))) return
     dispatch({ type: 'preview', verb, req, namespaceLabel, id: crypto.randomUUID(), at: Date.now(), watch: involved })
     ask()
@@ -445,9 +446,9 @@ export function useKubeOps(deps: KubeOpsDeps) {
   return {
     log: state.log,
     dialog: state.dialog,
-    startCompare: (req: KubeRequest, namespaceLabel: string, involved?: string[]) => void start('compare', req, namespaceLabel, involved),
-    startApply: (req: KubeRequest, namespaceLabel: string, involved?: string[]) => void start('apply', req, namespaceLabel, involved),
-    startDelete: (req: KubeRequest, namespaceLabel: string, involved?: string[]) => void start('delete', req, namespaceLabel, involved),
+    startCompare: (req: KubeRequest, namespaceLabel: NamespaceLabel, involved?: string[]) => void start('compare', req, namespaceLabel, involved),
+    startApply: (req: KubeRequest, namespaceLabel: NamespaceLabel, involved?: string[]) => void start('apply', req, namespaceLabel, involved),
+    startDelete: (req: KubeRequest, namespaceLabel: NamespaceLabel, involved?: string[]) => void start('delete', req, namespaceLabel, involved),
     startReload: (path: string, context: string, pill: string | null) => void startReload(path, context, pill),
     cancel: (id: string) => void window.api.kube.cancel(id).catch(() => {}),
     clear: () => dispatch({ type: 'clear' }),

@@ -5,7 +5,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { backdropProps } from '../../lib/backdrop'
 import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
-import { fileNamespacePill } from './fileNamespacePill'
+import { fileNamespacePill, type NamespaceLabel } from './fileNamespacePill'
 import { SideBySideDiff } from './SideBySideDiff'
 
 const MARK: Record<ResourceState, string> = {
@@ -33,10 +33,14 @@ const commandText = (args: string[]): string => `kubectl ${args.map((a) => shell
  *  were not all decided (`nsFlags` null), or one with no commands. */
 function namespacePill(
   preview: KubePreview | null,
-  namespaceLabel: string,
+  namespaceLabel: NamespaceLabel,
   t: ReturnType<typeof useI18n>['t']
 ): { text: string; title?: string; fromFile?: true } | null {
-  if (preview === null) return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
+  if (preview === null) {
+    if (typeof namespaceLabel === 'string') return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
+    const named = fileNamespacePill(namespaceLabel, t)
+    return named === null ? null : { ...named, fromFile: true }
+  }
   if (!preview.ok && (preview.reason !== 'kubectl' || preview.commandLines.length === 0)) return null
   if (preview.nsFlags === null) return null
   const values = [...new Set(preview.nsFlags.filter((n): n is string => n !== null))]
@@ -71,7 +75,7 @@ export function KubeConfirmDialog({
 }: {
   verb: 'compare' | KubeVerb
   context: string
-  namespaceLabel: string
+  namespaceLabel: NamespaceLabel
   preview: KubePreview | null
   keepServerFields: boolean
   onToggleServerFields: () => void

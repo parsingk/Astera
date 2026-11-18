@@ -200,6 +200,13 @@ describe('KubeConfirmDialog', () => {
     expect(many).toContain('title="dev, web"')
   })
 
+  it('before the preview answers, a label of file namespaces reads like the answered pill, with the lock and tooltip', () => {
+    const html = render(null, { namespaceLabel: ['web', 'api'] })
+    expect(html).toContain('kube.toolbar.nsMore{&quot;first&quot;:&quot;api&quot;,&quot;n&quot;:1}')
+    expect(html).toContain('title="kube.toolbar.nsFromFile\napi, web"')
+    expect(html).not.toContain('kube.confirm.namespace{')
+  })
+
   it("a failed dry run's namespace pill comes from its planned commands, as an ok preview's does", () => {
     const failed = (nsFlags: (string | null)[]): KubePreview => ({
       ok: false,
