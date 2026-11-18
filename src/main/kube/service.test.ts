@@ -5,7 +5,7 @@ import { stringify } from 'yaml'
 import { createKubeService, type KubeServiceDeps } from './service'
 import { KubeTargetStore } from './targetStore'
 import type { KubectlResult } from '../../core/kube/kubectl'
-import type { KubeRequest } from '../../core/kube/types'
+import type { KubeRequest, KubeRunResult, KubeVerb } from '../../core/kube/types'
 import { targetKey } from '../../core/kube/target'
 
 const root = path.resolve('/proj')
@@ -460,6 +460,20 @@ const request = (selection: string[], context = 'kind-dev', pill: string | null 
   pill
 })
 const HIDE = { keepServerFields: false }
+/** A fingerprint no preview produced. */
+const STALE = 'not-a-preview-fingerprint'
+
+/** What the confirmation does: preview, then run with that preview's fingerprint. */
+async function confirmRun(
+  svc: ReturnType<typeof createKubeService>,
+  id: string,
+  verb: KubeVerb,
+  req: KubeRequest
+): Promise<KubeRunResult> {
+  const preview = await svc.preview(verb, req, HIDE)
+  if (!preview.ok) throw new Error(`preview failed: ${preview.reason}`)
+  return svc.run(id, verb, req, preview.fingerprint)
+}
 
 describe('preview', () => {
   const a = p('k8s', 'a.yaml')
@@ -480,6 +494,7 @@ describe('preview', () => {
     if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
     expect(r.plan.commands).toEqual([{ kind: 'files', files: [a, b, c] }])
     expect(r.commandLines).toEqual([['apply', '--context', 'kind-dev', '-f', a, '-f', b, '-f', c]])
+    expect(r.fingerprint).toMatch(/^[0-9a-f]{64}$/)
     expect(r.resources.map((x) => [x.command, x.diff.ref, x.diff.state])).toEqual([
       [0, 'ConfigMap/dev/a', 'unchanged'],
       [0, 'ConfigMap/dev/b', 'changed'],
@@ -503,7 +518,12 @@ describe('preview', () => {
       reason: 'mixed-contexts',
       folders: [p('dev'), p('live')]
     })
-    expect(await svc.run('r-mixed', 'apply', request([x, y]))).toMatchObject({ ok: false, ran: 0, outcomes: [] })
+    expect(await svc.run('r-mixed', 'apply', request([x, y]), STALE)).toMatchObject({
+      ok: false,
+      ran: 0,
+      outcomes: [],
+      refused: { ok: false, reason: 'mixed-contexts', folders: [p('dev'), p('live')] }
+    })
     expect(clusterCalls(h.calls)).toEqual([])
   })
 
@@ -516,7 +536,11 @@ describe('preview', () => {
       reason: 'mixed-contexts',
       folders: [p('k8s')]
     })
-    expect(await svc.run('r-missing', 'delete', request([a], 'gone'))).toMatchObject({ ok: false, ran: 0 })
+    expect(await svc.run('r-missing', 'delete', request([a], 'gone'), STALE)).toMatchObject({
+      ok: false,
+      ran: 0,
+      refused: { reason: 'mixed-contexts', folders: [p('k8s')] }
+    })
     expect(clusterCalls(h.calls)).toEqual([])
   })
 
@@ -545,7 +569,11 @@ describe('preview', () => {
       reason: 'namespace',
       conflicts: [{ path: b, namespace: 'other' }]
     })
-    expect(await svc.run('r-ns', 'apply', request([a, b], 'kind-dev', 'shop'))).toMatchObject({ ok: false, ran: 0 })
+    expect(await svc.run('r-ns', 'apply', request([a, b], 'kind-dev', 'shop'), STALE)).toMatchObject({
+      ok: false,
+      ran: 0,
+      refused: { reason: 'namespace', conflicts: [{ path: b, namespace: 'other' }] }
+    })
     expect(clusterCalls(h.calls)).toEqual([])
 
     // The pill fills in a resource naming none; resources that all name theirs get no -n at all.
@@ -555,14 +583,15 @@ describe('preview', () => {
     expect(own.ok && own.commandLines).toEqual([['apply', '--context', 'kind-dev', '-f', b]])
   })
 
-  it('an overlay setting namespace: is locked (no -n, no render); otherwise its rendered output decides', async () => {
+  it('an overlay setting namespace: is locked (no -n even with a pill); otherwise its rendered output decides', async () => {
     const prod = p('envs', 'prod')
     const locked = { ...OVERLAY_TREE, [p('envs', 'prod', 'kustomization.yaml')]: 'namespace: prod\nresources:\n  - ../../apps/base\n' }
-    const h1 = harness(locked, fakeKube({}))
+    const h1 = harness(locked, fakeKube({ kustomize: yamlDocs(cm('a', {})) }))
     const s1 = traced(createKubeService(h1.deps))
     const r1 = await s1.preview('apply', request([prod], 'kind-dev', 'shop'), HIDE)
     expect(r1.ok && r1.commandLines).toEqual([['apply', '--context', 'kind-dev', '-k', prod]])
-    expect(h1.calls.filter((x) => x[0] === 'kustomize')).toEqual([])
+    // rendered once all the same, for the fingerprint
+    expect(h1.calls.filter((x) => x[0] === 'kustomize')).toEqual([['kustomize', prod]])
 
     let rendered = yamlDocs(cm('a', {}))
     const h2 = harness(OVERLAY_TREE, fakeKube({ kustomize: () => ({ ok: true, stdout: rendered, stderr: '' }) }))
@@ -760,7 +789,7 @@ describe('run', () => {
       })
     )
     const svc = traced(createKubeService(h.deps))
-    const r = await svc.run('r1', 'apply', request([prod, a]))
+    const r = await confirmRun(svc, 'r1', 'apply', request([prod, a]))
     expect(r).toMatchObject({ id: 'r1', verb: 'apply', context: 'kind-dev', commandLines: [applyA, applyProd], ran: 2, ok: true })
     expect(r.outcomes).toEqual([
       { ref: 'configmap/a', outcome: 'created' },
@@ -775,7 +804,7 @@ describe('run', () => {
     const forbidden = `Error from server (Forbidden): error when creating "${a}": configmaps is forbidden`
     const h = harness(tree, fakeKube({ kustomize, apply: (args) => (args.includes('-f') ? fail(forbidden) : { ok: true, stdout: 'configmap/a created\n', stderr: '' }) }))
     const svc = traced(createKubeService(h.deps))
-    const r = await svc.run('r2', 'apply', request([a, prod]))
+    const r = await confirmRun(svc, 'r2', 'apply', request([a, prod]))
     expect(r).toMatchObject({ ran: 1, ok: false, commandLines: [applyA, applyProd], stderr: forbidden })
     expect(r.outcomes).toEqual([{ ref: '', outcome: 'error', file: a, message: 'configmaps is forbidden' }])
     expect(h.calls.filter(isWrite)).toEqual([applyA])
@@ -784,7 +813,7 @@ describe('run', () => {
   it('a command past its deadline: timedOut, not ok, nothing after it', async () => {
     const h = harness(tree, fakeKube({ kustomize, apply: { ok: false, stdout: '', stderr: 'timed out', timedOut: true } }))
     const svc = traced(createKubeService(h.deps))
-    const r = await svc.run('r3', 'apply', request([a, prod]))
+    const r = await confirmRun(svc, 'r3', 'apply', request([a, prod]))
     expect(r).toMatchObject({ ran: 1, ok: false, timedOut: true, stderr: 'timed out', outcomes: [] })
     expect(h.calls.filter(isWrite)).toEqual([applyA])
   })
@@ -796,8 +825,47 @@ describe('run', () => {
       return h.files.get(file)?.text ?? ''
     }
     const svc = traced(createKubeService(h.deps))
-    const r = await svc.run('r-gone', 'apply', request([a]))
+    const r = await svc.run('r-gone', 'apply', request([a]), STALE)
     expect(r).toMatchObject({ ok: false, ran: 0, stderr: `ENOENT: no such file or directory, open '${a}'` })
+    expect(h.calls.filter(isWrite)).toEqual([])
+  })
+
+  it('refuses to write a folder that gained a manifest since the preview; a new preview runs it', async () => {
+    const b = p('k8s', 'b.yaml')
+    const h = harness({ [a]: yamlDocs(cm('a', {}, 'dev')) }, fakeKube({ apply: 'configmap/a configured\n' }))
+    const svc = traced(createKubeService(h.deps))
+    const req = request([p('k8s')])
+    const first = await svc.preview('apply', req, HIDE)
+    if (!first.ok) throw new Error(`preview failed: ${first.reason}`)
+    // an edit that leaves the command lines as they were
+    h.files.set(a, { text: yamlDocs(cm('a', { edited: 'yes' }, 'dev')), mtimeMs: 2 })
+    expect(await svc.run('f0', 'apply', req, first.fingerprint)).toMatchObject({ ok: false, ran: 0, refused: { reason: 'changed' } })
+    h.files.set(b, { text: yamlDocs(cm('b', {}, 'dev')), mtimeMs: 1 })
+    expect(await svc.run('f1', 'apply', req, first.fingerprint)).toMatchObject({
+      ok: false,
+      ran: 0,
+      refused: { reason: 'changed' }
+    })
+    expect(await svc.run('f2', 'apply', req, '')).toMatchObject({ ok: false, ran: 0, refused: { reason: 'changed' } })
+    expect(h.calls.filter(isWrite)).toEqual([])
+
+    const second = await svc.preview('apply', req, HIDE)
+    if (!second.ok) throw new Error(`preview failed: ${second.reason}`)
+    expect(second.fingerprint).not.toBe(first.fingerprint)
+    expect(await svc.run('f3', 'apply', req, second.fingerprint)).toMatchObject({ ok: true, ran: 1 })
+    expect(h.calls.filter(isWrite)).toEqual([['apply', '--context', 'kind-dev', '-f', a, '-f', b]])
+  })
+
+  it('refuses to write an overlay whose rendered output changed since the preview, also a locked one', async () => {
+    const locked = { ...OVERLAY_TREE, [p('envs', 'prod', 'kustomization.yaml')]: 'namespace: prod\nresources:\n  - ../../apps/base\n' }
+    let rendered = yamlDocs(cm('a', {}, 'prod'))
+    const h = harness(locked, fakeKube({ kustomize: () => ({ ok: true, stdout: rendered, stderr: '' }) }))
+    const svc = traced(createKubeService(h.deps))
+    const req = request([prod])
+    const r = await svc.preview('delete', req, HIDE)
+    if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
+    rendered = yamlDocs(cm('a', {}, 'prod'), cm('b', {}, 'prod'))
+    expect(await svc.run('k1', 'delete', req, r.fingerprint)).toMatchObject({ ok: false, ran: 0, refused: { reason: 'changed' } })
     expect(h.calls.filter(isWrite)).toEqual([])
   })
 
@@ -819,7 +887,7 @@ describe('run', () => {
     const w = waitingApply({ ok: false, stdout: '', stderr: 'cancelled', cancelled: true })
     const h = harness(tree, fakeKube({ kustomize, apply: w.run }))
     const svc = traced(createKubeService(h.deps))
-    const pending = svc.run('r4', 'apply', request([a, prod]))
+    const pending = confirmRun(svc, 'r4', 'apply', request([a, prod]))
     await w.started
     svc.cancel('r4')
     expect(await pending).toMatchObject({ ran: 1, ok: false, cancelled: true, outcomes: [] })
@@ -830,7 +898,7 @@ describe('run', () => {
     const w = waitingApply({ ok: true, stdout: 'configmap/a created\n', stderr: '' })
     const h = harness(tree, fakeKube({ kustomize, apply: w.run }))
     const svc = traced(createKubeService(h.deps))
-    const pending = svc.run('r5', 'apply', request([a, prod]))
+    const pending = confirmRun(svc, 'r5', 'apply', request([a, prod]))
     await w.started
     svc.cancel('r5')
     expect(await pending).toMatchObject({
@@ -1049,7 +1117,7 @@ describe('writes', () => {
     await svc.render(prod)
     svc.cancel('nothing-running')
     expect(h.calls.filter(isWrite)).toEqual([])
-    await svc.run('w1', 'delete', req)
+    await confirmRun(svc, 'w1', 'delete', req)
     expect(h.calls.filter(isWrite)).toEqual([
       ['delete', '--ignore-not-found', '--context', 'kind-dev', '-f', a],
       ['delete', '--ignore-not-found', '--context', 'kind-dev', '-k', prod]

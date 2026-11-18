@@ -93,13 +93,15 @@ export interface KubeRequest {
 }
 
 /** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the
- *  binary), also on a `kubectl` failure, whose `stderr` starts with the step that failed (`dry run failed: …`). */
+ *  binary), also on a `kubectl` failure, whose `stderr` starts with the step that failed (`dry run failed: …`).
+ *  `fingerprint` goes back to `run`, which refuses to write anything other than what this preview read. */
 export type KubePreview =
   | {
       ok: true
       plan: Extract<OperationPlan, { ok: true }>
       commandLines: string[][]
       resources: { command: number; diff: ResourceDiff }[]
+      fingerprint: string
     }
   | { ok: false; reason: 'refused'; plan: OperationPlan }
   | { ok: false; reason: 'mixed-contexts'; folders: string[] }
@@ -118,6 +120,9 @@ export interface KubeRunResult {
   stderr: string
   timedOut?: true
   cancelled?: true
+  /** Why nothing was written (`ran: 0`): the selection changed since the preview, or a preview refusal. `stderr`
+   *  carries a short summary. */
+  refused?: { reason: 'changed' } | Exclude<KubePreview, { ok: true }>
   startedAt: number
   finishedAt: number
 }

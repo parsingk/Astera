@@ -104,10 +104,11 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   })
 
   // The only channel that writes to a cluster; the renderer reaches it from the confirmation (spec 4.6).
-  ipcMain.handle('kube.run', async (_e, id, v, req) => {
+  ipcMain.handle('kube.run', async (_e, id, v, req, fingerprint) => {
     const runId = str(id, 'id')
     const op = verb(v)
-    return service.run(runId, op, await allowedRequest(req))
+    const fp = str(fingerprint, 'fingerprint')
+    return service.run(runId, op, await allowedRequest(req), fp)
   })
 
   ipcMain.handle('kube.cancel', (_e, id) => service.cancel(str(id, 'id')))

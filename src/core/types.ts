@@ -1431,8 +1431,9 @@ export interface CoreApi {
     useContext(context: string): Promise<{ ok: boolean; stdout: string; stderr: string; errorCode?: string }>
     /** Plan, one-context check, namespace and server-side dry run; never writes. */
     preview(verb: KubeVerb, req: KubeRequest, opts: { keepServerFields: boolean }): Promise<KubePreview>
-    /** The only write: re-plans, then runs the commands in order until one fails. Cancellable by `id`. */
-    run(id: string, verb: KubeVerb, req: KubeRequest): Promise<KubeRunResult>
+    /** The only write: re-plans, refuses unless it matches the confirmed preview's `fingerprint`, then runs the
+     *  commands in order until one fails. Cancellable by `id`. */
+    run(id: string, verb: KubeVerb, req: KubeRequest, fingerprint: string): Promise<KubeRunResult>
     cancel(id: string): Promise<void>
     /** `pill` is the namespace for a resource that names none (else the context's, else default). */
     reload(filePath: string, context: string, pill: string | null): Promise<KubeReloadResult>
