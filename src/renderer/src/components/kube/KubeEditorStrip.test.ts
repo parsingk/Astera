@@ -23,7 +23,8 @@ const VIEW: KubeTargetView = {
   nsFromFile: false,
   resource: null,
   brokenKustomization: null,
-  unlisted: false
+  unlisted: false,
+  helmChart: false
 }
 
 /** The strip as App renders it, over a stand-in for useKubeEditor's answer. */

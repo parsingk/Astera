@@ -38,6 +38,13 @@ interface KubeSession {
 
 export type KubeAction = 'compare' | 'apply' | 'reload' | 'delete'
 
+/** What the explorer's Kubernetes submenu shows once it opens (spec 4.4): where the first item would go, null when it
+ *  has no target, and which of the folders asked about lie in a Helm chart. */
+export interface KubeMenuInfo {
+  target: { context: string; namespace: string | null } | null
+  chartFolders: string[]
+}
+
 /** A Helm template shows only its notice; these two ask the cluster. */
 const asksCluster = (k: KubeFileKind): boolean => k === 'manifest' || k === 'kustomization'
 
@@ -354,6 +361,27 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     start(verb, req, labelOf(view, req.pill))
   }
 
+  /** The explorer submenu's heading and Helm check: the first item's target as explorerAction resolves it (an editor's
+   *  session choice for a single item included), and which of `folders` lie in a Helm chart. Never rejects: what
+   *  cannot be asked is left unresolved. */
+  const resolveMenu = async (selection: string[], folders: string[], projectRoot: string): Promise<KubeMenuInfo> => {
+    const ask = (p: string): Promise<KubeTargetView | null> => window.api.kube.target(p, projectRoot).catch(() => null)
+    const [first] = selection
+    const others = folders.filter((f) => f !== first)
+    const [view, ctx, ...folderViews] = await Promise.all([
+      first === undefined ? null : ask(first),
+      contextsRef.current ?? window.api.kube.contexts().catch(() => null),
+      ...others.map(ask)
+    ])
+    const viewOf = (f: string): KubeTargetView | null => (f === first ? view : folderViews[others.indexOf(f)])
+    const chartFolders = folders.filter((f) => viewOf(f)?.helmChart === true)
+    if (!view) return { target: null, chartFolders }
+    const override = selection.length === 1 ? sessionRef.current[first]?.override : undefined
+    const req = kubeRequestOf(selection, projectRoot, view, override, ctx)
+    if (!req) return { target: null, chartFolders }
+    return { target: { context: req.context, namespace: view.lockedNamespace ?? (view.nsFromFile ? null : req.pill) }, chartFolders }
+  }
+
   return {
     contexts,
     kubectlMissing: contexts?.error?.errorCode === 'ENOENT',
@@ -382,6 +410,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
       for (const path of kubeTabsAfterRun(entriesRef.current, req, commandLines)) refreshTarget(path)
     },
     toolbarAction,
-    explorerAction
+    explorerAction,
+    resolveMenu
   }
 }

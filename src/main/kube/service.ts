@@ -185,12 +185,23 @@ export function createKubeService(deps: KubeServiceDeps) {
     }
   }
 
+  /** Whether one of `folders` holds a Chart.yaml. */
+  async function anyChart(folders: string[]): Promise<boolean> {
+    for (const folder of folders) {
+      const s = await deps.stat(path.join(folder, 'Chart.yaml'))
+      if (s && !s.isDir) return true
+    }
+    return false
+  }
+
   async function target(rawFilePath: string, projectRoot: string): Promise<KubeTargetView> {
     const asked = onRoot(projectRoot, rawFilePath)
     // A folder (an explorer selection) resolves over its own chain, as the kustomization it may hold would.
     const isDir = (await deps.stat(asked))?.isDir === true
     const filePath = isDir ? path.join(asked, 'kustomization.yaml') : asked
     const [ctx, graph] = await Promise.all([contexts(), projectGraph(projectRoot)])
+    // The folder itself and every folder above it, as the plan's walk leaves a chart out (operations.ts folderIndex).
+    const helmChart = isDir && (await anyChart(foldersUpTo(filePath, projectRoot)))
     const isKustomization = isKustomizationName(path.basename(filePath))
     const overlays = graph.overlaysReaching(isKustomization ? path.dirname(filePath) : filePath)
     // The nearest kustomization over the file that does not parse: every action on the file is refused until it does.
@@ -214,7 +225,8 @@ export function createKubeService(deps: KubeServiceDeps) {
           nsFromFile: false,
           resource: null,
           brokenKustomization,
-          unlisted: false
+          unlisted: false,
+          helmChart
         }
       }
       folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
@@ -239,7 +251,8 @@ export function createKubeService(deps: KubeServiceDeps) {
           : await fileFacts(filePath)),
       brokenKustomization,
       // The planner's rule for a file it leaves out as unlisted (plan.ts takeLoose).
-      unlisted: !isDir && !isKustomization && !graph.isMember(filePath) && graph.inKustomization(filePath)
+      unlisted: !isDir && !isKustomization && !graph.isMember(filePath) && graph.inKustomization(filePath),
+      helmChart
     }
   }
 

@@ -377,6 +377,7 @@ const view = (over: Partial<KubeTargetView> = {}): KubeTargetView => ({
   resource: null,
   brokenKustomization: null,
   unlisted: false,
+  helmChart: false,
   ...over
 })
 

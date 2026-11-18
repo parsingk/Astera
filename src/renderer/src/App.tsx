@@ -4715,6 +4715,11 @@ export default function App(): React.JSX.Element {
                 onKube={(verb, selection) => {
                   if (currentProject) void kubeEditor.explorerAction(verb, selection, currentProject, openFile)
                 }}
+                resolveKube={(selection, folders) =>
+                  currentProject
+                    ? kubeEditor.resolveMenu(selection, folders, currentProject)
+                    : Promise.resolve({ target: null, chartFolders: [] })
+                }
                 kubeFailed={failedKubePaths}
                 revealFolder={explorerReveal}
                 onRevealDone={(seq) => setExplorerReveal((r) => (r !== null && r.seq === seq ? null : r))}

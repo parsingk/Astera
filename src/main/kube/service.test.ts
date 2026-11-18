@@ -1603,6 +1603,15 @@ describe('Helm charts under a selected folder (spec 4.4)', () => {
     [path.join(chart, 'templates', 'd.yaml')]: yamlDocs(cm('{{ .Release.Name }}', {}, 'dev'))
   }
 
+  it('a folder of or in a chart says so in its target view; another folder and a file do not', async () => {
+    const h = harness(tree, fakeKube({}))
+    const svc = createKubeService(h.deps)
+    expect((await svc.target(chart, root)).helmChart).toBe(true)
+    expect((await svc.target(path.join(chart, 'templates'), root)).helmChart).toBe(true)
+    expect((await svc.target(p('deploy'), root)).helmChart).toBe(false)
+    expect((await svc.target(a, root)).helmChart).toBe(false)
+  })
+
   it('leaves out every file of a chart, not only its templates, also when the folder picked lies inside the chart', async () => {
     const h = harness(tree, fakeKube({}))
     const svc = traced(createKubeService(h.deps))

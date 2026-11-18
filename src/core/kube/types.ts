@@ -85,6 +85,9 @@ export interface KubeTargetView {
   /** A file in or below a kustomization's folder that no kustomization lists, so the plan leaves it out (it may be a
    *  patch or a transformer config): every action waits. Never a folder or a kustomization file. */
   unlisted: boolean
+  /** A folder that is a Helm chart or lies in one (Chart.yaml in it or a folder above it, up to the project root):
+   *  the plan leaves everything under it out. Never a file; a file's kind says helm-template. */
+  helmChart: boolean
 }
 
 export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'

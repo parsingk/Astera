@@ -32,6 +32,8 @@ import { useFileOps, errText } from '../hooks/useFileOps'
 import { useGitStatus } from '../hooks/useGitStatus'
 import { useKubeKinds } from '../hooks/useKubeKinds'
 import { normKubePath } from '../hooks/useKubeOps'
+import type { KubeMenuInfo } from '../hooks/useKubeEditor'
+import { displayContextName } from '../../../core/kube/contextName'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
 import type { KubeFileKind } from '../../../core/kube/types'
@@ -67,23 +69,60 @@ const CURSOR_KEYS: Record<string, CursorKey> = {
 
 export type KubeVerb = 'compare' | 'apply' | 'reload' | 'delete'
 
+type T = (k: MessageKey, p?: Record<string, string | number>) => string
+
+/** The submenu heading (spec 4.4): "2 files · 1 folder", then the target once the App resolved it ("… → live-cluster
+ *  / api"), an ellipsis while it is asked, and nothing more when the first item has no target. */
+export function kubeMenuHeading(
+  selection: string[],
+  isDir: (p: string) => boolean,
+  target: KubeMenuInfo['target'] | 'loading',
+  t: T
+): string {
+  const folders = selection.filter(isDir).length
+  const files = selection.length - folders
+  const parts: string[] = []
+  if (files > 0) parts.push(files === 1 ? t('kube.menu.fileOne') : t('kube.menu.files', { count: files }))
+  if (folders > 0) parts.push(folders === 1 ? t('kube.menu.folderOne') : t('kube.menu.folders', { count: folders }))
+  const scope = parts.join(' · ')
+  if (target === null) return scope
+  if (target === 'loading') return t('kube.menu.targetLoading', { scope })
+  const context = displayContextName(target.context).short
+  return target.namespace === null
+    ? t('kube.menu.targetContext', { scope, context })
+    : t('kube.menu.target', { scope, context, namespace: target.namespace })
+}
+
+/** The App's answer for an open Kubernetes submenu: `menu` is the opening it was asked for (the menu state object),
+ *  `info` is 'loading' until that answer arrives, null when it could not be resolved. */
+export interface KubeMenuAsk {
+  menu: object | null
+  info: KubeMenuInfo | 'loading' | null
+}
+
+/** An answer lands only on the menu it was asked for: one for an earlier opening is dropped. */
+export const kubeMenuAnswer = (s: KubeMenuAsk, menu: object, info: KubeMenuInfo | null): KubeMenuAsk =>
+  s.menu === menu ? { menu, info } : s
+
 /** The "Kubernetes" group item of the context menu, or null when nothing in the selection can be a target.
  *  A manifest, a kustomization or a folder (which may hold manifests; the real planning is the main
- *  process's) is a target. Helm templates are not: when they are all there is, the group still shows,
- *  disabled, saying why. Reload is for exactly one manifest file. */
+ *  process's) is a target. Helm templates are not, nor a folder known to be in a Helm chart (`isChart`): when they
+ *  are all there is, the group still shows, disabled, saying why. Reload is for exactly one manifest file. */
 export function kubeMenuItems(args: {
   selection: string[]
   kinds: Record<string, KubeFileKind>
   isDir(p: string): boolean
+  isChart?(p: string): boolean
   heading: string
-  t: (k: MessageKey, p?: Record<string, string | number>) => string
+  t: T
   on: Record<KubeVerb, () => void>
 }): MenuItem | null {
   const { selection, kinds, isDir, heading, t, on } = args
+  const isHelm = (p: string): boolean => kinds[p] === 'helm-template' || (isDir(p) && args.isChart?.(p) === true)
   const applicable = selection.some(
-    (p) => isDir(p) || kinds[p] === 'manifest' || kinds[p] === 'kustomization'
+    (p) => !isHelm(p) && (isDir(p) || kinds[p] === 'manifest' || kinds[p] === 'kustomization')
   )
-  const helmOnly = !applicable && selection.some((p) => kinds[p] === 'helm-template')
+  const helmOnly = !applicable && selection.some(isHelm)
   if (!applicable && !helmOnly) return null
   const onlyManifest = selection.length === 1 && !isDir(selection[0]) && kinds[selection[0]] === 'manifest'
   const helmTitle = helmOnly ? t('kube.menu.helm') : undefined
@@ -130,6 +169,7 @@ export function FileExplorer({
   onPathDeleted,
   onRunFile,
   onKube,
+  resolveKube,
   kubeFailed,
   revealFolder,
   onRevealDone
@@ -158,6 +198,8 @@ export function FileExplorer({
   onRunFile: (path: string) => void
   /** A Kubernetes verb picked from the context menu, with the operation targets. Absent: no Kubernetes item. */
   onKube?: (verb: KubeVerb, selection: string[]) => void
+  /** Asked once the Kubernetes submenu opens: the targets' heading and which of `folders` lie in a Helm chart. */
+  resolveKube?: (selection: string[], folders: string[]) => Promise<KubeMenuInfo>
   /** Files whose last Kubernetes operation failed: their rows carry a warning mark. */
   kubeFailed?: ReadonlySet<string>
   /** A folder a terminal link named under this root (D2, 2026-10-14), as its names below the root: each level is
@@ -169,6 +211,8 @@ export function FileExplorer({
 }): React.JSX.Element {
   const { t, tm } = useI18n()
   const [menu, setMenu] = useState<{ x: number; y: number; entry: Entry | null } | null>(null)
+  /** The Kubernetes submenu's heading and Helm check, for the menu opening they were asked for. */
+  const [kubeMenu, setKubeMenu] = useState<KubeMenuAsk>({ menu: null, info: null })
   // entry=null means a right-click on the root's empty space (a menu targeting the root)
   // Whether the Local History modal is open. The history is per-project, so it is unrelated to entry.
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -431,6 +475,13 @@ export function FileExplorer({
     gitStatus.refresh() // refresh git status along with the explorer — appended after the existing behavior, which is unchanged
   }
 
+  /** Kubernetes targets are the selected rows. A right-click outside the selection acts on that row alone. */
+  const kubePathsOf = (entry: Entry): string[] => (sel.selection.has(entry.path) ? sel.selectionPaths() : [entry.path])
+  const kubeIsDir = (): ((p: string) => boolean) => {
+    const dirPaths = new Set(rows.flatMap((r) => (r.kind === 'entry' && r.entry.isDir ? [r.entry.path] : [])))
+    return (p) => dirPaths.has(p)
+  }
+
   const menuItemsFor = (entry: Entry | null): MenuItem[] => {
     // entry=null (root empty space) is treated as the root folder. For a file, New File/New Folder are created in its parent (VS Code behavior)
     // root!: this menu only opens from the tree, and the tree only renders when root exists, so root is always non-null.
@@ -490,15 +541,18 @@ export function FileExplorer({
         onSelect: () => onRunFile(entry.path)
       })
     }
-    // Kubernetes targets are the selected rows. A right-click outside the selection acts on that row alone.
     if (entry && onKube) {
-      const paths = sel.selection.has(entry.path) ? sel.selectionPaths() : [entry.path]
-      const dirPaths = new Set(rows.flatMap((r) => (r.kind === 'entry' && r.entry.isDir ? [r.entry.path] : [])))
+      const paths = kubePathsOf(entry)
+      const isDir = kubeIsDir()
+      // Before this opening's ask goes out it is loading too, never the answer of an earlier menu.
+      const info = !resolveKube ? null : kubeMenu.menu === menu ? kubeMenu.info : 'loading'
+      const charts = new Set(info !== null && info !== 'loading' ? info.chartFolders : [])
       const kube = kubeMenuItems({
         selection: paths,
         kinds: kubeKinds,
-        isDir: (p) => dirPaths.has(p),
-        heading: t('kube.menu.heading', { count: paths.length }),
+        isDir,
+        isChart: (p) => charts.has(p),
+        heading: kubeMenuHeading(paths, isDir, info === null || info === 'loading' ? info : info.target, t),
         t,
         on: {
           compare: () => onKube('compare', paths),
@@ -736,6 +790,23 @@ export function FileExplorer({
   // Kubernetes kinds of the YAML rows the tree lists (non-YAML paths never reach the IPC)
   const rowPaths = useMemo(() => entryPaths(rows), [rows])
   const kubeKinds = useKubeKinds(root, rowPaths)
+  // Once a menu opens on a Kubernetes selection, the App resolves its target and which selected folders are Helm
+  // charts; an answer for an earlier opening is dropped (kubeMenuAnswer).
+  useEffect(() => {
+    const entry = menu?.entry
+    if (!menu || !entry || !onKube || !resolveKube) return
+    const paths = kubePathsOf(entry)
+    const isDir = kubeIsDir()
+    const noop = (): void => {}
+    const on = { compare: noop, apply: noop, reload: noop, delete: noop }
+    if (kubeMenuItems({ selection: paths, kinds: kubeKinds, isDir, heading: '', t, on }) === null) return
+    setKubeMenu({ menu, info: 'loading' })
+    resolveKube(paths, paths.filter(isDir)).then(
+      (info) => setKubeMenu((s) => kubeMenuAnswer(s, menu, info)),
+      () => setKubeMenu((s) => kubeMenuAnswer(s, menu, null))
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menu])
   const [viewport, setViewport] = useState({ top: 0, h: DEFAULT_VIEWPORT_H })
   const range = visibleRange(offsets, viewport.top, viewport.h, OVERSCAN)
   // What the scroll handler and the reveal compare against — the latest render's layout

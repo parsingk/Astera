@@ -102,6 +102,7 @@ const view = (over: Partial<KubeTargetView> = {}): KubeTargetView => ({
   resource: null,
   brokenKustomization: null,
   unlisted: false,
+  helmChart: false,
   ...over
 })
 
@@ -166,6 +167,48 @@ async function mount(): Promise<() => ReturnType<typeof useKubeEditor>> {
   api.status.mockClear()
   return ed
 }
+
+describe("useKubeEditor: the explorer submenu's target", () => {
+  beforeEach(() => {
+    hooks.reset()
+    vi.clearAllMocks()
+    views[A] = view()
+    views[B] = view()
+    views[M] = MEMBER
+    ;(globalThis as { window?: unknown }).window = { api: { kube: api } }
+  })
+
+  it('resolves the first item as an explorer request would: its context and pill, or the locked namespace, or none from the files', async () => {
+    const ed = await mount()
+    expect(await ed().resolveMenu([A, B], [], '/p')).toEqual({ target: { context: 'kind-dev', namespace: 'dev' }, chartFolders: [] })
+    views['/p/k8s'] = view({ lockedNamespace: 'shop' })
+    expect((await ed().resolveMenu(['/p/k8s'], ['/p/k8s'], '/p')).target).toEqual({ context: 'kind-dev', namespace: 'shop' })
+    views['/p/own.yaml'] = view({ nsFromFile: true })
+    expect((await ed().resolveMenu(['/p/own.yaml'], [], '/p')).target).toEqual({ context: 'kind-dev', namespace: null })
+  })
+
+  it("honours an open editor's session context for a single item, never for several", async () => {
+    const ed = await mount()
+    await ed().pickContext(A, 'prod', null)
+    expect((await ed().resolveMenu([A], [], '/p')).target).toEqual({ context: 'prod', namespace: 'default' })
+    expect((await ed().resolveMenu([A, B], [], '/p')).target?.context).toBe('kind-dev')
+  })
+
+  it('is unresolved without a target, and when the target cannot be asked', async () => {
+    const ed = await mount()
+    views['/p/none.yaml'] = view({ state: { state: 'none' } })
+    expect((await ed().resolveMenu(['/p/none.yaml'], [], '/p')).target).toBeNull()
+    api.target.mockRejectedValueOnce(new Error('not allowed'))
+    expect(await ed().resolveMenu(['/p/x.yaml'], [], '/p')).toEqual({ target: null, chartFolders: [] })
+  })
+
+  it('names the given folders that lie in a Helm chart', async () => {
+    const ed = await mount()
+    views['/p/chart'] = view({ helmChart: true })
+    views['/p/k8s'] = view()
+    expect((await ed().resolveMenu(['/p/chart', '/p/k8s'], ['/p/chart', '/p/k8s'], '/p')).chartFolders).toEqual(['/p/chart'])
+  })
+})
 
 describe('useKubeEditor: the chip after a run and after a picker change', () => {
   beforeEach(() => {
