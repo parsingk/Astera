@@ -5623,6 +5623,8 @@ export function registerIpc(
   })
   ipcMain.handle('files.watch', async (_e, root: string) => {
     await assertAllowedPath(root)
+    // What changed in the project while nothing watched it (a pull, a checkout) reaches the Kustomize graph too.
+    kubeService.forgetGraph(root)
     await fileWatcher.watch(root)
   })
   ipcMain.handle('files.unwatch', () => fileWatcher.unwatch())

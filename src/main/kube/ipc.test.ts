@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { registerKubeIpc } from './ipc'
 import type { KubectlResult } from '../../core/kube/kubectl'
 
@@ -105,5 +108,18 @@ describe('kubectl path setting and recheck', () => {
     const t = setup()
     t.run.mockResolvedValueOnce({ ok: false, stdout: '', stderr: 'spawn kubectl ENOENT', errorCode: 'ENOENT' })
     expect(await t.call('kube.recheck')).toEqual({ ok: false, errorCode: 'ENOENT', stderr: 'spawn kubectl ENOENT' })
+  })
+})
+
+// registerIpc cannot run without Electron, so the explorer watch's wiring is guarded by its text, as
+// agentSessions.wiring.test.ts guards its own.
+describe('files.watch in ipc.ts', () => {
+  it('forgets the Kustomize graph of the root it starts watching, after the path check', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ipc.ts'), 'utf8')
+    const start = src.indexOf("ipcMain.handle('files.watch'")
+    const handler = src.slice(start, src.indexOf('})', start))
+    expect(start).toBeGreaterThan(0)
+    expect(handler.indexOf('await assertAllowedPath(root)')).toBeGreaterThan(0)
+    expect(handler.indexOf('kubeService.forgetGraph(root)')).toBeGreaterThan(handler.indexOf('await assertAllowedPath(root)'))
   })
 })

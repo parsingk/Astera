@@ -288,6 +288,31 @@ describe('projectGraph', () => {
     svc.invalidate([{ path: p('b', 'kustomization.yaml'), kind: 'add' }])
     expect([...(await svc.projectGraph(root)).overlays()].sort()).toEqual([p('a'), p('b')].sort())
   })
+
+  it('is rebuilt once it is 30 seconds old, so a change no watcher saw shows up', async () => {
+    vi.useFakeTimers()
+    const h = harness({ [p('a', 'kustomization.yaml')]: 'resources: []\n' })
+    const svc = createKubeService(h.deps)
+    expect((await svc.projectGraph(root)).overlays()).toEqual([p('a')])
+    h.files.set(p('b', 'kustomization.yaml'), { text: 'resources: []\n', mtimeMs: 1 })
+    vi.advanceTimersByTime(29_000)
+    expect((await svc.projectGraph(root)).overlays()).toEqual([p('a')])
+    vi.advanceTimersByTime(1_001)
+    expect([...(await svc.projectGraph(root)).overlays()].sort()).toEqual([p('a'), p('b')].sort())
+  })
+
+  it('forgetGraph (the explorer starting to watch the root) rebuilds that root only', async () => {
+    const other = path.resolve('/other')
+    const h = harness({ [p('a', 'kustomization.yaml')]: 'resources: []\n', [path.join(other, 'x', 'kustomization.yaml')]: 'resources: []\n' })
+    const svc = createKubeService(h.deps)
+    await svc.projectGraph(root)
+    await svc.projectGraph(other)
+    h.files.set(p('b', 'kustomization.yaml'), { text: 'resources: []\n', mtimeMs: 1 })
+    h.files.set(path.join(other, 'y', 'kustomization.yaml'), { text: 'resources: []\n', mtimeMs: 1 })
+    svc.forgetGraph(root)
+    expect([...(await svc.projectGraph(root)).overlays()].sort()).toEqual([p('a'), p('b')].sort())
+    expect((await svc.projectGraph(other)).overlays()).toEqual([path.join(other, 'x')])
+  })
 })
 
 describe('kubectl calls', () => {

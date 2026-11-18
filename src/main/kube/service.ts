@@ -46,13 +46,16 @@ export type { KubeTargetView }
 export type KubeService = ReturnType<typeof createKubeService>
 
 const CONTEXTS_TTL_MS = 5_000
+/** A project the explorer is not watching changes unseen (a pull in another window): its graph is rebuilt this often.
+ *  A run whose plan changed meanwhile is refused by the fingerprint all the same. */
+const GRAPH_TTL_MS = 30_000
 /** `config view` reads local files only; it never needs the long deadline of a cluster call. */
 const CONFIG_VIEW_TIMEOUT_MS = 15_000
 
 export function createKubeService(deps: KubeServiceDeps) {
   const kinds = new Map<string, { mtimeMs: number; kind: KubeFileKind }>()
   let contextsCache: { at: number; value: KubeContexts } | null = null
-  const graphs = new Map<string, Promise<KustomizeGraph>>()
+  const graphs = new Map<string, { at: number; graph: Promise<KustomizeGraph> }>()
 
   /** Every kubectl call of the feature: stderr is redacted here, before any result, outcome or reason is built from it,
    *  so a Secret's values in a patch error never leave the main process (C22). */
@@ -135,16 +138,16 @@ export function createKubeService(deps: KubeServiceDeps) {
     return buildKustomizeGraph(roots)
   }
 
-  /** The project's graph, built once per root whatever its spelling. The graph matches any spelling of a path; the
-   *  overlays it returns are spelled the way this caller spells the root. */
+  /** The project's graph, built once per root whatever its spelling and again once it is GRAPH_TTL_MS old. The graph
+   *  matches any spelling of a path; the overlays it returns are spelled the way this caller spells the root. */
   function projectGraph(projectRoot: string): Promise<KustomizeGraph> {
     const key = foldPathCase(projectRoot)
     let g = graphs.get(key)
-    if (!g) {
-      g = buildGraph(projectRoot)
+    if (!g || Date.now() - g.at >= GRAPH_TTL_MS) {
+      g = { at: Date.now(), graph: buildGraph(projectRoot) }
       graphs.set(key, g)
     }
-    return g.then((graph) => ({
+    return g.graph.then((graph) => ({
       ...graph,
       overlays: () => graph.overlays().map((d) => onRoot(projectRoot, d)),
       overlaysReaching: (p) => graph.overlaysReaching(p).map((d) => onRoot(projectRoot, d))
@@ -243,6 +246,11 @@ export function createKubeService(deps: KubeServiceDeps) {
     return r
   }
 
+  /** Drops a root's graph, e.g. when the explorer starts watching it: what changed while nobody watched is read again. */
+  function forgetGraph(projectRoot: string): void {
+    graphs.delete(foldPathCase(projectRoot))
+  }
+
   /** Drops what the changes may have made stale. A folder moved, copied or deleted can carry overlays, and
    *  some watchers report it as a file, so a non-YAML add or unlink also clears the graphs. */
   function invalidate(changes: FileChange[]): void {
@@ -331,6 +339,7 @@ export function createKubeService(deps: KubeServiceDeps) {
     setOverlay,
     useContext,
     projectGraph,
+    forgetGraph,
     invalidate,
     preview,
     run,
