@@ -29,10 +29,11 @@ const diff = (over: Partial<ResourceDiff> = {}): ResourceDiff => ({
   ...over
 })
 
-const okPreview = (d: ResourceDiff = diff()): KubePreview => ({
+const okPreview = (d: ResourceDiff = diff(), nsFlags: (string | null)[] = [null]): KubePreview => ({
   ok: true,
   plan: { ok: true, commands: [{ kind: 'files', files: ['/p/a.yaml'] }], leftOut: [{ path: '/p/x.yaml', reason: 'helm' }] },
   commandLines: [['apply', '--context', 'prod', '-f', '/p/a.yaml']],
+  nsFlags,
   resources: [{ command: 0, diff: d }],
   fingerprint: 'fp'
 })
@@ -49,6 +50,9 @@ const render = (preview: KubePreview | null, over: Record<string, unknown> = {})
       onConfirm: () => {},
       onCancel: () => {},
       stale: false,
+      running: false,
+      cancelling: false,
+      onAbort: () => {},
       ...over
     })
   )
@@ -97,5 +101,25 @@ describe('KubeConfirmDialog', () => {
     expect(render({ ok: false, reason: 'refused', plan: { ok: false, reason: 'base-folder', paths: ['/b'] } })).toContain(
       'kube.confirm.refused.base-folder'
     )
+  })
+
+  it('the namespace pill comes from the preview: one value, from the files, or several; the caller label while loading', () => {
+    expect(render(null)).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;shop&quot;}')
+    expect(render(okPreview(diff(), ['dev']))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
+    expect(render(okPreview(diff(), ['dev', 'dev', null]))).toContain('kube.confirm.namespace{&quot;ns&quot;:&quot;dev&quot;}')
+    const fromFiles = render(okPreview(diff(), [null, null]))
+    expect(fromFiles).toContain('kube.toolbar.nsFromFile')
+    expect(fromFiles).not.toContain('kube.confirm.namespace{')
+    const many = render(okPreview(diff(), ['dev', null, 'web']))
+    expect(many).toContain('kube.confirm.nsMany')
+    expect(many).toContain('title="dev, web"')
+  })
+
+  it('running: the primary shows progress and is disabled, the other button stops the run', () => {
+    const html = render(okPreview(), { running: true })
+    expect(html).toMatch(/<button[^>]*class="primary"[^>]*disabled[^>]*><span class="loading-spinner"/)
+    expect(html).toContain('kube.confirm.abort')
+    expect(html).not.toContain('common.cancel')
+    expect(render(okPreview(), { running: true, cancelling: true })).toMatch(/<button[^>]*disabled[^>]*>kube.confirm.abort/)
   })
 })

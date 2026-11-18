@@ -115,12 +115,14 @@ export interface KubeRequest {
 
 /** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the
  *  binary), also on a `kubectl` failure, whose `stderr` starts with the step that failed (`dry run failed: …`).
- *  `fingerprint` goes back to `run`, which refuses to write anything other than what this preview read. */
+ *  `nsFlags[i]` is the `-n` value of `commandLines[i]`, null when it sends none. `fingerprint` goes back to `run`,
+ *  which refuses to write anything other than what this preview read. */
 export type KubePreview =
   | {
       ok: true
       plan: Extract<OperationPlan, { ok: true }>
       commandLines: string[][]
+      nsFlags: (string | null)[]
       resources: { command: number; diff: ResourceDiff }[]
       fingerprint: string
     }

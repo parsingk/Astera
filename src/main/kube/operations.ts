@@ -221,7 +221,15 @@ export function createKubeOperations(d: KubeOperationDeps) {
     req: KubeRequest,
     signal?: AbortSignal
   ): Promise<
-    { ok: true; plan: Extract<OperationPlan, { ok: true }>; steps: Step[]; commandLines: string[][]; fingerprint: string } | Refusal
+    | {
+        ok: true
+        plan: Extract<OperationPlan, { ok: true }>
+        steps: Step[]
+        commandLines: string[][]
+        nsFlags: (string | null)[]
+        fingerprint: string
+      }
+    | Refusal
   > {
     // R11: a context chosen for one editor applies to that one item only.
     const overrideRefusal: Refusal = { ok: false, reason: 'mixed-contexts', folders: [...req.selection] }
@@ -231,6 +239,10 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const selection = req.selection.map((s) => d.onRoot(root, s))
     const plan = planOperation(selection, await folderIndex(selection, graph))
     if (!plan.ok) return { ok: false, reason: 'refused', plan }
+    // A folder skips C12 for everything under it, so the override takes one file or one overlay only.
+    const [only] = plan.commands
+    const oneItem = plan.commands.length === 1 && (only.kind === 'overlay' || only.files.length === 1)
+    if (req.override && !oneItem) return overrideRefusal
 
     const decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[] = []
     const conflicts = new Map<string, { path: string; namespace: string }>()
@@ -270,7 +282,8 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const steps: Step[] = decided.flatMap((x) =>
       x.src ? [{ cmd: x.cmd, t: { context: req.context, nsFlag: x.flag }, src: x.src, fallbackNs: x.flag ?? contextNs }] : []
     )
-    return { ok: true, plan, steps, commandLines, fingerprint: fingerprintOf(req, commandLines, steps) }
+    const nsFlags = decided.map((x) => x.flag)
+    return { ok: true, plan, steps, commandLines, nsFlags, fingerprint: fingerprintOf(req, commandLines, steps) }
   }
 
   /** Ties a run to the preview that was confirmed (C1, 5.2): the override flag and context (R11), the command lines,
@@ -331,7 +344,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines)
       for (const diff of diffs) resources.push({ command, diff })
     }
-    return { ok: true, plan: p.plan, commandLines: p.commandLines, resources, fingerprint: p.fingerprint }
+    return { ok: true, plan: p.plan, commandLines: p.commandLines, nsFlags: p.nsFlags, resources, fingerprint: p.fingerprint }
   }
 
   /** Re-plans and re-checks, and refuses unless what it would write is what the confirmed preview showed (its

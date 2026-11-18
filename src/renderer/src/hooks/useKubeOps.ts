@@ -30,9 +30,10 @@ export interface KubeLogEntry {
 }
 
 /** The confirmation dialog (spec 4.6). `preview: null` while the first answer loads. `phase` is `previewing` while
- *  the answer to ask `seq` is awaited (a stale dialog keeps showing the earlier diff), `confirming` once it is shown.
- *  `watch`: the paths whose disk change makes it stale (the selection, or a patch beside its overlay). `id` and
- *  `startedAt` name a compare's log entry. */
+ *  the answer to ask `seq` is awaited (a stale dialog keeps showing the earlier diff), `confirming` once it is shown,
+ *  `running` from confirm until the run `runId` answers: the dialog stays up meanwhile, so nothing behind it can
+ *  change the files a multi-command run is still reading. `watch`: the paths whose disk change makes it stale (the
+ *  selection, or a patch beside its overlay). `id` and `startedAt` name a compare's log entry. */
 export interface KubeDialogState {
   verb: 'compare' | KubeVerb
   req: KubeRequest
@@ -40,8 +41,11 @@ export interface KubeDialogState {
   preview: KubePreview | null
   stale: boolean
   keepServerFields: boolean
-  phase: 'previewing' | 'confirming'
+  phase: 'previewing' | 'confirming' | 'running'
   seq: number
+  runId: string | null
+  /** Stop was pressed; the run has not answered yet. */
+  cancelling: boolean
   watch: string[]
   id: string
   startedAt: number
@@ -70,8 +74,8 @@ export type KubeOpsAction =
   | { type: 'fileChanged' }
   | { type: 'toggleServerFields' }
   | { type: 'confirm'; id: string; at: number; scope: string }
-  /** `reopen`: the dialog that was confirmed, shown again when the run refused a selection changed since. */
-  | { type: 'ran'; result: KubeRunResult; reopen?: KubeDialogState }
+  | { type: 'cancel' }
+  | { type: 'ran'; result: KubeRunResult }
   | { type: 'reload'; id: string; context: string; scope: string; at: number }
   | { type: 'close' }
   | { type: 'clear' }
@@ -118,6 +122,8 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         keepServerFields: false,
         phase: 'previewing',
         seq: 0,
+        runId: null,
+        cancelling: false,
         watch: a.watch ?? a.req.selection,
         id: a.id,
         startedAt: a.at
@@ -141,10 +147,11 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
       const log = s.log.some((e) => e.id === d.id) ? s.log.map((e) => (e.id === d.id ? entry : e)) : [entry, ...s.log]
       return { ...s, dialog, log }
     }
+    // While the run goes, the dialog only waits for its answer.
     case 'fileChanged':
-      return d ? asking(s, d, { stale: true }) : s
+      return d && d.phase !== 'running' ? asking(s, d, { stale: true }) : s
     case 'toggleServerFields':
-      return d ? asking(s, d, { keepServerFields: !d.keepServerFields, preview: null, stale: false }) : s
+      return d && d.phase !== 'running' ? asking(s, d, { keepServerFields: !d.keepServerFields, preview: null, stale: false }) : s
     case 'confirm': {
       if (!d || !canConfirm(d)) return s
       const entry: KubeLogEntry = {
@@ -156,13 +163,16 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
         startedAt: a.at,
         state: 'running'
       }
-      return { ...s, dialog: null, log: [entry, ...s.log] }
+      return { ...s, dialog: { ...d, phase: 'running', runId: a.id, cancelling: false }, log: [entry, ...s.log] }
     }
+    case 'cancel':
+      return d && d.phase === 'running' ? { ...s, dialog: { ...d, cancelling: true } } : s
     case 'ran': {
       const next = { ...s, log: finish(s.log, a.result) }
-      // Nothing was written: show the dialog again so the person confirms what the files hold now.
-      if (a.result.refused?.reason === 'changed' && a.reopen && !d) return asking(next, a.reopen, { stale: true })
-      return next
+      if (!d || d.phase !== 'running' || d.runId !== a.result.id) return next
+      // Nothing was written: the same dialog previews again so the person confirms what the files hold now.
+      if (a.result.refused?.reason === 'changed') return asking(next, { ...d, runId: null, cancelling: false }, { stale: true })
+      return { ...next, dialog: null }
     }
     case 'reload': {
       const entry: KubeLogEntry = {
@@ -177,7 +187,7 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
       return { ...s, log: [entry, ...s.log] }
     }
     case 'close':
-      return d ? { ...s, dialog: null } : s
+      return d && d.phase !== 'running' ? { ...s, dialog: null } : s
     case 'clear':
       return { ...s, log: [] }
   }
@@ -223,6 +233,34 @@ export function kubeRequestOf(
   const req: KubeRequest = { selection, projectRoot, context, pill: kubePill(view, override, contexts) }
   // R11: the service checks a session context against kubeconfig instead of the file's own target.
   return override?.context ? { ...req, override: true } : req
+}
+
+/** The namespace a remembered context pick stores: only one the person chose, the editor's own namespace or the one
+ *  already remembered for this same context. Otherwise null, so the new context's own namespace applies. */
+export function rememberedNamespaceFor(view: KubeTargetView, override: KubeOverride | undefined, context: string): string | null {
+  if (override?.namespace !== undefined) return override.namespace
+  return view.state.state === 'remembered' && view.state.context === context ? view.state.namespace : null
+}
+
+/** A reload that came back for a file still opening (an explorer reload of a file that was not open): applied once
+ *  its buffer has loaded, dropped when the read failed or the tab closed first. A tab without a buffer yet is still
+ *  opening. */
+export function settlePendingReloads(
+  pending: Record<string, string>,
+  tabs: readonly { id: string; path: string }[],
+  buffers: Readonly<Record<string, { loading: boolean; error: string | null }>>
+): { apply: { path: string; id: string; text: string }[]; drop: string[]; keep: Record<string, string> } {
+  const apply: { path: string; id: string; text: string }[] = []
+  const drop: string[] = []
+  const keep: Record<string, string> = {}
+  for (const [path, text] of Object.entries(pending)) {
+    const tab = tabs.find((x) => x.path === path)
+    const buf = tab ? buffers[tab.id] : undefined
+    if (!tab || buf?.error) drop.push(path)
+    else if (!buf || buf.loading) keep[path] = text
+    else apply.push({ path, id: tab.id, text })
+  }
+  return { apply, drop, keep }
 }
 
 /** What the context pill shows: a session override as a plain choice (no fallback tint), else the target. */
@@ -329,13 +367,20 @@ export function useKubeOps(deps: KubeOpsDeps) {
         })
       )
       .then((result) => {
-        const before = stateRef.current.dialog
-        dispatch({ type: 'ran', result, reopen: d })
-        if (before === null && stateRef.current.dialog !== null) {
+        dispatch({ type: 'ran', result })
+        if (result.refused?.reason === 'changed' && stateRef.current.dialog?.phase === 'previewing') {
           toast.info(t('kube.ops.changedSincePreview'))
           ask()
         }
       })
+  }
+
+  /** The running dialog's stop button. */
+  const abort = (): void => {
+    const runId = stateRef.current.dialog?.runId
+    if (!runId) return
+    dispatch({ type: 'cancel' })
+    void window.api.kube.cancel(runId).catch(() => {})
   }
 
   const startReload = async (path: string, context: string, pill: string | null): Promise<void> => {
@@ -380,6 +425,7 @@ export function useKubeOps(deps: KubeOpsDeps) {
     cancel: (id: string) => void window.api.kube.cancel(id).catch(() => {}),
     clear: () => dispatch({ type: 'clear' }),
     confirm,
+    abort,
     close: () => dispatch({ type: 'close' }),
     toggleServerFields: () => {
       dispatch({ type: 'toggleServerFields' })

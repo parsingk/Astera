@@ -26,8 +26,23 @@ const STATE_KEY = {
 const platform = (): string => (typeof window === 'undefined' ? 'linux' : window.api.platform)
 const commandText = (args: string[]): string => `kubectl ${args.map((a) => shellQuote(a, platform())).join(' ')}`
 
+/** The namespace pill of a shown preview: the one `-n` its commands send, "from the files" when none sends one, or
+ *  "several" with the values as its tooltip. Before a preview, the caller's label. */
+function namespacePill(
+  preview: KubePreview | null,
+  namespaceLabel: string,
+  t: ReturnType<typeof useI18n>['t']
+): { text: string; title?: string } {
+  if (!preview?.ok) return { text: t('kube.confirm.namespace', { ns: namespaceLabel }) }
+  const values = [...new Set(preview.nsFlags.filter((n): n is string => n !== null))]
+  if (values.length === 0) return { text: t('kube.toolbar.nsFromFile') }
+  if (values.length === 1) return { text: t('kube.confirm.namespace', { ns: values[0] }) }
+  return { text: t('kube.confirm.nsMany'), title: values.join(', ') }
+}
+
 /** The confirmation that starts every cluster write (spec 4.6): what changes, the exact commands, one button.
- *  `compare` is the same view read-only. State and IPC live with the caller. */
+ *  `compare` is the same view read-only. While `running` it stays up with a stop button; Escape and the backdrop
+ *  do nothing then. State and IPC live with the caller. */
 export function KubeConfirmDialog({
   verb,
   context,
@@ -37,7 +52,10 @@ export function KubeConfirmDialog({
   onToggleServerFields,
   onConfirm,
   onCancel,
-  stale
+  stale,
+  running,
+  cancelling,
+  onAbort
 }: {
   verb: 'compare' | KubeVerb
   context: string
@@ -48,6 +66,10 @@ export function KubeConfirmDialog({
   onConfirm: () => void
   onCancel: () => void
   stale: boolean
+  running: boolean
+  /** Stop was pressed and the run has not answered yet. */
+  cancelling: boolean
+  onAbort: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const entries = preview?.ok ? preview.resources : []
@@ -59,14 +81,14 @@ export function KubeConfirmDialog({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || running) return
       const el = document.activeElement
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
       onCancel()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onCancel])
+  }, [onCancel, running])
 
   const commandLines = preview && (preview.ok || preview.reason === 'kubectl') ? preview.commandLines : []
   const copyAll = (): void => {
@@ -77,7 +99,8 @@ export function KubeConfirmDialog({
   const files = preview?.ok
     ? preview.plan.commands.reduce((n, c) => n + (c.kind === 'files' ? c.files.length : 1), 0)
     : 0
-  const canConfirm = preview?.ok === true && !stale && verb !== 'compare'
+  const canConfirm = preview?.ok === true && !stale && !running && verb !== 'compare'
+  const ns = namespacePill(preview, namespaceLabel, t)
   const afterLabel = verb === 'delete' ? t('kube.confirm.columnAfterDelete') : t('kube.confirm.columnAfter')
 
   const failure = (): React.JSX.Element | null => {
@@ -141,7 +164,7 @@ export function KubeConfirmDialog({
   const multi = preview?.ok === true && preview.commandLines.length > 1
 
   return (
-    <div className="modal-backdrop" {...backdropProps(onCancel)}>
+    <div className="modal-backdrop" {...backdropProps(running ? () => {} : onCancel)}>
       <div className="modal kube-confirm" onClick={(e) => e.stopPropagation()}>
         <h2>{t(`kube.confirm.title.${verb}` as 'kube.confirm.title.apply')}</h2>
         <div className="kube-pills">
@@ -149,7 +172,9 @@ export function KubeConfirmDialog({
             <FileIcon id="kubernetes" tone="blue" />
             <span className="mono">{context}</span>
           </span>
-          <span className="kube-pill mono">{t('kube.confirm.namespace', { ns: namespaceLabel })}</span>
+          <span className="kube-pill mono" title={ns.title}>
+            {ns.text}
+          </span>
           {preview?.ok && (
             <span className="kube-pill">{t('kube.confirm.counts', { files, resources: preview.resources.length })}</span>
           )}
@@ -244,9 +269,15 @@ export function KubeConfirmDialog({
         )}
 
         <div className="row right">
-          <button type="button" onClick={onCancel}>
-            {verb === 'compare' ? t('common.close') : t('common.cancel')}
-          </button>
+          {running ? (
+            <button type="button" disabled={cancelling} onClick={onAbort}>
+              {t('kube.confirm.abort')}
+            </button>
+          ) : (
+            <button type="button" onClick={onCancel}>
+              {verb === 'compare' ? t('common.close') : t('common.cancel')}
+            </button>
+          )}
           {verb !== 'compare' && (
             <button
               type="button"
@@ -254,6 +285,7 @@ export function KubeConfirmDialog({
               disabled={!canConfirm}
               onClick={onConfirm}
             >
+              {running && <span className="loading-spinner" aria-hidden="true" />}
               {t(verb === 'delete' ? 'kube.confirm.delete' : 'kube.confirm.apply', { context })}
             </button>
           )}

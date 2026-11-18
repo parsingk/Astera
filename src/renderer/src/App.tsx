@@ -151,7 +151,7 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
-import { touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
@@ -2875,8 +2875,28 @@ export default function App(): React.JSX.Element {
     [fileTabs, currentProject]
   )
   const kubeKinds = useKubeKinds(currentProject, openFilePaths)
+  /** A reloaded object into an open, loaded buffer: through the editor when it shows the file, so it is one undoable
+   *  edit, else straight into the buffer. */
+  const applyKubeReload = (id: string, text: string): void => {
+    const pane = layoutRef.current ? leaves(layoutRef.current).find((l) => l.activeTabId === id) : undefined
+    const view = pane ? mdViews[pane.id] : null
+    if (view) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+    else setBufferContent(id, text)
+  }
+  /** Reloads that came back for a file still opening (an explorer reload opens it), by path: applied once its buffer
+   *  has loaded, dropped with a toast when the read failed or the tab closed first. */
+  const [pendingKubeReloads, setPendingKubeReloads] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (Object.keys(pendingKubeReloads).length === 0) return
+    const { apply, drop, keep } = settlePendingReloads(pendingKubeReloads, fileTabs, fileBuffers)
+    if (apply.length === 0 && drop.length === 0) return
+    for (const r of apply) applyKubeReload(r.id, r.text)
+    for (const path of drop) toast.error(t('kube.ops.reloadDropped', { path }))
+    setPendingKubeReloads(keep)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKubeReloads, fileTabs, fileBuffers])
   /** Compare, apply, delete and reload (hooks/useKubeOps.ts). Before one starts, the open buffers it covers are saved
-   *  and waited for (C10); a reload lands in the editor as one undoable edit when the file is on screen. */
+   *  and waited for (C10). */
   const kubeOps = useKubeOps({
     save: async (paths) => {
       const ids = fileTabsRef.current.filter((t) => touchesSelection(t.path, paths)).map((t) => t.id)
@@ -2884,11 +2904,9 @@ export default function App(): React.JSX.Element {
     },
     setBuffer: (path, text) => {
       const tab = fileTabsRef.current.find((t) => t.path === path)
-      if (!tab) return
-      const pane = layoutRef.current ? leaves(layoutRef.current).find((l) => l.activeTabId === tab.id) : undefined
-      const view = pane ? mdViews[pane.id] : null
-      if (view) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
-      else setBufferContent(tab.id, text)
+      const buf = tab ? fileBuffersRef.current[tab.id] : undefined
+      if (tab && buf && !buf.loading && !buf.error) applyKubeReload(tab.id, text)
+      else setPendingKubeReloads((prev) => ({ ...prev, [path]: text }))
     }
   })
   const kubeTabs = useMemo(
@@ -5140,6 +5158,9 @@ export default function App(): React.JSX.Element {
           onConfirm={kubeOps.confirm}
           onCancel={kubeOps.close}
           stale={kubeOps.dialog.stale}
+          running={kubeOps.dialog.phase === 'running'}
+          cancelling={kubeOps.dialog.cancelling}
+          onAbort={kubeOps.abort}
         />
       )}
       {showSettings && (

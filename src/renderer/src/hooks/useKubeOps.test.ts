@@ -16,6 +16,8 @@ import {
   kubeOpsReducer,
   kubeRequestOf,
   kubeScope,
+  rememberedNamespaceFor,
+  settlePendingReloads,
   touchesSelection,
   type KubeOpsAction,
   type KubeOpsState
@@ -41,6 +43,7 @@ const okPreview = (fingerprint = 'fp1', states: ResourceState[] = ['changed']): 
   ok: true,
   plan: { ok: true, commands: [{ kind: 'files', files: ['/p/k8s/a.yaml'] }], leftOut: [] },
   commandLines: LINES,
+  nsFlags: [null],
   resources: states.map((s, i) => ({ command: 0, diff: diff(`cm/${i}`, s) })),
   fingerprint
 })
@@ -65,7 +68,7 @@ const open = (verb: 'compare' | 'apply' | 'delete' = 'apply'): KubeOpsState =>
   step(initialKubeOps, { type: 'preview', verb, req: REQ, namespaceLabel: 'dev', id: 'd1', at: 5 })
 
 describe('kubeOpsReducer: the apply flow', () => {
-  it('preview opens the dialog loading, previewed shows it, confirm closes it with a running entry, ran makes it done', () => {
+  it('preview opens the dialog loading, previewed shows it, confirm runs it in place, ran closes it with the entry done', () => {
     const s1 = open()
     expect(s1.dialog).toMatchObject({ verb: 'apply', preview: null, stale: false, keepServerFields: false, phase: 'previewing' })
     expect(canConfirm(s1.dialog)).toBe(false)
@@ -77,7 +80,9 @@ describe('kubeOpsReducer: the apply flow', () => {
     expect(s2.log).toEqual([]) // an apply logs when it runs, not when it is previewed
 
     const s3 = step(s2, { type: 'confirm', id: 'run1', at: 10, scope: '1 file' })
-    expect(s3.dialog).toBeNull()
+    // the dialog stays up while kubectl runs, so nothing behind it can change the files meanwhile
+    expect(s3.dialog).toMatchObject({ phase: 'running', runId: 'run1', cancelling: false })
+    expect(canConfirm(s3.dialog)).toBe(false)
     expect(s3.log).toEqual([
       {
         id: 'run1',
@@ -91,13 +96,13 @@ describe('kubeOpsReducer: the apply flow', () => {
     ])
 
     const result = runResult()
-    const s4 = step(s3, { type: 'ran', result, reopen: s2.dialog! })
+    const s4 = step(s3, { type: 'ran', result })
     expect(s4.dialog).toBeNull()
     expect(s4.log).toHaveLength(1)
     expect(s4.log[0]).toMatchObject({ id: 'run1', state: 'done', result })
   })
 
-  it('confirm does nothing while loading, while stale, for a failed preview, or for a compare', () => {
+  it('confirm does nothing while loading, while stale, for a failed preview, for a compare, or while running', () => {
     const loading = open()
     expect(step(loading, { type: 'confirm', id: 'r', at: 1, scope: '' })).toBe(loading)
 
@@ -119,6 +124,9 @@ describe('kubeOpsReducer: the apply flow', () => {
     expect(canConfirm(cmpShown.dialog)).toBe(false)
     const after = step(cmpShown, { type: 'confirm', id: 'r', at: 1, scope: '' })
     expect(after).toBe(cmpShown)
+
+    const running = step(shown, { type: 'confirm', id: 'r1', at: 1, scope: '' })
+    expect(step(running, { type: 'confirm', id: 'r2', at: 2, scope: '' })).toBe(running)
   })
 
   it('watches the selection for disk changes, or the paths the caller names (a patch beside its overlay)', () => {
@@ -136,7 +144,12 @@ describe('kubeOpsReducer: the apply flow', () => {
   })
 
   it('newest log entry first', () => {
-    const a = step(open(), { type: 'previewed', seq: 1, preview: okPreview(), scope: 'a' }, { type: 'confirm', id: 'r1', at: 1, scope: 'a' })
+    const a = step(
+      open(),
+      { type: 'previewed', seq: 1, preview: okPreview(), scope: 'a' },
+      { type: 'confirm', id: 'r1', at: 1, scope: 'a' },
+      { type: 'ran', result: runResult({ id: 'r1' }) }
+    )
     const b = step(
       a,
       { type: 'preview', verb: 'delete', req: REQ, namespaceLabel: 'dev', id: 'd2', at: 2 },
@@ -147,6 +160,33 @@ describe('kubeOpsReducer: the apply flow', () => {
       ['r2', 'delete'],
       ['r1', 'apply']
     ])
+  })
+})
+
+describe('kubeOpsReducer: while the run is going', () => {
+  const running = (): KubeOpsState =>
+    step(open(), { type: 'previewed', seq: 1, preview: okPreview(), scope: '' }, { type: 'confirm', id: 'run1', at: 10, scope: '' })
+
+  it('stop marks the dialog cancelling and keeps it up until the cancelled result ends it', () => {
+    const s1 = step(running(), { type: 'cancel' })
+    expect(s1.dialog).toMatchObject({ phase: 'running', cancelling: true })
+    const s2 = step(s1, { type: 'ran', result: runResult({ ok: false, cancelled: true, ran: 0 }) })
+    expect(s2.dialog).toBeNull()
+    expect(s2.log[0]).toMatchObject({ id: 'run1', state: 'done', result: { cancelled: true } })
+    expect(step(open(), { type: 'cancel' }).dialog).toMatchObject({ phase: 'previewing', cancelling: false })
+  })
+
+  it('close, a disk change and the server fields toggle wait: the dialog stays running', () => {
+    const s = running()
+    expect(step(s, { type: 'close' })).toBe(s)
+    expect(step(s, { type: 'fileChanged' })).toBe(s)
+    expect(step(s, { type: 'toggleServerFields' })).toBe(s)
+  })
+
+  it('a result for another operation (a reload) leaves the running dialog alone', () => {
+    const s = step(running(), { type: 'reload', id: 'rl', context: 'kind-dev', scope: 'x', at: 11 })
+    const after = step(s, { type: 'ran', result: runResult({ id: 'rl', verb: 'reload' }) })
+    expect(after.dialog).toBe(s.dialog)
   })
 })
 
@@ -183,44 +223,33 @@ describe('kubeOpsReducer: a disk change while the dialog is open', () => {
 })
 
 describe('kubeOpsReducer: a run refused because the selection changed', () => {
-  it('reopens the dialog in previewing, stale, with a new ask; the entry is done with the refusal', () => {
+  it('stays in the same dialog, previewing again, stale with the old diff; the entry is done with the refusal', () => {
     const s1 = open()
     const s2 = step(s1, { type: 'previewed', seq: s1.dialog!.seq, preview: okPreview('fp1'), scope: '' })
-    const confirmed = s2.dialog!
     const s3 = step(s2, { type: 'confirm', id: 'run1', at: 10, scope: '' })
     const result = runResult({ ok: false, ran: 0, outcomes: [], refused: { reason: 'changed' } })
-    const s4 = step(s3, { type: 'ran', result, reopen: confirmed })
-    expect(s4.dialog).toMatchObject({ verb: 'apply', req: REQ, phase: 'previewing', stale: true })
-    expect(s4.dialog!.seq).toBeGreaterThan(s2.dialog!.seq)
+    const s4 = step(s3, { type: 'ran', result })
+    expect(s4.dialog).toMatchObject({ verb: 'apply', req: REQ, phase: 'previewing', stale: true, runId: null })
+    expect(s4.dialog!.preview).toEqual(okPreview('fp1'))
+    expect(s4.dialog!.seq).toBeGreaterThan(s3.dialog!.seq)
     expect(s4.log[0]).toMatchObject({ id: 'run1', state: 'done', result })
     expect(canConfirm(s4.dialog)).toBe(false)
+    const s5 = step(s4, { type: 'previewed', seq: s4.dialog!.seq, preview: okPreview('fp2'), scope: '' })
+    expect(canConfirm(s5.dialog)).toBe(true)
   })
 
-  it('does not replace a dialog the person opened since', () => {
-    const s2 = step(open(), { type: 'previewed', seq: 1, preview: okPreview(), scope: '' })
-    const confirmed = s2.dialog!
-    const s3 = step(
-      s2,
-      { type: 'confirm', id: 'run1', at: 10, scope: '' },
-      { type: 'preview', verb: 'delete', req: REQ, namespaceLabel: 'dev', id: 'd2', at: 11 }
-    )
-    const s4 = step(s3, { type: 'ran', result: runResult({ ok: false, ran: 0, refused: { reason: 'changed' } }), reopen: confirmed })
-    expect(s4.dialog).toBe(s3.dialog)
-    expect(s4.log[0].state).toBe('done')
-  })
-
-  it('any other refusal only ends the entry, carrying it', () => {
+  it('any other refusal ends the entry, carrying it, and closes the dialog', () => {
     const s2 = step(open(), { type: 'previewed', seq: 1, preview: okPreview(), scope: '' })
     const refused: KubeRunResult['refused'] = { ok: false, reason: 'mixed-contexts', folders: ['/p/a', '/p/b'] }
     const result = runResult({ ok: false, ran: 0, outcomes: [], refused })
-    const s4 = step(s2, { type: 'confirm', id: 'run1', at: 10, scope: '' }, { type: 'ran', result, reopen: s2.dialog! })
+    const s4 = step(s2, { type: 'confirm', id: 'run1', at: 10, scope: '' }, { type: 'ran', result })
     expect(s4.dialog).toBeNull()
     expect(s4.log[0]).toMatchObject({ state: 'done', result: { refused } })
   })
 })
 
 describe('kubeOpsReducer: close and the server fields toggle', () => {
-  it('close works while loading, while shown and after a reopen; a late answer after close is dropped', () => {
+  it('close works while loading, while shown and after a changed refusal; a late answer after close is dropped', () => {
     const loading = open()
     const closed = step(loading, { type: 'close' })
     expect(closed.dialog).toBeNull()
@@ -229,13 +258,13 @@ describe('kubeOpsReducer: close and the server fields toggle', () => {
     const shown = step(open(), { type: 'previewed', seq: 1, preview: okPreview(), scope: '' })
     expect(step(shown, { type: 'close' }).dialog).toBeNull()
 
-    const reopened = step(
+    const again = step(
       shown,
       { type: 'confirm', id: 'r', at: 1, scope: '' },
-      { type: 'ran', result: runResult({ ok: false, ran: 0, refused: { reason: 'changed' } }), reopen: shown.dialog! }
+      { type: 'ran', result: runResult({ id: 'r', ok: false, ran: 0, refused: { reason: 'changed' } }) }
     )
-    expect(reopened.dialog).not.toBeNull()
-    expect(step(reopened, { type: 'close' }).dialog).toBeNull()
+    expect(again.dialog).not.toBeNull()
+    expect(step(again, { type: 'close' }).dialog).toBeNull()
     expect(step(initialKubeOps, { type: 'close' })).toBe(initialKubeOps)
   })
 
@@ -430,5 +459,54 @@ describe('compareCounts and kubeScope', () => {
         leftOut: []
       })
     ).toEqual({ files: 3 })
+  })
+})
+
+describe('rememberedNamespaceFor: what a remembered context pick stores', () => {
+  const remembered = view({ state: { state: 'remembered', context: 'prod', namespace: 'shop', folder: '/p/k8s' } })
+
+  it('a namespace the person chose for this editor', () => {
+    expect(rememberedNamespaceFor(view(), { namespace: 'mine' }, 'stage')).toBe('mine')
+    expect(rememberedNamespaceFor(remembered, { context: 'x', namespace: 'mine' }, 'stage')).toBe('mine')
+  })
+
+  it('the remembered namespace when the remembered context is the one picked again', () => {
+    expect(rememberedNamespaceFor(remembered, undefined, 'prod')).toBe('shop')
+  })
+
+  it('otherwise none, so the new context uses its own namespace', () => {
+    expect(rememberedNamespaceFor(remembered, undefined, 'stage')).toBeNull()
+    expect(rememberedNamespaceFor(view(), undefined, 'stage')).toBeNull() // a current fallback's namespace is not a choice
+    expect(rememberedNamespaceFor(remembered, { context: 'prod' }, 'stage')).toBeNull()
+  })
+})
+
+describe('settlePendingReloads: a reload for a file that is still opening', () => {
+  const tabs = [
+    { id: 't-a', path: '/p/a.yaml' },
+    { id: 't-b', path: '/p/b.yaml' },
+    { id: 't-c', path: '/p/c.yaml' }
+  ]
+  const buffers = {
+    't-a': { loading: true, error: null },
+    't-b': { loading: false, error: null },
+    't-c': { loading: false, error: 'EACCES' }
+  }
+
+  it('waits while the buffer loads, applies once it has, drops it when the read failed or the tab is gone', () => {
+    const pending = { '/p/a.yaml': 'A', '/p/b.yaml': 'B', '/p/c.yaml': 'C', '/p/gone.yaml': 'G' }
+    expect(settlePendingReloads(pending, tabs, buffers)).toEqual({
+      apply: [{ path: '/p/b.yaml', id: 't-b', text: 'B' }],
+      drop: ['/p/c.yaml', '/p/gone.yaml'],
+      keep: { '/p/a.yaml': 'A' }
+    })
+  })
+
+  it('a tab without a buffer yet is still opening', () => {
+    expect(settlePendingReloads({ '/p/a.yaml': 'A' }, tabs, {})).toEqual({ apply: [], drop: [], keep: { '/p/a.yaml': 'A' } })
+  })
+
+  it('nothing pending settles to nothing', () => {
+    expect(settlePendingReloads({}, tabs, buffers)).toEqual({ apply: [], drop: [], keep: {} })
   })
 })

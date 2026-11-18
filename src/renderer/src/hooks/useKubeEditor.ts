@@ -5,7 +5,7 @@ import { toast } from '../lib/toast'
 import { writeThrough } from '../lib/writeThrough'
 import { errText } from './useFileOps'
 import { isKubeCandidate } from './useKubeKinds'
-import { firstLine, kubePill, kubeRequestOf, type KubeOverride, type useKubeOps } from './useKubeOps'
+import { firstLine, kubeRequestOf, rememberedNamespaceFor, type KubeOverride, type useKubeOps } from './useKubeOps'
 
 /** An open file tab the Kubernetes strip may show for. */
 export interface KubeTab {
@@ -35,6 +35,38 @@ const asksCluster = (k: KubeFileKind): boolean => k === 'manifest' || k === 'kus
 
 const EMPTY: KubeEditorEntry = { view: null, status: null, statusLoading: false }
 
+/** Which target and chip answers still count, per path. One counter for every ask, so a late answer never matches a
+ *  later ask of the same path, also after the path was forgotten and asked again. */
+export interface KubeAskTracker {
+  seq: number
+  target: Map<string, number>
+  status: Map<string, number>
+}
+
+export const newAskTracker = (): KubeAskTracker => ({ seq: 0, target: new Map(), status: new Map() })
+
+/** A new target ask also outdates the chip's pending ask: that answer belongs to the target being replaced. */
+export function askTarget(t: KubeAskTracker, path: string): number {
+  const n = ++t.seq
+  t.target.set(path, n)
+  t.status.set(path, n)
+  return n
+}
+
+export function askStatus(t: KubeAskTracker, path: string): number {
+  const n = ++t.seq
+  t.status.set(path, n)
+  return n
+}
+
+export const isLatest = (t: KubeAskTracker, which: 'target' | 'status', path: string, seq: number): boolean =>
+  t[which].get(path) === seq
+
+export function forgetAsks(t: KubeAskTracker, path: string): void {
+  t.target.delete(path)
+  t.status.delete(path)
+}
+
 /**
  * The editor strip's state for every open Kubernetes file: its target and chip, the session-only choices, the
  * picker, and what the toolbar and the explorer menu start through `ops`. `tabs` must be a stable (memoised) list;
@@ -54,10 +86,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
   const [picker, setPicker] = useState<{ path: string; which: 'context' | 'namespace' } | null>(null)
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
-  // One counter for every target and status ask, so a late answer never matches a later ask of the same path.
-  const seqRef = useRef(0)
-  const targetSeq = useRef(new Map<string, number>())
-  const statusSeq = useRef(new Map<string, number>())
+  const asks = useRef(newAskTracker())
 
   const tabOf = (path: string): KubeTab | undefined => tabsRef.current.find((x) => x.path === path && asksCluster(x.kind))
 
@@ -73,8 +102,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
    *  for this editor is compared on (R11). A namespace chosen for this editor has no way into `status`, which uses the
    *  context's own, so the chip shows nothing then rather than a comparison in another namespace. */
   const refreshStatus = (path: string): void => {
-    const seq = ++seqRef.current
-    statusSeq.current.set(path, seq)
+    const seq = askStatus(asks.current, path)
     const tab = tabOf(path)
     const view = entriesRef.current[path]?.view
     const override = sessionRef.current[path]?.override
@@ -86,10 +114,10 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     patchEntry(path, { statusLoading: true })
     window.api.kube.status(path, tab.projectRoot, override?.context).then(
       (status) => {
-        if (statusSeq.current.get(path) === seq) patchEntry(path, { status, statusLoading: false })
+        if (isLatest(asks.current, 'status', path, seq)) patchEntry(path, { status, statusLoading: false })
       },
       (err: unknown) => {
-        if (statusSeq.current.get(path) === seq)
+        if (isLatest(asks.current, 'status', path, seq))
           patchEntry(path, { status: { kind: 'unknown', reason: errText(err) }, statusLoading: false })
       }
     )
@@ -98,16 +126,20 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
   const refreshTarget = (path: string): void => {
     const tab = tabOf(path)
     if (!tab) return
-    const seq = ++seqRef.current
-    targetSeq.current.set(path, seq)
-    if (!entriesRef.current[path]) setEntries((prev) => ({ ...prev, [path]: EMPTY }))
+    const seq = askTarget(asks.current, path)
+    // The chip's answer so far was for the target being replaced: it shows loading until the new one is compared.
+    if (!entriesRef.current[path]) setEntries((prev) => ({ ...prev, [path]: { ...EMPTY, statusLoading: true } }))
+    else patchEntry(path, { status: null, statusLoading: true })
     window.api.kube.target(path, tab.projectRoot).then(
       (view) => {
-        if (targetSeq.current.get(path) !== seq) return
+        if (!isLatest(asks.current, 'target', path, seq)) return
         patchEntry(path, { view })
         refreshStatus(path)
       },
-      () => {} // a path the main side refuses keeps no strip
+      () => {
+        // a path the main side refuses keeps no strip
+        if (isLatest(asks.current, 'target', path, seq)) patchEntry(path, { statusLoading: false })
+      }
     )
   }
 
@@ -121,10 +153,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     const wanted = new Set(tabs.filter((x) => asksCluster(x.kind)).map((x) => x.path))
     const stale = Object.keys(entriesRef.current).filter((p) => !wanted.has(p))
     if (stale.length > 0) {
-      for (const p of stale) {
-        targetSeq.current.delete(p)
-        statusSeq.current.delete(p)
-      }
+      for (const p of stale) forgetAsks(asks.current, p)
       setEntries((prev) => {
         const next = { ...prev }
         for (const p of stale) delete next[p]
@@ -154,11 +183,6 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
   const setOverride = (path: string, override: KubeOverride | undefined): void =>
     setSession((prev) => ({ ...prev, [path]: { ...prev[path], override } }))
 
-  const pillOf = (path: string): string | null => {
-    const view = entriesRef.current[path]?.view
-    return view ? kubePill(view, sessionRef.current[path]?.override, contextsRef.current) : null
-  }
-
   const labelOf = (view: KubeTargetView, pill: string | null): string =>
     view.lockedNamespace ?? (view.nsFromFile ? t('kube.toolbar.nsFromFile') : (pill ?? 'default'))
 
@@ -166,19 +190,20 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     toast.error(t('kube.ops.failed', { detail: errText(err) }))
   }
 
-  /** Picker: remembered for a folder (with the namespace the pill shows), or for this editor only, where the pill
-   *  then follows the chosen context's own namespace (what its chip compares in). */
+  /** Picker: remembered for a folder, or for this editor only. Either way the pill follows the chosen context's own
+   *  namespace unless the person chose one (rememberedNamespaceFor). */
   const pickContext = async (path: string, context: string, remember: { folder: string } | null): Promise<void> => {
     setPicker(null)
-    const pill = pillOf(path)
-    if (pill === null) return
+    const view = entriesRef.current[path]?.view
+    if (!view) return
     if (!remember) {
       setOverride(path, { context })
       refreshTarget(path)
       return
     }
+    const namespace = rememberedNamespaceFor(view, sessionRef.current[path]?.override, context)
     try {
-      await window.api.kube.setTarget(remember.folder, { context, namespace: pill })
+      await window.api.kube.setTarget(remember.folder, { context, namespace })
     } catch (err) {
       failed(err)
       return
@@ -259,7 +284,8 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
     start(verb, req, labelOf(view, req.pill), view.overlay ? [path, view.overlay] : [path])
   }
 
-  /** The explorer's Kubernetes menu: the target of the first item decides; without one, say so and open the file. */
+  /** The explorer's Kubernetes menu: the target of the first item decides; without one, say so and open the file.
+   *  A reload opens its file too: the text lands there once it has loaded (App's pending reloads). */
   const explorerAction = async (
     verb: KubeAction,
     selection: string[],
@@ -285,6 +311,7 @@ export function useKubeEditor(tabs: KubeTab[], openPaths: readonly string[], ops
       if (file) openFile(file)
       return
     }
+    if (verb === 'reload') openFile(selection[0])
     start(verb, req, labelOf(view, req.pill))
   }
 

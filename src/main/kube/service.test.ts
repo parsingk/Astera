@@ -1057,6 +1057,34 @@ describe('run', () => {
   })
 })
 
+describe('preview: the namespace each command uses', () => {
+  it('nsFlags line up with commandLines: the pill where a resource names none, null where all do or the overlay locks it', async () => {
+    const a = p('k8s', 'a.yaml')
+    const b = p('named', 'b.yaml')
+    const prod = p('envs', 'prod')
+    const h = harness(
+      {
+        ...OVERLAY_TREE,
+        [p('envs', 'prod', 'kustomization.yaml')]: 'namespace: shop\nresources:\n  - ../../apps/base\n',
+        [a]: yamlDocs(cm('a', {})),
+        [b]: yamlDocs(cm('b', {}, 'other'))
+      },
+      fakeKube({ kustomize: yamlDocs(cm('x', {}, 'shop')) })
+    )
+    const svc = createKubeService(h.deps)
+    const mixed = await svc.preview('apply', request([a, prod], 'kind-dev', 'dev'), HIDE)
+    if (!mixed.ok) throw new Error(`preview failed: ${mixed.reason}`)
+    expect(mixed.commandLines).toEqual([
+      ['apply', '--context', 'kind-dev', '-n', 'dev', '-f', a],
+      ['apply', '--context', 'kind-dev', '-k', prod]
+    ])
+    expect(mixed.nsFlags).toEqual(['dev', null])
+    const named = await svc.preview('apply', request([b], 'kind-dev', 'dev'), HIDE)
+    if (!named.ok) throw new Error(`preview failed: ${named.reason}`)
+    expect(named.nsFlags).toEqual([null])
+  })
+})
+
 describe('a context chosen for one editor without remembering it (R11)', () => {
   const a = p('k8s', 'a.yaml')
   const b = p('k8s', 'b.yaml')
@@ -1095,6 +1123,19 @@ describe('a context chosen for one editor without remembering it (R11)', () => {
     expect(await svc.preview('apply', gone, HIDE)).toEqual(refusal)
     expect(await svc.run('o3', 'apply', gone, STALE)).toMatchObject({ ok: false, ran: 0, refused: refusal })
     expect(clusterCalls(h.calls)).toEqual([])
+  })
+
+  it('accepts only one -f file or one overlay: a folder of several files is refused before any cluster call', async () => {
+    const solo = p('solo', 'x.yaml')
+    const h = harness({ ...files, [solo]: yamlDocs(cm('x', {}, 'dev')) }, kube())
+    const svc = traced(createKubeService(h.deps))
+    const folder = overridden([p('k8s')], 'kind-dev')
+    const refusal = { ok: false, reason: 'mixed-contexts', folders: [p('k8s')] }
+    expect(await svc.preview('apply', folder, HIDE)).toEqual(refusal)
+    expect(await svc.run('o5', 'apply', folder, STALE)).toMatchObject({ ok: false, ran: 0, refused: refusal })
+    expect(clusterCalls(h.calls)).toEqual([])
+    // a folder that plans to a single file is that one -f file
+    expect(await svc.preview('apply', overridden([p('solo')], 'kind-dev'), HIDE)).toMatchObject({ ok: true })
   })
 
   it('a run with the flag refuses the fingerprint of a preview without it, as changed', async () => {
