@@ -203,14 +203,19 @@ export function createKubeOperations(d: KubeOperationDeps) {
   }
 
   /** The `-n` value of one command (spec 4.2, C20). An overlay whose kustomization sets `namespace:` is locked and
-   *  never gets `-n` (C7); any other overlay is decided by what it renders. */
+   *  never gets `-n` (C7); any other overlay is decided by what it renders. Cluster-scoped kinds never decide it. */
   function namespaceOf(cmd: KubeCommand, src: Sources, pill: string | null, graph: KustomizeGraph): NamespaceFlag {
     if (cmd.kind === 'files') {
-      const items = src.texts.flatMap(([file, text]) => parseManifestDocs(text).map((doc) => ({ path: file, namespace: doc.namespace })))
+      const items = src.texts.flatMap(([file, text]) =>
+        parseManifestDocs(text).map((doc) => ({ path: file, kind: doc.kind, namespace: doc.namespace }))
+      )
       return namespaceFlag(items, pill)
     }
     if (graph.namespaceOf(cmd.dir) !== null) return { ok: true, flag: null }
-    return namespaceFlag((src.rendered ?? []).map((o) => ({ path: cmd.dir, namespace: o.metadata.namespace ?? null })), pill)
+    return namespaceFlag(
+      (src.rendered ?? []).map((o) => ({ path: cmd.dir, kind: o.kind, namespace: o.metadata.namespace ?? null })),
+      pill
+    )
   }
 
   /** Plan, namespaces, C12: everything decided before kubectl touches the cluster. What the commands apply is read

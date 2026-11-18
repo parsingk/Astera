@@ -13,6 +13,7 @@ import {
 } from '../../core/kube/target'
 import { configViewArgs, getOneArgs, kustomizeArgs, useContextArgs } from '../../core/kube/args'
 import { parseManifestDocs } from '../../core/kube/docs'
+import { isClusterScoped } from '../../core/kube/namespace'
 import { redactKubectlStderr } from '../../core/kube/redact'
 import { maskSecretPair, normalizeObject, objectsFromYaml, type K8sObject } from '../../core/kube/objects'
 import { foldPathCase } from '../../core/files/paths'
@@ -161,7 +162,8 @@ export function createKubeService(deps: KubeServiceDeps) {
     const docs = parseManifestDocs(await deps.readText(filePath).catch(() => ''))
     return {
       reloadBlocked: docs.some((d) => d.kind === 'Secret') ? 'secret' : docs.length !== 1 ? 'multi' : null,
-      nsFromFile: docs.length > 0 && docs.every((d) => d.namespace !== null),
+      // A cluster-scoped resource names no namespace and takes none, as namespaceFlag decides.
+      nsFromFile: docs.length > 0 && docs.every((d) => d.namespace !== null || isClusterScoped(d.kind)),
       resource: docs.length === 1 ? { kind: docs[0].kind, name: docs[0].name } : docs.length > 1 ? { count: docs.length } : null
     }
   }

@@ -1095,6 +1095,38 @@ describe('preview: the namespace each command uses', () => {
     if (!named.ok) throw new Error(`preview failed: ${named.reason}`)
     expect(named.nsFlags).toEqual([null])
   })
+
+  it('a cluster-scoped resource does not count as one naming no namespace, in files, the editor pill and an overlay', async () => {
+    const nsFile = p('k8s', 'namespace.yaml')
+    const app = p('k8s', 'app.yaml')
+    const rbac = p('k8s', 'rbac.yaml')
+    const web = p('k8s', 'web.yaml')
+    const deploy = (name: string, namespace: string): object => ({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name, namespace } })
+    const prod = p('envs', 'prod')
+    const h = harness(
+      {
+        ...OVERLAY_TREE,
+        [nsFile]: yamlDocs({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'app' } }),
+        [app]: yamlDocs(deploy('app', 'app')),
+        [rbac]: yamlDocs({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name: 'reader' } }),
+        [web]: yamlDocs(deploy('web', 'web'), deploy('api', 'api'))
+      },
+      fakeKube({ kustomize: yamlDocs({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'app' } }, deploy('app', 'app')) })
+    )
+    const svc = createKubeService(h.deps)
+    const first = await svc.preview('apply', request([nsFile, app], 'kind-dev', 'default'), HIDE)
+    if (!first.ok) throw new Error(`preview failed: ${first.reason}`)
+    expect(first.commandLines).toEqual([['apply', '--context', 'kind-dev', '-f', app, '-f', nsFile]])
+    const second = await svc.preview('apply', request([rbac, web], 'kind-dev', 'default'), HIDE)
+    if (!second.ok) throw new Error(`preview failed: ${second.reason}`)
+    expect(second.nsFlags).toEqual([null])
+    const overlay = await svc.preview('apply', request([prod], 'kind-dev', 'default'), HIDE)
+    if (!overlay.ok) throw new Error(`preview failed: ${overlay.reason}`)
+    expect(overlay.commandLines).toEqual([['apply', '--context', 'kind-dev', '-k', prod]])
+
+    h.files.set(p('k8s', 'both.yaml'), { text: yamlDocs({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'app' } }, deploy('app', 'app')), mtimeMs: 1 })
+    expect((await svc.target(p('k8s', 'both.yaml'), root)).nsFromFile).toBe(true)
+  })
 })
 
 describe('a context chosen for one editor without remembering it (R11)', () => {
