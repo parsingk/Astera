@@ -78,8 +78,10 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
   }
 
   if (refusals.length > 0) {
-    const reason = refusals[0].reason
-    return { ok: false, reason, paths: refusals.filter((r) => r.reason === reason).map((r) => r.path) }
+    // Fixed precedence so the answer never depends on selection order.
+    const reason: Refusal = refusals.some((r) => r.reason === 'base-folder') ? 'base-folder' : 'many-overlays'
+    const paths = [...new Set(refusals.filter((r) => r.reason === reason).map((r) => r.path))].sort(byPath)
+    return { ok: false, reason, paths }
   }
 
   const commands: KubeCommand[] = []

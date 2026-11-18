@@ -46,6 +46,12 @@ describe('planOperation', () => {
       ok: false, reason: 'many-overlays', paths: ['/k/base/dep.yaml']
     })
   })
+  it('a mixed refusal is the same in either selection order, base-folder first', () => {
+    const idx = index(kinds, ks)
+    const expected = { ok: false, reason: 'base-folder', paths: ['/k/base'] }
+    expect(planOperation(['/k/base/dep.yaml', '/k/base'], idx)).toEqual(expected)
+    expect(planOperation(['/k/base', '/k/base/dep.yaml'], idx)).toEqual(expected)
+  })
   it('a member with one overlay becomes that overlay', () => {
     const one = { '/k/base': K('dep.yaml'), '/k/overlays/dev': K('../../base') }
     expect(planOperation(['/k/base/dep.yaml'], index(kinds, one))).toEqual({
