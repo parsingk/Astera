@@ -92,8 +92,8 @@ export interface KubeRequest {
   pill: string | null
 }
 
-/** What the confirmation shows. `commandLines` are kubectl's arguments without the binary: on success the commands
- *  confirming will run, on a `kubectl` failure the call that failed. */
+/** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the
+ *  binary), also on a `kubectl` failure, whose `stderr` starts with the step that failed (`dry run failed: …`). */
 export type KubePreview =
   | {
       ok: true

@@ -465,7 +465,7 @@ describe('preview', () => {
   const a = p('k8s', 'a.yaml')
   const b = p('k8s', 'b.yaml')
   const c = p('k8s', 'c.yaml')
-  const dryA = (f: string): string[] => ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-f', f]
+  const applyA = (f: string): string[] => ['apply', '--context', 'kind-dev', '-f', f]
 
   it('three files on one context: one command, each resource the cluster now against the dry run', async () => {
     const h = harness(
@@ -578,24 +578,56 @@ describe('preview', () => {
     })
   })
 
-  it('a failing or timed-out dry run is a kubectl failure with its stderr (the confirm button stays disabled)', async () => {
+  it('a failing or timed-out dry run is a kubectl failure naming the step (the confirm button stays disabled)', async () => {
     const denied = 'Error from server (Forbidden): admission webhook "policy" denied the request'
     let answer = fail(denied)
     const h = harness({ [a]: MANIFEST }, fakeKube({ 'dry-apply': () => answer }))
     const svc = traced(createKubeService(h.deps))
+    // commandLines are always the commands confirm would run, never the diagnostic call
     expect(await svc.preview('apply', request([a]), HIDE)).toEqual({
       ok: false,
       reason: 'kubectl',
-      commandLines: [dryA(a)],
-      stderr: denied
+      commandLines: [applyA(a)],
+      stderr: `dry run failed: ${denied}`
     })
     answer = { ok: false, stdout: '', stderr: 'timed out', timedOut: true }
     expect(await svc.preview('apply', request([a]), HIDE)).toEqual({
       ok: false,
       reason: 'kubectl',
-      commandLines: [dryA(a)],
-      stderr: 'timed out',
+      commandLines: [applyA(a)],
+      stderr: 'dry run failed: timed out',
       timedOut: true
+    })
+  })
+
+  it('a failing live read or render names its step, with the planned commands as commandLines', async () => {
+    const prod = p('envs', 'prod')
+    let renderAnswer: KubectlResult = { ok: true, stdout: yamlDocs(cm('a', {})), stderr: '' }
+    const h = harness(
+      { ...OVERLAY_TREE, [a]: yamlDocs(cm('a', {})) },
+      fakeKube({ kustomize: () => renderAnswer, live: fail('Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout') })
+    )
+    const svc = traced(createKubeService(h.deps))
+    const req = request([a, prod], 'kind-dev', 'shop')
+    expect(await svc.preview('apply', req, HIDE)).toEqual({
+      ok: false,
+      reason: 'kubectl',
+      commandLines: [
+        ['apply', '--context', 'kind-dev', '-n', 'shop', '-f', a],
+        ['apply', '--context', 'kind-dev', '-n', 'shop', '-k', prod]
+      ],
+      stderr: 'reading the cluster failed: Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout'
+    })
+    // An overlay that does not render has no namespace to decide: its command is listed without -n.
+    renderAnswer = fail('Error: accumulating resources: missing.yaml')
+    expect(await svc.preview('delete', req, HIDE)).toEqual({
+      ok: false,
+      reason: 'kubectl',
+      commandLines: [
+        ['delete', '--ignore-not-found', '--context', 'kind-dev', '-n', 'shop', '-f', a],
+        ['delete', '--ignore-not-found', '--context', 'kind-dev', '-k', prod]
+      ],
+      stderr: 'kustomize failed: Error: accumulating resources: missing.yaml'
     })
   })
 
@@ -608,7 +640,12 @@ describe('preview', () => {
       const h = harness({ [a]: MANIFEST }, fakeKube({ 'dry-apply': leak }))
       const svc = traced(createKubeService(h.deps))
       const r = await svc.preview('apply', request([a]), HIDE)
-      expect(r).toEqual({ ok: false, reason: 'kubectl', commandLines: [dryA(a)], stderr: 'unreadable output from kubectl' })
+      expect(r).toEqual({
+        ok: false,
+        reason: 'kubectl',
+        commandLines: [applyA(a)],
+        stderr: 'dry run failed: unreadable output from kubectl'
+      })
       expect(await svc.status(a, root)).toEqual({ kind: 'unknown', reason: 'unreadable output from kubectl' })
       for (const s of spies) expect(s).not.toHaveBeenCalled()
     } finally {
@@ -619,10 +656,11 @@ describe('preview', () => {
   it('a missing kubectl is a kubectl failure, not a context refusal', async () => {
     const h = harness({ [a]: MANIFEST }, () => ({ ok: false, stdout: '', stderr: 'spawn kubectl ENOENT', errorCode: 'ENOENT' }))
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.preview('apply', request([a]), HIDE)).toMatchObject({
+    expect(await svc.preview('apply', request([a]), HIDE)).toEqual({
       ok: false,
       reason: 'kubectl',
-      stderr: 'spawn kubectl ENOENT'
+      commandLines: [applyA(a)],
+      stderr: 'listing contexts failed: spawn kubectl ENOENT'
     })
   })
 
@@ -677,10 +715,11 @@ describe('preview', () => {
   it('delete: a failing dry run stops before reading the cluster', async () => {
     const h = harness({ [a]: MANIFEST }, fakeKube({ 'dry-delete': fail('error: unable to recognize "a.yaml"') }))
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.preview('delete', request([a]), HIDE)).toMatchObject({
+    expect(await svc.preview('delete', request([a]), HIDE)).toEqual({
       ok: false,
       reason: 'kubectl',
-      stderr: 'error: unable to recognize "a.yaml"'
+      commandLines: [['delete', '--ignore-not-found', '--context', 'kind-dev', '-f', a]],
+      stderr: 'dry run failed: error: unable to recognize "a.yaml"'
     })
     expect(clusterCalls(h.calls).map(opOf)).toEqual(['dry-delete'])
   })
@@ -812,8 +851,8 @@ describe('reload', () => {
     const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 's' }, data: { k: 'dg==' } }
     const h = harness({ [f]: yamlDocs(secret), [two]: yamlDocs(cm('a', {}), cm('b', {})) }, fakeKube({}))
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.reload(f, 'kind-dev')).toEqual({ ok: false, reason: 'secret' })
-    expect(await svc.reload(two, 'kind-dev')).toEqual({ ok: false, reason: 'not-single' })
+    expect(await svc.reload(f, 'kind-dev', null)).toEqual({ ok: false, reason: 'secret' })
+    expect(await svc.reload(two, 'kind-dev', null)).toEqual({ ok: false, reason: 'not-single' })
     expect(h.calls).toEqual([])
   })
 
@@ -823,17 +862,39 @@ describe('reload', () => {
       fakeKube({ 'get-one': stringify(stored(cm('a', { v: '2' }, 'dev'))) })
     )
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.reload(f, ARN)).toEqual({ ok: true, text: stringify(cm('a', { v: '2' }, 'dev')) })
+    // the file's own namespace wins over the pill
+    expect(await svc.reload(f, ARN, 'shop')).toEqual({ ok: true, text: stringify(cm('a', { v: '2' }, 'dev')) })
     expect(h.calls).toEqual([['get', 'ConfigMap', 'a', '--ignore-not-found', '-o', 'yaml', '--context', ARN, '-n', 'dev']])
+  })
+
+  it('a resource naming no namespace is fetched in the pill, else the context namespace, else default', async () => {
+    const h = harness(
+      { [f]: yamlDocs(cm('a', {})) },
+      fakeKube({
+        'get-one': (args) => {
+          const inShop = args[args.indexOf('-n') + 1] === 'shop'
+          return { ok: true, stdout: inShop ? stringify(stored(cm('a', { v: '1' }, 'shop'))) : '', stderr: '' }
+        }
+      })
+    )
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.reload(f, 'kind-dev', 'shop')).toEqual({ ok: true, text: stringify(cm('a', { v: '1' }, 'shop')) })
+    expect(await svc.reload(f, 'kind-dev', null)).toEqual({ ok: false, reason: 'absent' })
+    expect(await svc.reload(f, ARN, null)).toEqual({ ok: false, reason: 'absent' })
+    expect(clusterCalls(h.calls)).toEqual([
+      ['get', 'ConfigMap', 'a', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-n', 'shop'],
+      ['get', 'ConfigMap', 'a', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-n', 'dev'],
+      ['get', 'ConfigMap', 'a', '--ignore-not-found', '-o', 'yaml', '--context', ARN, '-n', 'default']
+    ])
   })
 
   it('says absent when the cluster has no such object, and passes kubectl stderr on', async () => {
     let answer: KubectlResult = { ok: true, stdout: '', stderr: '' }
     const h = harness({ [f]: yamlDocs(cm('a', {})) }, fakeKube({ 'get-one': () => answer }))
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.reload(f, 'kind-dev')).toEqual({ ok: false, reason: 'absent' })
+    expect(await svc.reload(f, 'kind-dev', null)).toEqual({ ok: false, reason: 'absent' })
     answer = fail('error: You must be logged in to the server (Unauthorized)')
-    expect(await svc.reload(f, 'kind-dev')).toEqual({
+    expect(await svc.reload(f, 'kind-dev', null)).toEqual({
       ok: false,
       reason: 'kubectl',
       stderr: 'error: You must be logged in to the server (Unauthorized)'
@@ -844,7 +905,7 @@ describe('reload', () => {
     const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 'a' }, data: { password: 'aHVudGVyMg==' } }
     const h = harness({ [f]: yamlDocs(cm('a', {})) }, fakeKube({ 'get-one': stringify(secret) }))
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.reload(f, 'kind-dev')).toEqual({ ok: false, reason: 'secret' })
+    expect(await svc.reload(f, 'kind-dev', null)).toEqual({ ok: false, reason: 'secret' })
   })
 
   it('refuses a kind or name that kubectl would read as a flag, without running it', async () => {
@@ -853,24 +914,60 @@ describe('reload', () => {
       fakeKube({})
     )
     const svc = traced(createKubeService(h.deps))
-    expect(await svc.reload(f, 'kind-dev')).toMatchObject({ ok: false, reason: 'kubectl' })
+    expect(await svc.reload(f, 'kind-dev', null)).toMatchObject({ ok: false, reason: 'kubectl' })
     expect(h.calls).toEqual([])
   })
 })
 
 describe('render', () => {
+  const prod = p('envs', 'prod')
+
   it('runs kubectl kustomize on the overlay and returns its output, or its stderr', async () => {
-    let answer: KubectlResult = { ok: true, stdout: 'kind: ConfigMap\n', stderr: '' }
+    const rendered = yamlDocs(cm('a', { v: '1' }, 'prod'), cm('b', { v: '2' }, 'prod'))
+    let answer: KubectlResult = { ok: true, stdout: rendered, stderr: '' }
     const h = harness({}, fakeKube({ kustomize: () => answer }))
     const svc = traced(createKubeService(h.deps))
-    const prod = p('envs', 'prod')
-    expect(await svc.render(prod)).toEqual({ ok: true, text: 'kind: ConfigMap\n' })
+    expect(await svc.render(prod)).toEqual({ ok: true, text: rendered })
     answer = fail('Error: accumulating resources')
     expect(await svc.render(prod)).toEqual({ ok: false, stderr: 'Error: accumulating resources' })
+    answer = { ok: true, stdout: 'kind: ConfigMap\n', stderr: '' }
+    expect(await svc.render(prod)).toEqual({ ok: false, stderr: 'unreadable output from kubectl' })
     expect(h.calls).toEqual([
+      ['kustomize', prod],
       ['kustomize', prod],
       ['kustomize', prod]
     ])
+  })
+
+  it('masks every value of a generated Secret, also in its last-applied annotation', async () => {
+    const secret = {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: {
+        name: 'db-7h2k9m',
+        annotations: {
+          'kubectl.kubernetes.io/last-applied-configuration': '{"data":{"password":"aHVudGVyMg=="}}',
+          team: 'shop'
+        }
+      },
+      type: 'Opaque',
+      data: { password: 'aHVudGVyMg==' },
+      stringData: { token: 's3cr3t-token' }
+    }
+    const h = harness({}, fakeKube({ kustomize: yamlDocs(cm('a', { v: '1' }, 'prod'), secret) }))
+    const svc = traced(createKubeService(h.deps))
+    const r = await svc.render(prod)
+    if (!r.ok) throw new Error(`render failed: ${r.stderr}`)
+    expect(r.text).not.toContain('aHVudGVyMg')
+    expect(r.text).not.toContain('s3cr3t')
+    expect(r.text).toBe(
+      yamlDocs(cm('a', { v: '1' }, 'prod'), {
+        ...secret,
+        metadata: { name: 'db-7h2k9m', annotations: { team: 'shop' } },
+        data: { password: '***' },
+        stringData: { token: '***' }
+      })
+    )
   })
 })
 
@@ -948,7 +1045,7 @@ describe('writes', () => {
     await svc.preview('delete', req, { keepServerFields: true })
     await svc.status(a, root)
     await svc.status(p('apps', 'base', 'dep.yaml'), root)
-    await svc.reload(a, 'kind-dev')
+    await svc.reload(a, 'kind-dev', null)
     await svc.render(prod)
     svc.cancel('nothing-running')
     expect(h.calls.filter(isWrite)).toEqual([])

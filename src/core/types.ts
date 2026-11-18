@@ -1434,7 +1434,8 @@ export interface CoreApi {
     /** The only write: re-plans, then runs the commands in order until one fails. Cancellable by `id`. */
     run(id: string, verb: KubeVerb, req: KubeRequest): Promise<KubeRunResult>
     cancel(id: string): Promise<void>
-    reload(filePath: string, context: string): Promise<KubeReloadResult>
+    /** `pill` is the namespace for a resource that names none (else the context's, else default). */
+    reload(filePath: string, context: string, pill: string | null): Promise<KubeReloadResult>
     /** `kubectl kustomize <overlayDir>`. */
     render(overlayDir: string): Promise<KubeRenderResult>
     status(filePath: string, projectRoot: string): Promise<KubeStatus>

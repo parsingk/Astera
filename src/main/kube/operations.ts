@@ -2,7 +2,7 @@
  *  (spec 4.9). `run` is the only code in the feature that sends a write to a cluster; everything else here is a
  *  server-side dry run or a read. */
 import path from 'node:path'
-import { configViewArgs, kubectlArgs, kustomizeArgs } from '../../core/kube/args'
+import { kubectlArgs, kustomizeArgs } from '../../core/kube/args'
 import { parseManifestDocs } from '../../core/kube/docs'
 import { namespaceFlag } from '../../core/kube/namespace'
 import { objectsFromYaml, pairObjects, type K8sObject } from '../../core/kube/objects'
@@ -47,6 +47,13 @@ export function isSkippedDir(name: string): boolean {
 type Failure = Extract<KubePreview, { reason: 'kubectl' }>
 type Refusal = Exclude<KubePreview, { ok: true }>
 
+/** A step before confirmation that failed: which one (`failed`), and kubectl's own stderr (or UNREADABLE). */
+interface StepFailure {
+  failed: string
+  stderr: string
+  timedOut?: true
+}
+
 /** One kubectl command of a plan, with its target. `rendered` is the overlay's output when it was rendered to decide
  *  the namespace; `fallbackNs` is where kubectl puts a resource that names no namespace. */
 interface Step {
@@ -58,8 +65,19 @@ interface Step {
 
 const byPath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
-function failed(args: string[], r: KubectlResult): Failure {
-  return { ok: false, reason: 'kubectl', commandLines: [args], stderr: r.stderr, ...(r.timedOut ? { timedOut: true as const } : {}) }
+function stepFailure(step: string, r: KubectlResult): StepFailure {
+  return { failed: step, stderr: r.stderr, ...(r.timedOut ? { timedOut: true as const } : {}) }
+}
+
+/** The preview of a failed step: `commandLines` stay the commands confirm would run, the step goes into stderr. */
+function failedPreview(f: StepFailure, commandLines: string[][]): Failure {
+  return {
+    ok: false,
+    reason: 'kubectl',
+    commandLines,
+    stderr: `${f.failed} failed: ${f.stderr}`,
+    ...(f.timedOut ? { timedOut: true as const } : {})
+  }
 }
 
 /** objectsFromYaml throws on what it cannot read; the error is dropped, never shown or logged (C22). */
@@ -161,11 +179,10 @@ export function createKubeOperations(d: KubeOperationDeps) {
     return [...new Set(states.map((s, i) => ('folder' in s ? s.folder : items[i].folder)))].sort(byPath)
   }
 
-  async function render(dir: string, signal?: AbortSignal): Promise<K8sObject[] | Failure> {
-    const args = kustomizeArgs(dir)
-    const r = await d.run(args, { signal })
-    if (!r.ok) return failed(args, r)
-    return readObjects(r.stdout) ?? { ok: false, reason: 'kubectl', commandLines: [args], stderr: UNREADABLE }
+  async function render(dir: string, signal?: AbortSignal): Promise<K8sObject[] | StepFailure> {
+    const r = await d.run(kustomizeArgs(dir), { signal })
+    if (!r.ok) return stepFailure('kustomize', r)
+    return readObjects(r.stdout) ?? { failed: 'kustomize', stderr: UNREADABLE }
   }
 
   /** The `-n` value of one command (spec 4.2, C20). An overlay whose kustomization sets `namespace:` is locked and
@@ -175,7 +192,9 @@ export function createKubeOperations(d: KubeOperationDeps) {
     pill: string | null,
     graph: KustomizeGraph,
     signal?: AbortSignal
-  ): Promise<{ ok: true; flag: string | null; rendered: K8sObject[] | null } | { ok: false; conflicts: { path: string; namespace: string }[] } | Failure> {
+  ): Promise<
+    { ok: true; flag: string | null; rendered: K8sObject[] | null } | { ok: false; conflicts: { path: string; namespace: string }[] } | StepFailure
+  > {
     if (cmd.kind === 'files') {
       const items: { path: string; namespace: string | null }[] = []
       for (const file of cmd.files) {
@@ -191,62 +210,78 @@ export function createKubeOperations(d: KubeOperationDeps) {
     return ns.ok ? { ok: true, flag: ns.flag, rendered } : ns
   }
 
-  /** Plan, C12 and the namespace of every command: everything decided before kubectl touches the cluster. */
+  /** Plan, namespaces, C12: everything decided before kubectl touches the cluster. The namespaces come right after
+   *  the plan (local files, or `kubectl kustomize`, which reads no cluster), so every later failure can list the
+   *  commands confirm would run. */
   async function prepare(
+    verb: KubeVerb,
     req: KubeRequest,
     signal?: AbortSignal
-  ): Promise<{ ok: true; plan: Extract<OperationPlan, { ok: true }>; steps: Step[] } | Refusal> {
+  ): Promise<{ ok: true; plan: Extract<OperationPlan, { ok: true }>; steps: Step[]; commandLines: string[][] } | Refusal> {
     const root = req.projectRoot
-    // Read first: target() needs the contexts, and a kubectl that cannot run is not a context mismatch.
-    const ctx = await d.contexts()
-    if (ctx.error) return { ok: false, reason: 'kubectl', commandLines: [configViewArgs()], stderr: ctx.error.stderr }
     const graph = await d.projectGraph(root)
     const selection = req.selection.map((s) => d.onRoot(root, s))
     const plan = planOperation(selection, await folderIndex(selection, graph))
     if (!plan.ok) return { ok: false, reason: 'refused', plan }
+
+    const decided: { cmd: KubeCommand; flag: string | null; rendered: K8sObject[] | null }[] = []
+    const conflicts = new Map<string, { path: string; namespace: string }>()
+    let renderFailure: StepFailure | null = null
+    for (const cmd of plan.commands) {
+      let flag: string | null = null
+      let rendered: K8sObject[] | null = null
+      // After a failed render the remaining namespaces stay undecided; those commands are listed without -n.
+      if (!renderFailure) {
+        const ns = await namespaceOf(cmd, req.pill, graph, signal)
+        if ('failed' in ns) renderFailure = ns
+        else if (!ns.ok) for (const c of ns.conflicts) conflicts.set(`${c.path}\0${c.namespace}`, c)
+        else ({ flag, rendered } = ns)
+      }
+      decided.push({ cmd, flag, rendered })
+    }
+    const commandLines = decided.map((x) => kubectlArgs(verb, x.cmd, { context: req.context, nsFlag: x.flag }))
+
+    // target() needs the contexts, and a kubectl that cannot run is not a context mismatch.
+    const ctx = await d.contexts()
+    if (ctx.error) return failedPreview({ failed: 'listing contexts', stderr: ctx.error.stderr }, commandLines)
     const folders = await contextConflicts(plan.commands, req)
     if (folders) return { ok: false, reason: 'mixed-contexts', folders }
-    const contextNs = ctx.contexts.find((c) => c.name === req.context)?.namespace ?? 'default'
-    const steps: Step[] = []
-    const conflicts = new Map<string, { path: string; namespace: string }>()
-    for (const cmd of plan.commands) {
-      const ns = await namespaceOf(cmd, req.pill, graph, signal)
-      if ('reason' in ns) return ns
-      if (!ns.ok) {
-        for (const c of ns.conflicts) conflicts.set(`${c.path}\0${c.namespace}`, c)
-        continue
-      }
-      steps.push({ cmd, t: { context: req.context, nsFlag: ns.flag }, rendered: ns.rendered, fallbackNs: ns.flag ?? contextNs })
-    }
+    if (renderFailure) return failedPreview(renderFailure, commandLines)
     if (conflicts.size > 0) return { ok: false, reason: 'namespace', conflicts: [...conflicts.values()] }
-    return { ok: true, plan, steps }
+    const contextNs = ctx.contexts.find((c) => c.name === req.context)?.namespace ?? 'default'
+    const steps = decided.map((x) => ({
+      cmd: x.cmd,
+      t: { context: req.context, nsFlag: x.flag },
+      rendered: x.rendered,
+      fallbackNs: x.flag ?? contextNs
+    }))
+    return { ok: true, plan, steps, commandLines }
   }
 
   /** What one command would change. apply: the cluster now against the server dry run. delete: the dry run as
    *  validation, then the live objects against what the command names (the files, or the overlay's output). */
-  async function diffStep(verb: KubeVerb, step: Step, opts: { keepServerFields: boolean }): Promise<ResourceDiff[] | Failure> {
+  async function diffStep(verb: KubeVerb, step: Step, opts: { keepServerFields: boolean }): Promise<ResourceDiff[] | StepFailure> {
     const { cmd, t } = step
     const liveArgs = kubectlArgs('live', cmd, t)
-    const unreadable = (args: string[]): Failure => ({ ok: false, reason: 'kubectl', commandLines: [args], stderr: UNREADABLE })
+    const DRY = 'dry run'
+    const LIVE = 'reading the cluster'
     if (verb === 'apply') {
-      const dryArgs = kubectlArgs('dry-apply', cmd, t)
-      const [live, dry] = await Promise.all([d.run(liveArgs), d.run(dryArgs)])
-      if (!dry.ok) return failed(dryArgs, dry)
-      if (!live.ok) return failed(liveArgs, live)
+      const [live, dry] = await Promise.all([d.run(liveArgs), d.run(kubectlArgs('dry-apply', cmd, t))])
+      if (!dry.ok) return stepFailure(DRY, dry)
+      if (!live.ok) return stepFailure(LIVE, live)
       // `get --ignore-not-found` prints nothing for what is absent: no live objects.
       const liveObjs = readObjects(live.stdout)
-      if (!liveObjs) return unreadable(liveArgs)
+      if (!liveObjs) return { failed: LIVE, stderr: UNREADABLE }
       const after = readObjects(dry.stdout)
-      if (!after) return unreadable(dryArgs)
+      if (!after) return { failed: DRY, stderr: UNREADABLE }
       return pairObjects(liveObjs, after, 'apply', opts)
     }
-    const dryArgs = kubectlArgs('dry-delete', cmd, t)
-    const dry = await d.run(dryArgs)
-    if (!dry.ok) return failed(dryArgs, dry)
+    const dry = await d.run(kubectlArgs('dry-delete', cmd, t))
+    if (!dry.ok) return stepFailure(DRY, dry)
     const live = await d.run(liveArgs)
-    if (!live.ok) return failed(liveArgs, live)
+    if (!live.ok) return stepFailure(LIVE, live)
     const liveObjs = readObjects(live.stdout)
-    if (!liveObjs) return unreadable(liveArgs)
+    if (!liveObjs) return { failed: LIVE, stderr: UNREADABLE }
     let named: K8sObject[]
     if (cmd.kind === 'overlay') {
       const rendered = step.rendered ?? (await render(cmd.dir))
@@ -256,7 +291,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       named = []
       for (const file of cmd.files) {
         const objs = readObjects(await d.readText(file))
-        if (!objs) return { ok: false, reason: 'kubectl', commandLines: [], stderr: `cannot read the objects in ${file}` }
+        if (!objs) return { failed: `reading ${file}`, stderr: 'not readable as Kubernetes objects' }
         named.push(...objs)
       }
     }
@@ -264,15 +299,15 @@ export function createKubeOperations(d: KubeOperationDeps) {
   }
 
   async function preview(verb: KubeVerb, req: KubeRequest, opts: { keepServerFields: boolean }): Promise<KubePreview> {
-    const p = await prepare(req)
+    const p = await prepare(verb, req)
     if (!p.ok) return p
     const resources: { command: number; diff: ResourceDiff }[] = []
     for (const [command, step] of p.steps.entries()) {
       const diffs = await diffStep(verb, step, opts)
-      if (!Array.isArray(diffs)) return diffs
+      if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines)
       for (const diff of diffs) resources.push({ command, diff })
     }
-    return { ok: true, plan: p.plan, commandLines: p.steps.map((s) => kubectlArgs(verb, s.cmd, s.t)), resources }
+    return { ok: true, plan: p.plan, commandLines: p.commandLines, resources }
   }
 
   /** Re-plans and re-checks (the request may be older than the files), then runs the commands in order and stops at
@@ -297,14 +332,14 @@ export function createKubeOperations(d: KubeOperationDeps) {
     try {
       let p: Awaited<ReturnType<typeof prepare>>
       try {
-        p = await prepare(req, ctrl.signal)
+        p = await prepare(verb, req, ctrl.signal)
       } catch (e) {
         // A file gone or unreadable since the preview: nothing was sent, and the caller gets a result, not a rejection.
         return result({ stderr: e instanceof Error ? e.message : String(e) })
       }
       if (ctrl.signal.aborted) return result({ stderr: 'cancelled', cancelled: true })
       if (!p.ok) return result({ stderr: refusalText(p), ...(p.reason === 'kubectl' && p.timedOut ? { timedOut: true } : {}) })
-      const commandLines = p.steps.map((s) => kubectlArgs(verb, s.cmd, s.t))
+      const { commandLines } = p
       const outcomes: ResourceOutcome[] = []
       const stderr: string[] = []
       let ran = 0
@@ -352,7 +387,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     else if (kind === 'kustomization' || graph.isMember(file)) return { kind: 'unknown', reason: 'no-overlay' }
     else cmd = { kind: 'files', files: [file] }
     const ns = await namespaceOf(cmd, s.namespace, graph)
-    if ('reason' in ns) return { kind: 'unknown', reason: firstLine(ns.stderr) }
+    if ('failed' in ns) return { kind: 'unknown', reason: firstLine(ns.stderr) }
     if (!ns.ok) return { kind: 'unknown', reason: 'namespace' }
     const step: Step = { cmd, t: { context: s.context, nsFlag: ns.flag }, rendered: ns.rendered, fallbackNs: 'default' }
     const diffs = await diffStep('apply', step, { keepServerFields: false })

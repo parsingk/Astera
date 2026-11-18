@@ -30,6 +30,10 @@ function verb(v: unknown): KubeVerb {
   return v
 }
 
+function pillOf(v: unknown): string | null {
+  return v === null ? null : str(v, 'pill')
+}
+
 function request(v: unknown): KubeRequest {
   const r = v as { selection?: unknown; projectRoot?: unknown; context?: unknown; pill?: unknown } | undefined
   if (!r || !Array.isArray(r.selection) || r.selection.length === 0) {
@@ -39,7 +43,7 @@ function request(v: unknown): KubeRequest {
     selection: r.selection.map((p) => str(p, 'selection path')),
     projectRoot: str(r.projectRoot, 'projectRoot'),
     context: str(r.context, 'context'),
-    pill: r.pill === null ? null : str(r.pill, 'pill')
+    pill: pillOf(r.pill)
   }
 }
 
@@ -108,11 +112,12 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
 
   ipcMain.handle('kube.cancel', (_e, id) => service.cancel(str(id, 'id')))
 
-  ipcMain.handle('kube.reload', async (_e, filePath, context) => {
+  ipcMain.handle('kube.reload', async (_e, filePath, context, pill) => {
     const file = str(filePath, 'filePath')
     const ctx = str(context, 'context')
+    const ns = pillOf(pill)
     await assertAllowedPath(file)
-    return service.reload(file, ctx)
+    return service.reload(file, ctx, ns)
   })
 
   ipcMain.handle('kube.render', async (_e, overlayDir) => {
