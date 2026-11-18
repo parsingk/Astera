@@ -7,7 +7,7 @@ import type { KubectlResult } from '../../core/kube/kubectl'
 
 const NL = String.fromCharCode(10)
 
-function setup() {
+function setup(denied: string[] = []) {
   const handlers = new Map<string, (e: unknown, ...a: unknown[]) => unknown>()
   const settings = {
     getKubeconfigFiles: vi.fn(() => ['/a']),
@@ -17,11 +17,17 @@ function setup() {
   }
   const run = vi.fn(async (_args: string[]): Promise<KubectlResult> => ({ ok: true, stdout: 'Client Version: v1.30.2'+NL+'Kustomize Version: v5.0.4'+NL, stderr: '' }))
   const binPath = vi.fn(() => '/usr/bin/kubectl')
-  const service = { invalidateContexts: vi.fn(), preview: vi.fn(async () => ({})), status: vi.fn(async () => ({})) }
-  registerKubeIpc(
-    { handle: (c, fn) => void handlers.set(c, fn) },
-    { service, assertAllowedPath: async (p: string) => p, settings, run, binPath } as never
-  )
+  const service = {
+    invalidateContexts: vi.fn(),
+    preview: vi.fn(async () => ({})),
+    run: vi.fn(async () => ({})),
+    status: vi.fn(async () => ({}))
+  }
+  const assertAllowedPath = async (p: string): Promise<string> => {
+    if (denied.includes(p)) throw new Error('path not allowed')
+    return p
+  }
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath } as never)
   return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath }
 }
 
@@ -68,6 +74,33 @@ describe('the editor override (R11) over IPC', () => {
     await expect(t.call('kube.status', '/p/a.yaml', '/p', '')).rejects.toThrow()
     await expect(t.call('kube.status', '/p/a.yaml', '/p', 3)).rejects.toThrow()
     expect(t.service.status).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the guards of preview and run, before the service is asked', () => {
+  const req = { selection: ['/p/a.yaml', '/p/k8s'], projectRoot: '/p', context: 'c', pill: null }
+  const HIDE = { keepServerFields: false }
+
+  it('preview rejects a selection path or a project root outside the allowed roots', async () => {
+    for (const denied of ['/p/k8s', '/p']) {
+      const t = setup([denied])
+      await expect(t.call('kube.preview', 'apply', req, HIDE)).rejects.toThrow('path not allowed')
+      expect(t.service.preview).not.toHaveBeenCalled()
+    }
+  })
+
+  it('run rejects the same, and an empty fingerprint', async () => {
+    for (const denied of ['/p/a.yaml', '/p']) {
+      const t = setup([denied])
+      await expect(t.call('kube.run', 'r1', 'apply', req, 'fp')).rejects.toThrow('path not allowed')
+      expect(t.service.run).not.toHaveBeenCalled()
+    }
+    const t = setup()
+    await expect(t.call('kube.run', 'r1', 'apply', req, '')).rejects.toThrow()
+    await expect(t.call('kube.run', 'r1', 'apply', req, undefined)).rejects.toThrow()
+    expect(t.service.run).not.toHaveBeenCalled()
+    await t.call('kube.run', 'r1', 'apply', req, 'fp')
+    expect(t.service.run).toHaveBeenCalledWith('r1', 'apply', req, 'fp')
   })
 })
 
