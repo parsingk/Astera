@@ -16,15 +16,17 @@ export interface ManifestDoc {
 /** One kubectl invocation: kubectl takes `-f` (many) or a single `-k` per command. */
 export type KubeCommand = { kind: 'files'; files: string[] } | { kind: 'overlay'; dir: string }
 
-/** A file or folder the plan did not apply, with the reason. */
+/** A file or folder the plan did not apply, with the reason. `unlisted`: a manifest in or below a kustomization's
+ *  folder that no kustomization lists. */
 export interface LeftOut {
   path: string
-  reason: 'plain-yaml' | 'base' | 'base-member' | 'helm'
+  reason: 'plain-yaml' | 'base' | 'base-member' | 'helm' | 'unlisted'
 }
 
+/** `broken-kustomization`: the selection reaches into a kustomization that does not parse; `paths` are its folders. */
 export type OperationPlan =
   | { ok: true; commands: KubeCommand[]; leftOut: LeftOut[] }
-  | { ok: false; reason: 'nothing' | 'base-folder' | 'many-overlays'; paths: string[] }
+  | { ok: false; reason: 'nothing' | 'base-folder' | 'many-overlays' | 'broken-kustomization'; paths: string[] }
 
 /** `nsFlag` is the value for `-n`, or null when every resource names its namespace. */
 export type KubeTarget = { context: string; nsFlag: string | null }
@@ -74,6 +76,8 @@ export interface KubeTargetView {
   reloadBlocked: 'secret' | 'multi' | null
   nsFromFile: boolean
   resource: { kind: string; name: string | null } | { count: number } | { overlay: string } | null
+  /** The nearest folder over the file whose kustomization does not parse: every action is refused until it is fixed. */
+  brokenKustomization: string | null
 }
 
 export type ResourceState = 'changed' | 'unchanged' | 'new' | 'delete' | 'not-found'

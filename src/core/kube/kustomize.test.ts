@@ -60,13 +60,18 @@ describe('parseKustomization', () => {
     expect(parseKustomization(DEV + '\n---\nresources: [other]\n')).toEqual(lf)
   })
 
-  it('yields empty refs for unparsable text', () => {
+  it('marks unparsable text as broken, with empty refs', () => {
     expect(parseKustomization('resources: [a\n  : : :')).toEqual({
       resources: [],
       patchFiles: [],
       components: [],
-      namespace: null
+      namespace: null,
+      broken: true
     })
+    // a broken first document is not skipped for a later one
+    expect(parseKustomization('resources: [a\n---\nresources: [b.yaml]\n').broken).toBe(true)
+    expect(parseKustomization(DEV).broken).toBeUndefined()
+    expect(parseKustomization('').broken).toBeUndefined()
   })
 })
 
@@ -128,6 +133,24 @@ describe('buildKustomizeGraph', () => {
     expect(win.overlaysReaching('d:/proj/overlays/dev/patch.yaml')).toEqual([w('overlays', 'dev')])
     expect(win.namespaceOf(low(w('overlays', 'dev')))).toBe('dev')
     expect(win.overlays()).toEqual([w('overlays', 'dev')])
+  })
+
+  it('knows which paths lie in or below a kustomization folder, and which below a broken one', () => {
+    const g = buildKustomizeGraph({
+      '/q/app': refs({ resources: ['dep.yaml'] }),
+      '/q/bad': refs({ broken: true }),
+      '/q/bad/inner': refs({})
+    })
+    expect(g.inKustomization('/q/app/extra.yaml')).toBe(true)
+    expect(g.inKustomization('/q/app/sub/x.yaml')).toBe(true)
+    expect(g.inKustomization('/q/app')).toBe(true)
+    expect(g.inKustomization('/q/application/x.yaml')).toBe(false)
+    expect(g.inKustomization('/q/other.yaml')).toBe(false)
+    expect(g.brokenOver('/q/bad/patch.yaml')).toEqual(['/q/bad'])
+    expect(g.brokenOver('/q/bad/inner/x.yaml')).toEqual(['/q/bad'])
+    expect(g.brokenOver('/q/bad')).toEqual(['/q/bad'])
+    expect(g.brokenOver('/q/badger/x.yaml')).toEqual([])
+    expect(g.brokenOver('/q/app/dep.yaml')).toEqual([])
   })
 
   it('does not loop on a cycle and reports both as bases', () => {

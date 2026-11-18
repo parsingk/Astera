@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { KubePreview, ResourceDiff } from '../../../../core/kube/types'
+import { en } from '../../../../core/i18n/messages/en'
+import { ko } from '../../../../core/i18n/messages/ko'
 import { KubeConfirmDialog } from './KubeConfirmDialog'
 
 vi.mock('../../i18n/I18nProvider', () => ({
@@ -101,6 +103,20 @@ describe('KubeConfirmDialog', () => {
     expect(render({ ok: false, reason: 'refused', plan: { ok: false, reason: 'base-folder', paths: ['/b'] } })).toContain(
       'kube.confirm.refused.base-folder'
     )
+  })
+
+  it('a broken kustomization names its folder; a file no kustomization lists is left out with its own words', () => {
+    const broken = render({ ok: false, reason: 'refused', plan: { ok: false, reason: 'broken-kustomization', paths: ['/p/apps/app'] } })
+    expect(broken).toContain('kube.confirm.refused.broken-kustomization')
+    expect(broken).toContain('/p/apps/app')
+    const p = okPreview()
+    if (!p.ok) throw new Error('unreachable')
+    const html = render({ ...p, plan: { ...p.plan, leftOut: [{ path: '/p/app/transformer.yaml', reason: 'unlisted' }] } })
+    expect(html).toContain('kube.confirm.leftOutReason.unlisted')
+    for (const key of ['kube.confirm.refused.broken-kustomization', 'kube.confirm.leftOutReason.unlisted'] as const) {
+      expect(ko[key]).toBeTruthy()
+      expect(en[key]).toBeTruthy()
+    }
   })
 
   it('the namespace pill comes from the preview: one value, from the files, or several; the caller label while loading', () => {

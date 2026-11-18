@@ -27,6 +27,8 @@ export interface KubeToolbarProps {
   kubectlMissing: boolean
   /** Why reload cannot run on this file: a Secret or a file of several resources. */
   reloadBlocked: 'secret' | 'multi' | null
+  /** The folder of a kustomization over this file that does not parse: every action waits until it is fixed. */
+  brokenKustomization: string | null
   renderOpen: boolean
   /** Open the cluster picker / the namespace picker; the caller places them (pass them as children). */
   onPickContext(): void
@@ -78,7 +80,11 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
 
   const isKustomize = p.kind === 'kustomization' || p.overlays.length > 0
   const off =
-    p.busy || p.target.state === 'missing' || p.target.state === 'none' || (isKustomize && p.overlay === null)
+    p.busy ||
+    p.target.state === 'missing' ||
+    p.target.state === 'none' ||
+    (isKustomize && p.overlay === null) ||
+    p.brokenKustomization !== null
 
   const contextName = p.target.state === 'none' ? null : p.target.context
   const short = contextName === null ? '' : displayContextName(contextName).short
@@ -209,6 +215,12 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
         <div className="kube-info">
           <span>{t('kube.toolbar.kustomizeNote')}</span>
           {p.overlay !== null && <code>{`kubectl apply -k ${shellQuote(p.overlay, platform())}`}</code>}
+        </div>
+      )}
+      {p.brokenKustomization !== null && (
+        <div className="kube-info">
+          <span>{t('kube.toolbar.brokenKustomization')}</span>
+          <code>{p.brokenKustomization}</code>
         </div>
       )}
       {p.children}

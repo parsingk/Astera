@@ -10,7 +10,7 @@ export interface FolderIndex {
   graph: KustomizeGraph
 }
 
-type Refusal = 'base-folder' | 'many-overlays'
+type Refusal = 'broken-kustomization' | 'base-folder' | 'many-overlays'
 
 function dirOf(path: string): string {
   return path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf(String.fromCharCode(92))))
@@ -29,21 +29,35 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
     leftOut.set(reason + '\0' + path, { path, reason })
   }
 
+  /** Fails closed: anything in or below a kustomization that does not parse is refused, since what it lists (and so
+   *  which files are patches rather than resources) is unknown. True when `path` is refused so. */
+  const brokenRefusal = (path: string): boolean => {
+    const broken = graph.brokenOver(path)
+    for (const dir of broken) refusals.push({ reason: 'broken-kustomization', path: dir })
+    return broken.length > 0
+  }
+
+  /** A manifest no kustomization lists goes into -f, unless it sits in or below a kustomization's folder: that one
+   *  does not list it, so it may be a patch or a transformer config kubectl must not apply as a resource. */
+  const takeLoose = (path: string): void => {
+    if (graph.inKustomization(path)) skip(path, 'unlisted')
+    else files.add(path)
+  }
+
   // A kustomization folder named directly: an overlay is applied with -k, a base is refused.
   const takeFolder = (dir: string): void => {
+    if (brokenRefusal(dir)) return
     if (graph.isOverlay(dir)) overlays.add(dir)
     else if (graph.isBase(dir)) refusals.push({ reason: 'base-folder', path: dir })
   }
 
   const takeFile = (path: string): void => {
+    if (brokenRefusal(path)) return
     const kind = index.kindOf(path)
     if (kind === 'kustomization') return takeFolder(dirOf(path))
     if (kind === 'helm-template') return skip(path, 'helm')
     if (kind === 'plain') return skip(path, 'plain-yaml')
-    if (!graph.isMember(path)) {
-      files.add(path)
-      return
-    }
+    if (!graph.isMember(path)) return takeLoose(path)
     const reaching = graph.overlaysReaching(path)
     if (reaching.length === 1) overlays.add(reaching[0])
     else if (reaching.length > 1) refusals.push({ reason: 'many-overlays', path })
@@ -51,11 +65,14 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
   }
 
   const walk = (dir: string): void => {
+    if (brokenRefusal(dir)) return
     const found = index.filesUnder(dir)
     const foundOverlays = new Set<string>()
     for (const f of found) {
       if (index.kindOf(f) !== 'kustomization') continue
       const d = dirOf(f)
+      // Every file below a broken kustomization is below its kustomization file, which the walk finds too.
+      if (brokenRefusal(d)) continue
       if (graph.isOverlay(d)) foundOverlays.add(d)
       else if (graph.isBase(d)) skip(d, 'base')
     }
@@ -65,7 +82,7 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
       if (kind === 'kustomization') continue
       if (kind === 'helm-template') skip(f, 'helm')
       else if (kind === 'plain') skip(f, 'plain-yaml')
-      else if (!graph.isMember(f)) files.add(f)
+      else if (!graph.isMember(f)) takeLoose(f)
       // Members of an overlay found here are covered by its -k; any other member belongs to a base.
       else if (!graph.overlaysReaching(f).some((o) => foundOverlays.has(o))) skip(f, 'base-member')
     }
@@ -78,8 +95,9 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
   }
 
   if (refusals.length > 0) {
-    // Fixed precedence so the answer never depends on selection order.
-    const reason: Refusal = refusals.some((r) => r.reason === 'base-folder') ? 'base-folder' : 'many-overlays'
+    // Fixed precedence so the answer never depends on selection order; a broken kustomization is fixed first.
+    const order: Refusal[] = ['broken-kustomization', 'base-folder', 'many-overlays']
+    const reason = order.find((x) => refusals.some((r) => r.reason === x)) as Refusal
     const paths = [...new Set(refusals.filter((r) => r.reason === reason).map((r) => r.path))].sort(byPath)
     return { ok: false, reason, paths }
   }

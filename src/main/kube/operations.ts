@@ -431,6 +431,8 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const kind = (await d.classify([file]))[file]
     if (kind !== 'manifest' && kind !== 'kustomization') return { kind: 'unknown', reason: 'not-manifest' }
     const [graph, view] = await Promise.all([d.projectGraph(projectRoot), d.target(file, projectRoot)])
+    // What the file is (a resource, or a patch of an overlay) is unknown until the kustomization parses.
+    if (view.brokenKustomization !== null) return { kind: 'unknown', reason: 'broken-kustomization' }
     let s: { context: string; namespace: string | null }
     if (context !== undefined) {
       const listed = (await d.contexts()).contexts.find((c) => c.name === context)

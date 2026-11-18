@@ -368,6 +368,7 @@ const view = (over: Partial<KubeTargetView> = {}): KubeTargetView => ({
   reloadBlocked: null,
   nsFromFile: false,
   resource: null,
+  brokenKustomization: null,
   ...over
 })
 

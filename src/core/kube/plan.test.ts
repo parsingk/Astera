@@ -108,6 +108,65 @@ describe('planOperation', () => {
     expect(plan.leftOut.map((l) => l.path)).not.toContain('/r/base/dep.yaml')
   })
 
+  describe('a kustomization that does not parse (fails closed)', () => {
+    const k: Record<string, KubeFileKind> = {
+      '/b/app/kustomization.yaml': 'kustomization',
+      '/b/app/deployment.yaml': 'manifest',
+      '/b/app/patch.yaml': 'manifest',
+      '/b/app/sub/extra.yaml': 'manifest',
+      '/b/app/values.yaml': 'plain',
+      '/b/ok.yaml': 'manifest'
+    }
+    // the patches would be released as plain manifests if the broken file counted as listing nothing
+    const idx = (): FolderIndex => index(k, { '/b/app': 'resources: [deployment.yaml\npatches:\n  - path: patch.yaml\n' })
+    const refusal = { ok: false, reason: 'broken-kustomization', paths: ['/b/app'] }
+
+    it('refuses any file in or below its folder, the kustomization itself and the folder', () => {
+      for (const sel of [['/b/app/patch.yaml'], ['/b/app/sub/extra.yaml'], ['/b/app/values.yaml'], ['/b/app/kustomization.yaml'], ['/b/app'], ['/b/app/sub']]) {
+        expect(planOperation(sel, idx())).toEqual(refusal)
+      }
+    })
+    it('refuses a folder walk that reaches it, and a selection that also holds other files, first among refusals', () => {
+      expect(planOperation(['/b'], idx())).toEqual(refusal)
+      expect(planOperation(['/b/ok.yaml', '/b/app/patch.yaml'], idx())).toEqual(refusal)
+    })
+  })
+
+  describe('a manifest beside or below a kustomization that does not list it', () => {
+    const k: Record<string, KubeFileKind> = {
+      '/u/app/kustomization.yaml': 'kustomization',
+      '/u/app/deployment.yaml': 'manifest',
+      '/u/app/transformer.yaml': 'manifest',
+      '/u/app/more/x.yaml': 'manifest',
+      '/u/loose.yaml': 'manifest'
+    }
+    const idx = (): FolderIndex => index(k, { '/u/app': K('deployment.yaml') + '\ntransformers:\n  - transformer.yaml' })
+
+    it('is left out of a folder walk, never put into -f', () => {
+      const plan = planOperation(['/u'], idx())
+      expect(plan).toMatchObject({
+        ok: true,
+        commands: [
+          { kind: 'files', files: ['/u/loose.yaml'] },
+          { kind: 'overlay', dir: '/u/app' }
+        ]
+      })
+      if (!plan.ok) throw new Error('unreachable')
+      expect(plan.leftOut).toEqual(expect.arrayContaining([
+        { path: '/u/app/transformer.yaml', reason: 'unlisted' },
+        { path: '/u/app/more/x.yaml', reason: 'unlisted' }
+      ]))
+    })
+    it('is left out when selected itself', () => {
+      expect(planOperation(['/u/app/transformer.yaml'], idx())).toEqual({ ok: false, reason: 'nothing', paths: ['/u/app/transformer.yaml'] })
+      expect(planOperation(['/u/app/more/x.yaml', '/u/loose.yaml'], idx())).toEqual({
+        ok: true,
+        commands: [{ kind: 'files', files: ['/u/loose.yaml'] }],
+        leftOut: [{ path: '/u/app/more/x.yaml', reason: 'unlisted' }]
+      })
+    })
+  })
+
   it('values.yaml alone is nothing', () => {
     expect(planOperation(['/p/values.yaml'], index({ '/p/values.yaml': 'plain' }))).toEqual({
       ok: false, reason: 'nothing', paths: ['/p/values.yaml']

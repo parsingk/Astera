@@ -7,6 +7,8 @@ export interface KustomizationRefs {
   patchFiles: string[]
   components: string[]
   namespace: string | null
+  /** The text did not parse (or could not be read): what it lists is unknown, so nothing below it may be applied. */
+  broken?: true
 }
 
 export interface KustomizeGraph {
@@ -18,6 +20,10 @@ export interface KustomizeGraph {
   overlaysReaching(path: string): string[]
   isMember(path: string): boolean
   namespaceOf(dir: string): string | null
+  /** Whether `path` (a file or folder) lies in or below the folder of any kustomization. */
+  inKustomization(path: string): boolean
+  /** The folders of broken kustomizations (KustomizationRefs.broken) that `path` lies in or below, as given. */
+  brokenOver(path: string): string[]
 }
 
 function isRemote(entry: string): boolean {
@@ -35,14 +41,18 @@ function paths(value: unknown): string[] {
   return strings(out)
 }
 
-/** Empty refs when the text does not parse. Remote entries are dropped; paths stay as written. */
+/** Empty refs marked `broken` when the text does not parse. Remote entries are dropped; paths stay as written. */
 export function parseKustomization(text: string): KustomizationRefs {
   // The first document that is a map wins; empty documents (`---` alone) and trailing documents are skipped.
   let obj: Record<string, unknown> = {}
+  let broken = false
   try {
     // The BOM is built from its code point so no invisible character sits in the source.
     for (const d of parseAllDocuments(text.replace(new RegExp('^' + String.fromCharCode(0xfeff)), ''))) {
-      if (d.errors.length > 0) break
+      if (d.errors.length > 0) {
+        broken = true
+        break
+      }
       const v: unknown = d.toJS({ maxAliasCount: 100 })
       if (v && typeof v === 'object' && !Array.isArray(v)) {
         obj = v as Record<string, unknown>
@@ -51,7 +61,9 @@ export function parseKustomization(text: string): KustomizationRefs {
     }
   } catch {
     obj = {}
+    broken = true
   }
+  if (broken) return brokenKustomization()
   const ns = obj.namespace
   return {
     resources: [...strings(obj.resources), ...strings(obj.bases)],
@@ -63,6 +75,11 @@ export function parseKustomization(text: string): KustomizationRefs {
     components: strings(obj.components),
     namespace: typeof ns === 'string' && ns !== '' ? ns : null
   }
+}
+
+/** What a kustomization that cannot be parsed or read lists: nothing known. */
+export function brokenKustomization(): KustomizationRefs {
+  return { resources: [], patchFiles: [], components: [], namespace: null, broken: true }
 }
 
 /** The one spelling every key and lookup goes through: resolved (against `base` when given), and case-folded where
@@ -136,6 +153,23 @@ export function buildKustomizeGraph(roots: Record<string, KustomizationRefs>): K
         .map((dir) => original.get(dir) as string)
     },
     isMember: (path) => members.has(norm(path)),
-    namespaceOf: (dir) => roots[original.get(norm(dir)) ?? '']?.namespace ?? null
+    namespaceOf: (dir) => roots[original.get(norm(dir)) ?? '']?.namespace ?? null,
+    inKustomization: (path) => {
+      const target = norm(path)
+      return [...original.keys()].some((dir) => within(dir, target))
+    },
+    brokenOver: (path) => {
+      const target = norm(path)
+      return [...original.entries()]
+        .filter(([dir, key]) => roots[key].broken === true && within(dir, target))
+        .map(([, key]) => key)
+        .sort()
+    }
   }
+}
+
+/** Whether normalized `target` is normalized `dir` or lies below it. */
+function within(dir: string, target: string): boolean {
+  const sep = flavor(dir).sep
+  return target === dir || target.startsWith(dir.endsWith(sep) ? dir : dir + sep)
 }

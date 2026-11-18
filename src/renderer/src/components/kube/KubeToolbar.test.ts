@@ -26,6 +26,7 @@ const base = {
   busy: false,
   kubectlMissing: false,
   reloadBlocked: null,
+  brokenKustomization: null as string | null,
   renderOpen: false,
   onPickContext: noop,
   onPickNamespace: noop,
@@ -175,6 +176,17 @@ describe('notices', () => {
     expect(html).toContain('kube.toolbar.helm')
     expect(html).not.toContain('kube.toolbar.apply')
     expect(html).not.toContain('kind-dev')
+  })
+
+  it('a kustomization over the file that does not parse disables every action and says to fix it first', () => {
+    const html = render({ brokenKustomization: '/p/apps/app' })
+    for (const k of ['compare', 'apply', 'reload', 'delete']) expect(button(html, `kube.toolbar.${k}`)).toContain('disabled')
+    expect(html).toContain('kube.toolbar.brokenKustomization')
+    expect(html).toContain('/p/apps/app')
+    const kustomize = render({ kind: 'kustomization', overlays: ['/p/apps/app'], overlay: '/p/apps/app', brokenKustomization: '/p/apps/app' })
+    for (const k of ['compare', 'apply', 'delete']) expect(button(kustomize, `kube.toolbar.${k}`)).toContain('disabled')
+    expect(kustomize).toContain('kube.toolbar.brokenKustomization')
+    expect(render()).not.toContain('kube.toolbar.brokenKustomization')
   })
 
   it('a missing kubectl shows the notice with a settings button', () => {

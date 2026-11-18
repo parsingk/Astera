@@ -1441,6 +1441,44 @@ describe('status', () => {
   })
 })
 
+describe('a kustomization that does not parse or cannot be read (fails closed)', () => {
+  const app = p('apps', 'app')
+  const patch = p('apps', 'app', 'patch.yaml')
+  const tree = {
+    [p('apps', 'app', 'kustomization.yaml')]: 'resources: [deployment.yaml\npatches:\n  - path: patch.yaml\n',
+    [p('apps', 'app', 'deployment.yaml')]: yamlDocs(cm('a', {}, 'dev')),
+    [patch]: yamlDocs(cm('a', { patched: 'yes' }, 'dev'))
+  }
+  const refusal = { ok: false, reason: 'refused', plan: { ok: false, reason: 'broken-kustomization', paths: [app] } }
+
+  it('refuses every action on a file below it, says so in the target view and the chip, before any cluster call', async () => {
+    const h = harness(tree, fakeKube({}))
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.preview('apply', request([patch]), HIDE)).toEqual(refusal)
+    expect(await svc.preview('delete', request([p('apps')]), HIDE)).toEqual(refusal)
+    expect(await svc.run('broken', 'apply', request([patch]), STALE)).toMatchObject({ ok: false, ran: 0, refused: refusal })
+    expect((await svc.target(patch, root)).brokenKustomization).toBe(app)
+    expect((await svc.target(p('apps', 'app', 'kustomization.yaml'), root)).brokenKustomization).toBe(app)
+    expect(await svc.status(patch, root)).toEqual({ kind: 'unknown', reason: 'broken-kustomization' })
+    expect(clusterCalls(h.calls)).toEqual([])
+  })
+
+  it('counts a kustomization it cannot read as broken', async () => {
+    const h = harness({ ...tree, [p('apps', 'app', 'kustomization.yaml')]: 'resources: [deployment.yaml]\n' }, fakeKube({}))
+    h.deps.readText = async (f) => {
+      if (f.endsWith('kustomization.yaml')) throw new Error('EACCES')
+      return h.files.get(f)?.text ?? ''
+    }
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.preview('apply', request([patch]), HIDE)).toEqual(refusal)
+  })
+
+  it('a plain manifest away from any kustomization has no broken folder', async () => {
+    const h = harness({ ...tree, [p('k8s', 'a.yaml')]: MANIFEST }, fakeKube({}))
+    expect((await createKubeService(h.deps).target(p('k8s', 'a.yaml'), root)).brokenKustomization).toBeNull()
+  })
+})
+
 describe("Secret values in kubectl's stderr (C22)", () => {
   const SECRET = 'aHVudGVyMg=='
   const bs = String.fromCharCode(92)

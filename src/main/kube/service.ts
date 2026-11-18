@@ -3,7 +3,13 @@
 import path from 'node:path'
 import { stringify } from 'yaml'
 import { classifyYamlHead, helmChartRootOf, isKustomizationName, isYamlName } from '../../core/kube/detect'
-import { buildKustomizeGraph, parseKustomization, type KustomizeGraph, type KustomizationRefs } from '../../core/kube/kustomize'
+import {
+  brokenKustomization,
+  buildKustomizeGraph,
+  parseKustomization,
+  type KustomizeGraph,
+  type KustomizationRefs
+} from '../../core/kube/kustomize'
 import {
   defaultRememberFolder,
   foldersUpTo,
@@ -129,7 +135,9 @@ export function createKubeService(deps: KubeServiceDeps) {
             if (isSkippedDir(e.name)) return
             await walk(full)
           } else if (isKustomizationName(e.name)) {
-            roots[dir] = parseKustomization(await deps.readText(full).catch(() => ''))
+            // One that cannot be read lists nothing known, as one that does not parse (fails closed).
+            const text = await deps.readText(full).catch(() => null)
+            roots[dir] = text === null ? brokenKustomization() : parseKustomization(text)
           }
         })
       )
@@ -185,6 +193,8 @@ export function createKubeService(deps: KubeServiceDeps) {
     const [ctx, graph] = await Promise.all([contexts(), projectGraph(projectRoot)])
     const isKustomization = isKustomizationName(path.basename(filePath))
     const overlays = graph.overlaysReaching(isKustomization ? path.dirname(filePath) : filePath)
+    // The nearest kustomization over the file that does not parse: every action on the file is refused until it does.
+    const brokenKustomization = graph.brokenOver(filePath).at(-1) ?? null
     let overlay: string | null = null
     let folders = foldersUpTo(filePath, projectRoot)
     if (overlays.length > 0) {
@@ -202,7 +212,8 @@ export function createKubeService(deps: KubeServiceDeps) {
           rememberChoices: [],
           reloadBlocked: null,
           nsFromFile: false,
-          resource: null
+          resource: null,
+          brokenKustomization
         }
       }
       folders = foldersUpTo(path.join(overlay, 'kustomization.yaml'), projectRoot)
@@ -224,7 +235,8 @@ export function createKubeService(deps: KubeServiceDeps) {
         ? { reloadBlocked: null, nsFromFile: false, resource: { overlay: path.basename(overlay) } }
         : isDir
           ? { reloadBlocked: null, nsFromFile: false, resource: null }
-          : await fileFacts(filePath))
+          : await fileFacts(filePath)),
+      brokenKustomization
     }
   }
 
