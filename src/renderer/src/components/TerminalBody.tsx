@@ -8,13 +8,15 @@ import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
 import { activationFocusHeld } from '../lib/focusHold'
+import { selectionCopy } from '../lib/terminalCopy'
 
 /**
  * Project terminal body. Subscribes to terminal:data, and input goes to the PTY via terminal.write.
  * The xterm wiring is duplicated with RunPanel and TerminalView, and that is deliberate — TerminalView
- * carries concerns specific to claude's TUI (bracketed paste, Ctrl+C copy, the resize spam guard), so
+ * carries concerns specific to claude's TUI (bracketed paste, the resize spam guard), so
  * folding all three into a shared hook would get messy. If the three copies actually drift apart and
- * cause a bug, that is when it gets extracted — the focus wiring (below) is the first such case.
+ * cause a bug, that is when it gets extracted — the focus wiring (below) is the first such case, and
+ * the copy key (lib/terminalCopy.ts, missing here until 2026-11-19) the second.
  * URL links come from the shared provider (terminalLinks.ts) — the one piece of xterm wiring that is
  * not duplicated.
  * initialBuffer: recent output the parent passes in for replay — the body does not know projectPath, so
@@ -87,6 +89,13 @@ export function TerminalBody({
       onOpenFile: (path, at) => onOpenFileRef.current(path, at),
       onOpenFolder: (path) => onOpenFolderRef.current?.(path)
     })
+    // Ctrl+C (Cmd+C on macOS) over a selection copies it, as in the other terminals; without this it reached the shell
+    // as an interrupt and nothing was copied
+    const copy = selectionCopy(term, {
+      isMac: window.api.platform === 'darwin',
+      writeText: (text) => window.api.clipboard.writeText(text)
+    })
+    term.attachCustomKeyEventHandler(copy.key)
     fit.fit()
     termRef.current = term
     fitRef.current = fit
@@ -108,6 +117,7 @@ export function TerminalBody({
     observer.observe(host)
     return () => {
       disposeLinks()
+      copy.dispose()
       off()
       blinkGuard.dispose()
       input.dispose()
