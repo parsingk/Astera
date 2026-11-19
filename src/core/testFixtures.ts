@@ -36,3 +36,42 @@ export async function removeFixture(
     console.warn(`[fixture] still held, left for the sweeper: ${dir} (${String((err as { code?: unknown }).code)})`)
   }
 }
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const untilGone = async (pids: number[], ms: number): Promise<number[]> => {
+  const t0 = Date.now()
+  let left = pids.filter(pidAlive)
+  while (left.length > 0 && Date.now() - t0 < ms) {
+    await new Promise((r) => setTimeout(r, 25))
+    left = left.filter(pidAlive)
+  }
+  return left
+}
+
+/**
+ * Waits (bounded, 10 s) for processes the test spawned to be gone, before their folder is removed: on Windows a kill is
+ * asynchronous, and a still-dying process whose working directory is inside the folder makes the removal fail with
+ * EPERM. One still alive after the wait is killed (it is a process this test started) and waited for once more. Pids
+ * of 0 or below are ignored: signalling 0 would signal this test's whole process group.
+ */
+export async function waitPidsGone(pids: Iterable<number>, ms = 10_000): Promise<void> {
+  const mine = [...pids].filter((p) => Number.isInteger(p) && p > 0)
+  const stuck = await untilGone(mine, ms)
+  for (const pid of stuck) {
+    try {
+      process.kill(pid)
+    } catch {
+      // gone between the check and the kill
+    }
+  }
+  const still = await untilGone(stuck, 5_000)
+  if (still.length > 0) console.warn(`[fixture] processes still alive after a kill: ${still.join(', ')}`)
+}

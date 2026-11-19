@@ -10,6 +10,7 @@ import {
   applyValidationResult,
   blockForValidation,
   openReviewDispatch,
+  closeOrphanedExternalReviews,
   applyReviewResult,
   blockForReview,
   closeDispatch,
@@ -1911,6 +1912,16 @@ describe('openReviewDispatch', () => {
     expect(r.state.tasks.find((t) => t.id === taskId)!.status).toBe('reviewing')
   })
 
+  it('stores the external reviewer snapshot, and no key at all when there is none', () => {
+    const { s, taskId } = reviewing()
+    const plain = unwrap<Dispatch>(openReviewDispatch(s, review(taskId), NOW) as never)
+    expect('externalReviewer' in plain.value).toBe(false)
+    const ext = unwrap<Dispatch>(
+      openReviewDispatch(s, { ...review(taskId, 'acp:1a2b3c4d'), externalReviewer: { id: 'ext_1', name: 'Gemini' } }, NOW) as never
+    )
+    expect(ext.value.externalReviewer).toEqual({ id: 'ext_1', name: 'Gemini' })
+  })
+
   it('reviewing 이 아닌 Task 에는 열 수 없다', () => {
     const { s, taskId } = seed() // seed() 직후는 dispatched 다
     const r = openReviewDispatch(s, review(taskId), NOW)
@@ -3418,6 +3429,16 @@ describe('applyReviewResult — convergence', () => {
     expect(r.state.messages.at(-1)?.subject).toBe('Review approved (1 non-blocking note)')
   })
 
+  it('names the external reviewer in the blocking-issues message, not the provider', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const ext: OrchState = {
+      ...s,
+      dispatches: s.dispatches.map((d) => (d.id === reviewId ? { ...d, externalReviewer: { id: 'ext_1', name: 'Gemini' } } : d))
+    }
+    const r = unwrap(applyReviewResult(ext, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'see file', issues: [high, low], repair: SAME }, LATER) as never)
+    expect(r.state.messages.at(-1)?.subject).toBe('Gemini review found 1 blocking issue')
+  })
+
   it('blocking 이슈가 있으면 같은 구현 세션에 review-failure repair 를 연다', () => {
     const { s, taskId, implId, reviewId } = reviewing()
     const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'see file', issues: [high, low], repair: SAME }, LATER) as never)
@@ -4556,5 +4577,37 @@ describe('agent profiles: a reused session', () => {
     s = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
     const r = unwrap<Dispatch>(openRepairDispatch(s, { taskId: t.value.id, reason: 'check-failure', target: SAME }, NOW) as never)
     expect(r.value).not.toHaveProperty('agentProfileId')
+  })
+})
+
+describe('closeOrphanedExternalReviews', () => {
+  const mk = (id: string, over: Partial<Dispatch>): Dispatch => ({
+    id, taskId: 't1', provider: 'claude', accountId: '', sessionId: `acp:${id}`, cwd: 'D:/p', specPath: '',
+    review: true, externalReviewer: { id: 'ext_1', name: 'G' }, startedAt: '2026-01-01T00:00:00.000Z',
+    workerState: 'ready', retained: false, ...over
+  })
+  const world = (ds: Dispatch[]): OrchState => ({ ...emptyState(), dispatches: ds })
+
+  it('keeps an owned one and closes a foreign one as outcome_unknown with endedAt', () => {
+    const r = closeOrphanedExternalReviews(world([mk('a', {}), mk('b', {})]), { owned: new Set(['a']) }, NOW)
+    expect(r.closed).toEqual(['b'])
+    expect(r.state.dispatches[0].endedAt).toBeUndefined()
+    expect(r.state.dispatches[1]).toMatchObject({ workerState: 'outcome_unknown', endedAt: NOW })
+    expect(r.state.dispatches[1].outcome).toBeUndefined()
+  })
+
+  it('leaves a non-external and an already-ended Dispatch alone', () => {
+    const plain = mk('p', { externalReviewer: undefined })
+    const ended = mk('e', { endedAt: '2026-01-01T01:00:00.000Z', workerState: 'stopped' })
+    const s = world([plain, ended])
+    const r = closeOrphanedExternalReviews(s, { owned: new Set() }, NOW)
+    expect(r.closed).toEqual([])
+    expect(r.state).toBe(s)
+  })
+
+  it('startedBefore closes only the ones that began before it', () => {
+    const s = world([mk('old', { startedAt: '2026-01-01T00:00:00.000Z' }), mk('new', { startedAt: '2026-01-01T02:00:00.000Z' })])
+    const r = closeOrphanedExternalReviews(s, { owned: new Set(), startedBefore: Date.parse('2026-01-01T01:00:00.000Z') }, NOW)
+    expect(r.closed).toEqual(['old'])
   })
 })

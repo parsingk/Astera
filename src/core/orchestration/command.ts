@@ -72,7 +72,7 @@ import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
 import { taskDetailOf } from './taskDetail'
 import { checkOutputSlice, tailWindow } from './taskOutput'
-import { TAIL_UNTRACKED, TAIL_EMPTY } from './exec/tail'
+import { TAIL_UNTRACKED, TAIL_EMPTY, EXTERNAL_REVIEW_NO_OUTPUT } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -210,8 +210,8 @@ export interface HostSession {
   agentProfileId?: string
   /** It runs in its agent CLI's own sandbox (the note's `restore.sandboxed`, SessionInfo.sandboxed); absent outside it. */
   sandboxed?: true
-  /** What protection that is (SessionInfo.sandboxKind): `sandbox`, the CLI's own, or `deny-only`, Claude Code on Windows,
-   *  whose shell is not restricted. Absent when not sandboxed, or for a kind this build does not know. */
+  /** What protection that is (SessionInfo.sandboxKind): `sandbox`, the CLI's own (for Claude Code on Windows, its shell in
+   *  Codex's sandbox), or `deny-only`, Claude Code on Windows without that route, whose shell is not restricted. Absent when not sandboxed, or for a kind this build does not know. */
   sandboxKind?: SandboxKind
   /** Where the Host reads each fact of this session from (X1-06); `none` means the Host cannot say, and the fact is
    *  shown as unknown, never as idle. */
@@ -328,8 +328,8 @@ export interface OrchServerDeps {
     /** Start the worker in its CLI's sandbox whatever profile it names (final fix pass, C3): a sandboxed session asked
      *  for it (`worker-start`). The wiring adds a Task's or Job's own mark (workSandboxed, exec/workerStart.ts). */
     sandbox?: true
-    /** With `sandbox`: where the CLI has no sandbox (Claude Code on Windows), start with its deny rules only, as a
-     *  sandboxed profile's session does there, rather than be refused. A reviewer of work a profile's switch sandboxed
+    /** With `sandbox`: where the CLI has no sandbox (Claude Code on Windows without its shell route into Codex's
+     *  sandbox), start with its deny rules only, as a sandboxed profile's session does there, rather than be refused. A reviewer of work a profile's switch sandboxed
      *  asks for it (Task K fix rounds 1 and 2, the controller's rulings after E2); a worker, and a reviewer of a
      *  sandboxed session's work, never do (C3 refuses). */
     sandboxDenyOnly?: true
@@ -855,8 +855,9 @@ const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => 
   return d ? { status: 409, body: { error: `the worker is still starting; try again in a moment (dispatch ${d.id})`, reason: 'still-starting' } } : null
 }
 /** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
- *  is a start that died: no pty was ever opened for it, so there is nothing to release. */
-const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId)
+ *  is a start that died: no pty was ever opened for it, so there is nothing to release. An external review
+ *  never had a session (its `acp:` id names no pty), so there is nothing to release either. */
+const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId) && !d.externalReviewer
 
 /** The Job's latest Run **while it still runs**, else undefined. `jobs run` refuses on it, and a fire
  *  skips on it (`run-spawn --unless-running`; the user's ruling of 2026-09-25 on U1): the same test in
@@ -2993,6 +2994,23 @@ export async function handleCommand(
       const tokens = deps.spentTokens ? runTokensOf(s, run.id, deps.spentTokens()) : {}
       return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}), ...tokens })
     }
+    // A finished Run's report, the Host's snapshot stored on the Run (run report design C9, C12). Null for one that
+    // finished before reports. For a person in the app or at their own shell: an agent is refused, as it is for the other
+    // person-only reads.
+    case 'runs-report': {
+      if (agentCaller(caller))
+        return denied(
+          caller.role === 'controller'
+            ? withUnsaidNote(caller, `runs report is for a person: read it in your own Astera or shell, not from ${REMOTE_AGENT}`)
+            : 'runs report is for a person: read it in the app or from your own shell, not from an agent session'
+        )
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const run = s.runs.find((r) => r.id === id)
+      if (!run) return notFound(`unknown run: ${id}`)
+      const comment = run.githubState?.reportComment
+      return okBody({ runId: run.id, report: run.report ?? null, ...(comment ? { comment } : {}) })
+    }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
      *
@@ -4461,6 +4479,10 @@ export async function handleCommand(
     case 'worker-read': {
       const id = str(args.dispatch)
       if (!id) return bad('--dispatch is required')
+      // An external review has no pty and no tail. Answered here, before the dep, so the app and the Host say the
+      // same thing whether or not an app is attached (the Host would forward the read): an answer of the untracked
+      // kind, saying where its transcript is instead (final fix wave E4).
+      if (s.dispatches.find((x) => x.id === id)?.externalReviewer) return okBody({ output: EXTERNAL_REVIEW_NO_OUTPUT })
       return okBody({
         output: await deps.readWorker({
           dispatchId: id,

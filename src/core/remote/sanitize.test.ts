@@ -27,4 +27,11 @@ describe('sanitizeForController (remote runtime design §3.6, D10.2)', () => {
     const s = { ...emptyState(), tasks: [{ id: 't1' }] } as never
     expect(sanitizeForController(s)).toEqual(s)
   })
+  it("a controller's state carries no report", () => {
+    const run = { id: 'run_1', jobId: 'job_1', report: { version: 1 } }
+    const s = { ...emptyState(), runs: [run, { id: 'run_2', jobId: 'job_1' }] } as never
+    const out = sanitizeForController(s) as unknown as { runs: Array<Record<string, unknown>> }
+    expect(out.runs).toEqual([{ id: 'run_1', jobId: 'job_1' }, { id: 'run_2', jobId: 'job_1' }])
+    expect((s as { runs: Array<Record<string, unknown>> }).runs[0].report).toEqual({ version: 1 })
+  })
 })

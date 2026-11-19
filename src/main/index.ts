@@ -1046,7 +1046,8 @@ app.whenReady().then(async () => {
     // and for a chain in the sandbox its git layout), looked for before the kill and without blocking this
     // thread: an offline drive fails the roll here, where it is rescheduled, instead of freezing every
     // window at the spawn.
-    prepareSpawn: (account, cwd, agentProfileId, sandbox) => core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) }),
+    prepareSpawn: (account, cwd, agentProfileId, sandbox) =>
+      core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(sandbox === 'required' ? { sandboxRequired: true } : {}) }),
     // Why a roll waits when the sandbox refused its respawn (Task 7 fix round 1), as the codex coordinator's
     tell: tellRollRefusal,
     // What the roll above carries: the model the person picked, read off the session being rolled

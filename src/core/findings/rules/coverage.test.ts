@@ -170,8 +170,9 @@ describe('coverage-gap (§4.6)', () => {
     // With only the sandboxed profile, the write-outside rules raise nothing for Codex
     const boxedOnly = coverageGapFindings(inputs({ profiles: [prof('ap_boxed', ['acc_codex'], { sandbox: true })] }))
     expect(boxedOnly.map((f) => f.part).sort()).toEqual(['starter-git-remote-write', 'starter-git-remote-write', 'starter-github-pr-create', 'starter-github-pr-create', 'starter-github-write', 'starter-github-write'])
-    // Claude Code on Windows has no sandbox (deny rules for its file tools only), so a sandboxed Claude profile there is
-    // still affected; on macOS and Linux its sandbox holds writes
+    // Claude Code on Windows is held only when a start's shell runs in Codex's sandbox (the via-codex note), which
+    // Findings cannot know, so a sandboxed Claude profile there is still affected; on macOS and Linux its sandbox holds
+    // writes
     expect(sandboxHoldsWrites('claude', 'win32')).toBe(false)
     expect(sandboxHoldsWrites('claude', 'linux')).toBe(true)
     expect(sandboxHoldsWrites('claude', 'darwin')).toBe(true)

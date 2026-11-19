@@ -16,10 +16,10 @@ const SANDBOX_GIVEN = {
     'Codex: solo escribe en la carpeta de trabajo y la temporal, y no puede leer las carpetas con inicios de sesión ni el almacén de secretos del sistema. La red funciona.'
   ],
   'settings.agentProfiles.sandboxHint.claude': [
-    'Claude: macOS와 Linux에서는 Codex와 같습니다. Windows: 셸은 제한 없음, 파일 도구만 로그인 정보가 있는 폴더를 읽지 못합니다.',
-    'Claude: on macOS and Linux, the same as Codex. Windows: the shell is not restricted; only the file tools cannot read the folders holding logins.',
-    'Claude: macOS と Linux では Codex と同じです。Windows: シェルは制限なし。ファイルツールだけがログイン情報のあるフォルダーを読めません。',
-    'Claude: en macOS y Linux, igual que Codex. Windows: el shell no tiene límites; solo las herramientas de archivos no pueden leer las carpetas con inicios de sesión.'
+    'Claude: macOS와 Linux에서는 Codex와 같습니다. Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 로그인 정보가 있는 폴더를 읽지 못합니다.',
+    'Claude: on macOS and Linux, the same as Codex. Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools cannot read the folders holding logins.',
+    'Claude: macOS と Linux では Codex と同じです。Windows: Codex アカウントの Windows サンドボックスを設定済みならシェルは Codex のサンドボックスで動き、そうでなければファイルツールだけがログイン情報のあるフォルダーを読めません。',
+    'Claude: en macOS y Linux, igual que Codex. Windows: el shell se ejecuta en el sandbox de Codex si el sandbox de Windows de una cuenta de Codex está configurado; si no, solo las herramientas de archivos no pueden leer las carpetas con inicios de sesión.'
   ],
   // Final fix pass (minor 6): spec §6's third limit, which doctor already says
   'settings.agentProfiles.sandboxHint.limits': [
@@ -38,7 +38,12 @@ const SANDBOX_GIVEN = {
   'settings.security.sandboxCoverage.class.network': ['네트워크', 'Network', 'ネットワーク', 'Red'],
   'settings.security.sandboxCoverage.level.seen': ['허용', 'Allowed', '許可', 'Permitido'],
   'audit.coverageNote.runtime-measured': ['런타임으로 측정', 'measured on the runtime', 'ランタイムで測定', 'medido en el entorno de ejecución'],
-  'audit.coverageNote.file-tools-only': ['파일 도구만', 'file tools only', 'ファイルツールのみ', 'solo herramientas de archivos'],
+  'audit.coverageNote.via-codex': [
+    '셸이 Codex sandbox 안에 있을 때. Windows sandbox를 설정한 Codex 계정이 필요합니다',
+    'when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up',
+    'シェルが Codex のサンドボックスにあるとき。Windows のサンドボックスを設定した Codex アカウントが必要',
+    'cuando el shell va en el sandbox de Codex, que requiere una cuenta de Codex con su sandbox de Windows configurado'
+  ],
   'session.tab.sandboxed': ['Sandbox 안에서 실행 중', 'Running in the sandbox', 'サンドボックスで実行中', 'Ejecutándose en el sandbox'],
   // Task 8 fix round 1
   'session.tab.denyOnly': [
@@ -48,12 +53,18 @@ const SANDBOX_GIVEN = {
     'Sin sandbox: solo las herramientas de archivos no pueden leer las carpetas de inicio de sesión (el shell no tiene límites)'
   ],
   'settings.security.sandboxCoverage.homeReadable': [
-    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
-    'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code\'s sandboxing docs); the agent\'s own commands run inside it.',
-    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 Claude のセッションで人が `!` を付けて直接入力したコマンドは、通常サンドボックスの外で実行されます（Claude Code のサンドボックスのドキュメントを参照）。エージェント自身のコマンドは内側で実行されます。',
-    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude, los comandos que la persona escribe con `!` suelen ejecutarse fuera del sandbox (véase la documentación de sandbox de Claude Code); los del propio agente se ejecutan dentro.'
+    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. macOS와 Linux의 Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). Windows에서는 셸이 Codex sandbox 안에 있으면 안에서 실행됩니다. 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
+    'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session on macOS and Linux, commands the person types with `!` usually run outside the sandbox (see Claude Code’s sandboxing docs); on Windows they run inside it when the shell is in Codex’s sandbox. The agent’s own commands run inside it.',
+    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 macOS と Linux の Claude のセッションで人が `!` を付けて直接入力したコマンドは、通常サンドボックスの外で実行されます（Claude Code のサンドボックスのドキュメントを参照）。Windows では、シェルが Codex のサンドボックスにあれば内側で実行されます。エージェント自身のコマンドは内側で実行されます。',
+    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude en macOS y Linux, los comandos que la persona escribe con `!` suelen ejecutarse fuera del sandbox (véase la documentación de sandbox de Claude Code); en Windows se ejecutan dentro cuando el shell está en el sandbox de Codex. Los del propio agente se ejecutan dentro.'
   ],
-  'settings.security.sandboxCoverage.windowsClaude': ['Windows: 셸은 제한 없음', 'Windows: the shell is not restricted', 'Windows: シェルは制限なし', 'Windows: el shell no tiene límites'],
+  // Final fixes I2 and M6: the guards and their lasting effect (design D6), said of a session whose shell runs there
+  'settings.security.sandboxCoverage.windowsClaude': [
+    'Windows: Codex 계정의 Windows sandbox가 설정되어 있으면 셸이 Codex sandbox 안에서 돌아가고, 없으면 파일 도구만 막힙니다. 셸이 Codex sandbox 안에서 도는 세션에서는 PowerShell 도구가 꺼지고, .claude(없으면 새로 만듭니다)와 이미 있는 .mcp.json은 셸에서 읽기 전용입니다. 그런 세션이 한 번 돈 폴더에서는 그 뒤로 어떤 sandbox 세션의 셸에서도 둘이 읽기 전용으로 남습니다(파일 도구로는 고칠 수 있습니다).',
+    'Windows: the shell runs in Codex’s sandbox when a Codex account’s Windows sandbox is set up; otherwise only the file tools are kept out. In a session whose shell runs there, the PowerShell tool is off, and .claude (made if missing) and an existing .mcp.json are read-only to the shell. After such a session ran in a folder, no sandboxed session’s shell can write them there (the file tools still can).',
+    'Windows: Codex アカウントの Windows サンドボックスを設定済みならシェルは Codex のサンドボックスで動き、そうでなければファイルツールだけが遠ざけられます。シェルがそこで動くセッションでは PowerShell ツールはオフで、.claude（なければ作成します）と既存の .mcp.json はシェルからは読み取り専用です。そうしたセッションが一度動いたフォルダーでは、その後どのサンドボックスのセッションのシェルもこれらに書き込めません（ファイルツールは書き込めます）。',
+    'Windows: el shell se ejecuta en el sandbox de Codex cuando el sandbox de Windows de una cuenta de Codex está configurado; si no, solo las herramientas de archivos quedan fuera. En una sesión cuyo shell se ejecuta allí, la herramienta PowerShell está desactivada, y .claude (se crea si falta) y un .mcp.json existente son de solo lectura para el shell. Después de que una sesión así se ejecute en una carpeta, ningún shell de una sesión con sandbox puede escribirlos allí (las herramientas de archivos sí pueden).'
+  ],
   'audit.coverageNote.bus-path-only': [
     '세션 bus가 파일 경로일 때',
     'when the session bus is a file path',

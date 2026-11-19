@@ -443,6 +443,11 @@ const SESSION = {
       ...(USAGE['jobs-create'].flags ?? []).filter((f) => f.name !== 'objective' && f.name !== 'cwd')
     ]
   },
+  'runs-report': {
+    summary: "read a finished run's report",
+    detail: 'The report the Host stored when the run finished; null for a run that finished before reports. For a person: an agent session is refused.',
+    flags: [req('id', '<runId>', 'the run')]
+  },
   'runs-completion': {
     summary: "where each Task of a run stands in completion (the MCP server's get_completion)",
     flags: [req('id', '<runId>', 'the run to read')]

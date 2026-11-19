@@ -37,7 +37,8 @@ export function sessionInfoFromNote(a: { kind: string; id: string; restore: Reco
     ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {}),
     ...startedByOf(r),
     ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {}),
-    ...sandboxedOf(r)
+    ...sandboxedOf(r),
+    ...sandboxRequiredOf(r)
   }
 }
 
@@ -77,8 +78,17 @@ export function chatInfoFromNote(a: { kind: string; id: string; restore: Record<
     ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {}),
     ...startedByOf(r),
     ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {}),
-    ...sandboxedOf(r)
+    ...sandboxedOf(r),
+    ...sandboxRequiredOf(r)
   }
+}
+
+/** Whether the session must run in its CLI's sandbox, as its note says (SessionInfo.sandboxRequired; claude shell sandbox
+ *  design D5): only `true` on a sandboxed note means it. A roll reads it off the session it replaces, so its successor is
+ *  held to it too, whichever process took the session back. Not part of sandboxedOf, which the Host's `sessions list`
+ *  rows read too: the mark is for the roll, not for what a session list says. */
+function sandboxRequiredOf(r: Record<string, unknown>): Pick<SessionInfo, 'sandboxRequired'> {
+  return r.sandboxed === true && r.sandboxRequired === true ? { sandboxRequired: true } : {}
 }
 
 /** Who started the session, as its note says (SessionInfo.startedBy): only the one value means anything. */

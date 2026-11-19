@@ -11,7 +11,8 @@ export class SlackConfigStore extends SlackConfigReader {
       botToken: norm(cfg.botToken),
       channelId: norm(cfg.channelId),
       appToken: norm(cfg.appToken),
-      memberId: norm(cfg.memberId)
+      memberId: norm(cfg.memberId),
+      runReports: cfg.runReports !== false
     }
     await fs.writeFile(this.filePath, JSON.stringify(normalized, null, 2), 'utf8')
     return normalized
@@ -41,7 +42,8 @@ export class SlackConfigStore extends SlackConfigReader {
       botToken: partial.botToken !== undefined ? partial.botToken : current.botToken,
       channelId: partial.channelId !== undefined ? partial.channelId : current.channelId,
       appToken: partial.appToken !== undefined ? partial.appToken : current.appToken,
-      memberId: partial.memberId !== undefined ? partial.memberId : current.memberId
+      memberId: partial.memberId !== undefined ? partial.memberId : current.memberId,
+      runReports: partial.runReports !== undefined ? partial.runReports : current.runReports
     })
   }
 }

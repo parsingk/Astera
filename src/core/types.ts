@@ -1,4 +1,19 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type {
+  KubeContexts,
+  KubeFileKind,
+  KubePreview,
+  KubeReloadResult,
+  KubeRenderResult,
+  KubeRequest,
+  KubeRunResult,
+  KubeStatus,
+  KubeTargetView,
+  KubeVerb,
+  Remembered
+} from './kube/types'
+import type { ReviewerSettings } from './settings/externalReviewers'
+import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
@@ -142,24 +157,41 @@ export interface SessionInfo {
    *  back and a roll's successor starts in the sandbox too; absent on every session started outside it. */
   sandboxed?: true
   /** What protection `sandboxed` gives, set beside it by the session manager that knows the OS and the CLI: `sandbox`, the
-   *  CLI's own sandbox; `deny-only`, Claude Code on Windows, which has none and gets only deny rules for its file tools
-   *  (its shell is not restricted). In the note too, so a session taken back says the same. Absent when not sandboxed. */
+   *  CLI's own sandbox, or on Windows a Claude session whose shell runs in Codex's sandbox (claude shell sandbox design
+   *  D9); `deny-only`, a Claude session on Windows without that route, which gets only deny rules for its file tools (its
+   *  shell is not restricted). What that start really got. In the note too, so a session taken back says the same. Absent
+   *  when not sandboxed. */
   sandboxKind?: SandboxKind
   /** What a sandboxed start warned about (Task E fix rounds 2 and 3, core/sandbox/startWarnings.ts decides it): the work
    *  folder holds the home folder, Claude's shell cannot run under Ubuntu's AppArmor bubblewrap profile, or (Codex on
    *  Linux, fix round 5) a named path goes through a link in the work folder, so Codex refuses every command, or (Codex
    *  on Windows, Task P) the account's config.toml makes the elevated sandbox its default, so its ordinary Codex sessions
-   *  run in it too and cannot read the login folders. Beside
+   *  run in it too and cannot read the login folders, or (Claude on Windows, claude shell sandbox design D9) its shell
+   *  could not be put in Codex's sandbox: no Codex account or codex, its sandbox not set up, or anything else. Beside
    *  `sandboxKind` in the info and the note, so a Host worker's tab and a tab taken back after a restart show it too; the
    *  tab shows it as a line above the terminal or the chat. Absent when there is nothing to say. */
   sandboxWarnings?: SandboxStartWarning[]
+  /** The session must run in its CLI's sandbox (final fix pass, C3: a sandboxed session asked for it, or for the work it
+   *  made), so a start that cannot have it is refused, not started with less: on Windows a Claude session whose shell has
+   *  no route into Codex's sandbox (claude shell sandbox design D5). In the note too, so a roll's successor is held to it
+   *  as its chain was. Absent on every other session and on every note written before it. */
+  sandboxRequired?: true
 }
 
-/** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
+/** SessionInfo.sandboxKind: what the start recorded. core/sandbox/coverage.ts sandboxKindOf decides it, except for Claude
+ *  Code on Windows, whose start records `sandbox` when its shell has its route into Codex's sandbox and `deny-only`
+ *  otherwise (claude shell sandbox design D9). */
 export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** SessionInfo.sandboxWarnings, one each (core/sandbox/startWarnings.ts sandboxStartWarnings). */
-export type SandboxStartWarning = 'claudeUserns' | 'linkInWorkFolder' | 'elevatedDefault' | 'homeInWorkFolder'
+export type SandboxStartWarning =
+  | 'claudeUserns'
+  | 'linkInWorkFolder'
+  | 'elevatedDefault'
+  | 'claudeShellNoCodex'
+  | 'claudeShellNotSetUp'
+  | 'claudeShellUnavailable'
+  | 'homeInWorkFolder'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as
@@ -562,6 +594,9 @@ export interface JobTask {
    *  does not count — the sidebar's rows are the running ones, and this is the field that badge draws
    *  from. */
   provider?: Provider
+  /** The open Dispatch is a review by an external reviewer. `provider` stays set (it is the implementer's, and the UI reads
+   *  it as "a Dispatch is open"), so a surface that draws the provider draws this name instead. */
+  externalReviewer?: { id: string; name: string }
   /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
   startedAt?: string
   /** 지금 멈춰 있으면 그 계정과 정지 사유, 그리고 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에
@@ -638,8 +673,11 @@ export interface JobEvent {
   /** 펼쳤을 때 보이는 본문. 없을 수 있다 */
   body?: string
   outcome?: Outcome
-  /** kind === 'dispatch-started' 일 때만 */
+  /** kind === 'dispatch-started' 일 때만. 외부 검토자의 검토 Dispatch 에는 없다 — 그 Dispatch 의 provider 는
+   *  구현자의 것이라 이름이 아니다(externalReviewer) */
   provider?: Provider
+  /** 외부 검토자가 한 검토의 dispatch-started 일 때만 — provider 자리에 그 이름이 선다 */
+  externalReviewer?: { id: string; name: string }
   /** 재시도로 뜬 워커인가 (Dispatch.retryOf) */
   retry?: boolean
   /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
@@ -1380,6 +1418,29 @@ export interface CoreApi {
     /** Runs `workspace set <workspaceId>` under that account. */
     setWorkspace(id: string, workspaceId: string): Promise<void>
   }
+  kube: {
+    /** Runs `kubectl version --client` with the binary in use; `path` is that binary. */
+    recheck(): Promise<{ ok: true; path: string; version: string } | { ok: false; errorCode?: string; stderr: string }>
+    /** Kinds of the YAML files among `paths` (other paths are left out of the answer). */
+    classify(paths: string[]): Promise<Record<string, KubeFileKind>>
+    contexts(): Promise<KubeContexts>
+    target(filePath: string, projectRoot: string): Promise<KubeTargetView>
+    setTarget(folder: string, value: Remembered | null): Promise<void>
+    setOverlay(filePath: string, overlayDir: string): Promise<void>
+    useContext(context: string): Promise<{ ok: boolean; stdout: string; stderr: string; errorCode?: string }>
+    /** Plan, one-context check, namespace and server-side dry run; never writes. */
+    preview(verb: KubeVerb, req: KubeRequest, opts: { keepServerFields: boolean }): Promise<KubePreview>
+    /** The only write: re-plans, refuses unless it matches the confirmed preview's `fingerprint`, then runs the
+     *  commands in order until one fails. Cancellable by `id`. */
+    run(id: string, verb: KubeVerb, req: KubeRequest, fingerprint: string): Promise<KubeRunResult>
+    cancel(id: string): Promise<void>
+    /** `pill` is the namespace for a resource that names none (else the context's, else default). */
+    reload(filePath: string, context: string, pill: string | null): Promise<KubeReloadResult>
+    /** `kubectl kustomize <overlayDir>`. */
+    render(overlayDir: string): Promise<KubeRenderResult>
+    /** `context`: one chosen for the editor without remembering it (R11), which must be listed in kubeconfig. */
+    status(filePath: string, projectRoot: string, context?: string): Promise<KubeStatus>
+  }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */
     status(): Promise<GhProbe>
@@ -1434,6 +1495,7 @@ export interface CoreApi {
       channelId: string | null
       appToken: string | null
       memberId: string | null
+      runReports: boolean
     }>
     setConfig(cfg: {
       webhookUrl?: string | null
@@ -1441,6 +1503,7 @@ export interface CoreApi {
       channelId?: string | null
       appToken?: string | null
       memberId?: string | null
+      runReports?: boolean
     }): Promise<void>
   }
   /** `astera` 명령을 사람의 PATH 에서 닿는 자리에 깔아 둔다(공개 CLI 설계 §10). */
@@ -1474,6 +1537,12 @@ export interface CoreApi {
     newToken(): Promise<string>
   }
   settings: {
+    /** The kubectl binary to use instead of the one on PATH; null = use PATH. Setting it re-reads the contexts. */
+    getKubectlPath(): Promise<string | null>
+    setKubectlPath(path: string | null): Promise<void>
+    /** Extra kubeconfig files merged into the kube context list. Setting them re-reads the contexts. */
+    getKubeconfigFiles(): Promise<string[]>
+    setKubeconfigFiles(files: string[]): Promise<void>
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
     setLang(lang: Lang | null): Promise<void>
@@ -1516,6 +1585,11 @@ export interface CoreApi {
     // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
     getAgentPermissionMode(): Promise<AgentPermissionMode>
     setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    // External reviewers registered and the one chosen (spec 3.1). The set returns the narrowed value it stored.
+    getReviewerSettings(): Promise<ReviewerSettings>
+    setReviewerSettings(next: ReviewerSettings): Promise<ReviewerSettings>
+    // Initialize and session/new against a registered reviewer's command, in a temporary folder (spec section 4, Test).
+    testExternalReviewer(reviewer: { command: string; args: string[] }): Promise<ReviewerProbe>
     // What an MCP client may do through `astera mcp serve`. See McpAccess.
     getMcpAccess(): Promise<McpAccess>
     setMcpAccess(v: McpAccess): Promise<void>
@@ -2126,6 +2200,8 @@ export interface AuditApi {
   list(q: AuditQuery & { limit?: number }): Promise<PluginsCallAnswer>
   summary(q: AuditQuery): Promise<PluginsCallAnswer>
   runTokens(runId: string): Promise<PluginsCallAnswer>
+  /** A finished Run's report as the Host stored it (run report design C9): `{ runId, report }`, report null before reports. */
+  runReport(runId: string): Promise<PluginsCallAnswer>
   taskTokens(taskId: string): Promise<PluginsCallAnswer>
 }
 

@@ -961,7 +961,7 @@ describe('mcpSessions', () => {
 
 // G7a: the GitHub lifecycle's defaults (design §5.1), written only when they are not the built-in ones
 describe('githubLifecycle', () => {
-  const MINE = { autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 4, ciWaitMinutes: 45 }
+  const MINE = { autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 4, ciWaitMinutes: 45, postRunReport: true }
   it('is the built-in defaults until set, and is not written while it is', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
@@ -996,9 +996,9 @@ describe('githubLifecycle', () => {
     await fs.writeFile(file(), '{ not json', 'utf8')
     const store = new AppSettingsStore(file())
     expect(await store.load()).toEqual({ recovered: true })
-    expect(store.getGithubLifecycle()).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false })
+    expect(store.getGithubLifecycle()).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false })
     await store.setLang('ko')
-    expect(JSON.parse(await fs.readFile(file(), 'utf8')).githubLifecycle).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false })
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).githubLifecycle).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false })
   })
 })
 
@@ -1084,5 +1084,112 @@ describe('mcpHttp', () => {
     await store.setMcpHttp({ ...DEFAULTS, hosts: ['a'] })
     store.getMcpHttp().hosts.push('b')
     expect(store.getMcpHttp().hosts).toEqual(['a'])
+  })
+})
+
+describe('reviewer settings', () => {
+  const entry = { id: 'ext_0123abcd', name: 'Gemini CLI', command: 'gemini', args: ['--acp'] }
+
+  it('are empty by default and a default write leaves both keys out of the file', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getReviewerSettings()).toEqual({ reviewers: [], reviewBy: null })
+    await store.setReviewerSettings({ reviewers: [], reviewBy: null })
+    const onDisk = JSON.parse(await fs.readFile(file(), 'utf8')) as Record<string, unknown>
+    expect(onDisk).not.toHaveProperty('externalReviewers')
+    expect(onDisk).not.toHaveProperty('reviewBy')
+  })
+
+  it('round-trip through set and a fresh load', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const saved = await a.setReviewerSettings({ reviewers: [entry], reviewBy: entry.id })
+    expect(saved).toEqual({ reviewers: [entry], reviewBy: entry.id })
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getReviewerSettings()).toEqual({ reviewers: [entry], reviewBy: entry.id })
+  })
+
+  it('stores the narrowed value: an entry that does not fit and a dangling choice are dropped', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const saved = await a.setReviewerSettings({ reviewers: [entry, { ...entry, id: 'bad' }], reviewBy: 'ext_ffffffff' })
+    expect(saved).toEqual({ reviewers: [entry], reviewBy: null })
+  })
+
+  it('a hand-edited file narrows on load', async () => {
+    await fs.writeFile(file(), JSON.stringify({ externalReviewers: [entry, { ...entry, id: 'ext_11111111', name: 'a\nb' }], reviewBy: 'ext_11111111' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getReviewerSettings()).toEqual({ reviewers: [entry], reviewBy: null })
+  })
+
+  it('a corrupt file recovers to no reviewers', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getReviewerSettings()).toEqual({ reviewers: [], reviewBy: null })
+  })
+
+  it('writing another setting keeps the reviewers', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setReviewerSettings({ reviewers: [entry], reviewBy: null })
+    await a.setLang('en')
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getReviewerSettings().reviewers).toEqual([entry])
+  })
+})
+
+describe('kubectl settings', () => {
+  it('read as null and [] when the file does not mention them, and write() omits them', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getKubectlPath()).toBeNull()
+    expect(store.getKubeconfigFiles()).toEqual([])
+    await store.setLang('en')
+    const written = JSON.parse(await fs.readFile(file(), 'utf8'))
+    expect('kubectlPath' in written).toBe(false)
+    expect('kubeconfigFiles' in written).toBe(false)
+  })
+
+  it('persist and reload', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setKubectlPath('C:/tools/kubectl.exe')
+    await a.setKubeconfigFiles(['C:/k/one', 'C:/k/two'])
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getKubectlPath()).toBe('C:/tools/kubectl.exe')
+    expect(b.getKubeconfigFiles()).toEqual(['C:/k/one', 'C:/k/two'])
+    await b.setKubectlPath(null)
+    await b.setKubeconfigFiles([])
+    const written = JSON.parse(await fs.readFile(file(), 'utf8'))
+    expect('kubectlPath' in written).toBe(false)
+    expect('kubeconfigFiles' in written).toBe(false)
+  })
+
+  it('values of an unknown type read as the defaults, and bad list items are dropped', async () => {
+    await fs.writeFile(file(), JSON.stringify({ kubectlPath: 5, kubeconfigFiles: 'x' }), 'utf8')
+    const a = new AppSettingsStore(file())
+    await a.load()
+    expect(a.getKubectlPath()).toBeNull()
+    expect(a.getKubeconfigFiles()).toEqual([])
+    await fs.writeFile(file(), JSON.stringify({ kubectlPath: '', kubeconfigFiles: ['a', 3, '', 'b'] }), 'utf8')
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getKubectlPath()).toBeNull()
+    expect(b.getKubeconfigFiles()).toEqual(['a', 'b'])
+  })
+
+  it('a corrupt file resets them to the defaults', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setKubectlPath('k')
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    await a.load()
+    expect(a.getKubectlPath()).toBeNull()
+    expect(a.getKubeconfigFiles()).toEqual([])
   })
 })

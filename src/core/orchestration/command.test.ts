@@ -8657,6 +8657,49 @@ describe('handleCommand — tokens on runs-get and tasks-get', () => {
   })
 })
 
+describe('handleCommand — runs-report', () => {
+  const REPORT = { version: 1, runId: 'r1', outcome: 'completed' }
+  const world = (withReport: boolean): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...(withReport ? { report: REPORT } : {}) } as never],
+    tasks: [{ id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }]
+  })
+
+  it('runs-report answers the stored report, null for a Run finished before reports', async () => {
+    expect((await call(makeDeps(world(true)), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: REPORT })
+    expect((await call(makeDeps(world(false)), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: null })
+  })
+
+  it("runs-report carries the comment's record", async () => {
+    const s = world(true)
+    const comment = { id: 123, url: 'https://github.com/o/r/pull/7#issuecomment-123', at: NOW }
+    const withComment: OrchState = { ...s, runs: [{ ...s.runs[0], githubState: { log: [], seq: 0, reportComment: comment } }] }
+    expect((await call(makeDeps(withComment), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: REPORT, comment })
+    expect((await call(makeDeps(world(true)), 'runs-report', { id: 'r1' }, '')).body).not.toHaveProperty('comment')
+  })
+
+  it('runs get carries no report', async () => {
+    expect((await call(makeDeps(world(true)), 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('report')
+  })
+
+  it('runs-report refuses an agent caller', async () => {
+    const deps = makeDeps(world(true))
+    const as = (c: { sessionId: string; role?: string; principal?: unknown }) => handleCommand(deps, c as never, 'runs-report', { id: 'r1' })
+    expect((await as({ sessionId: 'sess_agent', role: 'cli' })).status).toBe(403)
+    expect((await as({ sessionId: '', role: 'mcp' })).status).toBe(403)
+    expect((await as({ sessionId: '', role: 'controller', principal: { clientId: 'c', name: 'n', permission: 'control', kind: 'agent' } })).status).toBe(403)
+    expect((await as({ sessionId: '', role: 'controller', principal: { clientId: 'c', name: 'n', permission: 'control', kind: 'person' } })).status).toBe(200)
+    expect((await as({ sessionId: APP_CALLER, role: 'app' })).status).toBe(200)
+    expect((await as({ sessionId: '', role: 'cli' })).status).toBe(200)
+  })
+
+  it('runs-report names an unknown Run', async () => {
+    expect((await call(makeDeps(world(true)), 'runs-report', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(makeDeps(world(true)), 'runs-report', {}, '')).status).toBe(400)
+  })
+})
+
 describe('handleCommand — tasks-check-output and tasks-output', () => {
   const dispatch = (id: string, startedAt: string): OrchState['dispatches'][number] =>
     ({ id, taskId: 't1', accountId: 'acc1', sessionId: 's', cwd: 'D:/p', specPath: 'x', startedAt, workerState: 'running' }) as unknown as OrchState['dispatches'][number]
@@ -9870,7 +9913,7 @@ describe('the external coordinator: run-create and check record the driving sess
 
 describe('run-create — the GitHub lifecycle (G1)', () => {
   const VIEW = 'repo view o/r --json nameWithOwner,viewerPermission'
-  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90, postRunReport: true }
   const withGithub = (o: { permission?: string; origin?: string | null; initial?: OrchState } = {}) => {
     const deps = makeDeps(o.initial)
     const calls: string[] = []
@@ -9925,7 +9968,8 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
       ci: { mode: 'selected', selectedChecks: ['build'] },
       autoRerunInfrastructureFailures: false,
       maxInfrastructureReruns: 5,
-      ciWaitMinutes: 30
+      ciWaitMinutes: 30,
+      postRunReport: true
     })
   })
 
@@ -11278,5 +11322,50 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
       expect(gateOf(damaged.deps).status).toBe('open')
     })
+  })
+})
+
+describe('handleCommand — an external review Dispatch', () => {
+  const external = { id: 'ext_1a2b3c4d', name: 'Gemini' }
+  const world = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [{ id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'reviewing', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
+    dispatches: [
+      {
+        id: 'dsp_ext', taskId: 't1', provider: 'claude', accountId: '', sessionId: 'acp:1a2b3c4d', cwd: 'D:/p', specPath: '',
+        review: true, externalReviewer: external, startedAt: NOW, workerState: 'ready', retained: false
+      }
+    ]
+  })
+
+  it('worker-stop closes it and releases no session', async () => {
+    const released: string[] = []
+    const deps = makeDeps(world())
+    deps.releaseWorker = async ({ dispatchId }): Promise<void> => {
+      released.push(dispatchId)
+    }
+    const r = await call(deps, 'worker-stop', { dispatch: 'dsp_ext' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().dispatches[0].endedAt).toBeDefined()
+    expect(released).toEqual([])
+  })
+
+  // Final fix wave E4: an answer of its own, of the same kind as the untracked one, saying where the transcript is
+  it('worker-read answers where the transcript is, without asking the dep', async () => {
+    const deps = makeDeps(world())
+    let asked = 0
+    deps.readWorker = async (): Promise<string> => {
+      asked += 1
+      throw new Error('no app attached')
+    }
+    const r = await call(deps, 'worker-read', { dispatch: 'dsp_ext' })
+    expect(r).toEqual({
+      status: 200,
+      body: { output: 'an external reviewer has no terminal output; its transcript is in the review-logs folder of the profile' }
+    })
+    expect(r.body).not.toEqual({ output: TAIL_UNTRACKED })
+    expect(asked).toBe(0)
   })
 })

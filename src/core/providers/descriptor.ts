@@ -138,7 +138,7 @@ export function makeDescriptors(
       logoutArgs: ['logout'],
       configDirEnv: 'CODEX_HOME',
       ambientDirName: '.codex',
-      isLoggedIn: fileMarkerProbe('auth.json'),
+      isLoggedIn: fileMarkerProbe('auth.json', platform),
       accountsRootName: '.codex-accounts',
       buildCommand: buildCodexCommand(platform, undefined, codexNoDaemon),
       prepare: async () => {

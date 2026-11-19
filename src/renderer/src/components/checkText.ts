@@ -7,6 +7,7 @@ import { formatRunDuration } from '../../../core/run/duration'
 import { PLUGIN_CHECK_PREFIX } from '../../../core/orchestration/pluginChecks'
 import type { CheckPluginRow } from '../lib/orchDoor'
 import { statusLabel } from './pluginsText'
+import { reviewerChipName } from '../lib/reviewerSettingsView'
 
 export type Translate = (key: MessageKey, params?: MessageParams) => string
 
@@ -43,7 +44,8 @@ export function checkTooltip(c: JobCheck, glyph: GlyphKind, t: Translate): strin
   const verdict = glyph === 'retrying' ? t('jobs.convergence.check.retrying') : checkVerdict(c, t)
   const time = c.durationMs !== undefined ? ` (${formatRunDuration({ startedAt: 0, exitedAt: c.durationMs }, 0)})` : ''
   const flip = c.unstable ? `, ${t('jobs.convergence.check.unstable')}` : ''
-  // Claude Code on Windows has no sandbox: its checks ran outside one (Task K, the person's Q1)
+  // Claude Code on Windows whose workers had no shell route into Codex's sandbox: its checks ran outside one (Task K, the
+  // person's Q1)
   const outside = c.outsideSandbox ? `, ${t('jobs.checks.outsideSandbox')}` : ''
   return `${c.name} — ${verdict}${time}${flip}${outside}`
 }
@@ -103,6 +105,8 @@ export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
       return t(m.unavailable ? 'jobs.convergence.node.unavailable' : 'jobs.convergence.node.failed', { name: m.name })
     case 'provider':
       return m.provider
+    case 'external-reviewer':
+      return reviewerChipName(m.name)
     case 'none':
       return undefined
     default: {

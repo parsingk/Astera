@@ -207,8 +207,8 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         // by TaskValidator's own queue.
         if (sandbox?.kind !== 'sandbox') {
           const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, ...(env ? { env } : {}) })
-          // Claude Code on Windows has no sandbox: its workers' shells ran as the person, and so does this check, said on
-          // its result (the person's Q1)
+          // Deny rules only (Claude Code on Windows without its shell route into Codex's sandbox): its workers' shells ran
+          // as the person, and so does this check, said on its result (the person's Q1)
           return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden }
         }
         // Inside the sandbox the workers ran in, as their CLI and account, or not at all: a check that cannot be put in it
@@ -221,10 +221,12 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           boxed = await c.sandboxedCheck({ provider: sandbox.provider, accountId: sandbox.accountId, cwd, command, env })
         } catch (e) {
           // A session manager's refusal (`SANDBOX_UNAVAILABLE: <code>`, unavailable.ts) in a check's words, for the question it
-          // opens, naming the account by its name (fix round 2)
+          // opens, naming the account by its name (fix round 2); a Claude check on Windows in its route's words (final
+          // review M5)
           const raw = e instanceof Error ? e.message : String(e)
           const name = await (async () => (await c.accountName?.(sandbox.accountId)) ?? null)().catch(() => null)
-          const said = checkRefusalMessage(raw, (id) => (id === sandbox.accountId ? name : null))
+          const claudeOnWindows = sandbox.provider === 'claude' && (c.platform ?? process.platform) === 'win32'
+          const said = checkRefusalMessage(raw, (id) => (id === sandbox.accountId ? name : null), claudeOnWindows)
           boxed = { unavailable: said ? t(lang, said.key, said.params) : raw }
         }
         if ('unavailable' in boxed) return { unavailable: boxed.unavailable, name: config.name }

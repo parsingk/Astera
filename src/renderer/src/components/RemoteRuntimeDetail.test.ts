@@ -161,6 +161,25 @@ describe('the Runtime detail (remote governance design §10.1)', () => {
     expect(unread).toContain('settings.remote.detail.unread')
   })
 
+  // Final review M3: a Windows Runtime reports Claude Code as deny-only by its CLI alone, while each start there puts the
+  // shell in Codex's sandbox when one is set up (claude shell sandbox design D9), so that kind says so; any other
+  // deny-only row keeps its plain word
+  it('words a Windows Runtime’s Claude deny-only kind with the Codex sandbox condition, and nothing else', () => {
+    const win = (claude: string, platform: string): ControlPlaneReport => ({
+      ...REPORT,
+      astera: { ...REPORT.astera, platform },
+      sandbox: { claude: { kind: claude, blocker: null }, codex: { kind: 'deny-only', blocker: null } }
+    })
+    const shown = (report: ControlPlaneReport): string => part(render(detail({ snapshot: { readAt: READ, report } })), 'settings.remote.detail.protection')
+    const onWindows = shown(win('deny-only', 'win32'))
+    expect(onWindows).toContain(words('settings.remote.detail.sandbox', { provider: 'Claude', kind: 'settings.remote.detail.sandboxKind.denyOnlyUnlessCodex' }))
+    // Codex's row is not Claude's: its deny-only, were a Runtime to send one, keeps the plain word
+    expect(onWindows).toContain(words('settings.remote.detail.sandbox', { provider: 'Codex', kind: 'settings.remote.detail.sandboxKind.denyOnly' }))
+    // Elsewhere a Claude deny-only keeps the plain word, and a Claude sandbox on Windows says sandbox
+    expect(shown(win('deny-only', 'linux'))).toContain(words('settings.remote.detail.sandbox', { provider: 'Claude', kind: 'settings.remote.detail.sandboxKind.denyOnly' }))
+    expect(shown(win('sandbox', 'win32'))).toContain(words('settings.remote.detail.sandbox', { provider: 'Claude', kind: 'settings.remote.detail.sandboxKind.sandbox' }))
+  })
+
   it("the extensions part lists this computer's and the Runtime's entries side by side", () => {
     const html = part(render(detail()), 'settings.remote.detail.extensions')
     // A checkbox per local entry marks it expected

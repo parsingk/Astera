@@ -594,6 +594,20 @@ describe('RollingCoordinator', () => {
     expect(p.spawnedOpts[0]).not.toHaveProperty('sandbox')
   })
 
+  // Claude shell sandbox design D5: a chain that must be sandboxed (a sandboxed session's work) is held to it at every
+  // roll: the preparation is told, so a respawn whose shell lost its route is refused before the kill, and so is the spawn
+  it('a roll keeps a chain that must be sandboxed held to it, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, sandboxed: true, sandboxRequired: true })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, undefined, 'required']])
+    expect(h.spawnedOpts[0]).toMatchObject({ sandbox: true, sandboxRequired: true })
+  })
+
   it('활성 체인의 claude 세션 ID로 live 세션을 찾는다 (resume 가드)', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))

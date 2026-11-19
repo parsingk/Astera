@@ -34,6 +34,9 @@ export interface ChatRollSpawn {
   /** The chain runs in Codex's sandbox (SessionInfo.sandboxed), kept by the roll; its folder was read for it by the
    *  roll's preparation, before the kill. */
   sandbox?: boolean
+  /** The chain must be sandboxed (SessionInfo.sandboxRequired), kept by the roll: a Claude chat on Windows whose shell
+   *  has lost its route into Codex's sandbox is refused rather than respawned with less (claude shell sandbox design D5). */
+  sandboxRequired?: boolean
   /** The session's own policy, when the request names one: a fresh session (`sessions create --kind
    *  chat --unattended`) has no old session to ask. Absent, the policy is asked of the old session. */
   unattendedPermission?: UnattendedPermission
@@ -63,6 +66,7 @@ export function chatSpawnOptsOf(
     ...(o.startedBy ? { startedBy: o.startedBy } : {}),
     ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
     ...(o.sandbox ? { sandbox: true } : {}),
+    ...(o.sandboxRequired ? { sandboxRequired: true } : {}),
     bypassSignal: d.bypassSignal,
     unattendedPermission: o.unattendedPermission ?? d.unattendedOf(o.restoreExtra?.rolledFrom),
     ...(d.hostStarting ? { hostStarting: true } : {})

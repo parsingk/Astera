@@ -12,6 +12,8 @@ export interface TaskAttempt {
   accountId: string
   repair?: RepairReason
   review?: true
+  /** The external reviewer that made this review attempt; `provider` and `accountId` above are then placeholders */
+  externalReviewer?: { id: string; name: string }
   outcome?: Outcome
   startedAt: string
   endedAt?: string
@@ -40,6 +42,7 @@ export function taskDetailOf(s: OrchState, taskId: string, waiting: ReadonlySet<
         accountId: d.accountId,
         ...(d.repair !== undefined ? { repair: d.repair } : {}),
         ...(d.review === true ? { review: true as const } : {}),
+        ...(d.externalReviewer !== undefined ? { externalReviewer: d.externalReviewer } : {}),
         ...(d.outcome !== undefined ? { outcome: d.outcome } : {}),
         startedAt: d.startedAt,
         ...(d.endedAt !== undefined ? { endedAt: d.endedAt } : {}),

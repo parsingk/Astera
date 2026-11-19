@@ -1,7 +1,9 @@
 // The Claude side of a sandboxed session (sandbox design §6): the `sandbox` and `permissions` parts of the settings handed to
-// the session. Claude's own sandbox runs on macOS and Linux only; on Windows the deny rules are all it can enforce.
+// the session. Claude's own sandbox runs on macOS and Linux only; on Windows the deny rules are all it can enforce, and a
+// session whose shell runs in Codex's sandbox names the wrapper in the settings' `env` (withShellEnv).
 import type { GitLayout } from './gitLayout'
 import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from './locations'
+import { claudeShellEnv } from './claudeShell'
 
 export interface ClaudeSandboxSettings {
   sandbox?: {
@@ -47,13 +49,22 @@ function gitDenyWrite(layout: GitLayout | null): string[] {
 
 /** What a sandboxed Claude session may not read: the E6 list and the OS credential store, from the session's own
  *  environment under the person's home, and the profile's app key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item
- *  1). One list for a Claude start (StatusLineManager's twins) and the S2 measurement (scripts/measure/s2.mjs
- *  claudeDenied), so what is measured is what a start hands Claude. */
-export function claudeSessionDenied(o: { platform: NodeJS.Platform; env: Record<string, string | undefined>; homeDir: string; appKeyFile?: string | null }): string[] {
+ *  1), and the agents' login files (`agentLogins`, sandbox design §6): paths the caller has already chosen (the entries
+ *  of locations.ts agentLoginEntries that are there at the start, StatusLineManager.sandboxNamed), appended as given. One
+ *  list for a Claude start (StatusLineManager's twins) and the S2 measurement (scripts/measure/s2.mjs claudeDenied), so
+ *  what is measured is what a start hands Claude. */
+export function claudeSessionDenied(o: {
+  platform: NodeJS.Platform
+  env: Record<string, string | undefined>
+  homeDir: string
+  appKeyFile?: string | null
+  agentLogins?: readonly string[]
+}): string[] {
   return [
     ...sensitiveLocations(o.platform, o.env, o.homeDir),
     ...credentialStoreDenies(o.platform, o.env, o.homeDir),
-    ...appKeyDenies(o.appKeyFile ?? null)
+    ...appKeyDenies(o.appKeyFile ?? null),
+    ...(o.agentLogins ?? [])
   ]
 }
 
@@ -88,4 +99,12 @@ export function claudeSandboxSettings(o: { platform: NodeJS.Platform; denied: st
     },
     permissions
   }
+}
+
+/** A settings file with Claude's shell routed into Codex's sandbox on Windows (claude shell sandbox design D7): its `env`
+ *  gets claudeShellEnv's values for the wrapper `wrapFile`, over any it already holds, its other keys kept. In the file a
+ *  session is started with (`--settings`), these win over a project's settings files (spec M10). */
+export function withShellEnv<T extends object>(settings: T, wrapFile: string): T & { env: Record<string, string> } {
+  const own = (settings as { env?: Record<string, string> }).env
+  return { ...settings, env: { ...(own ?? {}), ...claudeShellEnv(wrapFile) } }
 }

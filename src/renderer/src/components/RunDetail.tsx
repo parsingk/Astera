@@ -30,6 +30,8 @@ import { CompletionBlock } from './CompletionBlock'
 import { GateAnswer } from './GateAnswer'
 import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, taskTitleOf, eventTitleOf, type GlyphKind } from './checkText'
 import { toast } from '../lib/toast'
+import { RunReportCard } from './RunReportCard'
+import { runReportViewOf, type RunReportView } from '../lib/runReportView'
 import { errText } from '../hooks/useFileOps'
 import {
   LockIcon,
@@ -47,6 +49,7 @@ import { backdropProps } from '../lib/backdrop'
 import { SourceChip } from './SourceChip'
 import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
+import { reviewerChipName } from '../lib/reviewerSettingsView'
 import {
   afterObserveRead,
   observeReadDue,
@@ -69,6 +72,13 @@ import {
 function readTokens(door: OrchDoor, runtimeId: string | undefined, cmd: 'runs-get' | 'tasks-get', id: string): Promise<unknown> {
   if (runtimeId !== undefined) return door.command(cmd, { id }).then((r) => (r.status === 200 ? r.body : null))
   return (cmd === 'runs-get' ? window.api.audit.runTokens(id) : window.api.audit.taskTokens(id)).then((r) => (r.ok ? r.body : null))
+}
+
+/** The Host's `runs-report` for a finished Run: this computer's through its Host (never main's mirror, which hears of a
+ *  Host stamp only with the next push), a Runtime's through its door. Null when it did not answer. */
+function readRunReport(door: OrchDoor, runtimeId: string | undefined, runId: string): Promise<{ status: number; body: unknown } | null> {
+  if (runtimeId !== undefined) return door.command('runs-report', { id: runId })
+  return window.api.audit.runReport(runId).then((r) => (r.ok ? { status: 200, body: r.body } : null))
 }
 
 /** A token total's numbers as the person's locale writes them. */
@@ -419,6 +429,29 @@ export function RunDetail({
       }
     })()
   }, [targetId, runState, readAgain, runtimeId, door])
+  // The report of a finished Run, read again when the Run's state changes (a reconverge finishes it again)
+  const [reportView, setReportView] = useState<RunReportView>({ kind: 'none' })
+  const finished = run?.outcome === 'completed' || run?.outcome === 'failed'
+  const targetIsRun = 'runId' in target
+  useEffect(() => {
+    if (!finished || !targetIsRun) {
+      setReportView({ kind: 'none' })
+      return
+    }
+    let cancelled = false
+    void readRunReport(door, runtimeId, targetId)
+      .catch(() => null)
+      .then((reply) => {
+        if (!cancelled) setReportView(runReportViewOf(reply))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [targetIsRun, targetId, runState, finished, runtimeId, door])
+  const copyReport = (markdown: string): void => {
+    window.api.clipboard.writeText(markdown)
+    toast.success(t('runReport.card.copied'))
+  }
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
    *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
@@ -982,6 +1015,9 @@ export function RunDetail({
             )}
           </div>
         )}
+        {reportView.kind === 'ok' && (
+          <RunReportCard report={reportView.report} comment={reportView.comment} accounts={accounts} onCopy={copyReport} />
+        )}
         {/* flex: 1; min-height: 0 이 styles.css 에 있다 — 없으면 아래의 두 칸이 줄지 않아 모달 밖으로
             넘치고 닫기 버튼이 밀려난다. 이 저장소가 실제로 그 결함을 냈던 자리다 */}
         <div className="detail-body">
@@ -1251,8 +1287,12 @@ export function RunDetail({
                                   ? t(MSG_LABEL[e.messageType ?? 'status'])
                                   : t(KIND_LABEL[e.kind])}
                               </b>
-                              {e.provider && (
-                                <span className="detail-chip provider">{e.provider}</span>
+                              {e.externalReviewer ? (
+                                <span className="detail-chip" title={e.externalReviewer.name}>
+                                  {reviewerChipName(e.externalReviewer.name)}
+                                </span>
+                              ) : (
+                                e.provider && <span className="detail-chip provider">{e.provider}</span>
                               )}
                               {e.retry && (
                                 <span className="detail-chip retry">{t('jobs.timeline.retry')}</span>

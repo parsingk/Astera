@@ -28,6 +28,7 @@ import path from 'node:path'
 import { HOST_YIELD_SLACK } from '../core/host/protocol'
 import { SlackConfigReader, type SlackConfig } from '../core/slack/config'
 import { SlackNotifier } from '../core/slack/notifier'
+import { botErrorReason, SlackPostError } from '../core/slack/transport'
 import { SlackInboxController, type SocketClient } from '../core/slack/inbox'
 import type { Lang } from '../core/i18n'
 import { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
@@ -64,6 +65,10 @@ export interface HostSlackWiring {
   onRollEvent(e: HostRollEvent): void
   /** The rolling's hook tap: every hook event of the profile. Never throws. */
   onHookEvent(sessionId: string, payload: unknown): void
+  /** The run report at channel level (run report C5, C13). Never rejects; every answer but `posted` is logged to
+   *  slack.log, with a fixed reason only (never a token or URL). `not-held`: the app holds Slack or the Host has no
+   *  SDK; `off`: the settings switch; `not-set-up`: no transport. */
+  postRunReport(text: string): Promise<'posted' | 'off' | 'not-held' | 'not-set-up' | 'failed'>
   /** Socket closed, timers stopped. Never rejects. */
   dispose(): Promise<void>
 }
@@ -134,6 +139,8 @@ export function composeHostSlack(a: {
   let cancelGrace: (() => void) | null = null
   /** The config the notifier holds while active, as JSON; null while inactive. */
   let applied: string | null = null
+  /** The run report switch of the config last read while active (it never rebuilds the transport). */
+  let runReportsOn = true
   /** Settles and held-back forwards still in the queue: a forward waits behind them (see `forwarded`). */
   let pending = 0
 
@@ -261,7 +268,11 @@ export function composeHostSlack(a: {
           // Final review M1: while the Host stays active, the notifier keeps its transport unless the config
           // changed. Applying it again built a new transport and reset every record's thread, so a root
           // still in flight was lost and the next notice opened a second one.
-          const json = JSON.stringify(cfg)
+          // The run report switch is not part of the comparison (Review Focus 5): toggling it alone must not
+          // rebuild the transport, or every session thread would lose its root.
+          const { runReports, ...transportCfg } = cfg
+          runReportsOn = runReports !== false
+          const json = JSON.stringify(transportCfg)
           const fresh = !isActive || json !== applied
           if (fresh) notifier.applyConfig(cfg)
           applied = json
@@ -321,6 +332,26 @@ export function composeHostSlack(a: {
         decide()
         void settle('start, no app said hello')
       })
+    },
+    postRunReport: async (text) => {
+      try {
+        if (!isActive) {
+          log('slack: the run report was not posted, this Host does not hold Slack')
+          return 'not-held'
+        }
+        if (!runReportsOn) {
+          log('slack: the run report was not posted, the setting is off')
+          return 'off'
+        }
+        if (!(await notifier.postToChannel(text))) {
+          log('slack: the run report was not posted, Slack is not set up')
+          return 'not-set-up'
+        }
+        return 'posted'
+      } catch (err) {
+        log(`slack: the run report post failed ${err instanceof SlackPostError ? err.reason : botErrorReason(err)}`)
+        return 'failed'
+      }
     },
     reload: () => settle('slack-reload'),
     onAppsChanged: () => {

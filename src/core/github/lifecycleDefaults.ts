@@ -22,11 +22,12 @@ export function githubLifecycleDefaultsOf(v: unknown): GitHubLifecycleDefaults {
     autoRerunInfrastructureFailures:
       typeof o.autoRerunInfrastructureFailures === 'boolean' ? o.autoRerunInfrastructureFailures : GITHUB_LIFECYCLE_DEFAULTS.autoRerunInfrastructureFailures,
     maxInfrastructureReruns: within(o.maxInfrastructureReruns, LIFECYCLE_RERUNS) ? o.maxInfrastructureReruns : GITHUB_LIFECYCLE_DEFAULTS.maxInfrastructureReruns,
-    ciWaitMinutes: within(o.ciWaitMinutes, LIFECYCLE_CI_WAIT_MINUTES) ? o.ciWaitMinutes : GITHUB_LIFECYCLE_DEFAULTS.ciWaitMinutes
+    ciWaitMinutes: within(o.ciWaitMinutes, LIFECYCLE_CI_WAIT_MINUTES) ? o.ciWaitMinutes : GITHUB_LIFECYCLE_DEFAULTS.ciWaitMinutes,
+    postRunReport: typeof o.postRunReport === 'boolean' ? o.postRunReport : GITHUB_LIFECYCLE_DEFAULTS.postRunReport
   }
 }
 
-/** A value taken whole or not at all (the Settings pane's save): the three values, each in its bounds, else null. The
+/** A value taken whole or not at all (the Settings pane's save): the four values, each in its bounds, else null. The
  *  pane and the file then never disagree about what was set. */
 export function exactGithubLifecycleDefaults(v: unknown): GitHubLifecycleDefaults | null {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
@@ -35,6 +36,7 @@ export function exactGithubLifecycleDefaults(v: unknown): GitHubLifecycleDefault
   const same =
     o.autoRerunInfrastructureFailures === narrowed.autoRerunInfrastructureFailures &&
     o.maxInfrastructureReruns === narrowed.maxInfrastructureReruns &&
-    o.ciWaitMinutes === narrowed.ciWaitMinutes
+    o.ciWaitMinutes === narrowed.ciWaitMinutes &&
+    o.postRunReport === narrowed.postRunReport
   return same ? narrowed : null
 }

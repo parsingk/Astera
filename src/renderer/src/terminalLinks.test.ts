@@ -135,12 +135,28 @@ const fakeTerm = (lines: Array<string | { text: string; wrapped: true }>, cols: 
   }
   const term = {
     cols,
+    options: {} as { linkHandler?: { activate: (event: MouseEvent, uri: string) => void } | null },
     buffer: { active: { getLine: (y: number) => (lines[y] === undefined ? undefined : line(lines[y])), getNullCell: () => ({}) } },
     registerLinkProvider: (p: typeof provider) => ((provider = p), { dispose: () => {} })
   }
   const links = (y: number) => new Promise<Array<{ text: string; range: unknown }> | undefined>((r) => provider!.provideLinks(y, r as never))
   return { term, links }
 }
+
+// Claude Code prints an artifact's address as an OSC 8 hyperlink. With no linkHandler xterm opens those itself: a
+// blocking confirm() that froze the window, then window.open(), which Electron refuses, so nothing opened (bug report,
+// 2026-11-19). They take the printed URL's way instead, with the click's modifiers.
+describe('attachConsoleLinks and OSC 8 hyperlinks', () => {
+  it('hands an OSC 8 link to onUrl with its mouse event', () => {
+    const f = fakeTerm([''], 10)
+    const opened: Array<[string, boolean]> = []
+    attachConsoleLinks(f.term as never, { onUrl: (url, ev) => opened.push([url, ev.ctrlKey]) })
+    const handler = f.term.options.linkHandler
+    expect(handler).toBeTruthy()
+    handler!.activate({ ctrlKey: true } as MouseEvent, 'https://claude.ai/artifact/VwWHC1xLtetTs8WiBggwiN')
+    expect(opened).toEqual([['https://claude.ai/artifact/VwWHC1xLtetTs8WiBggwiN', true]])
+  })
+})
 
 // A path Claude Code cut at the right edge and went on with after its indentation (core/run/consoleLinks.ts
 // joinCutLines) is one link, across the rows it takes, when the whole of it names a file.

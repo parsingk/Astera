@@ -25,10 +25,10 @@ import { applyPendingReports, readPendingReports, type QueuedReport } from '../c
 import { dispatchesHeldOnlyByReport, pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
 import { writeOffDispatch, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
-import { isPlaceholderSessionId } from '../core/orchestration/types'
+import { isExternalReviewSessionId, isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
-import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
+import type { ControllerKind, OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
 import type { ControlPlaneReport } from '../core/controlPlane/report'
@@ -58,6 +58,7 @@ import type { HostSlackWiring } from './slackWiring'
 import type { McpHttpSupervisor } from './mcpHttp'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
+import type { RunReportPoster } from './runReportPost'
 import type { HostEventLog } from './eventLog'
 import { pollEvents } from './eventsPoll'
 import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
@@ -65,6 +66,8 @@ import type { HostWorkUnits } from './hostWorkUnits'
 import { ensureProject, findProject } from '../core/orchestration/projects'
 import type { SessionWorkUnit } from '../core/workUnit/types'
 import { justFinished, runRecordInputOf, stampRunEnds } from '../core/orchestration/runRecord'
+import { stampRunReports } from '../core/runReport/stamp'
+import { actorGroupOf, stampActedBy } from '../core/orchestration/actedBy'
 import type { WorkspaceManager } from './workspace/manager'
 import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
 import { recordingGhRunner, recordingGitRunner, workOfSession, type UseCaller, type UseRecorder } from './credentials/recordUses'
@@ -604,6 +607,9 @@ export function createHostOrch(a: {
    *  the app's `understanding-unit` and the app's and MCP's `understanding-regenerate`. Absent: this Host
    *  records no Run, and both calls answer 501. */
   understanding?: Pick<HostUnderstanding, 'onRunFinished' | 'onUnitClosed' | 'regenerate' | 'isWriter'> | null
+  /** The run report's posts (runReportPost.ts, run report C2): handed every Run a commit finishes, whether or not
+   *  `understanding` is set. Absent: no report is posted. */
+  runReports?: Pick<RunReportPoster, 'finished'>
   /** The agent app workspace (agent workspace design): `app-js` below the receipt line (plan ruling
    *  P2), and the app only `workspace-list`, `workspace-stop`, `workspace-close` and `workspace-size` above
    *  it. Absent: all five answer 501. */
@@ -682,7 +688,8 @@ export function createHostOrch(a: {
    *  command. Whether to record (writer, settings) is hostUnderstanding's to judge and log. */
   const recordFinishedRuns = (prev: OrchState, next: OrchState): void => {
     const understanding = a.understanding
-    if (!understanding) return
+    const runReports = a.runReports
+    if (!understanding && !runReports) return
     const failed = (runId: string, err: unknown): void => a.log(`understanding: recording run ${runId} failed on the Host: ${String(err)}`)
     let finished: ReturnType<typeof justFinished>
     try {
@@ -692,6 +699,15 @@ export function createHostOrch(a: {
       return
     }
     for (const { runId } of finished) {
+      // The run report goes to the pull request whether or not How It Works records (run report C2).
+      if (runReports) {
+        try {
+          runReports.finished(runId)
+        } catch (err) {
+          a.log(`run report: handing run ${runId} to the poster failed on the Host: ${String(err)}`)
+        }
+      }
+      if (!understanding) continue
       try {
         const input = runRecordInputOf(next, runId)
         if (input) void understanding.onRunFinished(input).catch((err) => failed(runId, err))
@@ -848,15 +864,17 @@ export function createHostOrch(a: {
     if (role !== 'plugin' && sessionId !== '') return { caller: { actor: 'session', sessionId, ...workOfSession(store.get(), sessionId) }, background: false }
     return { caller: { actor: 'outside' }, background: false }
   }
-  const depsFor = (marks: CallMarks, actor: JournalActor, use?: { caller: UseCaller; background: boolean }): OrchServerDeps =>
-    hostOrchDeps({
+  const depsFor = (marks: CallMarks, actor: JournalActor, use?: { caller: UseCaller; background: boolean }, controllerKind?: ControllerKind): OrchServerDeps => {
+    // Who answered a Gate or forced a completion in this commit, as a group (run report design §4.4).
+    const group = actorGroupOf(actor, controllerKind)
+    return hostOrchDeps({
       checkWaits,
       getState: () => store.get(),
       setState: async (sent, how) => {
         // The diff base, read before the save moves memory: each commit is journaled once, from here.
         const prev = store.get()
         // A Run this commit finishes is stamped with when (observe deferred minor b), and every later commit keeps it.
-        const next = stampRunEnds(prev, sent, a.now())
+        const next = stampRunReports(prev, stampRunEnds(prev, stampActedBy(prev, sent, group), a.now()), { spent: a.spentTokens })
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
         // own: a `state-put` arriving while this commit is still writing would otherwise read the
         // pre-commit number, pass the check, and land a whole state that does not contain this
@@ -938,6 +956,7 @@ export function createHostOrch(a: {
         a.log(detail ? `${name} refused by the Host: ${why}` : `${name} could not be put to the app: ${why}`)
       }
     })
+  }
 
   /** A 409 body with the file to repair (`marks.repair`), or the retry a leaving Host asks for
    *  (`marks.retry`), beside its error. Fields, so the CLI reads which it is rather than matching the
@@ -1093,7 +1112,12 @@ export function createHostOrch(a: {
     // mirror may not have heard of yet (observe deferred minor b). A put that stood in for the load has nothing in
     // `prev`: the stamps its Runs carry are the Host before's, kept (fix round 1, Minor 5). The sender hears of a stamp
     // with the next push.
-    const landed = stampRunEnds(prev, state, a.now(), { standsInForLoad: !hadState })
+    // Who answered a Gate or forced a completion is stamped the same way: the app's write is a person's, and a group the
+    // Host stamped before is kept over the mirror that lacks it. A put that stands in for the load keeps what it carries.
+    const acted = hadState ? stampActedBy(prev, state, 'person') : state
+    const ended = stampRunEnds(prev, acted, a.now(), { standsInForLoad: !hadState })
+    // The report of a Run this put finishes is built here, in the same commit; one the Host stored is kept over the mirror.
+    const landed = stampRunReports(prev, ended, { spent: a.spentTokens, standsInForLoad: !hadState })
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
     // Published as memory moves, for the reason in `depsFor`'s setState.
@@ -1731,7 +1755,8 @@ export function createHostOrch(a: {
       const st = store.get()
       const ids = new Set<string>()
       for (const d of st.dispatches)
-        if (!d.endedAt && !isPlaceholderSessionId(d.sessionId) && !isAlive(d.sessionId)) ids.add(d.sessionId)
+        if (!d.endedAt && !isPlaceholderSessionId(d.sessionId) && !isExternalReviewSessionId(d.sessionId) && !isAlive(d.sessionId))
+          ids.add(d.sessionId)
       for (const r of st.runs)
         if (r.coordinatorSessionId && !isAlive(r.coordinatorSessionId)) ids.add(r.coordinatorSessionId)
       return [...ids]
@@ -2336,7 +2361,7 @@ export function createHostOrch(a: {
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
         const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, principal: from?.principal, plugin: from?.plugin, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role, principal: from?.principal }, cmd, runArgs)
+        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId), from?.principal?.kind), { sessionId, role: from?.role, principal: from?.principal }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.

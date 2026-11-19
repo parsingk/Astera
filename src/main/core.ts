@@ -28,6 +28,7 @@ import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { RollConfigStore } from '../core/rolling/config'
 import { SchedulerConfigStore } from '../core/scheduler/config'
 import { RunConfigStore } from './runConfigStore'
+import { KubeTargetStore } from './kube/targetStore'
 import { RunManager } from '../core/run/runManager'
 import { TerminalManager } from './terminalManager'
 import { WorktreeRegistry, defaultWorktreeRoot } from '../core/worktrees/registry'
@@ -49,13 +50,15 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
-import { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import { claudeSandboxStart, shellCodexOf } from '../core/sandbox/claudeStart'
+import { cliEnvFor } from '../core/sessions/cliEnv'
+import { resolveWindowsExecutable } from '../core/sessions/windowsExecutable'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
 import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { agentAccountFolders, agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry } from '../core/sandbox/locations'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -138,6 +141,7 @@ export interface Core {
    *  history resume of a conversation no tab holds starts as its profile again. */
   profileConversations: ProfileConversations
   runConfig: RunConfigStore // User run config persistence
+  kubeTargets: KubeTargetStore // Remembered kube target per folder, overlay per kustomize file
   run: RunManager // Project run management
   terminal: TerminalManager // Project terminal management
   worktrees: WorktreeRegistry // git worktree registry for sessions
@@ -282,6 +286,10 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),
     resolve: presentOrNull
   })
+  // The agents' login files a sandboxed session may not read (sandbox design §6): the default folders' and every registered
+  // account's plus every folder account detection would look at (agentAccountFolders: one nobody registered has a login
+  // file too), from the registry and the disk as they are when a start asks, since accounts come and go while the app runs
+  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir: os.homedir(), accounts: [...accounts.list(), ...agentAccountFolders(os.homedir())] })
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -295,7 +303,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime, readOnly }
+    { findRuntime, readOnly, agentLogins }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -337,7 +345,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     [previewShotsDir(userDataDir)],
     process.env,
     // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -387,7 +395,11 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
   }
   sessions.enforce = enforce
   // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
-  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start of either manager
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start of either manager. On Windows its
+  // shell runs in Codex's sandbox when it can (claude shell sandbox design D4): under the default Codex account, from the
+  // registry, with the environment that account's sessions start with, and what a sandboxed Codex start here is given
+  // (the readiness question, the version probe, the codex on PATH, the excludes copy, the app key, the read-only folders,
+  // the login files)
   const claudeSandbox = claudeSandboxStart({
     platform: process.platform,
     profileDir: userDataDir,
@@ -397,7 +409,20 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     files: statusLine,
     version: cliVersions,
     linkLook: nodeLinkLook,
-    log: sessionsLog
+    log: sessionsLog,
+    shellCodex: () =>
+      shellCodexOf({
+        accounts: accounts.list(),
+        loggedIn: (a) => accounts.loginStatus(a.id),
+        envOf: (a) => cliEnvFor({ base: process.env, account: a, descriptor: descriptorOf(descriptors, a), homeDir: os.homedir() })
+      }),
+    codexReady: askCodexWindowsReady,
+    codexVersion: cliVersions,
+    codexExe: () => resolveWindowsExecutable('codex'),
+    codexExcludes,
+    appKeyFile,
+    readOnly,
+    agentLogins
   })
   sessions.claudeSandbox = claudeSandbox
   // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
@@ -429,8 +454,11 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady: askCodexWindowsReady,
     claudeSandbox,
+    // The process's one Git Bash resolver, the terminal manager's: a sandboxed Claude chat's shell route wraps that bash
+    gitBash: defaultSpawnChecks(sessionsLog).gitBash,
     hostSocketDir,
     appKeyFile,
+    agentLogins,
     readOnly,
     linkLook: nodeLinkLook,
     codexVersion: cliVersions,
@@ -461,6 +489,8 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
   })
   const runConfig = new RunConfigStore(path.join(userDataDir, 'run-configs.json'))
   await runConfig.load()
+  const kubeTargets = new KubeTargetStore(path.join(userDataDir, 'kube-targets.json'))
+  await kubeTargets.load()
   const worktrees = new WorktreeRegistry(
     path.join(userDataDir, 'worktrees.json'),
     // The default root carries the app name. It only steers new worktrees — a root saved in
@@ -637,6 +667,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     schedulerConfigLoad,
     profileConversations: conversationProfiles,
     runConfig,
+    kubeTargets,
     run,
     terminal,
     worktrees,

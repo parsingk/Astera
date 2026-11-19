@@ -61,7 +61,7 @@ export type CodexWindowsReady = (a: {
  *  on Windows the copy of the person's git excludes it wrote (prepareCodexSandbox), which its spawn points git at, and
  *  whether the account's home makes the elevated sandbox its default (Task P), which the start warns about. */
 export class PreparedLayouts {
-  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; excludesFile: string | null; elevatedDefault: boolean; at: number }>()
+  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; excludesFile: string | null; elevatedDefault: boolean; agentLogins: readonly DenyEntry[]; at: number }>()
 
   keep(
     accountId: string,
@@ -70,10 +70,11 @@ export class PreparedLayouts {
     now: number,
     otherHosts: readonly string[] = [],
     excludesFile: string | null = null,
-    elevatedDefault = false
+    elevatedDefault = false,
+    agentLogins: readonly DenyEntry[] = []
   ): void {
     for (const [k, v] of this.entries) if (now - v.at >= PREPARED_MS) this.entries.delete(k)
-    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, excludesFile, elevatedDefault, at: now })
+    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, excludesFile, elevatedDefault, agentLogins, at: now })
   }
 
   /** Whether the prepare kept for this account and folder within PREPARED_MS found the account's Codex home making the
@@ -81,6 +82,13 @@ export class PreparedLayouts {
   elevatedDefaultOf(accountId: string, cwd: string, now: number): boolean {
     const e = this.entries.get(keyOf(accountId, cwd))
     return e !== undefined && now - e.at < PREPARED_MS && e.elevatedDefault
+  }
+
+  /** The agents' login files the prepare chose for this account and folder within PREPARED_MS (those there at the prepare);
+   *  none when it kept none. The spawn names exactly these (codexNamedEntries `agentLoginsChosen`). */
+  agentLoginsOf(accountId: string, cwd: string, now: number): readonly DenyEntry[] {
+    const e = this.entries.get(keyOf(accountId, cwd))
+    return e && now - e.at < PREPARED_MS ? e.agentLogins : []
   }
 
   /** The copy of the person's git excludes the prepare kept for this account and folder within PREPARED_MS; null when it
@@ -109,7 +117,8 @@ const keyOf = (accountId: string, cwd: string): string => `${accountId}\u0000${c
 /** What a sandboxed Codex session may not read: the E6 list and the OS credential store, read from the session's own
  *  environment and home, on macOS and Linux the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies) and
  *  every other Host's folder its prepare found beside it (`otherHostDirs`, otherHostFolders), and on every OS the app's
- *  key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item 1). One list for a session's start (sessionSandboxArgs) and
+ *  key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item 1), and the agents' login files (`agentLogins`,
+ *  locations.ts agentLoginEntries; sandbox design §6), as given. One list for a session's start (sessionSandboxArgs) and
  *  the S2 measurement (scripts/measure/s2.mjs codexDenied), so what is measured is what a start hands Codex. */
 export function codexSessionDenied(o: {
   platform: NodeJS.Platform
@@ -120,13 +129,29 @@ export function codexSessionDenied(o: {
   otherHostDirs?: readonly string[]
   /** `<profile>/host/app.key` (core/host/hostKey.ts appKeyPath). */
   appKeyFile?: string | null
+  /** The agents' login files of every account and the default folders (locations.ts agentLoginEntries). */
+  agentLogins?: readonly DenyEntry[]
 }): string[] {
   return [
     ...sensitiveLocations(o.platform, o.env, o.homeDir),
     ...credentialStoreDenies(o.platform, o.env, o.homeDir),
     ...hostSocketDenies(o.platform, o.hostSocketDir ?? null, o.otherHostDirs ?? []),
-    ...appKeyDenies(o.appKeyFile ?? null)
+    ...appKeyDenies(o.appKeyFile ?? null),
+    ...(o.agentLogins ?? []).map((e) => e.path)
   ]
+}
+
+/** The agents' login files that are there now (sandbox design §6), on every OS: a logged-out account has no file to
+ *  protect, Codex's Windows sandbox would make a folder of the missing path (which the CLI's next login could not write its
+ *  file over), and another sandbox may put a placeholder file at it. A look that throws keeps the entry. */
+export function presentAgentLogins(entries: readonly DenyEntry[], look: LinkLook): DenyEntry[] {
+  return entries.filter((e) => {
+    try {
+      return look.lstat(e.path) !== null
+    } catch {
+      return true
+    }
+  })
 }
 
 /** The folders a sandboxed Codex session may write, by which a link on a named path is judged (namedPathFor): its work
@@ -147,9 +172,10 @@ export interface SessionLinks {
 }
 
 /** What a sandboxed Codex start names, and the links that left an entry as given (Task E fix round 5): the E6 list, the
- *  OS credential store, the app key and the read-only folders each where namedPathFor puts it for this session; the
- *  Host socket folders as they are (already named in both macOS spellings). Without `links`, codexSessionDenied's list
- *  and the read-only folders as given. */
+ *  OS credential store, the app key, the agents' login files (the ones there, unless the prepare already chose them:
+ *  `agentLoginsChosen`) and the read-only folders each where namedPathFor puts it for this session; the Host socket
+ *  folders as they are (already named in both macOS spellings). Without `links`, codexSessionDenied's list and the
+ *  read-only folders as given. */
 function codexNamedEntries(o: {
   platform: NodeJS.Platform
   homeDir: string
@@ -158,6 +184,12 @@ function codexNamedEntries(o: {
   hostSocketDir?: string | null
   otherHostDirs?: readonly string[]
   appKeyFile?: string | null
+  /** The agents' login files (codexSessionDenied); with `links`, each only if it is there when asked, unless
+   *  `agentLoginsChosen` says the list is already the one chosen at the prepare. */
+  agentLogins?: readonly DenyEntry[]
+  /** The list in `agentLogins` was chosen once, at the prepare (prepareCodexSandbox), and is named as it is: no second
+   *  look at the disk, so the readiness echo and the spawn share one list even if a login file appeared or went since. */
+  agentLoginsChosen?: boolean
   readOnly?: readonly string[]
   links: SessionLinks | null
 }): { denied: string[]; readOnly: string[]; links: string[] } {
@@ -165,7 +197,8 @@ function codexNamedEntries(o: {
   const readOnly = [...(o.readOnly ?? [])]
   const loginEntries = [...sensitiveEntries(o.platform, o.env, o.homeDir), ...credentialStoreEntries(o.platform, o.env, o.homeDir)]
   const keyEntries = appKeyEntries(o.appKeyFile ?? null)
-  if (!o.links) return { denied: [...loginEntries, ...sockets.map((path) => ({ path })), ...keyEntries].map((e) => e.path), readOnly, links: [] }
+  const agentEntries = o.agentLogins ?? []
+  if (!o.links) return { denied: [...loginEntries, ...sockets.map((path) => ({ path })), ...keyEntries, ...agentEntries].map((e) => e.path), readOnly, links: [] }
   const look = o.links.look
   // Task E fix round 6: Codex's Windows sandbox makes every missing deny-read path a folder before it denies it
   // (windows-sandbox-rs/src/deny_read_acl.rs:58-76 `create_dir_all`, reached through deny_read_state.rs:32-46 from
@@ -182,7 +215,10 @@ function codexNamedEntries(o: {
       return true
     }
   }
-  const logins = loginEntries.filter(present).map((e) => e.path)
+  // The agents' login files (sandbox design §6) are left out when missing on every OS (presentAgentLogins), unless the list
+  // is the one the prepare already chose
+  const agentChosen = o.agentLoginsChosen ? [...agentEntries] : presentAgentLogins(agentEntries, look)
+  const logins = [...loginEntries.filter(present), ...agentChosen].map((e) => e.path)
   const key = keyEntries.filter(present).map((e) => e.path)
   const writable = codexWritableFolders({ platform: o.platform, cwd: o.links.cwd, layout: o.layout, env: o.env })
   const named = (paths: readonly string[]) => namedPaths(paths, writable, o.platform, o.links!.look)
@@ -228,6 +264,10 @@ export function sessionSandboxArgs(o: {
   otherHostDirs?: readonly string[]
   /** The profile's app key file, denied on every OS (codexSessionDenied). */
   appKeyFile?: string | null
+  /** The agents' login files (locations.ts agentLoginEntries), denied on every OS; with `links`, only those there when
+   *  asked (codexNamedEntries), unless `agentLoginsChosen` says the list is the prepare's own choice, kept for the spawn. */
+  agentLogins?: readonly DenyEntry[]
+  agentLoginsChosen?: boolean
   /** The read-only folders, built by the start's wiring (sandboxReadOnly). Absent, nothing is kept read-only. */
   readOnly?: readonly string[]
   /** Where a refused path is named (the manager's log). */
@@ -269,12 +309,14 @@ export function codexEchoArgs(o: Omit<Parameters<typeof sessionSandboxArgs>[0], 
 /** What a sandboxed Codex prepare hands its caller to keep for the spawn (PreparedLayouts.keep): the folder's git layout
  *  (null outside a repository), the other Hosts' socket folders found beside this profile's, and on Windows the copy of
  *  the person's git excludes it wrote (null when none was) and whether the account's Codex home makes the elevated
- *  sandbox its default (Task P; false elsewhere). */
+ *  sandbox its default (Task P; false elsewhere), and the agents' login files it chose (those there then). */
 export interface PreparedCodex {
   layout: GitLayout | null
   otherHosts: string[]
   excludesFile: string | null
   elevatedDefault: boolean
+  /** The agents' login files the prepare chose (those there at the prepare), which the spawn names as they are. */
+  agentLogins: DenyEntry[]
 }
 
 /**
@@ -311,6 +353,9 @@ export async function prepareCodexSandbox(o: {
   hostSocketDir?: string | null
   /** The profile's app key file, denied on every OS (sessionSandboxArgs). */
   appKeyFile?: string | null
+  /** The agents' login files, denied on every OS; the prepare chooses the entries that are there once, and the session and the
+   *  readiness echo get that one list (sessionSandboxArgs, PreparedCodex.agentLogins). */
+  agentLogins?: readonly DenyEntry[]
   /** The read-only folders, built by the start's wiring (sessionSandboxArgs). */
   readOnly?: readonly string[]
   /** The codex version question (final review I2): asked first, so an old codex is refused before anything is read or
@@ -343,6 +388,10 @@ export async function prepareCodexSandbox(o: {
     throw fail(err)
   }
   const otherHosts = await otherHostFolders(o.platform, o.hostSocketDir ?? null)
+  // The agents' login files are chosen once, here: those there now (presentAgentLogins). The session's profile, the
+  // readiness echo and the spawn after this prepare all take this list as it is, so a login file that appears or goes
+  // between the prepare and the spawn changes none of them
+  const agentLogins = o.look ? presentAgentLogins(o.agentLogins ?? [], o.look) : [...(o.agentLogins ?? [])]
   const args = sessionSandboxArgs({
     platform: o.platform,
     homeDir: o.homeDir,
@@ -351,6 +400,8 @@ export async function prepareCodexSandbox(o: {
     hostSocketDir: o.hostSocketDir ?? null,
     otherHostDirs: otherHosts,
     appKeyFile: o.appKeyFile ?? null,
+    agentLogins,
+    agentLoginsChosen: true,
     readOnly: o.readOnly ?? [],
     log: o.log,
     links: o.look ? { cwd: o.cwd, look: o.look } : null
@@ -366,6 +417,8 @@ export async function prepareCodexSandbox(o: {
       hostSocketDir: o.hostSocketDir ?? null,
       otherHostDirs: otherHosts,
       appKeyFile: o.appKeyFile ?? null,
+      agentLogins,
+      agentLoginsChosen: true,
       readOnly: o.readOnly ?? [],
       links: o.look ? { cwd: o.cwd, look: o.look } : null
     })
@@ -387,5 +440,5 @@ export async function prepareCodexSandbox(o: {
   }
   const excludesFile = o.platform === 'win32' && o.excludes ? await o.excludes().catch(() => null) : null
   const elevatedDefault = o.platform === 'win32' ? await (o.elevatedDefault ?? elevatedDefaultIn)(codexConfigFile(o.env, o.homeDir)).catch(() => false) : false
-  return { layout, otherHosts, excludesFile, elevatedDefault }
+  return { layout, otherHosts, excludesFile, elevatedDefault, agentLogins }
 }

@@ -29,6 +29,9 @@ describe('chatSpawnOptsOf', () => {
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p', sandbox: true }, d).sandbox).toBe(true)
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p' }, d)).not.toHaveProperty('sandbox')
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p', sandbox: false }, d)).not.toHaveProperty('sandbox')
+    // Claude shell sandbox design D5: a chain that must be sandboxed is held to it at its roll too
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p', sandbox: true, sandboxRequired: true }, d).sandboxRequired).toBe(true)
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p', sandbox: true }, d)).not.toHaveProperty('sandboxRequired')
   })
   it('asks the policy of undefined when the respawn names no old session', () => {
     const seen: Array<string | undefined> = []

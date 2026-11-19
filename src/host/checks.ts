@@ -26,12 +26,15 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { isLang, t, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import type { OrchServerDeps } from '../core/orchestration/command'
-import type { OrchState, RepairTarget } from '../core/orchestration/state'
+import { closeOrphanedExternalReviews as closeOrphans, type OrchState, type RepairTarget } from '../core/orchestration/state'
 import type { CheckResult } from '../core/orchestration/types'
 import { knowledgeIn } from '../core/orchestration/exec/coordinator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { createResumeSweep } from '../core/orchestration/exec/resumeSweep'
 import { createReviewStarter } from '../core/orchestration/exec/review'
+import { externalReviewIo } from '../core/orchestration/exec/externalReviewIo'
+import { nodeProcFactory } from '../core/sessions/nodeProcFactory'
+import { readReviewerSettings } from '../core/settings/externalReviewersFile'
 import { createTaskValidation } from '../core/orchestration/exec/validation'
 import { unavailable } from '../core/orchestration/pluginChecks'
 import type { TaskValidator } from '../core/orchestration/exec/validator'
@@ -44,7 +47,7 @@ import { RunManager } from '../core/run/runManager'
 import { treeKillCommand } from '../core/run/kill'
 import { isSamePath } from '../core/files/tree'
 import { changedNames } from '../core/git/changedNames'
-import { readRangeDiff } from '../core/git/changes'
+import { readRangeDiff, trackedTreeState } from '../core/git/changes'
 import { git as runGit } from '../core/worktrees/git'
 import { readFileRetrying } from '../core/renameRetry'
 import { settingsObjectOf } from '../core/settings/settingsObject'
@@ -84,6 +87,12 @@ export interface HostChecks {
    *  false. */
   checking(taskId: string): boolean
   resumeSweep(why: string): void
+  /** The gone app's external reviews, closed (endedUnproven; design 3.6): every open Dispatch with `externalReviewer` that
+   *  is not one of this Host's own in-flight reviews, and, with `startedBefore`, that began before it. Reads the state and
+   *  commits with no await between. Called by the driver beside stopForeignValidations, before its resume sweep. */
+  closeOrphanedExternalReviews(o?: { startedBefore?: number }): Promise<void>
+  /** Kills this Host's external reviews and records nothing: their Dispatches stay open for the next driver. Synchronous. */
+  dispose(): void
   /** A lifecycle round handed over at github:ci, settled with CI's result (GitHub lifecycle G3b1): the watch's settle. */
   settleHandedOff(a: { taskId: string; result: CheckResult; since?: string; ciClass?: string }): Promise<void>
 }
@@ -118,6 +127,9 @@ export interface HostChecksDeps {
   /** `lifecycle-ci-begin` through the Host's own door (GitHub lifecycle §4): a round reaching `github:ci` hands its
    *  results so far to it. */
   lifecycleCiBegin?(a: { taskId: string; done: CheckResult[] }): Promise<{ status: number; body: unknown }>
+  /** The Host's own command door (`orch.handle`): an external review settles through it, with or without an app. Absent:
+   *  no external review is run and every review is automatic. */
+  handle?(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
   /** The environment a check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
    *  hides there, and the names it took (fix round 2); the spawner's session manager (SessionManager.checkEnv). Absent:
    *  `base` as is. */
@@ -252,7 +264,24 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     assertAllowedPath,
     startWorker: (w) => d.deps().startWorker(w),
     specsDir: d.specsDir,
-    rangeDiff: (cwd, base, head) => readRangeDiff(cwd, base, head)
+    rangeDiff: (cwd, base, head, o) => readRangeDiff(cwd, base, head, o),
+    // The agent is this process's own child, never one of the registry's (design 3.5): nodeProcFactory, which the runner's
+    // "pid 0 means not found" reading depends on.
+    ...(d.handle
+      ? {
+          external: {
+            settings: () => readReviewerSettings(settingsPath),
+            handle: d.handle,
+            spawn: nodeProcFactory,
+            // What the checks in that folder start from: the Host's environment without what the Credentials list hides there
+            env: (cwd: string) => (d.checkEnv ? d.checkEnv(hostWorkerBaseEnv(d.env), cwd).env : hostWorkerBaseEnv(d.env)),
+            platform: process.platform,
+            clientVersion: 'host',
+            ...externalReviewIo(log),
+            treeState: trackedTreeState
+          }
+        }
+      : {})
   })
   /** The review starts in flight, by Task (`checking`). Both callers, the validator's `onSettled` and
    *  the driver's doors, go through this, so a Task is held from the call until the start has opened
@@ -466,6 +495,15 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     stopForeignValidations,
     checking: (taskId) =>
       validation.validator.holds(taskId) || reviewStarts.has(taskId) || foreignRunIn(taskId),
-    resumeSweep: (why) => sweep.run(why)
+    resumeSweep: (why) => sweep.run(why),
+    closeOrphanedExternalReviews: async (o) => {
+      const deps = d.deps()
+      // The read and the commit are one step: nothing awaited between them
+      const r = closeOrphans(deps.getState(), { owned: reviewStarter.externalInFlight(), ...(o?.startedBefore !== undefined ? { startedBefore: o.startedBefore } : {}) }, d.now())
+      if (r.closed.length === 0) return
+      await deps.setState(r.state)
+      log(`closed the external reviews nobody owns now: ${r.closed.join(', ')}`)
+    },
+    dispose: () => reviewStarter.disposeExternal()
   }
 }

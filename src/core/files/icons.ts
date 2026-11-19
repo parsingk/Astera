@@ -4,10 +4,12 @@
  *  id is the shape and tone is the colour, kept orthogonal — the same shape is reused in several
  *  colours. */
 
+import type { KubeFileKind } from '../kube/types'
+
 export const ICON_IDS = [
   'folder', 'folder-open', 'file', 'label',
   'code-braces', 'code-hash', 'code-angle', 'markdown', 'text-lines',
-  'gear', 'git', 'container',
+  'gear', 'git', 'container', 'kubernetes', 'layers',
   'image', 'video', 'audio', 'archive',
   'database', 'terminal', 'table', 'lock'
 ] as const
@@ -184,7 +186,11 @@ function extOf(lower: string): string {
   return i < 0 ? '' : body.slice(i + 1)
 }
 
-export function resolveFileIcon(name: string): FileIconSpec {
+/** `kube` is the manifest classification (main process, content based) — it is passed in so this stays
+ *  pure. Anything but a manifest-ish kind leaves the name-based answer untouched. */
+export function resolveFileIcon(name: string, kube?: KubeFileKind): FileIconSpec {
+  if (kube === 'manifest' || kube === 'helm-template') return { id: 'kubernetes', tone: 'blue' }
+  if (kube === 'kustomization') return { id: 'layers', tone: 'blue' }
   const lower = name.toLowerCase()
 
   const exact = own(EXACT, lower)

@@ -53,6 +53,7 @@ import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWorkspace'
 import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
+import type { ReviewerSettings } from '../core/settings/externalReviewers'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { appProfileSpawn, profileSpawn } from '../core/agentProfiles/permission'
 import { readAgentProfiles } from '../core/agentProfiles/store'
@@ -69,7 +70,6 @@ import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { forgetReadiness } from '../core/sandbox/windowsReadiness'
-import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { claudeUsernsCheck, sandboxWarningMessage } from '../core/sandbox/startWarnings'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
@@ -109,6 +109,9 @@ import { createMirrorStore, OrchStateConflict } from './orchestration/mirrorStor
 import { createResumeSweep, type ResumeSweep } from '../core/orchestration/exec/resumeSweep'
 import { createOrchCommitHook } from './orchestration/commitHook'
 import { createReviewStarter } from '../core/orchestration/exec/review'
+import { externalReviewIo } from '../core/orchestration/exec/externalReviewIo'
+import { probeReviewer, type ReviewerProbe } from '../core/acp/probe'
+import { nodeProcFactory } from '../core/sessions/nodeProcFactory'
 import {
   createDispatchLoop,
   ORCH_FIRE_TICK_MS,
@@ -118,7 +121,7 @@ import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { readChanges, readFileDiff, readRangeDiff } from '../core/git/changes'
+import { readChanges, readFileDiff, readRangeDiff, trackedTreeState } from '../core/git/changes'
 import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
@@ -296,6 +299,9 @@ import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { registerHiggsfieldIpc } from './higgsfield'
+import { registerKubeIpc } from './kube/ipc'
+import { createKubeService } from './kube/service'
+import { createRealKubeDeps, kubectlDisplayPath } from './kube/runtime'
 import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { fillFromCommits } from '../core/github/fill'
@@ -2147,21 +2153,21 @@ export function registerIpc(
     const account = core.accounts.get(opts.accountId)
     // **The sandbox comes from the profile only** (final fix pass, minor 1; permission.ts: "never a caller's"): a
     // `sandbox` in the options is dropped, whoever sent it. The app's own start of a sandboxed session's work, a Job's
-    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
-    // rather than started without one; the renderer's handler clears that one.
+    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and must have it: the prepares and spawns below are
+    // told so (`sandboxRequired`), and a Claude start on Windows whose shell has no route into Codex's sandbox is refused
+    // there in the reason's words (claude shell sandbox design D5), rather than started without one; the renderer's
+    // handler clears that one.
     const forceSandbox = opts.forceSandbox === true
     // A reviewer of work a profile's switch sandboxed allows the deny rules only where the CLI has no sandbox (Task K fix
     // rounds 1 and 2): it then starts as a sandboxed profile's session does there, rather than being refused. A reviewer
     // of a sandboxed session's work never asks (review.ts), so C3's refusal holds for it
     const forceSandboxDenyOnly = opts.forceSandboxDenyOnly === true
     {
-      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, ...withoutSandbox } = opts
+      // A caller's `sandboxRequired` too (Task 4 review M3): only the forced paths below set it
+      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, sandboxRequired: _callerRequired, ...withoutSandbox } = opts
       opts = withoutSandbox
     }
-    if (forceSandbox && !forceSandboxDenyOnly) {
-      const refused = forcedSandboxBlocker(providerOf(account), process.platform)
-      if (refused) throw refused
-    }
+    const sandboxRequired = forceSandbox && !forceSandboxDenyOnly
     // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
     // the profile's permission decides the bypass when the caller gave none. One that is not found is logged and
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
@@ -2329,7 +2335,7 @@ export function registerIpc(
       await core.capabilities.refresh(account, opts.agentProfileId)
       // The profile's sandbox: the folder's git layout read for the synchronous spawn, and on Windows the account's Codex
       // home asked whether it is set up; a refusal reaches the toast like any failed spawn (설정하기 for an account not set up)
-      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}) })
+      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}), ...(sandboxRequired ? { sandboxRequired: true } : {}) })
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -2343,7 +2349,8 @@ export function registerIpc(
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
         bypassSignal,
         ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
-        ...(opts.sandbox === true ? { sandbox: true } : {})
+        ...(opts.sandbox === true ? { sandbox: true } : {}),
+        ...(sandboxRequired ? { sandboxRequired: true } : {})
       })
       if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
       // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
@@ -2389,12 +2396,18 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
-    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}) })
+    // A forced Claude start on Windows without its shell's route is refused here (and the chat's above), no longer up
+    // front (Task 4 review M4): a forced resume refused here has already recorded its conversation under the profile and
+    // copied its transcript into the account. Both are harmless: the record names the profile the conversation was asked
+    // to resume as, which a later resume writes again, and the copy is the one any resume into that account makes and
+    // remakes, which a resume that fails for any other reason after this point leaves just the same
+    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}), ...(sandboxRequired ? { sandboxRequired: true } : {}) })
     const info = core.sessions.spawn({
       ...opts,
       account,
       rollProviders,
       orchEnv: orchEnvOf(),
+      ...(sandboxRequired ? { sandboxRequired: true } : {}),
       // 백지 재개 — `--resume` 을 부르지 않는다. `opts` 에는 아직 `resumeSessionId` 가 들어 있으므로
       // 여기서 undefined 로 덮는 것이 그 취소다. 그 결과 `info.resumeSessionId` 도 비고, 그것을
       // 읽는 아래 배선들(rolling·codexRolling 의 seed 필드, rollout 감시자)이 저절로 새 세션으로
@@ -3276,7 +3289,20 @@ export function registerIpc(
       // `(w)` 는 일부러다 — ipcConvergenceWiring.test.ts 의 남은 가드가 첫 `startWorker: (a) =>` 에 닻을 내린다.
       startWorker: (w) => deps.startWorker(w),
       specsDir,
-      rangeDiff: (cwd, base, head) => readRangeDiff(cwd, base, head)
+      rangeDiff: (cwd, base, head, o) => readRangeDiff(cwd, base, head, o),
+      // A reviewer registered in Settings runs as this process's own child (design 3.5): nodeProcFactory, never the Host's
+      // registry, so it dies with the app. `handle` is the in-process door, bound late like startWorker above.
+      external: {
+        settings: async () => core.appSettings.getReviewerSettings(),
+        handle: (cmd, args) => orchHandleCommand(deps, { sessionId: UI_CALLER }, cmd, args),
+        spawn: nodeProcFactory,
+        // What the checks in that folder start from: the app's environment without what the Credentials list hides there
+        env: (cwd) => core.sessions.checkEnv(process.env, cwd).env,
+        platform: process.platform,
+        clientVersion: app.getVersion(),
+        ...externalReviewIo(orchLog),
+        treeState: trackedTreeState
+      }
     })
 
     /** What reapWorktree (core/orchestration/exec/integrateGit.ts) may close and ask in the app.
@@ -4092,6 +4118,8 @@ export function registerIpc(
     installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {
+        // The external reviewers' agents die with the app and record nothing: their Dispatches stay open for the Host.
+        startReview.disposeExternal()
         // The journal's handle goes with the server it was opened for; reopened by the next boot.
         closeContinuity()
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -4523,6 +4551,17 @@ export function registerIpc(
     throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
   }
 
+  // Kubernetes manifests: classification, contexts and targets. The watcher batch below calls kubeService.invalidate.
+  const kubeDeps = createRealKubeDeps(core.appSettings, core.kubeTargets)
+  const kubeService = createKubeService(kubeDeps)
+  registerKubeIpc(ipcMain, {
+    service: kubeService,
+    assertAllowedPath,
+    settings: core.appSettings,
+    run: kubeDeps.run,
+    binPath: () => kubectlDisplayPath(core.appSettings.getKubectlPath(), process.env)
+  })
+
   /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
    *  — 그 아래 전부가 아니다.
    *
@@ -4927,6 +4966,7 @@ export function registerIpc(
   ipcMain.handle('audit.list', (_e, q: unknown) => audit.list(q as Parameters<typeof audit.list>[0]))
   ipcMain.handle('audit.summary', (_e, q: unknown) => audit.summary(q as Parameters<typeof audit.summary>[0]))
   ipcMain.handle('audit.runTokens', (_e, runId: unknown) => audit.runTokens(runId as string))
+  ipcMain.handle('audit.runReport', (_e, runId: unknown) => audit.runReport(runId as string))
   ipcMain.handle('audit.taskTokens', (_e, taskId: unknown) => audit.taskTokens(taskId as string))
   // Settings › Security & Access › Credentials (credentials design §7): the Host's list, as the app
   const credentials = createCredentialsRoute({ call: (m) => orchCall(m) })
@@ -5577,9 +5617,14 @@ export function registerIpc(
   // The live-update watcher: watches the explorer root and refreshes the tree and viewer through
   // files:changedBatch — one message per batching window, not one per event. The path guard is reused —
   // watching an arbitrary path is refused.
-  const fileWatcher = new FileWatcher((batch) => send('files:changedBatch', batch))
+  const fileWatcher = new FileWatcher((batch) => {
+    kubeService.invalidate(batch.changes)
+    send('files:changedBatch', batch)
+  })
   ipcMain.handle('files.watch', async (_e, root: string) => {
     await assertAllowedPath(root)
+    // What changed in the project while nothing watched it (a pull, a checkout) reaches the Kustomize graph too.
+    kubeService.forgetGraph(root)
     await fileWatcher.watch(root)
   })
   ipcMain.handle('files.unwatch', () => fileWatcher.unwatch())
@@ -5912,7 +5957,7 @@ export function registerIpc(
   ipcMain.handle('slack.getConfig', () =>
     slack
       ? slack.store.load()
-      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null }
+      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null, runReports: true }
   )
   // A partial update — passing the received object straight to store.save() would turn fields that were
   // not sent into null during normalisation, silently erasing already-stored values in a single save.
@@ -6221,6 +6266,39 @@ export function registerIpc(
   ipcMain.handle('settings.setAgentPermissionMode', async (_e, mode: unknown) => {
     if (mode !== 'yolo' && mode !== 'manual') throw new Error(`INVALID_AGENT_PERMISSION_MODE: ${String(mode)}`)
     await core.appSettings.setAgentPermissionMode(mode)
+  })
+
+  // External reviewers (spec 3.1). The store narrows what it is given and returns what it kept; the Host
+  // reads the file when a Task is reviewed, so saving it is the whole effect.
+  ipcMain.handle('settings.getReviewerSettings', () => core.appSettings.getReviewerSettings())
+  ipcMain.handle('settings.setReviewerSettings', (_e, next: unknown) => core.appSettings.setReviewerSettings(next as ReviewerSettings))
+  // "Test this reviewer" (spec section 4): initialize and session/new in a temporary folder, with a review's own
+  // resolution and environment. A malformed argument answers without spawning.
+  ipcMain.handle('settings.testExternalReviewer', async (_e, reviewer: unknown): Promise<ReviewerProbe> => {
+    const r = reviewer as { command?: unknown; args?: unknown } | null
+    const valid =
+      typeof r === 'object' &&
+      r !== null &&
+      typeof r.command === 'string' &&
+      r.command.trim() !== '' &&
+      !/[\r\n]/.test(r.command) &&
+      Array.isArray(r.args) &&
+      r.args.length <= 20 &&
+      r.args.every((x) => typeof x === 'string')
+    if (!valid) return { ok: false, kind: 'protocol', message: 'invalid reviewer' }
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-reviewer-test-'))
+    try {
+      return await probeReviewer({
+        reviewer: { command: r.command as string, args: r.args as string[] },
+        cwd,
+        spawn: nodeProcFactory,
+        baseEnv: process.env,
+        platform: process.platform,
+        clientVersion: app.getVersion()
+      })
+    } finally {
+      await fs.rm(cwd, { recursive: true, force: true }).catch(() => {})
+    }
   })
 
   // MCP access (MCP design M5). The Host reads the file on every MCP call (readMcpAccess), so saving it

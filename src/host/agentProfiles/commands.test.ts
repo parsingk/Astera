@@ -18,7 +18,7 @@ afterEach(async () => {
 
 type Deps = Parameters<typeof createHostAgentProfiles>[0]
 
-async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: Deps['sandboxReadiness']; sandboxDefault?: Deps['sandboxDefault'] } = {}) {
+async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: Deps['sandboxReadiness']; sandboxDefault?: Deps['sandboxDefault']; claudeShellAccount?: Deps['claudeShellAccount'] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-ap-'))
   dirs.push(root)
   const profileDir = path.join(root, 'profile')
@@ -36,7 +36,8 @@ async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: 
     log: (l) => logs.push(l),
     ...(o.sandboxSetup ? { sandboxSetup: o.sandboxSetup } : {}),
     ...(o.sandboxReadiness ? { sandboxReadiness: o.sandboxReadiness } : {}),
-    ...(o.sandboxDefault ? { sandboxDefault: o.sandboxDefault } : {})
+    ...(o.sandboxDefault ? { sandboxDefault: o.sandboxDefault } : {}),
+    ...(o.claudeShellAccount ? { claudeShellAccount: o.claudeShellAccount } : {})
   })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent' | 'controller'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
@@ -274,6 +275,75 @@ describe('createHostAgentProfiles', () => {
     const none = await rig()
     const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
     expect((await none.call('agent-profiles-sandbox-setup', { id: n.id, accountId: 'acc_x' })).status).toBe(501)
+  })
+
+  // Windows Claude shell sandbox (Task 7, D11): a sandboxed profile that holds a Claude account also lists the Codex
+  // account Claude's shell borrows, picked by the Host's `claudeShellAccount` (shellCodexOf), marked forClaudeShell
+  describe('the Codex account Claude shell borrows', () => {
+    const borrowing = (id: string | null) => ({ claudeShellAccount: async () => id })
+    const ask = (h: Awaited<ReturnType<typeof rig>>, id: unknown) => h.call('agent-profiles-sandbox-readiness', { id })
+
+    it('adds the borrowed account, marked, to a Claude-only sandboxed profile', async () => {
+      const asked: string[] = []
+      const h = await rig({ ...borrowing('acc_y'), sandboxReadiness: async (a) => (asked.push(a.id), 'not-set-up') })
+      const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_1'], sandbox: true }))
+      expect((await ask(h, p.id)).body).toEqual({ accounts: [{ accountId: 'acc_y', state: 'not-set-up', forClaudeShell: true }] })
+      expect(asked).toEqual(['acc_y'])
+    })
+
+    it('says so when no Codex account is registered, and adds no row', async () => {
+      const h = await rig({ ...borrowing(null), sandboxReadiness: async () => 'ready' })
+      const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_1'], sandbox: true }))
+      expect((await ask(h, p.id)).body).toEqual({ accounts: [], noClaudeShellCodex: true })
+    })
+
+    it('does not list the borrowed account twice when the profile already has it, and marks that row', async () => {
+      const h = await rig({ ...borrowing('acc_x'), sandboxReadiness: async () => 'ready' })
+      // A profile holds one provider (mixed-provider), so a Claude account plus a Codex account cannot be one profile;
+      // the store is written as a hand-edited file could hold it
+      const p = profileOf(await h.call('agent-profiles-create', { name: 'Codex', accountIds: ['acc_x', 'acc_y'], sandbox: true }))
+      const stored = await readAgentProfiles(h.profileDir)
+      const { writeAgentProfiles } = await import('../../core/agentProfiles/store')
+      await writeAgentProfiles(h.profileDir, { ...stored, profiles: stored.profiles.map((q) => (q.id === p.id ? { ...q, accountIds: ['acc_1', 'acc_x', 'acc_y'] } : q)) })
+      expect((await ask(h, p.id)).body).toEqual({
+        accounts: [
+          { accountId: 'acc_x', state: 'ready', forClaudeShell: true },
+          { accountId: 'acc_y', state: 'ready' }
+        ]
+      })
+    })
+
+    it('leaves a Codex-only profile as it was, even when its account is the borrowed one', async () => {
+      const h = await rig({ ...borrowing('acc_x'), sandboxReadiness: async () => 'ready' })
+      const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x', 'acc_y'], sandbox: true }))
+      expect((await ask(h, p.id)).body).toEqual({ accounts: [{ accountId: 'acc_x', state: 'ready' }, { accountId: 'acc_y', state: 'ready' }] })
+      const other = profileOf(await h.call('agent-profiles-create', { name: 'Other', accountIds: ['acc_y'], sandbox: true }))
+      expect((await ask(h, other.id)).body).toEqual({ accounts: [{ accountId: 'acc_y', state: 'ready' }] })
+    })
+
+    it('changes nothing off Windows, where the Host has no shell account to ask about', async () => {
+      const h = await rig({ sandboxReadiness: async () => 'ready' })
+      const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_1'], sandbox: true }))
+      expect((await ask(h, p.id)).body).toEqual({ accounts: [] })
+    })
+
+    it('sets up the borrowed account for a profile that holds a Claude account, and no other', async () => {
+      const set: string[] = []
+      const h = await rig({ ...borrowing('acc_y'), sandboxSetup: async (a) => (set.push(a.id), { ok: true, out: 'set up' }) })
+      const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_1'], sandbox: true }))
+      expect((await h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_y' })).body).toEqual({ ok: true, out: 'set up' })
+      expect((await h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_x' })).status).toBe(400)
+      expect((await h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_2' })).status).toBe(400)
+      expect(set).toEqual(['acc_y'])
+      // A Codex-only profile does not borrow: its own accounts only
+      const codex = profileOf(await h.call('agent-profiles-create', { name: 'Codex', accountIds: ['acc_x'], sandbox: true }))
+      expect((await h.call('agent-profiles-sandbox-setup', { id: codex.id, accountId: 'acc_y' })).status).toBe(400)
+      expect(set).toEqual(['acc_y'])
+      // Off Windows (no shell account asked) a Claude profile has nothing to borrow
+      const off = await rig({ sandboxSetup: async () => ({ ok: true, out: '' }) })
+      const q = profileOf(await off.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_1'], sandbox: true }))
+      expect((await off.call('agent-profiles-sandbox-setup', { id: q.id, accountId: 'acc_y' })).status).toBe(400)
+    })
   })
 
   // Task 8: Settings › Agent profiles shows each Codex account's readiness under a sandboxed profile on Windows, and

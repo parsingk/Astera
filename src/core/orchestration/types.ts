@@ -5,6 +5,7 @@ import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
 import type { GitHubLifecyclePolicy, RunGitHubState } from '../github/lifecycle'
 import type { SandboxKind } from '../types'
+import type { RunReport } from '../runReport/types'
 
 export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
@@ -85,9 +86,10 @@ export interface CheckResult {
   externalUrl?: string
   /** A person let this round go on without this check (C9 `skip-check`); its status is `not-run` */
   skipped?: true
-  /** The check ran outside any sandbox although the Task's workers were sandboxed: Claude Code on Windows has no sandbox,
-   *  only deny rules for its file tools, so its workers' shells, and with them this check, run as the person (Task K,
-   *  the person's Q1). Shown beside the verdict. */
+  /** The check ran outside any sandbox although the Task's workers were sandboxed: they were Claude Code on Windows
+   *  without its shell route into Codex's sandbox (claude shell sandbox design D5), with only deny rules for its file
+   *  tools, so its workers' shells, and with them this check, run as the person (Task K, the person's Q1). Shown beside
+   *  the verdict. */
   outsideSandbox?: true
   /** The variables the Credentials list kept from the check's environment, by name, never a value (Task K fix round 2):
    *  the names it took from the environment the check started from, and those it pointed at an empty location. A
@@ -135,6 +137,12 @@ export const isGitHubGateKind = (k: string | null | undefined): k is GitHubGateK
  *  않으면 되는 값이다. continuity/events.ts 의 isPlaceholder 가 같은 접두사를 본다. */
 export const placeholderSessionId = (): string => `pending:${newId('p').slice(2, 10)}`
 export const isPlaceholderSessionId = (id: string): boolean => id.startsWith('pending:')
+
+/** An external review (a third-party agent over ACP) has no terminal session. Its Dispatch carries a made-up
+ *  `acp:<8 hex>` sessionId so the one-open-Dispatch-per-session rule still holds. Not a `pending:` placeholder:
+ *  `isPlaceholderSessionId` keeps meaning only that. */
+export const EXTERNAL_REVIEW_SESSION_PREFIX = 'acp:'
+export const isExternalReviewSessionId = (id: string): boolean => id.startsWith(EXTERNAL_REVIEW_SESSION_PREFIX)
 
 /** A repository this app has been used in. **The project is a registered thing now, not a path the
  *  app infers every time** (docs/2026-09-21-job-run-split-and-projects-design.md §6): the public CLI
@@ -336,6 +344,10 @@ export interface JobRun {
    *  bounded by it (`runEndOf`, running.ts). Absent on a Run that runs, and on one that finished before it was kept.
    *  Kept back from the public surface. */
   endedAt?: string
+  /** The Host's snapshot of how this Run got to its outcome, built inside the commit that finished it (run report design
+   *  C9, `stampRunReports`), kept through later commits and dropped on the commit that sets the Run running again. Absent
+   *  on a Run that runs and on one that finished before reports. Kept back from the public surface. */
+  report?: RunReport
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
    *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
    *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).
@@ -444,8 +456,8 @@ export interface Task {
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
   /** The last review that gave a verdict ran with Claude Code's file-tool protection only (Task K fix round 1): its work was
-   *  sandboxed, and Claude Code has no sandbox on Windows, so its reviewer started with the deny rules only (E2), its shell
-   *  unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */
+   *  sandboxed, and Claude Code on Windows without its shell route into Codex's sandbox has none, so its reviewer started
+   *  with the deny rules only (E2), its shell unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */
   reviewFileToolsOnly?: true
   /** 이 Task 가 처음 validating 이 될 때 찍은 완료 정책의 지문(설계 G3, 명세 §37).
    *  `completionPolicyHash` 의 값이다 — 해시가 아니라 읽을 수 있는 정규 문자열이다. */
@@ -458,6 +470,9 @@ export interface Task {
   /** 완료 정책을 만족하지 않은 채 사람이 완료로 옮겼다 (설계 G4, 명세 §30). 이유는 사람이 적은 것
    *  그대로다 — 저널의 TASK_COMPLETED_WITH_OVERRIDE 가 이 칸을 읽는다. */
   completionOverride?: { reason: string; at: string }
+  /** Who forced it (`completionOverride`): a person, the coordinator, Astera itself, or a caller the Host cannot tell.
+   *  Stamped by the Host's commit path (`stampActedBy`); the journal holds the full actor. */
+  completionOverrideBy?: ActorGroup
   /** 이 Task 가 **처음 validating 이 된** 때 — 시간 예산의 시계(ConvergencePolicy.maxTotalMinutes).
    *  한 번만 찍고 덮지 않는다: 라운드마다 다시 찍으면 예산이 영원히 리셋된다. */
   convergenceStartedAt?: string
@@ -557,7 +572,8 @@ export interface Dispatch {
    *  one borrowed with the accounts (`workerProfileOf`). A reviewer's Dispatch has none. */
   agentProfileId?: string
   /** The protection the session this Dispatch started actually ran in (SessionInfo.sandboxKind), recorded when it
-   *  starts: `sandbox` its CLI's own, `deny-only` Claude Code on Windows. Absent when it ran unsandboxed, or for a
+   *  starts: `sandbox` its CLI's own (or, for Claude Code on Windows, Codex's around its shell), `deny-only` Claude Code
+   *  on Windows without its shell route into Codex's sandbox. Absent when it ran unsandboxed, or for a
    *  Dispatch from before Task K. A Task's checks run in the same kind (exec/checkSandbox.ts checkSandboxOf). */
   sandboxKind?: SandboxKind
   /**
@@ -603,6 +619,12 @@ export interface Dispatch {
    *  names (GitHub lifecycle G5b). Merge-ready needs it to be the PR's head; the Host records `git.head` only after the
    *  Dispatch ended, too late for the verdict. */
   reviewHead?: string
+  /** Who really reviewed, when this review Dispatch was an external reviewer's (a third-party agent over ACP) and
+   *  not the built-in Claude/Codex cross-review: a snapshot of the registered reviewer's id and name when it opened,
+   *  so a later rename or removal does not change the record. Such a Dispatch has no terminal session: `sessionId`
+   *  is `acp:<8 hex>`, `provider` is the implementer's and `accountId` is `''`, and nothing shows them. Absent for
+   *  every other Dispatch. */
+  externalReviewer?: { id: string; name: string }
   /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
    *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
   repair?: RepairReason
@@ -655,7 +677,13 @@ export interface Gate {
   resolution?: string
   createdAt: string
   resolvedAt?: string
+  /** Who answered it: a person, the coordinator, Astera itself, or a caller the Host cannot tell. Stamped by the Host's
+   *  commit path (`stampActedBy`); the journal holds the full actor. */
+  resolvedBy?: ActorGroup
 }
+
+/** Who acted on a Gate or forced a completion, as a group. No session id, address or pairing name rides on it. */
+export type ActorGroup = 'person' | 'coordinator' | 'astera' | 'unknown'
 
 /** Maximum messages in one Delivery batch */
 export const DELIVERY_MAX = 50

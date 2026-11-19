@@ -72,7 +72,8 @@ const RUN_HIDDEN = [
   'coordinatorStopPending',
   'externalCoordinatorSessionId',
   'githubState',
-  'endedAt'
+  'endedAt',
+  'report'
 ] as const
 
 /** A Job's mark that a sandboxed session made it (final fix pass, C3): the Host's own rule for what its work starts in,
@@ -101,12 +102,18 @@ const TASK_HIDDEN = [
   'sandboxed',
   // A lifecycle round handed to the Host (GitHub lifecycle G3a): its results are the Task's `checks` once CI settles it
   'ciWait',
-  'ciUnknowns'
+  'ciUnknowns',
+  // Who forced the completion, for the Host's run report: not a script's to read or send
+  'completionOverrideBy'
 ] as const
+
+/** A question's field kept back on purpose: who answered it, the Host's own record for its run report. */
+const QUESTION_HIDDEN = ['resolvedBy'] as const
 
 /** A followed event's message body (pages long) and the app's link from an event to a tab. */
 // `github` (G7b): a GitHub line's facts for the app's timeline; the public line says them in its summary
-const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github'] as const
+// `externalReviewer`: the app's chip for a review by an external reviewer; the public line says the name in its summary
+const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github', 'externalReviewer'] as const
 
 // A Job's and a Run's derived fields (the package's DERIVED_FIELDS: outcome, progress, questionsOpen) are not fields
 // of the objects, so they are on neither side of these checks.
@@ -114,7 +121,7 @@ type _project = NothingLeft<Unlisted<Project, typeof PROJECT_FIELDS, []>>
 type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, typeof JOB_HIDDEN>>
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
-type _question = NothingLeft<Unlisted<Gate, typeof QUESTION_FIELDS, []>>
+type _question = NothingLeft<Unlisted<Gate, typeof QUESTION_FIELDS, typeof QUESTION_HIDDEN>>
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT_FIELDS, []>>
 type _agentProfile = NothingLeft<Unlisted<AgentProfile, typeof AGENT_PROFILE_FIELDS, []>>
 type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG_FIELDS, []>>

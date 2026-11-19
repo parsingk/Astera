@@ -682,7 +682,7 @@ describe('agent-profiles --sandbox', () => {
     const flag = (cmd: 'agent-profiles-create' | 'agent-profiles-update') => USAGE[cmd].flags?.find((f) => f.name === 'sandbox')
     for (const cmd of ['agent-profiles-create', 'agent-profiles-update'] as const) {
       expect(flag(cmd)?.about, cmd).toContain("its sessions, terminal and chat, in their CLI's own sandbox")
-      expect(flag(cmd)?.about, cmd).toContain('Claude Code on Windows gets deny rules only')
+      expect(flag(cmd)?.about, cmd).toContain('Claude Code on Windows runs its shell in Codex')
     }
     expect(USAGE['agent-profiles-create'].detail).toContain("--sandbox on starts its sessions, terminal and chat, in their CLI's own sandbox (Codex's, or Claude Code's on macOS and Linux")
     expect(USAGE['agent-profiles-create'].detail).toContain('Windows')

@@ -16,7 +16,13 @@ export interface GitHubLifecyclePolicy {
   autoRerunInfrastructureFailures: boolean
   maxInfrastructureReruns: number
   ciWaitMinutes: number
+  /** The Job's consent to comment its Runs' report on the Run's pull request (run report C4). Absent reads off: a Job made
+   *  before the report existed never agreed to a comment. */
+  postRunReport?: boolean
 }
+
+/** Whether a Job's policy consents to the report comment: only an explicit true does. */
+export const postsRunReport = (policy: GitHubLifecyclePolicy | undefined): boolean => policy?.postRunReport === true
 
 /** How many checks a Job may name to wait for, and how long a name may be (G7a): a Run keeps at most 50 checks of a
  *  read, and a name is a check's name, not a document. run-create and MCP's create_job hold both. */
@@ -26,7 +32,8 @@ export const LIFECYCLE_CHECK_NAME_MAX = 100
 export const GITHUB_LIFECYCLE_DEFAULTS: Omit<GitHubLifecyclePolicy, 'ci'> = {
   autoRerunInfrastructureFailures: true,
   maxInfrastructureReruns: 2,
-  ciWaitMinutes: 90
+  ciWaitMinutes: 90,
+  postRunReport: true
 }
 
 /** GitHub's CheckConclusionState, lower-cased; `unknown` is ours, for a value GitHub adds later. */
@@ -237,6 +244,17 @@ export interface GitHubLogEntry {
   reason?: GitHubInvalidatedReason
 }
 
+export interface RunReportComment {
+  id?: number
+  url?: string
+  /** The pull request the comment was posted on: a Run bound to another one since has no comment there yet */
+  pr?: number
+  /** A person deleted the comment: nothing is posted again for this Run. */
+  gone?: true
+  error?: string
+  at: string
+}
+
 /** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written by the Host's `runs-github-record`
  *  and, for merge-ready, by the lifecycle review's verdict in its own write (G5b). */
 export interface RunGitHubState {
@@ -269,6 +287,9 @@ export interface RunGitHubState {
   /** When runs reconverge bound the base the pull request was retargeted to (G6): CI that started before it was judged
    *  against the old base, and stands for merge-ready no more (G6 final review I2). */
   baseReboundAt?: string
+  /** The run report's comment on the pull request (run report C2): its id, whether a person deleted it, the last error.
+   *  Written by `runs-github-record` with no log line and no seq. */
+  reportComment?: RunReportComment
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
   /** How many timeline lines (GITHUB_LINE_KINDS) the cap has dropped (G7b final review I3): a Run's event count is what

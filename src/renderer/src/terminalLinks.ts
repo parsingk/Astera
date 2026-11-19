@@ -77,6 +77,10 @@ export function attachConsoleLinks(
     onOpenFolder?: (path: string) => void
   }
 ): () => void {
+  // An OSC 8 hyperlink (Claude Code prints an artifact's address as one) goes the printed URL's way. Without a handler
+  // xterm opens it with a blocking confirm() and window.open(), which froze the window and opened nothing (2026-11-19).
+  // xterm makes links of http(s) targets only.
+  term.options.linkHandler = { activate: (event, uri) => opts.onUrl(uri, event) }
   const resolvePath = opts.resolvePath
   // A folder counts only where something opens folders; otherwise it is a miss, as it always was
   const answer = (r: ResolvedPath | null): { path: string; dir: boolean } | null => {

@@ -7,7 +7,6 @@ import type { MessageKey } from '../i18n'
 import type { SandboxKind } from '../types'
 
 const ENFORCED: CoverageCell = { level: 'enforced' }
-const NONE: CoverageCell = { level: 'none' }
 /** E3: the network is allowed inside the sandbox, on every OS for both CLIs. */
 const ALLOWED: CoverageCell = { level: 'seen' }
 
@@ -25,9 +24,13 @@ const CODEX_LINUX = { ...CODEX, stores: { level: 'enforced', note: 'bus-path-onl
 const RUNTIME_MEASURED: CoverageCell = { level: 'enforced', note: 'runtime-measured' }
 const CLAUDE_POSIX = { write: RUNTIME_MEASURED, sensitive: RUNTIME_MEASURED, stores: RUNTIME_MEASURED, network: ALLOWED } as const
 
-/** Claude Code on Windows has no sandbox: deny rules keep its file tools out of E6's locations, its shell is not
- *  restricted ("Windows: 셸은 제한 없음"). */
-const CLAUDE_WIN32 = { write: NONE, sensitive: { level: 'partial', note: 'file-tools-only' }, stores: NONE, network: ALLOWED } as const
+/** Claude Code on Windows has no sandbox of its own: deny rules keep its file tools out of E6's locations, and when a
+ *  Codex account's Windows sandbox is set up its shell runs in Codex's sandbox (claude shell sandbox design). Measured on
+ *  Windows 11 with Claude Code 2.1.325 and codex-cli 0.160.0 on 2026-11-16 (design §3): a home write refused, `~/.ssh`
+ *  closed, the login files closed. Without that route the session starts deny-only and its start says so, so each cell
+ *  carries the note: it holds only when the shell runs in Codex's sandbox. */
+const VIA_CODEX: CoverageCell = { level: 'enforced', note: 'via-codex' }
+const CLAUDE_WIN32 = { write: VIA_CODEX, sensitive: VIA_CODEX, stores: VIA_CODEX, network: ALLOWED } as const
 
 export const SANDBOX_COVERAGE: readonly SandboxCoverageRow[] = [
   { provider: 'claude', os: 'win32', classes: CLAUDE_WIN32 },
@@ -41,14 +44,18 @@ export const SANDBOX_COVERAGE: readonly SandboxCoverageRow[] = [
 /** Said under the table: E6 is the list, so the rest of the home stays readable inside the sandbox (spec §6). */
 export const SANDBOX_TABLE_CAPTION: MessageKey = 'settings.security.sandboxCoverage.homeReadable'
 
-/** Said beside a row the cells cannot say it for: Claude Code's shell on Windows is not restricted; on Linux, from
+/** Said beside a row the cells cannot say it for: on Windows, when Claude Code's shell is in Codex's sandbox and what is
+ *  still open; on Linux, from
  *  Ubuntu 25.04 its shell commands fail under AppArmor's profile for bubblewrap (bwrap-userns-restrict), which takes
  *  capabilities away from the programs inside bubblewrap (Task E fix rounds 2 and 3). Null for the others. */
 export const sandboxRowCaption = (r: Pick<SandboxCoverageRow, 'provider' | 'os'>): MessageKey | null =>
   r.provider !== 'claude' ? null : r.os === 'win32' ? 'settings.security.sandboxCoverage.windowsClaude' : r.os === 'linux' ? 'settings.security.sandboxCoverage.linuxClaudeUbuntu' : null
 
-/** The protection a sandboxed session of `provider` gets on `platform` (SessionInfo.sandboxKind), decided by the session
- *  managers, which know both: Claude Code on Windows has no sandbox, only deny rules for its file tools; everything else
- *  runs in its CLI's own sandbox. `platform` is a string: the renderer, which has no NodeJS types, reads this file. */
+/** The protection a sandboxed session of `provider` gets on `platform` by its CLI alone: Claude Code on Windows has no
+ *  sandbox, only deny rules for its file tools; everything else runs in its CLI's own sandbox. Not what a Claude session
+ *  on Windows got: its start records that (SessionInfo.sandboxKind), `sandbox` when its shell ran in Codex's sandbox
+ *  (claude shell sandbox design D9), and every reader of a session takes the recorded kind. What this answers is kept for
+ *  work recorded before kinds were (checkSandbox.ts's last line) and for the control plane's static report.
+ *  `platform` is a string: the renderer, which has no NodeJS types, reads this file. */
 export const sandboxKindOf = (provider: 'claude' | 'codex', platform: string): SandboxKind =>
   provider === 'claude' && platform === 'win32' ? 'deny-only' : 'sandbox'

@@ -134,6 +134,21 @@ const api = {
     setCurrent: invoke('higgsfield.setCurrent'),
     setWorkspace: invoke('higgsfield.setWorkspace')
   },
+  kube: {
+    recheck: invoke('kube.recheck'),
+    classify: invoke('kube.classify'),
+    contexts: invoke('kube.contexts'),
+    target: invoke('kube.target'),
+    setTarget: invoke('kube.setTarget'),
+    setOverlay: invoke('kube.setOverlay'),
+    useContext: invoke('kube.useContext'),
+    preview: invoke('kube.preview'),
+    run: invoke('kube.run'),
+    cancel: invoke('kube.cancel'),
+    reload: invoke('kube.reload'),
+    render: invoke('kube.render'),
+    status: invoke('kube.status')
+  },
   github: {
     status: invoke('github.status'),
     recheck: invoke('github.recheck'),
@@ -185,6 +200,10 @@ const api = {
     newToken: invoke('mcpHttp.newToken')
   },
   settings: {
+    getKubectlPath: invoke('settings.getKubectlPath'),
+    setKubectlPath: invoke('settings.setKubectlPath'),
+    getKubeconfigFiles: invoke('settings.getKubeconfigFiles'),
+    setKubeconfigFiles: invoke('settings.setKubeconfigFiles'),
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),
     getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),
@@ -204,6 +223,9 @@ const api = {
     setResumeStrategy: invoke('settings.setResumeStrategy'),
     getAgentPermissionMode: invoke('settings.getAgentPermissionMode'),
     setAgentPermissionMode: invoke('settings.setAgentPermissionMode'),
+    getReviewerSettings: invoke('settings.getReviewerSettings'),
+    setReviewerSettings: invoke('settings.setReviewerSettings'),
+    testExternalReviewer: invoke('settings.testExternalReviewer'),
     getMcpAccess: invoke('settings.getMcpAccess'),
     setMcpAccess: invoke('settings.setMcpAccess'),
     getMcpSessions: invoke('settings.getMcpSessions'),
@@ -411,6 +433,7 @@ const api = {
     list: invoke('audit.list'),
     summary: invoke('audit.summary'),
     runTokens: invoke('audit.runTokens'),
+    runReport: invoke('audit.runReport'),
     taskTokens: invoke('audit.taskTokens')
   },
   // Settings › Security & Access › Credentials and Audit Logs' credential uses (credentials design §7): the Host's

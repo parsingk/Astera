@@ -4,9 +4,10 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { makeRepo, gitSync } from '../worktrees/testRepo'
-import { CHANGES_MAX_FILES, fileIdOf, readChanges, readFileDiff, readRangeDiff, type ChangedFile } from './changes'
+import { CHANGES_MAX_FILES, fileIdOf, readChanges, readFileDiff, readRangeDiff, trackedTreeState, type ChangedFile } from './changes'
 
 const head = (repo: string): string => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, windowsHide: true, encoding: 'utf8' }).trim()
 const gitDiff = (repo: string, args: string[]): string =>
@@ -234,5 +235,55 @@ describe('git reads are bounded and literal', { timeout: 60_000 }, () => {
     const r = (await readFileDiff(repo, base, head(repo), f, { maxBytes: 64 * 1024 }))!
     expect(r.truncated).toBe(true)
     expect(Buffer.byteLength(r.diff)).toBeLessThanOrEqual(64 * 1024)
+  })
+})
+
+describe('trackedTreeState', { timeout: 30_000 }, () => {
+  it('is null outside a repository', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-tts-'))
+    try {
+      expect(await trackedTreeState(dir)).toBeNull()
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('names HEAD and the tracked changes, and ignores untracked files', async () => {
+    const repo = await makeRepo()
+    try {
+      await write(repo, 'a.txt', 'one\n')
+      commit(repo, 'base')
+      const clean = (await trackedTreeState(repo))!
+      expect(clean.startsWith(`${head(repo)}\n`)).toBe(true)
+      await write(repo, 'new.txt', 'untracked\n')
+      expect(await trackedTreeState(repo)).toBe(clean)
+      await write(repo, 'a.txt', 'two\n')
+      const dirty = (await trackedTreeState(repo))!
+      expect(dirty).not.toBe(clean)
+      expect(dirty).toContain(' M a.txt')
+      commit(repo, 'next')
+      const next = (await trackedTreeState(repo))!
+      expect(next.startsWith(`${head(repo)}\n`)).toBe(true)
+      expect(next).not.toBe(clean)
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  // Final fix wave A1: the status line of a file already modified does not change when it is edited again
+  it('changes when a tracked file that is already modified is edited again', async () => {
+    const repo = await makeRepo()
+    try {
+      await write(repo, 'a.txt', 'one\n')
+      commit(repo, 'base')
+      await write(repo, 'a.txt', 'two\n')
+      const first = (await trackedTreeState(repo))!
+      expect(await trackedTreeState(repo)).toBe(first)
+      await write(repo, 'a.txt', 'three\n')
+      const second = (await trackedTreeState(repo))!
+      expect(second).not.toBe(first)
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
   })
 })

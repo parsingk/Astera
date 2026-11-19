@@ -1318,14 +1318,39 @@ describe('createHostSpawner — createSession', () => {
         expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
         expect(info.sandboxed).toBe(true)
         expect(h.registry.list()[i].meta!.restore).toMatchObject({ sandboxed: true })
+        // Claude shell sandbox design D5: it must be, and its note says so, so its rolls are held to it too
+        expect(info.sandboxRequired).toBe(true)
+        expect(h.registry.list()[i].meta!.restore).toMatchObject({ sandboxRequired: true })
       }
       if (process.platform === 'win32') {
+        // With no Codex account registered, a Claude shell has no sandbox to borrow (Task 4 review M1: a registered one
+        // is borrowed logged in or not)
+        await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+          { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' }
+        ] }))
         await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
         expect(h.spawned).toHaveLength(2)
       } else {
         const claude = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })
         expect(claude.sandboxed).toBe(true)
       }
+    })
+
+    // Claude shell sandbox design D4 and D5 (Task 4): on Windows the Host decides the route for a Claude session's shell
+    // under the Codex account it reads from accounts.json: a forced start with no Codex account registered is refused for
+    // that (`no-sandbox claude`), and one with a registered account, logged out here (Task 4 review M1: `codex sandbox`
+    // needs no login), goes on to ask its codex (here a version probe that finds none: `cli-missing codex`). Off Windows a
+    // forced Claude start runs in Claude's own sandbox
+    it.runIf(process.platform === 'win32')('a forced Claude start on Windows asks the route of the default Codex account in accounts.json', async () => {
+      const cx = path.join(dir, 'cfg2')
+      const claudeAccount = { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' }
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [claudeAccount] }))
+      const missing = Object.assign((): undefined => undefined, { warm: async () => {} })
+      const h = rig({ findRollout: async () => null, claudeVersion: Object.assign(() => '2.1.310', { warm: async () => {} }), codexVersion: missing })
+      await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [claudeAccount, { id: 'acc2', label: 'two', configDir: cx, color: '#888', createdAt: NOW, provider: 'codex' }] }))
+      await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-missing codex$/)
+      expect(h.spawned).toHaveLength(0)
     })
 
     // Task K fix rounds 1 and 2 (the controller's rulings, after E2): a reviewer of work a profile's switch sandboxed asks
@@ -1474,5 +1499,50 @@ describe('enforceWarm', () => {
     warmed.length = 0
     await warm('claude')
     expect(warmed.sort()).toEqual(['hooks', 'version:claude'])
+  })
+})
+
+// Sandbox design §6: the Host names the agents' login files from accounts.json as it is when a start asks, not from
+// whichever code path happened to read it last. A Host that has read nothing yet still denies a registered account's login
+// file, even where the account's folder is outside the places account detection looks at.
+describe('createHostSpawner, the agents login files', () => {
+  const slashed = (p: string): string => p.split(path.sep).join('/')
+  const neverRead = (): Promise<never> => Promise.reject(new Error('this Host never read accounts.json'))
+
+  it('names a registered account outside the usual places before any read of accounts.json, and one registered since', async () => {
+    const outside = path.join(dir, 'agents', 'work')
+    writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'w', label: 'work', configDir: outside, color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ readAccounts: neverRead })
+    const paths = (): string[] => h.spawner!.agentLogins!().map((e) => e.path)
+    expect(paths()).toContain(`${slashed(outside)}/auth.json`)
+    // An account registered afterwards is there at the next ask, with no spawn in between
+    const later = path.join(dir, 'agents', 'later')
+    writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'w', label: 'work', configDir: outside, color: '#888', createdAt: NOW, provider: 'codex' },
+      { id: 'l', label: 'later', configDir: later, color: '#888', createdAt: NOW, provider: 'claude' }
+    ] }))
+    expect(paths()).toContain(`${slashed(later)}/.credentials.json`)
+  })
+
+  it('uses accounts.json while it reads, and the last list its operations read when it is damaged or missing, never throwing', async () => {
+    const kept = path.join(dir, 'agents', 'kept')
+    const onDisk = path.join(dir, 'agents', 'on-disk')
+    const h = rig({ readAccounts: async () => [{ id: 'k', label: 'k', configDir: kept, color: '#888', createdAt: NOW, provider: 'codex' }] })
+    // The last read came from a spawner operation (the wrapped reader), and says `kept`
+    await h.spawner!.accountName!('k')
+    const paths = (): string[] => h.spawner!.agentLogins!().map((e) => e.path)
+    // While the file reads, it is the file that counts, not what the operations last read
+    writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'd', label: 'd', configDir: onDisk, color: '#888', createdAt: NOW, provider: 'codex' }] }))
+    expect(paths()).toContain(`${slashed(onDisk)}/auth.json`)
+    expect(paths()).not.toContain(`${slashed(kept)}/auth.json`)
+    // Damaged: the last list stands in
+    writeFileSync(path.join(profile, 'accounts.json'), '{ not json')
+    expect(paths()).toContain(`${slashed(kept)}/auth.json`)
+    expect(paths()).not.toContain(`${slashed(onDisk)}/auth.json`)
+    // Missing: the same
+    await fs.rm(path.join(profile, 'accounts.json'))
+    expect(paths()).toContain(`${slashed(kept)}/auth.json`)
   })
 })

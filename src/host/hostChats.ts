@@ -53,10 +53,15 @@ export interface HostChatsDeps {
   /** The sandbox for Claude, the spawner's (core/sandbox/claudeStart.ts): a sandboxed Claude chat's version floor and its
    *  one --settings file. */
   claudeSandbox?: ChatManagerDeps['claudeSandbox']
+  /** The Git Bash a sandboxed Claude chat's shell route wraps on Windows, the spawner's resolver (claude shell sandbox
+   *  design D4.1). */
+  gitBash?: ChatManagerDeps['gitBash']
   /** The folder the Host's socket is in, the spawner's: a sandboxed Codex chat's profile denies it on macOS and Linux. */
   hostSocketDir?: ChatManagerDeps['hostSocketDir']
   /** The profile's app key file, the spawner's: a sandboxed Codex chat's profile denies it on every OS. */
   appKeyFile?: ChatManagerDeps['appKeyFile']
+  /** The agents' login files, the spawner's: a sandboxed Codex chat's profile denies those there at the start on every OS. */
+  agentLogins?: ChatManagerDeps['agentLogins']
   /** The read-only folders, the spawner's: a sandboxed Codex chat's profile keeps them read on every OS (Task E and its
    *  fix round 1). */
   readOnly?: ChatManagerDeps['readOnly']
@@ -82,7 +87,7 @@ export interface HostChats {
   spawn(o: ChatRollSpawn): SessionInfo
   /** What a sandboxed chat's spawn needs first (ChatSessionManager.prepare): a Codex chat's folder read, a Claude chat's
    *  version asked and settings written; `sessions create` awaits it. Rejects with the refusal (`SANDBOX_UNAVAILABLE: …`). */
-  prepare(o: { account: Account; cwd: string; sandbox?: boolean }): Promise<void>
+  prepare(o: { account: Account; cwd: string; sandbox?: boolean; sandboxRequired?: boolean }): Promise<void>
   /** True once the new proc's handshake and carry-on settled; hostStarting is then cleared in the note.
    *  False when they did not settle within CHAT_START_PUSH_MS: the session is killed and the mark stays,
    *  so no app takes over a start still under way (final review I1). Never rejects. */
@@ -207,8 +212,10 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.sandboxLayouts ? { sandboxLayouts: d.sandboxLayouts } : {}),
     ...(d.codexWindowsReady ? { codexWindowsReady: d.codexWindowsReady } : {}),
     ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
+    ...(d.gitBash ? { gitBash: d.gitBash } : {}),
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
     ...(d.appKeyFile !== undefined ? { appKeyFile: d.appKeyFile } : {}),
+    ...(d.agentLogins ? { agentLogins: d.agentLogins } : {}),
     ...(d.readOnly !== undefined ? { readOnly: d.readOnly } : {}),
     linkLook: d.linkLook,
     ...(d.sandboxWarn ? { sandboxWarn: d.sandboxWarn } : {}),

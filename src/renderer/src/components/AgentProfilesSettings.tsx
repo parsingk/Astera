@@ -24,7 +24,8 @@ import {
   sandboxDefaultRemoved,
   sandboxHintKeys,
   sandboxReadinessShown,
-  sandboxStateLine
+  sandboxStateLine,
+  shellCodexMissing
 } from './agentProfilesText'
 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
@@ -479,6 +480,7 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
 
   return (
     <>
+      {shellCodexMissing(answer) && <div className="settings-hint">{t('settings.agentProfiles.sandboxShell.none')}</div>}
       {readinessRows(profile, accounts, answer).map((r) => (
         <Fragment key={r.accountId}>
           <div className="settings-row">
@@ -492,6 +494,7 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
               )}
             </div>
           </div>
+          {r.forClaudeShell && <div className="settings-hint">{t('settings.agentProfiles.sandboxShell.hint')}</div>}
           {r.elevatedDefault && (
             // A dim sentence that takes the width, beside a button that keeps its own (seen on the hidden desktop: as a
             // settings row the sentence took the label's weight and squeezed the button)

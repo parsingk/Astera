@@ -1,7 +1,7 @@
 // Which sandbox a Task's checks run in (Task K): the kind its workers' sessions actually ran in, recorded on their
 // Dispatches. The person decided validation of a sandboxed Job runs inside the same kind of sandbox its workers ran in,
-// a lifecycle Task's merged check with the Run's latest sandboxed implementer (Q3), and Claude Code on Windows, which has
-// no sandbox, runs its checks as today, said so (Q1).
+// a lifecycle Task's merged check with the Run's latest sandboxed implementer (Q3), and Claude Code on Windows, when its
+// workers ran with deny rules only (no shell route into Codex's sandbox), runs its checks as today, said so (Q1).
 import { describe, expect, it } from 'vitest'
 import { emptyState, type OrchState } from '../state'
 import type { Dispatch, Task } from '../types'
@@ -48,6 +48,14 @@ describe('checkSandboxOf', () => {
     const t = task('t1')
     const s = state([t], [dispatch('d1', 't1', 0, { provider: 'claude', sandboxKind: 'deny-only' })])
     expect(checkSandboxOf(s, t, 'win32')).toEqual({ kind: 'deny-only' })
+  })
+
+  // Claude shell sandbox design D10: a Claude worker on Windows whose shell ran in Codex's sandbox recorded `sandbox`, so
+  // its check is put in a sandbox as that Claude account (SessionManager.checkLaunch builds it through the route)
+  it("a sandbox as the Claude account when Claude Code's workers on Windows ran with their shell in Codex's sandbox", () => {
+    const t = task('t1')
+    const s = state([t], [dispatch('d1', 't1', 0, { provider: 'claude', accountId: 'cl1', sandboxKind: 'sandbox' })])
+    expect(checkSandboxOf(s, t, 'win32')).toEqual({ kind: 'sandbox', provider: 'claude', accountId: 'cl1' })
   })
 
   it('a real sandbox wins over deny-only', () => {

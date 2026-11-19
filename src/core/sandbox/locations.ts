@@ -1,14 +1,16 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
-// list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
-// slashes, the one form both CLIs' settings and the Codex profile take on every OS.
-import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs'
+// list, the OS credential stores a CLI's own sandbox does not close by itself, and the agents' own login files (Claude
+// Code's `.credentials.json`, Codex's `auth.json`) of every account and of the two default folders. All paths come out
+// absolute with forward slashes, the one form both CLIs' settings and the Codex profile take on every OS.
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 /** One place a sandboxed session may not read, and whether it names a file or a folder (Task E fix round 6): Codex's
  *  Windows sandbox makes a missing deny-read path a folder, which is harmless for a folder and breaks the program that
- *  later wants a file there (core/sandbox/prepared.ts leaves a missing file out on Windows). Said where each list is
+ *  later wants a file there (core/sandbox/prepared.ts leaves a missing E6 file out on Windows, and an agent's login file on
+ *  every OS, presentAgentLogins). Said where each list is
  *  built, so a new entry is classed too. */
 export interface DenyEntry {
   path: string
@@ -30,6 +32,80 @@ export function sensitiveEntries(platform: NodeJS.Platform, env: Record<string, 
 /** The E6 list's paths (sensitiveEntries). */
 export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string[] {
   return sensitiveEntries(platform, env, home).map((e) => e.path)
+}
+
+/** The file each agent keeps its login in, inside its config folder: Claude Code's `<CLAUDE_CONFIG_DIR>/.credentials.json`
+ *  and Codex's `<CODEX_HOME>/auth.json` (the files the login probes look at, accounts/loginStatus.ts). */
+export const AGENT_LOGIN_FILE = { claude: '.credentials.json', codex: 'auth.json' } as const
+
+/** The agents' login files as deny entries (sandbox design §6): `~/.claude/.credentials.json`, `~/.codex/auth.json` and
+ *  each account's `<configDir>/<its provider's file>`, an account with no provider being a Claude one (`Account.provider`,
+ *  core/types.ts). A sandboxed session's shell had these open (measured on Windows, 2026-11-16) and the sandbox allows
+ *  the network, so a command could send them out. Files, so a start leaves one out that is not there
+ *  (a logged-out account has none to protect, and Codex's Windows sandbox makes a missing deny path a folder). Only the
+ *  login file is named, not the folder: `.claude.json` and `config.toml` beside it are not credentials. Forward
+ *  slashes, each path once. One rule for every wiring (the app, the Host, both CLIs). */
+export function agentLoginEntries(o: { homeDir: string; accounts: readonly { provider?: 'claude' | 'codex'; configDir: string }[] }): DenyEntry[] {
+  const home = slashed(o.homeDir)
+  const paths = [
+    `${home}/.claude/${AGENT_LOGIN_FILE.claude}`,
+    `${home}/.codex/${AGENT_LOGIN_FILE.codex}`,
+    ...o.accounts.map((a) => `${slashed(a.configDir)}/${AGENT_LOGIN_FILE[a.provider ?? 'claude']}`)
+  ]
+  return [...new Set(paths)].map((path) => ({ path, kind: 'file' as const }))
+}
+
+/** What agentAccountFolders reads of a folder: its entries' names and whether each is a folder. `readdirSync` with
+ *  `withFileTypes` is one. */
+type FolderList = (dir: string) => readonly { name: string; isDirectory(): boolean; isSymbolicLink?(): boolean }[]
+
+/** The folders account detection looks at, for both providers, found on the disk now (sandbox design §6): `~/.claude`,
+ *  every sub-folder of `~/.claude-accounts`, every `~/.claude-*` folder, and the same three for `.codex`. It mirrors
+ *  `collectCandidateDirs` in accounts/detect.ts and its Codex twin in accounts/detectCodex.ts, minus their config marker
+ *  test (a folder with no login file is dropped by the start's presence rule). A login file in a folder nobody
+ *  registered (one made by `claude` or `codex` run by hand with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set) was readable to
+ *  a sandboxed session (measured on Windows, 2026-11-16), and the registry does not know it. The default folders are
+ *  always there; a folder that cannot be listed gives none of its children, never an exception.
+ *
+ *  Synchronous on purpose: the spawn that asks is synchronous, so it cannot await a listing, and it already looks at
+ *  paths under the home folder this way (`LinkLook`). The list must also be the one at THIS start: a list kept from an
+ *  earlier read would miss a folder made since. A link to a folder (a junction, a symlink: a `~/.claude-accounts` moved
+ *  off the system drive is commonly one) counts as a folder, which `Dirent.isDirectory()` alone says no to. `list` is a
+ *  test seam for the directory read. */
+export function agentAccountFolders(
+  homeDir: string,
+  list: FolderList = (dir) => readdirSync(dir, { withFileTypes: true })
+): { provider: 'claude' | 'codex'; configDir: string }[] {
+  const home = slashed(homeDir)
+  const entries = (dir: string): { name: string; isDirectory(): boolean }[] => {
+    try {
+      return [...list(dir)].map((e) => ({
+        name: e.name,
+        isDirectory: () => {
+          if (e.isDirectory()) return true
+          try {
+            return Boolean(e.isSymbolicLink?.()) && statSync(`${dir}/${e.name}`).isDirectory()
+          } catch {
+            return false
+          }
+        }
+      }))
+    } catch {
+      return []
+    }
+  }
+  const top = entries(home)
+  return (['claude', 'codex'] as const).flatMap((provider) => {
+    const base = `.${provider}`
+    const folders = [`${home}/${base}`]
+    for (const entry of top) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === `${base}-accounts`) {
+        for (const sub of entries(`${home}/${entry.name}`)) if (sub.isDirectory()) folders.push(`${home}/${entry.name}/${sub.name}`)
+      } else if (entry.name.startsWith(`${base}-`)) folders.push(`${home}/${entry.name}`)
+    }
+    return folders.map((configDir) => ({ provider, configDir }))
+  })
 }
 
 /** The app's key (`<profile>/host/app.key`, core/host/hostKey.ts appKeyPath): what lets a process be the app to the

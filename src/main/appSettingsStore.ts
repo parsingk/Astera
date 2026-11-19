@@ -23,6 +23,7 @@ import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
 import { mcpAccessOf } from '../core/settings/mcpAccess'
 import { mcpSessionsOf } from '../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../core/settings/mcpGithubWrite'
+import { EMPTY_REVIEWER_SETTINGS, reviewerSettingsOf, type ReviewerSettings } from '../core/settings/externalReviewers'
 import { githubLifecycleDefaultsOf, type GitHubLifecycleDefaults } from '../core/github/lifecycleDefaults'
 import { GITHUB_LIFECYCLE_DEFAULTS } from '../core/github/lifecycle'
 import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
@@ -113,6 +114,10 @@ export class AppSettingsStore {
    *  is inverted from the toggles above — the file is user-editable, so only an explicit false
    *  reads as off, and anything else (absent, corrupt) reads as on. */
   private githubPolling = true
+  /** Override for the kubectl binary; null means resolve it from PATH. */
+  private kubectlPath: string | null = null
+  /** Extra kubeconfig files to merge into the kube context list. */
+  private kubeconfigFiles: string[] = []
   /** 설명을 누가·무엇으로 만드는가. 비어 있으면 생성하지 않는다 (설계 D2) */
   private generator: GeneratorSettings = {}
   private resumeStrategy: ResumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
@@ -132,6 +137,9 @@ export class AppSettingsStore {
   private githubLifecycle: GitHubLifecycleDefaults = { ...GITHUB_LIFECYCLE_DEFAULTS }
   /** MCP over HTTP (MCP HTTP design §2). Off by default; written only while a field differs from its default. */
   private mcpHttp: McpHttpSettings = mcpHttpOf(undefined)
+  /** The registered external reviewers and the chosen one (`externalReviewers`, `reviewBy`). Empty means the built-in
+   *  review; written only while it is not empty. The Host reads the file (readReviewerSettings). */
+  private reviewerSettings: ReviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
   /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
@@ -189,6 +197,13 @@ export class AppSettingsStore {
       this.jobContinuityEnabled =
         (parsed as { jobContinuityEnabled?: unknown }).jobContinuityEnabled === true
       this.githubPolling = (parsed as { githubPolling?: unknown }).githubPolling !== false
+      // Narrowed on read, the file is user-editable: anything but a non-empty string / string list is "not set".
+      const kubectlPath = (parsed as { kubectlPath?: unknown }).kubectlPath
+      this.kubectlPath = typeof kubectlPath === 'string' && kubectlPath !== '' ? kubectlPath : null
+      const kubeconfigFiles = (parsed as { kubeconfigFiles?: unknown }).kubeconfigFiles
+      this.kubeconfigFiles = Array.isArray(kubeconfigFiles)
+        ? kubeconfigFiles.filter((f): f is string => typeof f === 'string' && f !== '')
+        : []
       // Narrowed on read, like generator and terminalFont and for the same reason: the file is
       // user-editable, and the narrowing is per flag's own default (see readDesktopNotify).
       this.desktopNotify = readDesktopNotify((parsed as { desktopNotify?: unknown }).desktopNotify)
@@ -213,6 +228,8 @@ export class AppSettingsStore {
       this.githubLifecycle = githubLifecycleDefaultsOf((parsed as { githubLifecycle?: unknown }).githubLifecycle)
       // The same function the Host's readMcpHttp uses, so the two cannot differ.
       this.mcpHttp = mcpHttpOf((parsed as { mcpHttp?: unknown }).mcpHttp)
+      // The same function the Host's readReviewerSettings uses, so the two cannot differ.
+      this.reviewerSettings = reviewerSettingsOf(parsed)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -256,6 +273,8 @@ export class AppSettingsStore {
         this.orchAlwaysOnMigrated = false
         this.jobContinuityEnabled = false
         this.githubPolling = true
+        this.kubectlPath = null
+        this.kubeconfigFiles = []
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
         this.generator = {}
         this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
@@ -265,6 +284,7 @@ export class AppSettingsStore {
         this.mcpGithubWrite = false
         this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS }
         this.mcpHttp = mcpHttpOf(undefined)
+        this.reviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         this.defaultSessionKind = 'terminal'
@@ -288,6 +308,8 @@ export class AppSettingsStore {
       this.orchAlwaysOnMigrated = false
       this.jobContinuityEnabled = false
       this.githubPolling = true
+      this.kubectlPath = null
+      this.kubeconfigFiles = []
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
       this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
@@ -301,8 +323,10 @@ export class AppSettingsStore {
       this.mcpSessions = false
       this.mcpGithubWrite = false
       // The narrower side too (G7a final review M4): the file may have said "do not rerun", and the Host reads this one
-      this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false }
+      this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false }
       this.mcpHttp = mcpHttpOf(undefined)
+      // The narrower side too: no external reviewer, so every review stays the built-in one.
+      this.reviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.defaultSessionKind = 'terminal'
@@ -429,6 +453,18 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getReviewerSettings(): ReviewerSettings {
+    return { reviewers: this.reviewerSettings.reviewers.map((r) => ({ ...r, args: [...r.args] })), reviewBy: this.reviewerSettings.reviewBy }
+  }
+
+  /** The Host reads the file when a Task is reviewed (readReviewerSettings), so saving it is the whole effect.
+   *  Narrowed here too, and the narrowed value is returned: the file holds only what the Host would read back. */
+  async setReviewerSettings(v: ReviewerSettings): Promise<ReviewerSettings> {
+    this.reviewerSettings = reviewerSettingsOf({ externalReviewers: v?.reviewers, reviewBy: v?.reviewBy })
+    await this.persist()
+    return this.getReviewerSettings()
+  }
+
   getMcpAccess(): McpAccess {
     return this.mcpAccess
   }
@@ -486,6 +522,24 @@ export class AppSettingsStore {
 
   async setGithubPolling(enabled: boolean): Promise<void> {
     this.githubPolling = enabled
+    await this.persist()
+  }
+
+  getKubectlPath(): string | null {
+    return this.kubectlPath
+  }
+
+  async setKubectlPath(p: string | null): Promise<void> {
+    this.kubectlPath = p
+    await this.persist()
+  }
+
+  getKubeconfigFiles(): string[] {
+    return [...this.kubeconfigFiles]
+  }
+
+  async setKubeconfigFiles(files: string[]): Promise<void> {
+    this.kubeconfigFiles = [...files]
     await this.persist()
   }
 
@@ -611,6 +665,8 @@ export class AppSettingsStore {
       orchestrationEnabled?: true
       jobContinuityEnabled?: boolean
       githubPolling?: boolean
+      kubectlPath?: string
+      kubeconfigFiles?: string[]
       desktopNotify?: DesktopNotifySettings
       generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
@@ -620,6 +676,8 @@ export class AppSettingsStore {
       mcpGithubWrite?: true
       githubLifecycle?: GitHubLifecycleDefaults
       mcpHttp?: McpHttpSettings
+      externalReviewers?: ReviewerSettings['reviewers']
+      reviewBy?: string
       terminalFont?: TerminalFont
       theme?: ThemeId
       defaultSessionKind?: SessionKind
@@ -646,6 +704,8 @@ export class AppSettingsStore {
       data.orchestrationEnabled = true
     if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
+    if (this.kubectlPath !== null) data.kubectlPath = this.kubectlPath
+    if (this.kubeconfigFiles.length > 0) data.kubeconfigFiles = this.kubeconfigFiles
     // Written only while the question is still open, which is the same one-sided rule as the two
     // below — and here it carries the difference between a new install and an old one, so an absent
     // key has to keep meaning "asked". See the field's own note.
@@ -660,6 +720,8 @@ export class AppSettingsStore {
     if (JSON.stringify(this.githubLifecycle) !== JSON.stringify(githubLifecycleDefaultsOf(undefined))) data.githubLifecycle = { ...this.githubLifecycle }
     const h = this.mcpHttp
     if (h.enabled || h.lan || h.port !== MCP_HTTP_DEFAULT_PORT || h.hosts.length > 0) data.mcpHttp = h
+    if (this.reviewerSettings.reviewers.length > 0) data.externalReviewers = this.reviewerSettings.reviewers
+    if (this.reviewerSettings.reviewBy !== null) data.reviewBy = this.reviewerSettings.reviewBy
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)

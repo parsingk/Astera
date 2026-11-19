@@ -567,6 +567,10 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ sandbox: true }))
     h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
     expect((chats.spawn.mock.calls[1] as unknown[])[0]).not.toHaveProperty('sandbox')
+    // Claude shell sandbox design D5: a chain that must be sandboxed is held to it at its respawn too
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', sandbox: true, sandboxRequired: true, restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect(chats.spawn).toHaveBeenLastCalledWith(expect.objectContaining({ sandbox: true, sandboxRequired: true }))
+    expect((chats.spawn.mock.calls[0] as unknown[])[0]).not.toHaveProperty('sandboxRequired')
   })
   it('does not announce a chat roll whose new proc ended before it started (review M2)', async () => {
     const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', procOf: (id: string) => (id === 'c2' ? null : 'p1') }

@@ -105,6 +105,7 @@ export function LifecycleField(p: {
               : t('jobs.new.githubDefaultsNoRerun', { minutes: p.defaults.ciWaitMinutes })}
         </p>
       )}
+      {p.checked && p.defaults !== null && p.defaults !== 'runtime' && p.defaults.postRunReport && <p className="modal-hint">{t('jobs.new.githubReportHint')}</p>}
     </div>
   )
 }

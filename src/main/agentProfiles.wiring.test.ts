@@ -68,7 +68,7 @@ describe('ipc.ts starts a session from an agent profile', () => {
   // the prepare reads the folder for it and the spawn, which takes `...opts`, starts in it
   it('a terminal session: the prepare takes the profile and its sandbox, the spawn carries them in opts, and its use is stamped after', () => {
     expect(terminal).toMatch(
-      /core\.sessions\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.agentProfileId !== undefined \? \{ agentProfileId: opts\.agentProfileId \} : \{\}\), \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\) \}\)/
+      /core\.sessions\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.agentProfileId !== undefined \? \{ agentProfileId: opts\.agentProfileId \} : \{\}\), \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\), \.\.\.\(sandboxRequired \? \{ sandboxRequired: true \} : \{\}\) \}\)/
     )
     expect(terminal).toMatch(/core\.sessions\.spawn\(\{\s*\.\.\.opts,/)
     expect(before(terminal, 'core.sessions.spawn({', 'touchAgentProfile(opts.agentProfileId)')).toBe(true)
@@ -106,8 +106,10 @@ describe('index.ts prepares a roll on the chain’s agent profile', () => {
   it('both coordinators’ prepareSpawn pass the profile id and the sandbox to the prepare', () => {
     expect(index.split('\n').filter((l) => l.includes('prepareSpawn:'))).toHaveLength(2)
     const shared = String.raw`core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\), \.\.\.\(sandbox \? \{ sandbox: true \} : \{\}\)`
-    // The claude coordinator's, as it was
-    expect(index).toMatch(new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox\) => ${shared} \}\)`))
+    // The claude coordinator's, which also says when the chain must be sandboxed (claude shell sandbox design D5)
+    expect(index).toMatch(
+      new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox\) =>\s+${shared}, \.\.\.\(sandbox === 'required' \? \{ sandboxRequired: true \} : \{\}\) \}\)`)
+    )
     // Task 6 fix round 1: the codex coordinator's also says when the respawn is a chat's (its sandbox needs no
     // --no-daemon)
     expect(index).toMatch(
@@ -181,15 +183,21 @@ describe('the app records the conversation a profiled session is on, and reads i
 
 // Final fix pass (minor 1, C3): the sandbox comes from the profile, never from the options a caller passes (a `sandbox`
 // the renderer sends is dropped), and the app's own start of a sandboxed session's work asks for it apart
-// (`forceSandbox`), refused where the CLI has no sandbox. registerIpc cannot run without Electron: guarded by its text
+// (`forceSandbox`), which it must have: the prepares and the spawns are told (`sandboxRequired`) and refuse where it cannot
+// be had (claude shell sandbox design D5). registerIpc cannot run without Electron: guarded by its text
 describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session’s work', () => {
   const body = between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")
-  it('drops a caller’s sandbox before the profile is read, and refuses a forced one where the CLI has none', () => {
-    // Task K fix round 1: a reviewer's allowance of deny rules only is dropped with them, never taken from the caller
-    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, \.\.\.withoutSandbox \} = opts/)
+  it('drops a caller’s sandbox before the profile is read, and tells every prepare and spawn that a forced one must be had', () => {
+    // Task K fix round 1: a reviewer's allowance of deny rules only is dropped with them, never taken from the caller;
+    // Task 4 review M3: so is a caller's `sandboxRequired`, which only the forced paths below set
+    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, sandboxRequired: _callerRequired, \.\.\.withoutSandbox \} = opts/)
     expect(before(body, 'withoutSandbox', 'appProfileSpawn(')).toBe(true)
-    expect(body).toMatch(/forcedSandboxBlocker\(providerOf\(account\), process\.platform\)/)
+    expect(body).toMatch(/const sandboxRequired = forceSandbox && !forceSandboxDenyOnly/)
     expect(body).toMatch(/if \(forceSandbox\) opts = \{ \.\.\.opts, sandbox: true \}/)
+    // The chat's prepare and spawn, and the terminal's prepare and spawn
+    expect(body.match(/\.\.\.\(sandboxRequired \? \{ sandboxRequired: true \} : \{\}\)/g)).toHaveLength(4)
+    expect(body).toMatch(/core\.chat\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\), \.\.\.\(sandboxRequired \? \{ sandboxRequired: true \} : \{\}\) \}\)/)
+    expect(body).not.toMatch(/forcedSandboxBlocker/)
   })
   it('the renderer cannot ask for a forced one', () => {
     expect(src).toMatch(/ipcMain\.handle\('sessions\.spawn', async \(_e, opts\) => spawnSession\(\{ \.\.\.opts, forceSandbox: undefined, forceSandboxDenyOnly: undefined \}\)\)/)
@@ -229,12 +237,14 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
   })
   // Fix round 5: and each looks at the links on the paths it names (nodeLinkLook)
   it('the StatusLineManager, the terminal checks and the chat deps all take that one list, and look at its links', () => {
-    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly, agentLogins \}\n  \)/)
     // Fix round 6: Claude's twins take the way to look from the scope each start hands them (claudeSandboxStart)
-    expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog\n  \}\)/)
-    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog,\n/)
+    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    // The registered accounts plus the folders on the disk now, so an unregistered folder's login file is named too
+    expect(core).toContain('agentLoginEntries({ homeDir: os.homedir(), accounts: [...accounts.list(), ...agentAccountFolders(os.homedir())] })')
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
-    expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
+    expect(chat).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
   })
 })
 
@@ -254,11 +264,17 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   // Fix round 5: the Host's terminal checks and twins look at the links on the paths they name, and so do its chats
   it('the spawner, rollingWiring and hostChats hand the way to look at links to every start', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
-    expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
-    expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log\n  \}\)/)
+    expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log,\n/)
     expect(spawner).toMatch(/\n    sandboxWarn,\n    linkLook: nodeLinkLook,\n/)
     expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    linkLook: a\.spawner\.linkLook,\n/)
     expect(hostChats).toMatch(/\n    linkLook: d\.linkLook,\n/)
+  })
+  it('the Host names the agents login files from accounts.json as it is at the ask (spawner.test.ts runs it), for the twins, the checks and the chats', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    expect(spawner).toMatch(/const agentLogins = \(\): DenyEntry\[\] => agentLoginEntries\(\{ homeDir, accounts: \[\.\.\.registeredAccounts\(\), \.\.\.agentAccountFolders\(homeDir\)\] \}\)/)
+    expect(spawner).toMatch(/\n      readOnly,\n      agentLogins\n    \}/)
+    expect(spawner).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    sandboxWarn,\n/)
   })
   it('the spawner makes the updater cache and its runtime folder before it builds the list (fix round 4)', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
@@ -267,10 +283,43 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
     expect(spawner.slice(at, spawner.indexOf('\n  })', at))).toMatch(/\n    updaterCache,\n/)
   })
   it('rollingWiring reads them off the spawner for the chat deps', () => {
-    expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
+    expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    \.\.\.\(a\.spawner\.agentLogins \? \{ agentLogins: a\.spawner\.agentLogins \} : \{\}\),\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
   })
   it('hostChats passes both on to the chat manager', () => {
-    expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
+    expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.agentLogins \? \{ agentLogins: d\.agentLogins \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
+  })
+})
+
+// Claude shell sandbox design D4 (Task 4): on Windows a sandboxed Claude session's shell runs in Codex's sandbox under the
+// default Codex account (shellCodexOf, claudeStart.test.ts), with what a sandboxed Codex start of that process is given.
+// The app and the Host must hand claudeSandboxStart the same things, each from what it holds: the app from its registry,
+// the Host from accounts.json as it is at the ask. core.ts cannot run without Electron, so both are guarded by their text;
+// spawner.test.ts runs the Host's
+describe('Claude’s shell on Windows borrows the default Codex account, in the app and the Host alike', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const core = readFileSync(path.join(here, 'core.ts'), 'utf8')
+  const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+  const block = (src: string): string => src.slice(src.indexOf('const claudeSandbox = claudeSandboxStart({'), src.indexOf('\n  })', src.indexOf('const claudeSandbox = claudeSandboxStart({')))
+  it('the app: the registry, its login check, its sessions’ environment, and its Codex start’s own options', () => {
+    const b = block(core)
+    expect(b).toMatch(/shellCodex: \(\) =>\s+shellCodexOf\(\{\s+accounts: accounts\.list\(\),\s+loggedIn: \(a\) => accounts\.loginStatus\(a\.id\),\s+envOf: \(a\) => cliEnvFor\(\{ base: process\.env, account: a, descriptor: descriptorOf\(descriptors, a\), homeDir: os\.homedir\(\) \}\)\s+\}\)/)
+    expect(b).toMatch(/\n    codexReady: askCodexWindowsReady,\n    codexVersion: cliVersions,\n    codexExe: \(\) => resolveWindowsExecutable\('codex'\),\n    codexExcludes,\n    appKeyFile,\n    readOnly,\n    agentLogins$/)
+    // The SessionManager's own environment is built from process.env too (cliEnvFor, its baseEnv)
+    expect(core).toMatch(/\[previewShotsDir\(userDataDir\)\],\n    process\.env,/)
+    // The chat manager finds the Git Bash its shell route wraps with the process's one resolver
+    const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
+    expect(chat).toMatch(/\n    gitBash: defaultSpawnChecks\(sessionsLog\)\.gitBash,\n/)
+  })
+  it('the Host: accounts.json as it is at the ask, its login check, its sessions’ environment, and its Codex start’s own options', () => {
+    const b = block(spawner)
+    expect(b).toMatch(/shellCodex: \(\) =>\s+shellCodexOf\(\{\s+accounts: registeredAccounts\(\),\s+loggedIn: \(a\) => isLoggedIn\(a, descriptors\),\s+envOf: \(a\) => cliEnvFor\(\{ base: hostWorkerBaseEnv\(d\.env\), account: a, descriptor: descriptorOf\(descriptors, a\), homeDir \}\)\s+\}\)/)
+    expect(b).toMatch(/\n    codexReady: codexWindowsReady,\n    codexVersion: d\.codexVersion \?\? cliVersions,\n    codexExe: \(\) => resolveWindowsExecutable\('codex'\),\n    codexExcludes,\n    appKeyFile,\n    readOnly,\n    agentLogins$/)
+    // Its terminal sessions start from the same base (SessionManager's baseEnv)
+    expect(spawner).toMatch(/\(\) => hostWorkerBaseEnv\(d\.env\),\n/)
+    // Its chats get the spawner's Git Bash resolver, through rollingWiring and hostChats
+    expect(spawner).toMatch(/\n    gitBash: defaultSpawnChecks\(log\)\.gitBash,\n/)
+    expect(readFileSync(path.join(here, '..', 'host', 'rollingWiring.ts'), 'utf8')).toMatch(/\.\.\.\(a\.spawner\.gitBash \? \{ gitBash: a\.spawner\.gitBash \} : \{\}\),/)
+    expect(readFileSync(path.join(here, '..', 'host', 'hostChats.ts'), 'utf8')).toMatch(/\.\.\.\(d\.gitBash \? \{ gitBash: d\.gitBash \} : \{\}\),/)
   })
 })
 

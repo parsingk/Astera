@@ -368,3 +368,26 @@ describe('makeLimitProbe — 공통', () => {
     expect(deps.logs).toHaveLength(1)
   })
 })
+
+describe('makeLimitProbe — external review', () => {
+  it('answers null without reading or logging anything', async () => {
+    let reads = 0
+    const deps = makeDeps({
+      statusLinePayload: async () => {
+        reads += 1
+        return null
+      },
+      configDirOf: () => {
+        reads += 1
+        return null
+      }
+    })
+    const probe = makeLimitProbe(deps)
+    for (const provider of ['claude', 'codex'] as const) {
+      const d = baseDispatch({ provider, accountId: '', sessionId: 'acp:1a2b3c4d', externalReviewer: { id: 'ext_1', name: 'G' } })
+      expect(await probe(d)).toBeNull()
+    }
+    expect(reads).toBe(0)
+    expect(deps.logs).toEqual([])
+  })
+})
