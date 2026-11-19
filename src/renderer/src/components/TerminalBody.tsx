@@ -9,6 +9,7 @@ import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
 import { activationFocusHeld } from '../lib/focusHold'
 import { selectionCopy } from '../lib/terminalCopy'
+import { attachFilePaste, isFilePasteKey } from '../lib/terminalFilePaste'
 
 /**
  * Project terminal body. Subscribes to terminal:data, and input goes to the PTY via terminal.write.
@@ -91,11 +92,17 @@ export function TerminalBody({
     })
     // Ctrl+C (Cmd+C on macOS) over a selection copies it, as in the other terminals; without this it reached the shell
     // as an interrupt and nothing was copied
+    const isMac = window.api.platform === 'darwin'
     const copy = selectionCopy(term, {
-      isMac: window.api.platform === 'darwin',
+      isMac,
       writeText: (text) => window.api.clipboard.writeText(text)
     })
-    term.attachCustomKeyEventHandler(copy.key)
+    // Files copied outside the app type their paths: with files on the clipboard the paste key goes unprevented and
+    // attachFilePaste takes the browser's paste event; otherwise Ctrl+V reaches the shell as before (PowerShell pastes)
+    const detachFilePaste = attachFilePaste(host, term, (f) => window.api.files.pathForFile(f))
+    term.attachCustomKeyEventHandler((e) =>
+      isFilePasteKey(e, { isMac, hasFiles: () => window.api.clipboard.hasFiles() }) ? false : copy.key(e)
+    )
     fit.fit()
     termRef.current = term
     fitRef.current = fit
@@ -118,6 +125,7 @@ export function TerminalBody({
     return () => {
       disposeLinks()
       copy.dispose()
+      detachFilePaste()
       off()
       blinkGuard.dispose()
       input.dispose()
