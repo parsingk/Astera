@@ -37,7 +37,7 @@ import { createKubeOperations, isSkippedDir, UNREADABLE } from './operations'
 import type { KubeTargetStore } from './targetStore'
 
 export interface KubeServiceDeps {
-  run(args: string[], opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<KubectlResult>
+  run(args: string[], opts?: { timeoutMs?: number; signal?: AbortSignal; input?: string }): Promise<KubectlResult>
   /** The first KUBE_HEAD_BYTES bytes of a file, as text. */
   readHead(path: string): Promise<string>
   readText(path: string): Promise<string>

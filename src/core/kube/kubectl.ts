@@ -42,7 +42,7 @@ export function kubectlBin(override: string | null): string {
  *  exited, not when the output pipes close, which a grandchild can hold open for as long as it lives. */
 export function runKubectl(
   args: string[],
-  opts: { bin: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal }
+  opts: { bin: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal; input?: string }
 ): Promise<KubectlResult> {
   const signal = opts.signal
   type Raw = { err: unknown; stdout: string; stderr: string; cancelled?: true; timedOut?: true }
@@ -89,6 +89,8 @@ export function runKubectl(
             resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' })
           }
         )
+        // `-f -` reads the objects from stdin until it closes (spec 4.6.1); a retried spawn writes them again.
+        if (opts.input !== undefined) child.stdin?.end(opts.input)
         if (!settled) {
           signal?.addEventListener('abort', onAbort, { once: true })
           deadline = setTimeout(() => stop('timedOut'), opts.timeoutMs ?? KUBECTL_TIMEOUT_MS)

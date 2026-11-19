@@ -68,6 +68,15 @@ describe('runKubectl', () => {
     })
     expect(r.stdout).toBe('a')
   })
+
+  // Spec 4.6.1: objects applied first go to `kubectl apply -f -` on stdin; kubectl reads until stdin closes.
+  it('writes input to stdin and closes it', async () => {
+    const r = await runKubectl(
+      js("let s='';process.stdin.on('data',(d)=>{s+=d}).on('end',()=>process.stdout.write(s.toUpperCase()))"),
+      { bin: node, input: 'kind: Namespace', timeoutMs: 10_000 }
+    )
+    expect(r).toMatchObject({ ok: true, stdout: 'KIND: NAMESPACE' })
+  })
 })
 
 describe('kubectlBin', () => {
