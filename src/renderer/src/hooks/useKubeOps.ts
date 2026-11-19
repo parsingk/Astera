@@ -56,6 +56,16 @@ export interface KubeDialogState {
   watch: string[]
   id: string
   startedAt: number
+  /** Spec 4.6.1: this dialog applies first what `then`'s dry run waits for; `then` opens again when its run succeeds. */
+  then?: KubeReopen
+}
+
+/** The dialog an apply-first dialog came from, opened again afresh after its run succeeds (spec 4.6.1). */
+export interface KubeReopen {
+  verb: 'compare' | KubeVerb
+  req: KubeRequest
+  namespaceLabel: NamespaceLabel
+  watch: string[]
 }
 
 /** `seq` numbers every preview ask of the session, so an answer for an earlier dialog never lands in a later one. */
@@ -76,13 +86,15 @@ export type KubeOpsAction =
       id: string
       at: number
       watch?: string[]
+      then?: KubeReopen
     }
   | { type: 'previewed'; seq: number; preview: KubePreview; scope: string }
   | { type: 'fileChanged' }
   | { type: 'toggleServerFields' }
   | { type: 'confirm'; id: string; at: number; scope: string }
   | { type: 'cancel' }
-  | { type: 'ran'; result: KubeRunResult }
+  /** `reopen` names the dialog `then` opens as, when the run succeeded. */
+  | { type: 'ran'; result: KubeRunResult; reopen?: { id: string; at: number } }
   | { type: 'reload'; id: string; context: string; scope: string; at: number; pill?: string | null }
   | { type: 'close' }
   | { type: 'clear' }
@@ -100,9 +112,10 @@ export function compareCounts(p: OkPreview): { changed: number; unchanged: numbe
 }
 
 /** What an operation covers: the overlay of a single overlay command, else how many files and overlays. */
-export function kubeScope(plan: ShownPlan): { overlay: string } | { files: number } {
+export function kubeScope(plan: ShownPlan): { overlay: string } | { files: number } | { objects: string[] } {
   const [only] = plan.commands
   if (plan.commands.length === 1 && only.kind === 'overlay') return { overlay: only.dir }
+  if (plan.commands.length === 1 && only.kind === 'objects') return { objects: only.refs }
   return { files: plan.commands.reduce((n, c) => n + (c.kind === 'files' ? c.files.length : 1), 0) }
 }
 
@@ -112,6 +125,32 @@ const asking = (s: KubeOpsState, d: KubeDialogState, fields: Partial<KubeDialogS
   dialog: { ...d, ...fields, phase: 'previewing', seq: s.seq + 1 }
 })
 
+/** A dialog as it opens: nothing shown yet. */
+const opening = (a: {
+  verb: 'compare' | KubeVerb
+  req: KubeRequest
+  namespaceLabel: NamespaceLabel
+  id: string
+  at: number
+  watch?: string[]
+  then?: KubeReopen
+}): KubeDialogState => ({
+  verb: a.verb,
+  req: a.req,
+  namespaceLabel: a.namespaceLabel,
+  preview: null,
+  stale: false,
+  keepServerFields: false,
+  phase: 'previewing',
+  seq: 0,
+  runId: null,
+  cancelling: false,
+  watch: a.watch ?? a.req.selection,
+  id: a.id,
+  startedAt: a.at,
+  ...(a.then ? { then: a.then } : {})
+})
+
 const finish = (log: KubeLogEntry[], result: KubeRunResult): KubeLogEntry[] =>
   log.map((e) => (e.id === result.id ? { ...e, state: 'done', result } : e))
 
@@ -119,24 +158,8 @@ const finish = (log: KubeLogEntry[], result: KubeRunResult): KubeLogEntry[] =>
 export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState {
   const d = s.dialog
   switch (a.type) {
-    case 'preview': {
-      const opened: KubeDialogState = {
-        verb: a.verb,
-        req: a.req,
-        namespaceLabel: a.namespaceLabel,
-        preview: null,
-        stale: false,
-        keepServerFields: false,
-        phase: 'previewing',
-        seq: 0,
-        runId: null,
-        cancelling: false,
-        watch: a.watch ?? a.req.selection,
-        id: a.id,
-        startedAt: a.at
-      }
-      return asking(s, opened, {})
-    }
+    case 'preview':
+      return asking(s, opening(a), {})
     case 'previewed': {
       if (!d || d.phase !== 'previewing' || d.seq !== a.seq) return s
       const dialog: KubeDialogState = { ...d, preview: a.preview, stale: false, phase: 'confirming' }
@@ -186,6 +209,8 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
       if (!d || d.phase !== 'running' || d.runId !== a.result.id) return next
       // Nothing was written: the same dialog previews again so the person confirms what the files hold now.
       if (a.result.refused?.reason === 'changed') return asking(next, { ...d, runId: null, cancelling: false }, { stale: true })
+      // Applied first what an apply waits for (spec 4.6.1): that apply opens again and previews afresh.
+      if (a.result.ok && d.then && a.reopen) return asking(next, opening({ ...d.then, ...a.reopen }), {})
       return { ...next, dialog: null }
     }
     case 'reload': {
@@ -339,7 +364,8 @@ export function useKubeOps(deps: KubeOpsDeps) {
   const scopeText = (p: KubePreview | null): string => {
     if (!p?.ok) return ''
     const s = kubeScope(p.plan)
-    return 'overlay' in s ? s.overlay : t('kube.ops.scopeFiles', { count: s.files })
+    if ('overlay' in s) return s.overlay
+    return 'objects' in s ? s.objects.join(', ') : t('kube.ops.scopeFiles', { count: s.files })
   }
 
   /** Asks for the preview the dialog now waits for. */
@@ -395,12 +421,24 @@ export function useKubeOps(deps: KubeOpsDeps) {
         })
       )
       .then((result) => {
-        dispatch({ type: 'ran', result })
-        if (result.refused?.reason === 'changed' && stateRef.current.dialog?.phase === 'previewing') {
-          toast.info(t('kube.ops.changedSincePreview'))
-          ask()
-        }
+        dispatch({ type: 'ran', result, reopen: { id: crypto.randomUUID(), at: Date.now() } })
+        // The same dialog again (the selection changed) or the apply an apply-first dialog was for (spec 4.6.1).
+        if (stateRef.current.dialog?.phase !== 'previewing') return
+        if (result.refused?.reason === 'changed') toast.info(t('kube.ops.changedSincePreview'))
+        ask()
       })
+  }
+
+  /** Spec 4.6.1: from an apply whose dry run waits for a Namespace or CRD it creates, a dialog that applies exactly those
+   *  first. Their own confirmation decides the pill (they are cluster-scoped), so none is shown while it loads. */
+  const applyFirst = (): void => {
+    const d = stateRef.current.dialog
+    const p = d?.preview
+    if (!d || d.verb !== 'apply' || d.phase !== 'confirming' || !p || p.ok || p.reason !== 'kubectl' || !p.createFirst?.length) return
+    const first = p.createFirst.map(({ kind, name }) => ({ kind, name }))
+    const then: KubeReopen = { verb: d.verb, req: d.req, namespaceLabel: d.namespaceLabel, watch: d.watch }
+    dispatch({ type: 'preview', verb: 'apply', req: { ...d.req, first }, namespaceLabel: [], id: crypto.randomUUID(), at: Date.now(), watch: d.watch, then })
+    ask()
   }
 
   /** The running dialog's stop button. */
@@ -453,6 +491,7 @@ export function useKubeOps(deps: KubeOpsDeps) {
     cancel: (id: string) => void window.api.kube.cancel(id).catch(() => {}),
     clear: () => dispatch({ type: 'clear' }),
     confirm,
+    applyFirst,
     abort,
     close: () => dispatch({ type: 'close' }),
     toggleServerFields: () => {
