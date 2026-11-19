@@ -89,8 +89,12 @@ export function runKubectl(
             resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' })
           }
         )
-        // `-f -` reads the objects from stdin until it closes (spec 4.6.1); a retried spawn writes them again.
-        if (opts.input !== undefined) child.stdin?.end(opts.input)
+        // `-f -` reads the objects from stdin until it closes (spec 4.6.1); a retried spawn writes them again. A kill on
+        // the deadline or a cancel closes the pipe under input still pending: that error is the kill's, already answered.
+        if (opts.input !== undefined) {
+          child.stdin?.on('error', () => {})
+          child.stdin?.end(opts.input)
+        }
         if (!settled) {
           signal?.addEventListener('abort', onAbort, { once: true })
           deadline = setTimeout(() => stop('timedOut'), opts.timeoutMs ?? KUBECTL_TIMEOUT_MS)
