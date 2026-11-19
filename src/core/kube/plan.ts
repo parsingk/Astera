@@ -1,6 +1,6 @@
 /** Turns a selection of files and folders into the kubectl commands that apply it (spec §4.4). */
 import type { KustomizeGraph } from './kustomize'
-import type { KubeCommand, KubeFileKind, LeftOut, OperationPlan } from './types'
+import type { KubeFileKind, LeftOut, OperationPlan, PlanCommand } from './types'
 
 export interface FolderIndex {
   kindOf(path: string): KubeFileKind
@@ -102,7 +102,7 @@ export function planOperation(selection: string[], index: FolderIndex): Operatio
     return { ok: false, reason, paths }
   }
 
-  const commands: KubeCommand[] = []
+  const commands: PlanCommand[] = []
   if (files.size > 0) commands.push({ kind: 'files', files: [...files].sort(byPath) })
   for (const dir of [...overlays].sort(byPath)) commands.push({ kind: 'overlay', dir })
   if (commands.length === 0) return { ok: false, reason: 'nothing', paths: [...selection], leftOut: [...leftOut.values()] }

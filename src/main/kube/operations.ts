@@ -23,6 +23,7 @@ import type {
   KubeTarget,
   KubeVerb,
   OperationPlan,
+  PlanCommand,
   ResourceDiff,
   ResourceOutcome,
   TargetState
@@ -186,7 +187,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
   /** C12: every file and overlay must resolve to the request's context. On a mismatch, the folders involved: where a
    *  context is remembered, else the item's own folder. */
-  async function contextConflicts(commands: KubeCommand[], req: KubeRequest): Promise<string[] | null> {
+  async function contextConflicts(commands: PlanCommand[], req: KubeRequest): Promise<string[] | null> {
     // A -f file is never a Kustomize member, so its target depends on its folder alone: one file per folder answers.
     const items: { file: string; folder: string }[] = []
     const seen = new Set<string>()
@@ -212,7 +213,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
    *  context's, else default), where it is not the pill `-n` would put it into. Only items the pill fills in count:
    *  an overlay whose command sends `-n`, and each folder of a -f file holding a namespaced resource naming none. */
   async function namespaceConflicts(
-    decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[],
+    decided: { cmd: PlanCommand; flag: string | null; src: Sources | null }[],
     req: KubeRequest,
     ctx: KubeContexts
   ): Promise<{ folder: string; namespace: string }[]> {
@@ -247,7 +248,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
   /** Reads what one command applies. Every overlay is rendered, a locked one too: its output feeds the fingerprint
    *  and the delete diff. `kubectl kustomize` is local and contacts no cluster. A render is added to `checks`. */
-  async function sourcesOf(cmd: KubeCommand, signal?: AbortSignal, checks: string[][] = []): Promise<Sources | StepFailure> {
+  async function sourcesOf(cmd: PlanCommand, signal?: AbortSignal, checks: string[][] = []): Promise<Sources | StepFailure> {
     if (cmd.kind === 'files') {
       const texts: [string, string][] = []
       for (const file of cmd.files) texts.push([file, await d.readText(file)])
@@ -264,7 +265,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
   /** The `-n` value of one command (spec 4.2, C20). An overlay whose kustomization sets `namespace:` is locked and
    *  never gets `-n` (C7); any other overlay is decided by what it renders. Cluster-scoped kinds never decide it. */
-  function namespaceOf(cmd: KubeCommand, src: Sources, pill: string | null, graph: KustomizeGraph): NamespaceFlag {
+  function namespaceOf(cmd: PlanCommand, src: Sources, pill: string | null, graph: KustomizeGraph): NamespaceFlag {
     if (cmd.kind === 'files') {
       const items = src.texts.flatMap(([file, text]) =>
         parseManifestDocs(text).map((doc) => ({ path: file, kind: doc.kind, namespace: doc.namespace }))
@@ -310,7 +311,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const oneItem = plan.commands.length === 1 && (only.kind === 'overlay' || only.files.length === 1)
     if (req.override && !oneItem) return overrideRefusal
 
-    const decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[] = []
+    const decided: { cmd: PlanCommand; flag: string | null; src: Sources | null }[] = []
     const checks: string[][] = []
     const conflicts = new Map<string, { path: string; namespace: string }>()
     let renderFailure: StepFailure | null = null
@@ -532,7 +533,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       s = { context, namespace: listed.namespace }
     } else if (view.state.state === 'remembered' || view.state.state === 'current') s = view.state
     else return { kind: 'unknown', reason: 'no-target' }
-    let cmd: KubeCommand
+    let cmd: PlanCommand
     if (view.overlay) cmd = { kind: 'overlay', dir: view.overlay }
     else if (kind === 'kustomization' || graph.isMember(file)) return { kind: 'unknown', reason: 'no-overlay' }
     else cmd = { kind: 'files', files: [file] }

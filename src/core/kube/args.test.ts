@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { configViewArgs, getOneArgs, kubectlArgs, kustomizeArgs, useContextArgs } from './args'
+import { configViewArgs, getOneArgs, kubectlArgs, kustomizeArgs, useContextArgs, waitEstablishedArgs } from './args'
 import type { KubeCommand } from './types'
 
 const files: KubeCommand = { kind: 'files', files: ['a.yaml', 'b.yaml'] }
 const overlay: KubeCommand = { kind: 'overlay', dir: 'k/dev' }
 const t = { context: 'ctx', nsFlag: 'api' }
+
+// Spec 4.6.1: the objects an apply's dry run waits for go to kubectl on stdin, with no -n (they are cluster-scoped).
+describe('kubectlArgs for objects on stdin', () => {
+  const objects: KubeCommand = { kind: 'objects', text: 'kind: Namespace', from: ['a.yaml'], refs: ['Namespace/brand-new'] }
+  const c = { context: 'c', nsFlag: null }
+  it('apply, dry-apply and live read the objects from stdin', () => {
+    expect(kubectlArgs('apply', objects, c)).toEqual(['apply', '--context', 'c', '-f', '-'])
+    expect(kubectlArgs('dry-apply', objects, c)).toEqual(['apply', '--dry-run=server', '-o', 'yaml', '--context', 'c', '-f', '-'])
+    expect(kubectlArgs('live', objects, c)).toEqual(['get', '--ignore-not-found', '-o', 'yaml', '--context', 'c', '-f', '-'])
+  })
+  it('waits for applied CRDs to be established', () => {
+    expect(waitEstablishedArgs('c', ['widgets.example.com'])).toEqual([
+      'wait', '--for', 'condition=established', '--timeout', '60s', '--context', 'c', 'customresourcedefinition/widgets.example.com'
+    ])
+  })
+})
 
 describe('kubectlArgs', () => {
   it('apply puts the namespace after the context and one -f per file', () => {

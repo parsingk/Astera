@@ -13,8 +13,26 @@ export interface ManifestDoc {
   namespace: string | null
 }
 
-/** One kubectl invocation: kubectl takes `-f` (many) or a single `-k` per command. */
-export type KubeCommand = { kind: 'files'; files: string[] } | { kind: 'overlay'; dir: string }
+/** One kubectl invocation: kubectl takes `-f` (many) or a single `-k` per command. `objects` (spec 4.6.1) sends
+ *  objects taken from files or renders on stdin (`-f -`): `text` is their YAML, `from` the files or overlays they came
+ *  from, `refs` their `Kind/name`. */
+export type KubeCommand =
+  | { kind: 'files'; files: string[] }
+  | { kind: 'overlay'; dir: string }
+  | { kind: 'objects'; text: string; from: string[]; refs: string[] }
+
+/** Spec 4.6.1: an object the operation creates that its own server dry run waits for, and the file or overlay it comes
+ *  from. */
+export interface CreateFirst {
+  kind: 'Namespace' | 'CustomResourceDefinition'
+  name: string
+  path: string
+}
+
+export type FirstRef = Pick<CreateFirst, 'kind' | 'name'>
+
+/** What a plan is made of: files and overlays. `objects` commands come only from a `first` request (spec 4.6.1). */
+export type PlanCommand = Exclude<KubeCommand, { kind: 'objects' }>
 
 /** A file or folder the plan did not apply, with the reason. `unlisted`: a manifest in or below a kustomization's
  *  folder that no kustomization lists. */
@@ -27,7 +45,7 @@ export interface LeftOut {
  *  `nothing`: nothing applicable was found; `paths` is the selection, `leftOut` what was found and why it is not
  *  applied (empty when nothing was found at all). */
 export type OperationPlan =
-  | { ok: true; commands: KubeCommand[]; leftOut: LeftOut[] }
+  | { ok: true; commands: PlanCommand[]; leftOut: LeftOut[] }
   | { ok: false; reason: 'nothing'; paths: string[]; leftOut: LeftOut[] }
   | { ok: false; reason: 'base-folder' | 'many-overlays' | 'broken-kustomization'; paths: string[] }
 
@@ -129,6 +147,8 @@ export interface KubeRequest {
   /** R11: `context` was chosen for one open editor without remembering it. Only for a single item, whose own
    *  resolved target then need not agree; the context must still be listed in kubeconfig. */
   override?: true
+  /** Spec 4.6.1: apply only these objects, as main finds them in what the selection applies now. */
+  first?: FirstRef[]
 }
 
 /** What the confirmation shows. `commandLines` are the commands confirming would run (kubectl's arguments without the
@@ -163,6 +183,8 @@ export type KubePreview =
       checkCommandLines: string[][]
       stderr: string
       timedOut?: true
+      /** Spec 4.6.1: what the failed dry run waits for that this operation itself creates; absent when nothing. */
+      createFirst?: CreateFirst[]
     }
 
 /** One finished operation. `ran` counts the commands executed: the first failing one stops the rest (C19). */
