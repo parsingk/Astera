@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { parseAllDocuments } from 'yaml'
 import { createFirstOf, objectsYaml, pickFirst, type ObjectSource } from './createFirst'
 import { objectsFromYaml, type K8sObject } from './objects'
 
@@ -14,11 +15,16 @@ const deploy = (name: string, namespace: string): K8sObject => ({
   metadata: { name, namespace },
   spec: { replicas: 1 }
 })
-const crd = (group: string, kind: string): K8sObject => ({
+const crd = (group: string, kind: string, versions: string[] = ['v1']): K8sObject => ({
   apiVersion: 'apiextensions.k8s.io/v1',
   kind: 'CustomResourceDefinition',
   metadata: { name: `${kind.toLowerCase()}s.${group}` },
-  spec: { group, scope: 'Namespaced', names: { plural: `${kind.toLowerCase()}s`, singular: kind.toLowerCase(), kind } }
+  spec: {
+    group,
+    scope: 'Namespaced',
+    names: { plural: `${kind.toLowerCase()}s`, singular: kind.toLowerCase(), kind },
+    versions: versions.map((name, i) => ({ name, served: true, storage: i === 0 }))
+  }
 })
 const widget: K8sObject = { apiVersion: 'example.com/v1', kind: 'Widget', metadata: { name: 'w1', namespace: 'default' } }
 
@@ -51,6 +57,15 @@ describe('createFirstOf', () => {
 
   it('nothing for a CRD of another group', () => {
     expect(createFirstOf(CRD_STDERR, [{ path: 'C:/p/crd.yaml', objects: [crd('other.io', 'Widget'), widget] }])).toEqual([])
+  })
+
+  // Final review I3: applying a CRD that does not serve the version asked for changes nothing, so offering it looped.
+  it('nothing for a CRD that does not serve the version asked for', () => {
+    const v1beta1 = CRD_STDERR.replace('example.com/v1', 'example.com/v1beta1')
+    expect(createFirstOf(v1beta1, [{ path: 'C:/p/crd.yaml', objects: [crd('example.com', 'Widget', ['v1']), widget] }])).toEqual([])
+    expect(createFirstOf(v1beta1, [{ path: 'C:/p/crd.yaml', objects: [crd('example.com', 'Widget', ['v1', 'v1beta1']), widget] }])).toEqual([
+      { kind: 'CustomResourceDefinition', name: 'widgets.example.com', path: 'C:/p/crd.yaml' }
+    ])
   })
 
   it('Namespaces come before CRDs, and each object once', () => {
@@ -94,5 +109,12 @@ describe('objectsYaml', () => {
   it('reads back as the same objects', () => {
     const objects = [ns('brand-new'), crd('example.com', 'Widget')]
     expect(objectsFromYaml(objectsYaml(objects))).toEqual(objects)
+  })
+
+  // Final review I2: kubectl reads YAML 1.1, where an unquoted yes or on is a boolean; a label "yes" must stay a string.
+  it('keeps strings kubectl would read as booleans quoted', () => {
+    const labelled: K8sObject = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'b', labels: { backup: 'yes', tier: 'on' } } }
+    const [doc] = parseAllDocuments(objectsYaml([labelled]), { version: '1.1' })
+    expect(doc.toJS()).toEqual(labelled)
   })
 })
