@@ -54,7 +54,9 @@ export function RemoteTerminalView({
       return
     }
     const host = hostRef.current!
-    const term = new Terminal({ fontSize: 14, fontFamily: family, scrollback: 5000, theme: xtermThemeOf(theme) })
+    // An OSC 8 hyperlink opens nothing either: without a handler xterm would ask with a blocking confirm() and try
+    // window.open() (terminalLinks.ts, 2026-11-19)
+    const term = new Terminal({ fontSize: 14, fontFamily: family, scrollback: 5000, theme: xtermThemeOf(theme), linkHandler: { activate: () => {} } })
     const blinkGuard = pinCursorBlinkOff(term)
     term.open(host)
     termRef.current = term
