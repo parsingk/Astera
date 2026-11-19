@@ -3,7 +3,8 @@
  *  server-side dry run or a read. */
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { kubectlArgs, kustomizeArgs } from '../../core/kube/args'
+import { kubectlArgs, kustomizeArgs, waitEstablishedArgs } from '../../core/kube/args'
+import { createFirstOf, objectsYaml, pickFirst, type ObjectSource } from '../../core/kube/createFirst'
 import { parseManifestDocs } from '../../core/kube/docs'
 import { isClusterScoped, namespaceFlag, type NamespaceFlag } from '../../core/kube/namespace'
 import { objectsFromYaml, pairObjects, type K8sObject } from '../../core/kube/objects'
@@ -22,9 +23,10 @@ import type {
   KubeStatus,
   KubeTarget,
   KubeVerb,
-  OperationPlan,
+  PlanCommand,
   ResourceDiff,
   ResourceOutcome,
+  ShownPlan,
   TargetState
 } from '../../core/kube/types'
 import type { KubeServiceDeps, KubeTargetView } from './service'
@@ -74,6 +76,12 @@ interface Step {
 
 const byPath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
+/** The step name of a failed server dry run, as `stderr` starts (`dry run failed: …`). */
+const DRY = 'dry run'
+
+/** What an objects command sends on stdin (spec 4.6.1); nothing for files and overlays. */
+const inputOf = (cmd: KubeCommand): { input?: string } => (cmd.kind === 'objects' ? { input: cmd.text } : {})
+
 function stepFailure(step: string, r: KubectlResult): StepFailure {
   return { failed: step, stderr: r.stderr, ...(r.timedOut ? { timedOut: true as const } : {}) }
 }
@@ -104,6 +112,16 @@ function readObjects(text: string): K8sObject[] | null {
 
 function firstLine(text: string): string {
   return text.trim().split(/\r?\n/)[0] ?? ''
+}
+
+/** The objects each file and each overlay's render of these steps applies (spec 4.6.1). A file that does not read as
+ *  objects counts as none: the dry run that failed already said what was wrong with it. */
+function objectsOf(steps: Step[]): ObjectSource[] {
+  return steps.flatMap((s): ObjectSource[] => {
+    if (s.cmd.kind === 'overlay') return [{ path: s.cmd.dir, objects: s.src.rendered ?? [] }]
+    if (s.cmd.kind === 'objects') return []
+    return s.src.texts.map(([file, text]) => ({ path: file, objects: readObjects(text) ?? [] }))
+  })
 }
 
 /** Delete pairs what the command names with the live objects by namespace too. kubectl puts a resource naming no
@@ -186,7 +204,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
   /** C12: every file and overlay must resolve to the request's context. On a mismatch, the folders involved: where a
    *  context is remembered, else the item's own folder. */
-  async function contextConflicts(commands: KubeCommand[], req: KubeRequest): Promise<string[] | null> {
+  async function contextConflicts(commands: PlanCommand[], req: KubeRequest): Promise<string[] | null> {
     // A -f file is never a Kustomize member, so its target depends on its folder alone: one file per folder answers.
     const items: { file: string; folder: string }[] = []
     const seen = new Set<string>()
@@ -212,7 +230,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
    *  context's, else default), where it is not the pill `-n` would put it into. Only items the pill fills in count:
    *  an overlay whose command sends `-n`, and each folder of a -f file holding a namespaced resource naming none. */
   async function namespaceConflicts(
-    decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[],
+    decided: { cmd: PlanCommand; flag: string | null; src: Sources | null }[],
     req: KubeRequest,
     ctx: KubeContexts
   ): Promise<{ folder: string; namespace: string }[]> {
@@ -247,7 +265,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
   /** Reads what one command applies. Every overlay is rendered, a locked one too: its output feeds the fingerprint
    *  and the delete diff. `kubectl kustomize` is local and contacts no cluster. A render is added to `checks`. */
-  async function sourcesOf(cmd: KubeCommand, signal?: AbortSignal, checks: string[][] = []): Promise<Sources | StepFailure> {
+  async function sourcesOf(cmd: PlanCommand, signal?: AbortSignal, checks: string[][] = []): Promise<Sources | StepFailure> {
     if (cmd.kind === 'files') {
       const texts: [string, string][] = []
       for (const file of cmd.files) texts.push([file, await d.readText(file)])
@@ -264,7 +282,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
 
   /** The `-n` value of one command (spec 4.2, C20). An overlay whose kustomization sets `namespace:` is locked and
    *  never gets `-n` (C7); any other overlay is decided by what it renders. Cluster-scoped kinds never decide it. */
-  function namespaceOf(cmd: KubeCommand, src: Sources, pill: string | null, graph: KustomizeGraph): NamespaceFlag {
+  function namespaceOf(cmd: PlanCommand, src: Sources, pill: string | null, graph: KustomizeGraph): NamespaceFlag {
     if (cmd.kind === 'files') {
       const items = src.texts.flatMap(([file, text]) =>
         parseManifestDocs(text).map((doc) => ({ path: file, kind: doc.kind, namespace: doc.namespace }))
@@ -288,7 +306,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
   ): Promise<
     | {
         ok: true
-        plan: Extract<OperationPlan, { ok: true }>
+        plan: ShownPlan
         steps: Step[]
         commandLines: string[][]
         nsFlags: (string | null)[]
@@ -303,6 +321,9 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const root = req.projectRoot
     const graph = await d.projectGraph(root)
     const selection = req.selection.map((s) => d.onRoot(root, s))
+    const nothing: Refusal = { ok: false, reason: 'refused', plan: { ok: false, reason: 'nothing', paths: selection, leftOut: [] } }
+    // Spec 4.6.1: objects are applied first, never deleted that way.
+    if (req.first && verb !== 'apply') return nothing
     const plan = planOperation(selection, await folderIndex(selection, graph, root))
     if (!plan.ok) return { ok: false, reason: 'refused', plan }
     // A folder skips C12 for everything under it, so the override takes one file or one overlay only.
@@ -310,7 +331,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const oneItem = plan.commands.length === 1 && (only.kind === 'overlay' || only.files.length === 1)
     if (req.override && !oneItem) return overrideRefusal
 
-    const decided: { cmd: KubeCommand; flag: string | null; src: Sources | null }[] = []
+    const decided: { cmd: PlanCommand; flag: string | null; src: Sources | null }[] = []
     const checks: string[][] = []
     const conflicts = new Map<string, { path: string; namespace: string }>()
     let renderFailure: StepFailure | null = null
@@ -358,19 +379,42 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const steps: Step[] = decided.flatMap((x) =>
       x.src ? [{ cmd: x.cmd, t: { context: req.context, nsFlag: x.flag }, src: x.src, fallbackNs: x.flag ?? contextNs }] : []
     )
+    if (req.first) {
+      // Spec 4.6.1: exactly the named objects, from what was read just now; both kinds are cluster-scoped (no -n).
+      const picked = pickFirst(req.first, objectsOf(steps))
+      if (!picked) return nothing
+      const cmd: KubeCommand = {
+        kind: 'objects',
+        text: objectsYaml(picked.objects),
+        from: picked.from,
+        refs: picked.objects.map((o) => `${o.kind}/${String(o.metadata.name)}`)
+      }
+      const first: Step = { cmd, t: { context: req.context, nsFlag: null }, src: { texts: [], rendered: picked.objects }, fallbackNs: contextNs }
+      const lines = [kubectlArgs(verb, cmd, first.t)]
+      return {
+        ok: true,
+        plan: { ok: true, commands: [cmd], leftOut: [] },
+        steps: [first],
+        commandLines: lines,
+        nsFlags: [null],
+        checkCommandLines: checks,
+        fingerprint: fingerprintOf(req, lines, [first])
+      }
+    }
     return { ok: true, plan, steps, commandLines, nsFlags, checkCommandLines: checks, fingerprint: fingerprintOf(req, commandLines, steps) }
   }
 
   /** Ties a run to the preview that was confirmed (C1, 5.2): the override flag and context (R11), the command lines,
-   *  every file's path and text (sorted by path), and every overlay's path and rendered output. Anything that would
-   *  change what is written, or how its target was decided, changes it. */
+   *  every file's path and text (sorted by path), every overlay's path and rendered output, and the text of objects
+   *  sent on stdin. Anything that would change what is written, or how its target was decided, changes it. */
   function fingerprintOf(req: KubeRequest, commandLines: string[][], steps: Step[]): string {
     const files = steps
       .flatMap((s) => (s.cmd.kind === 'files' ? s.src.texts : []))
       .sort((x, y) => byPath(x[0], y[0]))
     const overlays = steps.flatMap((s) => (s.cmd.kind === 'overlay' ? s.src.texts : []))
+    const objects = steps.flatMap((s) => (s.cmd.kind === 'objects' ? [s.cmd.text] : []))
     const decided = [req.override === true, req.context]
-    return createHash('sha256').update(JSON.stringify([decided, commandLines, files, overlays])).digest('hex')
+    return createHash('sha256').update(JSON.stringify([decided, commandLines, files, overlays, objects])).digest('hex')
   }
 
   /** What one command would change. apply: the cluster now against the server dry run. delete: the dry run as
@@ -384,12 +428,12 @@ export function createKubeOperations(d: KubeOperationDeps) {
   ): Promise<ResourceDiff[] | StepFailure> {
     const { cmd, t } = step
     const liveArgs = kubectlArgs('live', cmd, t)
-    const DRY = 'dry run'
     const LIVE = 'reading the cluster'
+    const input = inputOf(cmd)
     if (verb === 'apply') {
       const dryArgs = kubectlArgs('dry-apply', cmd, t)
       checks.push(liveArgs, dryArgs)
-      const [live, dry] = await Promise.all([d.run(liveArgs), d.run(dryArgs)])
+      const [live, dry] = await Promise.all([d.run(liveArgs, input), d.run(dryArgs, input)])
       if (!dry.ok) return stepFailure(DRY, dry)
       if (!live.ok) return stepFailure(LIVE, live)
       // `get --ignore-not-found` prints nothing for what is absent: no live objects.
@@ -401,10 +445,10 @@ export function createKubeOperations(d: KubeOperationDeps) {
     }
     const dryArgs = kubectlArgs('dry-delete', cmd, t)
     checks.push(dryArgs)
-    const dry = await d.run(dryArgs)
+    const dry = await d.run(dryArgs, input)
     if (!dry.ok) return stepFailure(DRY, dry)
     checks.push(liveArgs)
-    const live = await d.run(liveArgs)
+    const live = await d.run(liveArgs, input)
     if (!live.ok) return stepFailure(LIVE, live)
     const liveObjs = readObjects(live.stdout)
     if (!liveObjs) return { failed: LIVE, stderr: UNREADABLE }
@@ -428,7 +472,12 @@ export function createKubeOperations(d: KubeOperationDeps) {
     const checks = [...p.checkCommandLines]
     for (const [command, step] of p.steps.entries()) {
       const diffs = await diffStep(verb, step, opts, checks)
-      if (!Array.isArray(diffs)) return failedPreview(diffs, p.commandLines, p.nsFlags, checks)
+      if (!Array.isArray(diffs)) {
+        const failed = failedPreview(diffs, p.commandLines, p.nsFlags, checks)
+        // Spec 4.6.1: a dry run waiting for a Namespace or CRD this same apply creates offers to apply those first.
+        const first = verb === 'apply' && !req.first && diffs.failed === DRY ? createFirstOf(diffs.stderr, objectsOf(p.steps)) : []
+        return first.length > 0 ? { ...failed, createFirst: first } : failed
+      }
       for (const diff of diffs) resources.push({ command, diff })
     }
     return {
@@ -483,9 +532,10 @@ export function createKubeOperations(d: KubeOperationDeps) {
       const stderr: string[] = []
       let ran = 0
       let last: KubectlResult | null = null
-      for (const args of commandLines) {
+      // commandLines[i] is steps[i]'s command: an objects command sends its text on stdin.
+      for (const [i, args] of commandLines.entries()) {
         if (ctrl.signal.aborted) break
-        last = await d.run(args, { signal: ctrl.signal })
+        last = await d.run(args, { signal: ctrl.signal, ...inputOf(p.steps[i].cmd) })
         ran++
         if (last.stderr !== '') stderr.push(last.stderr)
         // A killed kubectl's output is gone; its flag says what happened. After exit 0 a line it does not know warns.
@@ -495,6 +545,15 @@ export function createKubeOperations(d: KubeOperationDeps) {
       const timedOut = last?.timedOut === true
       const cancelled = last?.cancelled === true || (ctrl.signal.aborted && ran < commandLines.length)
       const ok = ran === commandLines.length && last?.ok !== false && !outcomes.some((o) => o.outcome === 'error')
+      // Spec 4.6.1: CRDs applied first are waited for, so the apply that reopens next finds their kinds served. A read;
+      // a wait that fails is said, and the next preview shows what the cluster serves.
+      const crds = p.steps.flatMap((s) =>
+        s.cmd.kind === 'objects' ? (s.src.rendered ?? []).filter((o) => o.kind === 'CustomResourceDefinition').map((o) => String(o.metadata.name)) : []
+      )
+      if (ok && !cancelled && crds.length > 0) {
+        const w = await d.run(waitEstablishedArgs(req.context, crds), { signal: ctrl.signal })
+        if (!w.ok) outcomes.push({ ref: '', outcome: 'warning', message: `not served yet (${crds.join(', ')}): ${firstLine(w.stderr)}` })
+      }
       return result({
         commandLines,
         ran,
@@ -532,7 +591,7 @@ export function createKubeOperations(d: KubeOperationDeps) {
       s = { context, namespace: listed.namespace }
     } else if (view.state.state === 'remembered' || view.state.state === 'current') s = view.state
     else return { kind: 'unknown', reason: 'no-target' }
-    let cmd: KubeCommand
+    let cmd: PlanCommand
     if (view.overlay) cmd = { kind: 'overlay', dir: view.overlay }
     else if (kind === 'kustomization' || graph.isMember(file)) return { kind: 'unknown', reason: 'no-overlay' }
     else cmd = { kind: 'files', files: [file] }

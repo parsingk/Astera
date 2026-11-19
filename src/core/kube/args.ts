@@ -4,6 +4,7 @@ import type { KubeCommand, KubeTarget } from './types'
 export type KubeOp = 'apply' | 'delete' | 'dry-apply' | 'dry-delete' | 'live'
 
 function source(cmd: KubeCommand): string[] {
+  if (cmd.kind === 'objects') return ['-f', '-']
   return cmd.kind === 'overlay' ? ['-k', cmd.dir] : cmd.files.flatMap((f) => ['-f', f])
 }
 
@@ -28,6 +29,14 @@ export function getOneArgs(kind: string, name: string, namespace: string | null,
   return [
     'get', kind, name, '--ignore-not-found', '-o', 'yaml', '--context', context,
     ...(namespace === null ? [] : ['-n', namespace])
+  ]
+}
+
+/** Spec 4.6.1: after CRDs were applied first, until the API server serves their kinds (a read). */
+export function waitEstablishedArgs(context: string, crdNames: string[]): string[] {
+  return [
+    'wait', '--for', 'condition=established', '--timeout', '60s', '--context', context,
+    ...crdNames.map((n) => `customresourcedefinition/${n}`)
   ]
 }
 

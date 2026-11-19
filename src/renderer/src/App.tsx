@@ -5230,6 +5230,7 @@ export default function App(): React.JSX.Element {
           running={kubeOps.dialog.phase === 'running'}
           cancelling={kubeOps.dialog.cancelling}
           onAbort={kubeOps.abort}
+          onApplyFirst={kubeOps.applyFirst}
         />
       )}
       {showSettings && (

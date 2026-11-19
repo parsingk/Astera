@@ -7,6 +7,7 @@ import { KubeTargetStore } from './targetStore'
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { KubeRequest, KubeRunResult, KubeVerb } from '../../core/kube/types'
 import { targetKey } from '../../core/kube/target'
+import { objectsFromYaml } from '../../core/kube/objects'
 
 const root = path.resolve('/proj')
 const p = (...s: string[]): string => path.join(root, ...s)
@@ -26,7 +27,7 @@ const CONFIG = JSON.stringify({
 
 const MANIFEST = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n'
 
-type RunOpts = { timeoutMs?: number; signal?: AbortSignal }
+type RunOpts = { timeoutMs?: number; signal?: AbortSignal; input?: string }
 type FakeRun = (args: string[], opts?: RunOpts) => KubectlResult | Promise<KubectlResult>
 
 // Every kubectl call of every test, with the service method it came from (followed across awaits), so the last
@@ -1802,6 +1803,148 @@ describe("Secret values in kubectl's stderr (C22)", () => {
     const contexts = await createKubeService(broken.deps).contexts()
     expect(contexts.error?.stderr).toBe('<omitted>\nerror: rejected')
     clean(contexts)
+  })
+})
+
+// Spec 4.6.1: a server dry run creates nothing, so an operation that creates its own Namespace (or CRD) fails it.
+describe('applying first what the dry run waits for (spec 4.6.1)', () => {
+  const app = p('k8s', 'app.yaml')
+  const NS = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'brand-new' } }
+  const DEP = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'brand-new' }, spec: { replicas: 1 } }
+  // What kubectl answered on kind v1.32 (2026-11-18)
+  const NS_MISSING = `Error from server (NotFound): error when creating "${app}": namespaces "brand-new" not found`
+  const FIRST: KubeRequest['first'] = [{ kind: 'Namespace', name: 'brand-new' }]
+  const stdinApply = ['apply', '--context', 'kind-dev', '-f', '-']
+  const stdinLive = ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-f', '-']
+  const stdinDry = ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-f', '-']
+
+  it('a dry run waiting for a namespace the file creates offers it first', async () => {
+    let answer = fail(NS_MISSING)
+    const h = harness({ [app]: yamlDocs(NS, DEP) }, fakeKube({ 'dry-apply': () => answer, 'dry-delete': () => answer }))
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.preview('apply', request([app]), HIDE)).toEqual({
+      ok: false,
+      reason: 'kubectl',
+      commandLines: [['apply', '--context', 'kind-dev', '-f', app]],
+      nsFlags: [null],
+      checkCommandLines: [
+        ['get', '--ignore-not-found', '-o', 'yaml', '--context', 'kind-dev', '-f', app],
+        ['apply', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev', '-f', app]
+      ],
+      stderr: `dry run failed: ${NS_MISSING}`,
+      createFirst: [{ kind: 'Namespace', name: 'brand-new', path: app }]
+    })
+    // Delete never offers it
+    const del = await svc.preview('delete', request([app]), HIDE)
+    expect(!del.ok && del.reason === 'kubectl' && 'createFirst' in del).toBe(false)
+    answer = fail('Error from server (Forbidden): admission webhook "policy" denied the request')
+    const denied = await svc.preview('apply', request([app]), HIDE)
+    expect(!denied.ok && denied.reason === 'kubectl' && 'createFirst' in denied).toBe(false)
+  })
+
+  it('first takes only the named objects from a file that holds more', async () => {
+    const inputs: { live?: string; dry?: string } = {}
+    const h = harness(
+      { [app]: yamlDocs(NS, DEP) },
+      fakeKube({
+        live: (_a, o) => ((inputs.live = o?.input), { ok: true, stdout: '', stderr: '' }),
+        'dry-apply': (_a, o) => ((inputs.dry = o?.input), { ok: true, stdout: yamlDocs(NS), stderr: '' })
+      })
+    )
+    const svc = traced(createKubeService(h.deps))
+    const r = await svc.preview('apply', { ...request([app]), first: FIRST }, HIDE)
+    if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
+    expect(r.commandLines).toEqual([stdinApply])
+    expect(r.nsFlags).toEqual([null])
+    expect(r.checkCommandLines).toEqual([stdinLive, stdinDry])
+    expect(r.plan).toEqual({
+      ok: true,
+      commands: [{ kind: 'objects', text: inputs.dry, from: [app], refs: ['Namespace/brand-new'] }],
+      leftOut: []
+    })
+    expect(objectsFromYaml(inputs.dry ?? '')).toEqual([NS])
+    expect(inputs.live).toBe(inputs.dry)
+    expect(r.resources.map((x) => [x.diff.kind, x.diff.name, x.diff.state])).toEqual([['Namespace', 'brand-new', 'new']])
+  })
+
+  it('first from an overlay takes the object from its render', async () => {
+    const ov = p('k', 'overlays', 'dev')
+    const inputs: { dry?: string } = {}
+    const h = harness(
+      {
+        [p('k', 'overlays', 'dev', 'kustomization.yaml')]: 'resources:\n  - namespace.yaml\n  - dep.yaml\n',
+        [p('k', 'overlays', 'dev', 'namespace.yaml')]: yamlDocs(NS),
+        [p('k', 'overlays', 'dev', 'dep.yaml')]: yamlDocs(DEP)
+      },
+      fakeKube({
+        kustomize: yamlDocs(NS, DEP),
+        'dry-apply': (_a, o) => ((inputs.dry = o?.input), { ok: true, stdout: yamlDocs(NS), stderr: '' })
+      })
+    )
+    const svc = traced(createKubeService(h.deps))
+    const r = await svc.preview('apply', { ...request([ov]), first: FIRST }, HIDE)
+    if (!r.ok) throw new Error(`preview failed: ${r.reason}`)
+    expect(r.plan.commands).toEqual([{ kind: 'objects', text: inputs.dry, from: [ov], refs: ['Namespace/brand-new'] }])
+    expect(objectsFromYaml(inputs.dry ?? '')).toEqual([NS])
+    expect(r.checkCommandLines).toEqual([['kustomize', ov], stdinLive, stdinDry])
+  })
+
+  it('first naming an object the selection no longer has is refused', async () => {
+    const h = harness({ [app]: yamlDocs(DEP) }, fakeKube({}))
+    const svc = traced(createKubeService(h.deps))
+    expect(await svc.preview('apply', { ...request([app]), first: FIRST }, HIDE)).toEqual({
+      ok: false,
+      reason: 'refused',
+      plan: { ok: false, reason: 'nothing', paths: [app], leftOut: [] }
+    })
+  })
+
+  it('run with first sends the objects on stdin; a changed file is refused as changed', async () => {
+    const applied: (string | undefined)[] = []
+    const h = harness(
+      { [app]: yamlDocs(NS, DEP) },
+      fakeKube({
+        'dry-apply': yamlDocs(NS),
+        apply: (_a, o) => (applied.push(o?.input), { ok: true, stdout: 'namespace/brand-new created', stderr: '' })
+      })
+    )
+    const svc = traced(createKubeService(h.deps))
+    const req: KubeRequest = { ...request([app]), first: FIRST }
+    const r = await confirmRun(svc, 'r1', 'apply', req)
+    expect(r).toMatchObject({ ok: true, ran: 1, commandLines: [stdinApply], outcomes: [{ ref: 'namespace/brand-new', outcome: 'created' }] })
+    expect(applied.map((t) => objectsFromYaml(t ?? ''))).toEqual([[NS]])
+    const preview = await svc.preview('apply', req, HIDE)
+    if (!preview.ok) throw new Error(`preview failed: ${preview.reason}`)
+    h.files.set(app, { text: yamlDocs({ ...NS, metadata: { name: 'brand-new', labels: { team: 'a' } } }, DEP), mtimeMs: 2 })
+    const r2 = await svc.run('r2', 'apply', req, preview.fingerprint)
+    expect(r2.refused).toEqual({ reason: 'changed' })
+    expect(applied).toHaveLength(1)
+  })
+
+  it('after a CRD is applied first, run waits for it to be established', async () => {
+    const crdFile = p('k8s', 'crd.yaml')
+    const CRD = {
+      apiVersion: 'apiextensions.k8s.io/v1',
+      kind: 'CustomResourceDefinition',
+      metadata: { name: 'widgets.example.com' },
+      spec: { group: 'example.com', scope: 'Namespaced', names: { plural: 'widgets', singular: 'widget', kind: 'Widget' } }
+    }
+    const W = { apiVersion: 'example.com/v1', kind: 'Widget', metadata: { name: 'w1', namespace: 'default' } }
+    const created = 'customresourcedefinition.apiextensions.k8s.io/widgets.example.com created'
+    let wait: KubectlResult = { ok: true, stdout: 'customresourcedefinition.apiextensions.k8s.io/widgets.example.com condition met', stderr: '' }
+    const h = harness({ [crdFile]: yamlDocs(CRD, W) }, fakeKube({ 'dry-apply': yamlDocs(CRD), apply: created, other: () => wait }))
+    const svc = traced(createKubeService(h.deps))
+    const req: KubeRequest = { ...request([crdFile]), first: [{ kind: 'CustomResourceDefinition', name: 'widgets.example.com' }] }
+    const waitArgs = ['wait', '--for', 'condition=established', '--timeout', '60s', '--context', 'kind-dev', 'customresourcedefinition/widgets.example.com']
+    const r = await confirmRun(svc, 'c1', 'apply', req)
+    const applyAt = h.calls.findIndex((c) => c[0] === 'apply' && !c.includes('--dry-run=server'))
+    expect(h.calls.slice(applyAt + 1)).toEqual([waitArgs])
+    expect(r).toMatchObject({ ok: true, commandLines: [stdinApply], outcomes: [{ ref: created.split(' ')[0], outcome: 'created' }] })
+    expect(r.outcomes).toHaveLength(1)
+    wait = fail('error: timed out waiting for the condition on customresourcedefinitions/widgets.example.com')
+    const r2 = await confirmRun(svc, 'c2', 'apply', req)
+    expect(r2.ok).toBe(true)
+    expect(r2.outcomes).toContainEqual({ ref: '', outcome: 'warning', message: expect.stringContaining('widgets.example.com') })
   })
 })
 

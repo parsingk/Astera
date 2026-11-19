@@ -272,6 +272,33 @@ describe('kubeOpsReducer: a run refused because the selection changed', () => {
   })
 })
 
+// Spec 4.6.1: the dialog that applies first what an apply's dry run waits for reopens that apply when it succeeds.
+describe('kubeOpsReducer: applying first, then the apply again', () => {
+  const FIRST_REQ: KubeRequest = { ...REQ, first: [{ kind: 'Namespace', name: 'brand-new' }] }
+  const THEN = { verb: 'apply' as const, req: REQ, namespaceLabel: 'dev', watch: ['/p/k8s/a.yaml'] }
+  const openFirst = (): KubeOpsState => {
+    const s1 = step(initialKubeOps, { type: 'preview', verb: 'apply', req: FIRST_REQ, namespaceLabel: 'dev', id: 'f1', at: 5, then: THEN })
+    return step(s1, { type: 'previewed', seq: s1.dialog!.seq, preview: okPreview('fpf'), scope: '' }, { type: 'confirm', id: 'run1', at: 10, scope: '' })
+  }
+
+  it('a successful run opens the apply it was for, previewing afresh', () => {
+    const s = step(openFirst(), { type: 'ran', result: runResult(), reopen: { id: 'd2', at: 30 } })
+    expect(s.dialog).toMatchObject({ verb: 'apply', req: REQ, namespaceLabel: 'dev', watch: ['/p/k8s/a.yaml'], phase: 'previewing', preview: null, id: 'd2', startedAt: 30 })
+    expect(s.dialog!.then).toBeUndefined()
+    expect(s.log[0]).toMatchObject({ id: 'run1', state: 'done' })
+  })
+
+  it('a failed or cancelled run closes it', () => {
+    expect(step(openFirst(), { type: 'ran', result: runResult({ ok: false }), reopen: { id: 'd2', at: 30 } }).dialog).toBeNull()
+    expect(step(openFirst(), { type: 'ran', result: runResult({ ok: false, cancelled: true }), reopen: { id: 'd2', at: 30 } }).dialog).toBeNull()
+  })
+
+  it('an apply without one closes as before', () => {
+    const s2 = step(open(), { type: 'previewed', seq: 1, preview: okPreview(), scope: '' }, { type: 'confirm', id: 'run1', at: 10, scope: '' })
+    expect(step(s2, { type: 'ran', result: runResult(), reopen: { id: 'd2', at: 30 } }).dialog).toBeNull()
+  })
+})
+
 describe('kubeOpsReducer: close and the server fields toggle', () => {
   it('close works while loading, while shown and after a changed refusal; a late answer after close is dropped', () => {
     const loading = open()
@@ -491,6 +518,11 @@ describe('compareCounts and kubeScope', () => {
         leftOut: []
       })
     ).toEqual({ files: 3 })
+  })
+
+  it('the scope of objects applied first is what they are', () => {
+    const objects = { kind: 'objects' as const, text: '', from: ['/p/a.yaml'], refs: ['Namespace/brand-new', 'CustomResourceDefinition/widgets.example.com'] }
+    expect(kubeScope({ ok: true, commands: [objects], leftOut: [] })).toEqual({ objects: ['Namespace/brand-new', 'CustomResourceDefinition/widgets.example.com'] })
   })
 })
 

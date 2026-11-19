@@ -68,6 +68,23 @@ describe('runKubectl', () => {
     })
     expect(r.stdout).toBe('a')
   })
+
+  // Spec 4.6.1: objects applied first go to `kubectl apply -f -` on stdin; kubectl reads until stdin closes.
+  it('writes input to stdin and closes it', async () => {
+    const r = await runKubectl(
+      js("let s='';process.stdin.on('data',(d)=>{s+=d}).on('end',()=>process.stdout.write(s.toUpperCase()))"),
+      { bin: node, input: 'kind: Namespace', timeoutMs: 10_000 }
+    )
+    expect(r).toMatchObject({ ok: true, stdout: 'KIND: NAMESPACE' })
+  })
+
+  // Final review I1: a kill while a large input is still pending closes the pipe under it; the pipe's error must not go
+  // unhandled (in Electron main that is an error box).
+  it('a child that never reads a large input still ends at its deadline, with no stdin error left unhandled', async () => {
+    const r = await runKubectl(js('setTimeout(() => {}, 30000)'), { bin: node, input: 'x'.repeat(300_000), timeoutMs: 300 })
+    expect(r.timedOut).toBe(true)
+    await new Promise((done) => setTimeout(done, 300))
+  })
 })
 
 describe('kubectlBin', () => {

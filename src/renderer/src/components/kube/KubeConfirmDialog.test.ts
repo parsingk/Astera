@@ -59,9 +59,49 @@ const render = (preview: KubePreview | null, over: Record<string, unknown> = {})
       running: false,
       cancelling: false,
       onAbort: () => {},
+      onApplyFirst: () => {},
       ...over
     })
   )
+
+// Spec 4.6.1: a dry run waiting for a Namespace or CRD the same apply creates.
+describe('KubeConfirmDialog: apply first', () => {
+  const waiting: KubePreview = {
+    ok: false,
+    reason: 'kubectl',
+    commandLines: [['apply', '--context', 'prod', '-f', '/p/app.yaml']],
+    nsFlags: [null],
+    checkCommandLines: [],
+    stderr: 'dry run failed: Error from server (NotFound): namespaces "brand-new" not found',
+    createFirst: [{ kind: 'Namespace', name: 'brand-new', path: '/p/app.yaml' }]
+  }
+
+  it('names what to apply first above the error, and the primary button applies it', () => {
+    const onApplyFirst = vi.fn()
+    const html = render(waiting, { onApplyFirst })
+    const at = (s: string): number => html.indexOf(s)
+    expect(at('kube.confirm.createFirst')).toBeGreaterThan(-1)
+    expect(html).toContain('Namespace brand-new')
+    expect(html).toContain('/p/app.yaml')
+    expect(at('kube.confirm.createFirstWhy')).toBeGreaterThan(at('Namespace brand-new'))
+    expect(at('namespaces &quot;brand-new&quot; not found')).toBeGreaterThan(at('kube.confirm.createFirstWhy'))
+    expect(html).toMatch(/<button[^>]*class="primary"[^>]*>kube\.confirm\.applyFirst<\/button>/)
+    expect(html).not.toMatch(/<button[^>]*class="primary"[^>]*disabled/)
+  })
+
+  it('a compare shows what to apply first without the button', () => {
+    const html = render(waiting, { verb: 'compare' })
+    expect(html).toContain('Namespace brand-new')
+    expect(html).not.toContain('kube.confirm.applyFirst')
+  })
+
+  it('without it the primary button stays the disabled apply button', () => {
+    const { createFirst: _, ...plain } = waiting as Extract<KubePreview, { reason: 'kubectl' }>
+    const html = render(plain)
+    expect(html).not.toContain('kube.confirm.createFirst')
+    expect(html).toMatch(/<button[^>]*class="primary"[^>]*disabled[^>]*>kube\.confirm\.apply/)
+  })
+})
 
 describe('KubeConfirmDialog', () => {
   it('a kubectl failure shows stderr and a disabled primary button', () => {

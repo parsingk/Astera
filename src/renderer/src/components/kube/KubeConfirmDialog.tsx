@@ -62,7 +62,8 @@ function namespacePill(
 
 /** The confirmation that starts every cluster write (spec 4.6): what changes, the exact commands, one button.
  *  `compare` is the same view read-only. While `running` it stays up with a stop button; Escape and the backdrop
- *  do nothing then. State and IPC live with the caller. */
+ *  do nothing then. When an apply's dry run waits for a Namespace or CRD the same apply creates (spec 4.6.1), the one
+ *  button applies those first (`onApplyFirst`). State and IPC live with the caller. */
 export function KubeConfirmDialog({
   verb,
   context,
@@ -75,7 +76,8 @@ export function KubeConfirmDialog({
   stale,
   running,
   cancelling,
-  onAbort
+  onAbort,
+  onApplyFirst
 }: {
   verb: 'compare' | KubeVerb
   context: string
@@ -90,6 +92,7 @@ export function KubeConfirmDialog({
   /** Stop was pressed and the run has not answered yet. */
   cancelling: boolean
   onAbort: () => void
+  onApplyFirst: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const entries = preview?.ok ? preview.resources : []
@@ -123,9 +126,10 @@ export function KubeConfirmDialog({
   }
 
   const files = preview?.ok
-    ? preview.plan.commands.reduce((n, c) => n + (c.kind === 'files' ? c.files.length : 1), 0)
+    ? preview.plan.commands.reduce((n, c) => n + (c.kind === 'files' ? c.files.length : c.kind === 'objects' ? c.from.length : 1), 0)
     : 0
   const canConfirm = preview?.ok === true && !stale && !running && verb !== 'compare'
+  const createFirst = preview && !preview.ok && preview.reason === 'kubectl' ? (preview.createFirst ?? []) : []
   const ns = namespacePill(preview, namespaceLabel, t)
   const afterLabel = verb === 'delete' ? t('kube.confirm.columnAfterDelete') : t('kube.confirm.columnAfter')
 
@@ -206,6 +210,20 @@ export function KubeConfirmDialog({
       case 'kubectl':
         return (
           <div className="kube-fail">
+            {createFirst.length > 0 && (
+              <>
+                <p>{t('kube.confirm.createFirst')}</p>
+                <ul>
+                  {createFirst.map((c) => (
+                    <li key={`${c.kind}/${c.name}`}>
+                      <span className="mono">{`${c.kind} ${c.name}`}</span>{' '}
+                      <span className="kube-leftout-reason mono">{c.path}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p>{t('kube.confirm.createFirstWhy')}</p>
+              </>
+            )}
             {preview.timedOut && <p>{t('kube.confirm.timedOut')}</p>}
             <pre className="confirm-code">{preview.stderr}</pre>
           </div>
@@ -338,7 +356,11 @@ export function KubeConfirmDialog({
               {verb === 'compare' ? t('common.close') : t('common.cancel')}
             </button>
           )}
-          {verb !== 'compare' && (
+          {verb === 'apply' && createFirst.length > 0 ? (
+            <button type="button" className="primary" disabled={stale || running} onClick={onApplyFirst}>
+              {t('kube.confirm.applyFirst')}
+            </button>
+          ) : verb !== 'compare' && (
             <button
               type="button"
               className={verb === 'delete' ? 'primary danger' : 'primary'}
