@@ -7,7 +7,7 @@ import type {
   KubeRunResult,
   KubeTargetView,
   KubeVerb,
-  OperationPlan,
+  ShownPlan,
   TargetState
 } from '../../../core/kube/types'
 import { useI18n } from '../i18n/I18nProvider'
@@ -100,7 +100,7 @@ export function compareCounts(p: OkPreview): { changed: number; unchanged: numbe
 }
 
 /** What an operation covers: the overlay of a single overlay command, else how many files and overlays. */
-export function kubeScope(plan: Extract<OperationPlan, { ok: true }>): { overlay: string } | { files: number } {
+export function kubeScope(plan: ShownPlan): { overlay: string } | { files: number } {
   const [only] = plan.commands
   if (plan.commands.length === 1 && only.kind === 'overlay') return { overlay: only.dir }
   return { files: plan.commands.reduce((n, c) => n + (c.kind === 'files' ? c.files.length : 1), 0) }

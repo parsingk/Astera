@@ -49,6 +49,9 @@ export type OperationPlan =
   | { ok: false; reason: 'nothing'; paths: string[]; leftOut: LeftOut[] }
   | { ok: false; reason: 'base-folder' | 'many-overlays' | 'broken-kustomization'; paths: string[] }
 
+/** The plan a preview shows: a plan, or the one objects command of a `first` request (spec 4.6.1). */
+export type ShownPlan = { ok: true; commands: KubeCommand[]; leftOut: LeftOut[] }
+
 /** `nsFlag` is the value for `-n`, or null when every resource names its namespace. */
 export type KubeTarget = { context: string; nsFlag: string | null }
 
@@ -162,7 +165,7 @@ export interface KubeRequest {
 export type KubePreview =
   | {
       ok: true
-      plan: Extract<OperationPlan, { ok: true }>
+      plan: ShownPlan
       commandLines: string[][]
       nsFlags: (string | null)[]
       checkCommandLines: string[][]

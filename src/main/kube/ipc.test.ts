@@ -65,6 +65,23 @@ describe('the editor override (R11) over IPC', () => {
     expect(t.service.preview).toHaveBeenCalledTimes(2)
   })
 
+  // Spec 4.6.1: the objects to apply first, named by kind and name only.
+  it('passes first through when well formed and rejects anything else', async () => {
+    const t = setup()
+    const first = [
+      { kind: 'Namespace', name: 'brand-new' },
+      { kind: 'CustomResourceDefinition', name: 'widgets.example.com' }
+    ]
+    await t.call('kube.preview', 'apply', { ...req, first }, HIDE)
+    expect(t.service.preview).toHaveBeenLastCalledWith('apply', { ...req, first }, HIDE)
+    await t.call('kube.run', 'id-1', 'apply', { ...req, first }, 'fp')
+    expect(t.service.run).toHaveBeenLastCalledWith('id-1', 'apply', { ...req, first }, 'fp')
+    for (const bad of ['Namespace', [], [{ kind: 'Secret', name: 's' }], [{ kind: 'Namespace', name: '' }], [{ kind: 'Namespace' }]]) {
+      await expect(t.call('kube.preview', 'apply', { ...req, first: bad }, HIDE)).rejects.toThrow()
+    }
+    expect(t.service.preview).toHaveBeenCalledTimes(1)
+  })
+
   it('status takes an optional non-empty context', async () => {
     const t = setup()
     await t.call('kube.status', '/p/a.yaml', '/p')

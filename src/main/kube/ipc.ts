@@ -1,5 +1,5 @@
 /** IPC for the kube feature. Every handler that receives a path asks assertAllowedPath first. */
-import type { KubeRequest, KubeVerb, Remembered } from '../../core/kube/types'
+import type { FirstRef, KubeRequest, KubeVerb, Remembered } from '../../core/kube/types'
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { AppSettingsStore } from '../appSettingsStore'
 import type { KubeService } from './service'
@@ -42,8 +42,20 @@ function pillOf(v: unknown): string | null {
   return v === null ? null : str(v, 'pill')
 }
 
+/** Spec 4.6.1: the objects to apply first, by kind and name; main finds the objects themselves. */
+function firstOf(v: unknown): FirstRef[] {
+  if (!Array.isArray(v) || v.length === 0) throw new Error('kube: first must be a non-empty array')
+  return v.map((x) => {
+    const r = x as { kind?: unknown; name?: unknown } | null
+    if (!r || (r.kind !== 'Namespace' && r.kind !== 'CustomResourceDefinition')) {
+      throw new Error('kube: first names a Namespace or a CustomResourceDefinition')
+    }
+    return { kind: r.kind, name: str(r.name, 'first name') }
+  })
+}
+
 function request(v: unknown): KubeRequest {
-  const r = v as { selection?: unknown; projectRoot?: unknown; context?: unknown; pill?: unknown; override?: unknown } | undefined
+  const r = v as { selection?: unknown; projectRoot?: unknown; context?: unknown; pill?: unknown; override?: unknown; first?: unknown } | undefined
   if (!r || !Array.isArray(r.selection) || r.selection.length === 0) {
     throw new Error('kube: request must be { selection, projectRoot, context, pill } with a non-empty selection')
   }
@@ -53,7 +65,8 @@ function request(v: unknown): KubeRequest {
     projectRoot: str(r.projectRoot, 'projectRoot'),
     context: str(r.context, 'context'),
     pill: pillOf(r.pill),
-    ...(r.override === true ? { override: true as const } : {})
+    ...(r.override === true ? { override: true as const } : {}),
+    ...(r.first !== undefined ? { first: firstOf(r.first) } : {})
   }
 }
 
