@@ -10,8 +10,10 @@
 // System.Windows.Forms clipboard needs an STA thread, which powershell.exe gives with -Sta.
 //
 // The clipboard also keeps the paths as text, because that is what Ctrl+C on a file has always put
-// there and a session terminal is pasted into far more often than Explorer is. One DataObject
-// carries both, so neither use loses.
+// there and other apps paste it. One DataObject carries both, so neither use loses. The app's own
+// session terminal and bottom panel terminal see the file list and type the paths on one line
+// instead (renderer lib/terminalFilePaste.ts); the remote terminal and the Run console still paste
+// the text, one path per line.
 import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'

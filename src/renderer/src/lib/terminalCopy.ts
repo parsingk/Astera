@@ -3,7 +3,8 @@ import { copyTextFor } from '../../../core/terminal/copy'
 
 /**
  * The copy key the session terminal (TerminalView), the Run console (RunPanel) and the remote terminal each wire inline,
- * for a terminal with no other keys of its own (TerminalBody). Ctrl+C, Cmd+C on macOS, over a selection copies it and
+ * for the bottom panel's terminal (TerminalBody), whose key handler has only this and the file paste key
+ * (terminalFilePaste.ts). Ctrl+C, Cmd+C on macOS, over a selection copies it and
  * clears the selection instead of reaching the shell; with nothing to copy the key goes through as before (an interrupt
  * on Windows and Linux). The text is caught when the selection is made, for the reason core/terminal/copy.ts gives: a
  * program that draws over the screen leaves the selection pointing at something else.

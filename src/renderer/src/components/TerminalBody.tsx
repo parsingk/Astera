@@ -18,8 +18,8 @@ import { attachFilePaste, isFilePasteKey } from '../lib/terminalFilePaste'
  * folding all three into a shared hook would get messy. If the three copies actually drift apart and
  * cause a bug, that is when it gets extracted — the focus wiring (below) is the first such case, and
  * the copy key (lib/terminalCopy.ts, missing here until 2026-11-19) the second.
- * URL links come from the shared provider (terminalLinks.ts) — the one piece of xterm wiring that is
- * not duplicated.
+ * URL links come from the shared provider (terminalLinks.ts), and a paste of copied files from the one
+ * TerminalView also uses (lib/terminalFilePaste.ts) — the pieces of xterm wiring that are not duplicated.
  * initialBuffer: recent output the parent passes in for replay — the body does not know projectPath, so
  * it cannot call list itself.
  * clearNonce: a counter the parent's (BottomPanel's) clear button increments — it clears without holding
