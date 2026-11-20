@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
-import { Ellipsis, RotateCcw, SquarePen } from 'lucide-react'
+import { Ellipsis, ExternalLink, RotateCcw } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
@@ -168,7 +168,7 @@ export function ClusterDetail({
             aria-label={t('kube.cluster.openInEditor')}
             onClick={() => onOpenInEditor(selectedRef)}
           >
-            <SquarePen size={14} />
+            <ExternalLink size={14} />
           </button>
         )}
         <button

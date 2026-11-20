@@ -61,6 +61,14 @@ describe('ClusterDetail', () => {
     expect(render(model('ConfigMap', 'configmaps', cm), { onOpenInEditor: noop })).toContain('kube.cluster.openInEditor')
   })
 
+  // Task 15 S5: a pencil reads as "edit" in a part that only reads; boards A and B draw open-in-editor as "open elsewhere".
+  it('draws the editor button with the open-elsewhere icon, not a pencil', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    const html = render(model('ConfigMap', 'configmaps', cm), { onOpenInEditor: noop })
+    expect(html).toMatch(/aria-label="kube\.cluster\.openInEditor"><svg [^>]*class="lucide lucide-external-link"/)
+    expect(html).not.toContain('lucide-square-pen')
+  })
+
   it('says a deleted object is deleted and keeps its content', () => {
     const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
     const html = render(model('ConfigMap', 'configmaps', cm, { deleted: true }))
