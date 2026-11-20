@@ -121,6 +121,13 @@ const NO_CRDS = { kinds: [] as KindDef[], objects: [] as K8sObject[] }
 const NO_COUNTS: Record<string, CountInfo> = {}
 const FIXED_KINDS = KIND_GROUPS.flatMap((g) => g.kinds)
 
+/** The list's objects when they were listed for `key` (the picked context, namespace and kind), else none: until the
+ *  new list starts, the rows of the last one would be drawn under the new kind's columns and could be selected as one
+ *  of its objects. */
+export function objectsFor(list: Keyed<ReadonlyMap<string, K8sObject>> | null, key: string | null): ReadonlyMap<string, K8sObject> {
+  return valueFor(list, key) ?? NO_OBJECTS
+}
+
 function recall(root: string): { context: string; namespace: string | null } | null {
   try {
     return readMemory(localStorage.getItem(memoryKey(root)))
@@ -304,7 +311,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const [namespaces, setNamespaces] = useState<Keyed<Read<{ names: string[] }>> | null>(null)
   const [crds, setCrds] = useState<Keyed<typeof NO_CRDS> | null>(null)
   const [counts, setCounts] = useState<Keyed<Record<string, CountInfo>> | null>(null)
-  const [list, setList] = useState<ReadonlyMap<string, K8sObject>>(NO_OBJECTS)
+  const [list, setList] = useState<Keyed<ReadonlyMap<string, K8sObject>> | null>(null)
   /** Nothing has arrived since the list (re)started. */
   const [fresh, setFresh] = useState(true)
   const [listWatch, setListWatch] = useState<WatchState>('live')
@@ -335,8 +342,11 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   // read, not one kept from an earlier round. Not while the watch fails: the rows then stay as last seen (§4.12).
   const saysEmpty = listWatch === 'live' && kindCount?.count === 0 && !kindCount.forbidden && !kindCount.stale
   const listForbidden = typeof listWatch === 'object' && listWatch.forbidden ? listWatch.error : null
+  const listed = objectsFor(list, listKey)
+  /** Fresh too while the list effect has not yet started this list (the render that switched to it). */
+  const listFresh = fresh || list?.key !== listKey
   // A refused list shows its reason, not rows a refresh may no longer be allowed to read.
-  const objects = listForbidden !== null || (fresh && saysEmpty) ? NO_OBJECTS : list
+  const objects = listForbidden !== null || (listFresh && saysEmpty) ? NO_OBJECTS : listed
   const selected = valueFor(pick, view.selected)
   const selectedRef = selected !== null && context !== null && kind !== null ? refOf(context, kind, selected.object) : null
   const selectedKey = selectedRef && JSON.stringify(selectedRef)
@@ -457,12 +467,13 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   useEffect(() => {
     const spec = latest.current.listSpec
     if (!visible || spec === null || listKey === null) return
+    const key = listKey
     let alive = true
     // One copy of the list per burst, not per event (a big namespace's first list is N ADDED events, Task 5 review),
     // and a relist swapped in whole once it goes quiet (final review I3).
     const batcher = createWatchBatcher({
       apply: (burst) => {
-        setList((prev) => applyPending(prev, burst))
+        setList((prev) => ({ key, value: applyPending(objectsFor(prev, key), burst) }))
         setFresh(false)
       },
       frame: nextFrame,
@@ -473,7 +484,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     })
     if (shownList.current !== listKey) {
       shownList.current = listKey
-      setList(NO_OBJECTS)
+      setList({ key, value: NO_OBJECTS })
     } else {
       // Seen again (the window restored too) or refreshed: the rows stay until the relisted objects replace them.
       batcher.push('resync')
@@ -493,7 +504,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
         api.list(spec).then(
           (r) => {
             if (!alive || !r.ok) return
-            setList(new Map(r.objects.map((o) => [keyOf(o), o])))
+            setList({ key, value: new Map(r.objects.map((o) => [keyOf(o), o])) })
             setFresh(false)
           },
           () => {}
@@ -641,7 +652,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     kind,
     columns,
     rows,
-    loading: live === 'live' && fresh && list.size === 0 && !saysEmpty,
+    loading: live === 'live' && listFresh && listed.size === 0 && !saysEmpty,
     selected: selected?.object ?? null,
     selectedRef,
     deleted: selected?.deleted ?? false,
@@ -673,9 +684,12 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     },
     select(uid) {
       pickTicket.current.next()
-      const object = uid === null ? undefined : latest.current.objects.get(uid)
+      const { objects: shown, view: v } = latest.current
+      // Only a row of the list now picked: `objects` holds none of the last kind's, namespace's or context's.
+      const object = uid === null ? undefined : shown.get(uid)
       if (uid !== null && object === undefined) return
-      setView((s) => ({ ...s, selected: uid }))
+      // Checked again as the update applies: a click that beats the render of a switch names a row of the old list.
+      setView((s) => (s.context === v.context && s.namespace === v.namespace && s.resource === v.resource ? { ...s, selected: uid } : s))
       setPick(uid !== null && object !== undefined ? { key: uid, value: { object, deleted: false } } : null)
     },
     selectRef(ref) {

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle, follow, listFailure, liveOf, type WatchState } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, follow, listFailure, liveOf, objectsFor, type WatchState } from './useClusterView'
 import type { WatchClient } from '../lib/kubeWatchClient'
 import type { WatchMessage } from '../../../core/kube/cluster/types'
+import type { K8sObject } from '../../../core/kube/objects'
 
 afterEach(() => vi.useRealTimers())
 
@@ -31,6 +32,30 @@ describe('listFailure', () => {
     expect(listFailure({ error: FORBIDDEN, forbidden: true })).toBeNull()
     expect(listFailure('live')).toBeNull()
     expect(listFailure('limit')).toBeNull()
+  })
+})
+
+// Task 15 S2: right after a kind switch the old kind's rows were still drawn and clickable, and selecting one showed a
+// Pod as "Deployment web-5968759884-5kdd6" with a false "deleted" banner. The list is kept with the list it belongs to.
+describe('objectsFor', () => {
+  const key = (resource: string, namespace: string | null = 'api'): string => JSON.stringify({ context: 'c', namespace, namespaced: true, resource })
+  const pod: K8sObject = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'web-5968759884-5kdd6', namespace: 'api', uid: 'u-pod' } }
+  const pods = { key: key('pods'), value: new Map([['u-pod', pod]]) }
+
+  it('gives the objects listed for the key now picked', () => {
+    expect(objectsFor(pods, key('pods')).get('u-pod')).toBe(pod)
+  })
+
+  it('gives none of another kind\'s, namespace\'s or context\'s list, so its rows are neither drawn nor selectable', () => {
+    expect(objectsFor(pods, key('deployments.apps')).size).toBe(0)
+    expect(objectsFor(pods, key('deployments.apps')).get('u-pod')).toBeUndefined()
+    expect(objectsFor(pods, key('pods', 'web')).size).toBe(0)
+    expect(objectsFor(pods, JSON.stringify({ context: 'other', namespace: 'api', namespaced: true, resource: 'pods' })).size).toBe(0)
+  })
+
+  it('gives none before anything is listed or while no list can be picked', () => {
+    expect(objectsFor(null, key('pods')).size).toBe(0)
+    expect(objectsFor(pods, null).size).toBe(0)
   })
 })
 
