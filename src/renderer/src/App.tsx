@@ -167,7 +167,7 @@ import { useClusterView } from './hooks/useClusterView'
 import type { ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
-import { closeLogTab, isLogTabId, logRequestOf, newLogTabId, openLogTab, type KubeLogTab } from './lib/kubeLogTabs'
+import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, type KubeLogTab } from './lib/kubeLogTabs'
 import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
@@ -4502,10 +4502,9 @@ export default function App(): React.JSX.Element {
 
   /** A Pod's logs from the cluster view (spec 4.7): their own tab, or the one already showing that Pod and container,
    *  is shown. `previous`: previous logs were asked. */
-  const openPodLogs = (ref: ObjectRef, pod: K8sObject, previous: boolean): void => {
-    const asked = logRequestOf(pod, previous)
-    if (asked === null) return
-    const opened = openLogTab(logTabs, ref, asked.container, asked.previous, newLogTabId)
+  const showPodLogs = (ref: ObjectRef, pod: K8sObject, previous: boolean): void => {
+    const opened = openPodLogs(logTabs, ref, pod, previous, newLogTabId)
+    if (opened === null) return
     setLogTabs(opened.tabs)
     setBottomTab(opened.focus)
   }
@@ -5193,9 +5192,9 @@ export default function App(): React.JSX.Element {
                       kubectlFound ? (
                         <ClusterView
                           model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={openPodLogs} />}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} />}
                           onOpenInEditor={openKubeObject}
-                          onOpenLogs={openPodLogs}
+                          onOpenLogs={showPodLogs}
                           toolbarStart={switcher}
                         />
                       ) : (

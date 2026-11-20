@@ -20,21 +20,22 @@ const sameLogs = (tab: KubeLogTab, ref: ObjectRef, container: string): boolean =
   tab.ref.context === ref.context && tab.ref.namespace === ref.namespace && tab.ref.name === ref.name && tab.container === container
 
 /** Opens a Pod's logs: the tab already showing that Pod and container gets the focus, and turns previous on when
- *  previous logs are asked; plain logs leave it as the person left it. Else a new tab goes at the end. */
+ *  previous logs were asked (`previous.asked`); a plain open leaves it as the person left it. Else a new tab goes at the
+ *  end, starting with `previous.initial`, which is only a default and asks nothing of an existing tab. */
 export function openLogTab(
   tabs: readonly KubeLogTab[],
   ref: ObjectRef,
   container: string,
-  previous: boolean,
+  previous: { initial: boolean; asked: boolean },
   newId: () => string
 ): { tabs: KubeLogTab[]; focus: string } {
   const at = tabs.findIndex((tab) => sameLogs(tab, ref, container))
   if (at < 0) {
-    const tab = { id: newId(), ref, container, previous, request: 0 }
+    const tab = { id: newId(), ref, container, previous: previous.initial, request: 0 }
     return { tabs: [...tabs, tab], focus: tab.id }
   }
   const tab = tabs[at]
-  if (!previous) return { tabs: [...tabs], focus: tab.id }
+  if (!previous.asked) return { tabs: [...tabs], focus: tab.id }
   return { tabs: tabs.map((x, i) => (i === at ? { ...x, previous: true, request: x.request + 1 } : x)), focus: tab.id }
 }
 
@@ -42,9 +43,17 @@ export function closeLogTab(tabs: readonly KubeLogTab[], id: string): KubeLogTab
   return tabs.filter((tab) => tab.id !== id)
 }
 
-/** What opening a Pod's logs asks for (spec 4.7, 4.8): its default container, and previous when previous logs are asked
- *  or that container is in CrashLoopBackOff, where the reason is. Null for a Pod that lists no containers. */
-export function logRequestOf(pod: K8sObject, previous: boolean): { container: string; previous: boolean } | null {
+/** Opens a Pod's logs from the cluster view (spec 4.7, 4.8) on its default container. A new tab starts with previous on
+ *  when previous logs were asked or that container is in CrashLoopBackOff, where the reason is; an existing tab follows
+ *  only the ask. Null for a Pod that lists no containers. */
+export function openPodLogs(
+  tabs: readonly KubeLogTab[],
+  ref: ObjectRef,
+  pod: K8sObject,
+  askedPrevious: boolean,
+  newId: () => string
+): { tabs: KubeLogTab[]; focus: string } | null {
   const container = defaultContainer(pod)
-  return container === null ? null : { container, previous: previous || previousByDefault(pod, container) }
+  if (container === null) return null
+  return openLogTab(tabs, ref, container, { initial: askedPrevious || previousByDefault(pod, container), asked: askedPrevious }, newId)
 }
