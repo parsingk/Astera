@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ansiSpans, appendLines, compareStamps, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, finishedText, linesAfter, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
+import { LOG_MAX_CHARS, ansiSpans, appendLines, compareStamps, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, finishedText, linesAfter, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
 
 describe('log logic', () => {
   it('splits the kubectl time stamp', () => {
@@ -12,6 +12,24 @@ describe('log logic', () => {
     expect(b.lines.map((l) => l.text)).toEqual(['b', 'c'])
     expect(b.dropped).toBe(1)
     expect(appendLines(b, ['d'], 2).lines.map((l) => l.n)).toEqual([2, 3])
+  })
+  // Final review M2: 50,000 lines of up to 1 MB each bound nothing in memory. The kept lines' text has a size cap too,
+  // and the lines it takes count as dropped. The time stamp is not part of a line's text.
+  it('drops the oldest beyond the size cap and counts them', () => {
+    let b = appendLines(emptyLogBuffer(), ['aaaa', 'bbbb', '2026-11-20T01:12:03Z cccc'], 100, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['bbbb', 'cccc'])
+    expect(b.dropped).toBe(1)
+    // The size of what is kept carries over from the last append, less what went.
+    b = appendLines(b, ['dd'], 100, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['bbbb', 'cccc', 'dd'])
+    b = appendLines(b, ['e'], 100, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['cccc', 'dd', 'e'])
+    expect(b.dropped).toBe(2)
+    // Both caps hold together: the count takes one, then the size another.
+    b = appendLines(b, ['ffffffff'], 3, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['e', 'ffffffff'])
+    expect(b.dropped).toBe(4)
+    expect(LOG_MAX_CHARS).toBe(64 * 1024 * 1024)
   })
   it('filters by visible text', () => {
     const lines = appendLines(emptyLogBuffer(), ['\u001b[31mERROR\u001b[0m could not connect', 'INFO ok']).lines

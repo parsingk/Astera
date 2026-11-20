@@ -5,14 +5,18 @@ export type { LogOptions } from './types'
 
 export const LOG_TAIL_LINES = 1000
 export const LOG_MAX_LINES = 50_000
+/** The kept lines' text, in characters: a line can be up to a million characters long (main's LOG_LINE_MAX_CHARS), so
+ *  the count alone bounds nothing in memory. */
+export const LOG_MAX_CHARS = 64 * 1024 * 1024
 
 /** `n` is a running index over the whole read, so it stays stable when the oldest lines are dropped. `lower`: the
  *  visible text in lower case, worked out once as the line arrives, since the filter reads every line at every frame. */
 export interface LogLine { n: number; ts: string | null; text: string; lower: string }
-export interface LogBuffer { lines: LogLine[]; dropped: number; next: number }
+/** `chars`: the kept lines' text length, kept as lines come and go rather than summed again. */
+export interface LogBuffer { lines: LogLine[]; dropped: number; next: number; chars: number }
 
 export function emptyLogBuffer(): LogBuffer {
-  return { lines: [], dropped: 0, next: 0 }
+  return { lines: [], dropped: 0, next: 0, chars: 0 }
 }
 
 // kubectl --timestamps: RFC3339 with nanoseconds, then one space.
@@ -47,16 +51,21 @@ export function linesAfter(raw: readonly string[], since: string): string[] {
   })
 }
 
-export function appendLines(buf: LogBuffer, raw: string[], max: number = LOG_MAX_LINES): LogBuffer {
+/** Adds the lines and drops the oldest beyond `max` lines or `maxChars` of text, counting them in `dropped`. */
+export function appendLines(buf: LogBuffer, raw: string[], max: number = LOG_MAX_LINES, maxChars: number = LOG_MAX_CHARS): LogBuffer {
   let next = buf.next
+  let chars = buf.chars
   const lines = buf.lines.concat(
     raw.map((r) => {
       const { ts, text } = splitTimestamp(r)
+      chars += text.length
       return { n: next++, ts, text, lower: visibleText(text).toLowerCase() }
     })
   )
-  const over = Math.max(0, lines.length - max)
-  return { lines: over > 0 ? lines.slice(over) : lines, dropped: buf.dropped + over, next }
+  let over = Math.max(0, lines.length - max)
+  for (let i = 0; i < over; i++) chars -= lines[i].text.length
+  while (over < lines.length && chars > maxChars) chars -= lines[over++].text.length
+  return { lines: over > 0 ? lines.slice(over) : lines, dropped: buf.dropped + over, next, chars }
 }
 
 export function filterLines(lines: readonly LogLine[], text: string): LogLine[] {
