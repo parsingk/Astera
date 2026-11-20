@@ -137,7 +137,8 @@ function fakeApi() {
           cluster: {
             get: async (r: unknown) => {
               reads.push(r)
-              return queue.length > 0 ? queue.shift() : answer
+              if (queue.length > 0) return queue.shift()
+              return typeof answer === 'function' ? (answer as (r: unknown) => unknown)(r) : answer
             }
           }
         },
@@ -269,6 +270,77 @@ describe('KubeLogView stream', () => {
     hooks.render(view())
     await vi.advanceTimersByTimeAsync(10_000)
     expect(api.reads).toHaveLength(2)
+  })
+
+  // Task 5 re-review (round 2): a read without follow ends by itself, with no exit to wait for: one read, no backoff.
+  it('reads the Pod once when a read without follow ends', async () => {
+    vi.useFakeTimers()
+    let tree = hooks.render(view())
+    await vi.advanceTimersByTimeAsync(0)
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    hooks.render(view())
+    expect(api.started[1]).toMatchObject({ container: 'sidecar', follow: false })
+    api.emit({ logId: api.started[1].id, kind: 'ended' })
+    hooks.render(view())
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.reads).toHaveLength(2) // the mount read, and one at the end
+  })
+
+  // Task 5 re-review (round 2): the start count belongs to a kubectl that starts. Follow turned off after the end
+  // starts none, so the exit stays; follow turned on again starts one, so the count is taken again.
+  it('keeps the exit code when follow is turned off after the end, and counts again when a resumed read starts', async () => {
+    vi.useFakeTimers()
+    let tree = hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(view(null))
+    const crashed = podWith({ restartCount: 1, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 2, finishedAt: '2026-11-20T01:12:11Z' } } })
+    api.answer(read(crashed))
+    api.emit({ logId: api.started[0].id, kind: 'ended' })
+    hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    tree = hooks.render(view(null))
+    expect(textOf(tree)).toContain('kube.logs.ended{"code":2}')
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view(null))
+    tree = hooks.render(view(null))
+    expect(textOf(tree)).toContain('kube.logs.ended{"code":2}')
+
+    // On again: the resumed read starts at restart count 1. It ends with the container running again and the same old
+    // exit in lastState, which is not this read's.
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view(null))
+    hooks.render(view(null))
+    api.answer(read(podWith({ restartCount: 1, state: { running: {} }, lastState: { terminated: { exitCode: 2, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    api.emit({ logId: api.started[1].id, kind: 'ended' })
+    hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    tree = hooks.render(view(null))
+    expect(textOf(tree)).toContain('kube.logs.streamEnded')
+  })
+
+  // Task 5 re-review (round 2): on a target change the start count waits for the new Pod's read, not the old one's.
+  it('takes the start count from the new target\'s Pod', async () => {
+    vi.useFakeTimers()
+    let at = target
+    const v = () => KubeLogView({ pod: null, target: at, initial: { container: 'worker', previous: false }, visible: true })
+    api.answer(read(podWith({ restartCount: 5, state: { running: {} } })))
+    hooks.render(v)
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(v)
+    at = { ...target, name: 'worker-2' }
+    const second = held()
+    api.queue.push(second.promise)
+    hooks.render(v)
+    second.answer(read(podWith({ restartCount: 0, state: { running: {} } })))
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(v)
+    api.answer(read(podWith({ restartCount: 1, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 9, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    api.emit({ logId: api.started[1].id, kind: 'ended' })
+    hooks.render(v)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(textOf(hooks.render(v))).toContain('kube.logs.ended{"code":9}')
   })
 
   // Task 5 review (ruled in): the saved file holds the lines the filter shows, time stamps as shown, no colour codes.

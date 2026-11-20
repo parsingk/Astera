@@ -17,7 +17,7 @@ import {
   type Span
 } from '../../../../../core/kube/cluster/logs'
 import { displayContextName } from '../../../../../core/kube/contextName'
-import { useKubeLogStream } from '../../../hooks/useKubeLogStream'
+import { useKubeLogStream, type LogState } from '../../../hooks/useKubeLogStream'
 import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { toast } from '../../../lib/toast'
@@ -99,10 +99,12 @@ export function KubeLogView({
   const [filter, setFilter] = useState(initial.filter ?? '')
   const [timestamps, setTimestamps] = useState(true)
   const [wrap, setWrap] = useState(false)
-  /** The Pod as last read: its containers, and once the stream ends its exit. The tab knows only where the Pod lives,
-   *  so the view reads it; `pod` shows until the first read answers. */
-  const [fresh, setFresh] = useState<K8sObject | null>(null)
-  const podNow = fresh ?? pod
+  /** The Pod as last read, and for which target: its containers, and once the stream ends its exit. The tab knows only
+   *  where the Pod lives, so the view reads it; `pod` shows until the first read answers. */
+  const [fresh, setFresh] = useState<{ target: string; pod: K8sObject } | null>(null)
+  /** Read for this target: right after a target change, `fresh` is still the last target's Pod. */
+  const readNow = fresh !== null && fresh.target === targetKey ? fresh.pod : null
+  const podNow = readNow ?? pod
   const stream = useKubeLogStream(target, { container, previous, follow })
   const { buffer, state } = stream
 
@@ -115,7 +117,7 @@ export function KubeLogView({
       (r) => {
         if (!alive() || !r.ok || r.object === null || seq < reads.current.applied) return null
         reads.current.applied = seq
-        setFresh(r.object)
+        setFresh({ target: targetKey, pod: r.object })
         return r.object
       },
       // Unread, the picker keeps what it has and the closing line says only that the stream ended.
@@ -125,7 +127,6 @@ export function KubeLogView({
 
   useEffect(() => {
     let alive = true
-    setFresh(null)
     void readPod(() => alive)
     return () => {
       alive = false
@@ -134,25 +135,37 @@ export function KubeLogView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetKey])
 
-  /** The container's restart count when its stream started (see exitLine); null while no Pod is known. */
+  /** The container's restart count when the running kubectl started (see exitLine), from a read of this target's Pod;
+   *  null until one answers. `state`: the last state seen, to tell a kubectl starting. */
   const streamKey = JSON.stringify([targetKey, container, previous, follow])
-  const startRestarts = useRef<{ key: string; count: number | null }>({ key: '', count: null })
+  const startRestarts = useRef<{ key: string; count: number | null; state: LogState }>({ key: '', count: null, state: 'starting' })
   useEffect(() => {
-    const count = podNow !== null ? restartCountOf(podNow, container) : null
-    if (startRestarts.current.key !== streamKey) startRestarts.current = { key: streamKey, count }
-    // The first read can answer after the stream started; until the stream ends, its count is still the start's.
-    else if (startRestarts.current.count === null && state !== 'ended') startRestarts.current.count = count
-  }, [streamKey, podNow, state])
+    const b = startRestarts.current
+    const live = state === 'starting' || state === 'streaming'
+    // A kubectl starting: another target, container or previous, or follow turned on again. Follow turned off starts
+    // none, so an ended stream keeps the count its exit was found with.
+    const started = live && (b.key !== streamKey || (state === 'starting' && b.state !== 'starting'))
+    b.state = state
+    const count = readNow !== null ? restartCountOf(readNow, container) : null
+    if (started) {
+      b.key = streamKey
+      b.count = count
+    } else if (live && b.count === null) {
+      // The read can answer after kubectl started; until the stream ends, its count is still the start's.
+      b.count = count
+    }
+  }, [streamKey, readNow, state])
 
-  // kubectl ends before the kubelet writes the exit: read the Pod now, then after 1, 2 and 4 s until the exit shows.
-  // Previous logs are of a container that ended long ago: one read.
+  // kubectl -f ends before the kubelet writes the exit: read the Pod now, then after 1, 2 and 4 s until the exit shows.
+  // A read without follow (previous logs among them) ends by itself, with nothing to wait for: one read. `follow` is
+  // the ended stream's, from the render where it ended.
   useEffect(() => {
     if (state !== 'ended') return
     let alive = true
     let timer: ReturnType<typeof setTimeout> | undefined
     const attempt = (k: number): void => {
       void readPod(() => alive).then((p) => {
-        if (!alive || previous || k >= EXIT_RETRY_MS.length) return
+        if (!alive || previous || !follow || k >= EXIT_RETRY_MS.length) return
         if (p !== null && exitLine(p, container, false, startRestarts.current.count) !== null) return
         timer = setTimeout(() => attempt(k + 1), EXIT_RETRY_MS[k])
       })
