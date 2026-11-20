@@ -34,8 +34,9 @@ export const KUBECTL_MISSING = 'kubectl was not found'
 export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidden?: true }
 /** `text` null: the value is not UTF-8 text. */
 export interface SecretValue { key: string; text: string | null; base64: string }
-/** Options of one `kubectl logs` read; main, the renderer and the IPC types share them. */
-export interface LogOptions { container: string; previous: boolean; follow: boolean }
+/** Options of one `kubectl logs` read; main, the renderer and the IPC types share them. `sinceTime`: read on from this
+ *  time stamp (follow turned on again) instead of the last lines. */
+export interface LogOptions { container: string; previous: boolean; follow: boolean; sinceTime?: string }
 /** What main needs to start one log stream. */
 export interface LogSpec { ref: ObjectRef; options: LogOptions }
 /** What a log stream sends the renderer: whole lines in batches, then how it ended. */

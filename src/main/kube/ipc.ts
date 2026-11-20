@@ -119,17 +119,24 @@ function watchSpec(v: unknown): WatchSpec {
   }
 }
 
+/** A kubectl time stamp, as `--since-time` takes it. */
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/
+
 /** Logs are per Pod; the container is passed as a `-c` value, so a leading `-` would be read as a flag. */
 function logSpec(v: unknown): LogSpec {
   const r = v as { ref?: unknown; options?: unknown } | null | undefined
   if (!r || typeof r !== 'object') throw new Error('kube: log spec must be { ref, options }')
   const ref = objectRef(r.ref)
   if (ref.kind !== 'Pod' || ref.resource !== 'pods' || ref.namespace === null) throw new Error('kube: ref must be a namespaced Pod')
-  const o = r.options as { container?: unknown; previous?: unknown; follow?: unknown } | null | undefined
+  const o = r.options as { container?: unknown; previous?: unknown; follow?: unknown; sinceTime?: unknown } | null | undefined
   if (!o || typeof o !== 'object' || typeof o.previous !== 'boolean' || typeof o.follow !== 'boolean') {
-    throw new Error('kube: log options must be { container, previous, follow }')
+    throw new Error('kube: log options must be { container, previous, follow, sinceTime? }')
   }
-  return { ref, options: { container: arg(o.container, 'log container'), previous: o.previous, follow: o.follow } }
+  if (o.sinceTime !== undefined && (typeof o.sinceTime !== 'string' || !RFC3339.test(o.sinceTime))) {
+    throw new Error('kube: log sinceTime must be an RFC3339 time')
+  }
+  const options = { container: arg(o.container, 'log container'), previous: o.previous, follow: o.follow }
+  return { ref, options: o.sinceTime !== undefined ? { ...options, sinceTime: o.sinceTime } : options }
 }
 
 /** A bare file name: the save dialog decides the folder, so a path in the name has no use. */

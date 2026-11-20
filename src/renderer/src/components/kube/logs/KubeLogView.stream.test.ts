@@ -5,7 +5,7 @@
 // fake window.api.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ReactElement } from 'react'
-import type { LogMessage } from '../../../../../core/kube/cluster/types'
+import type { LogMessage, LogOptions } from '../../../../../core/kube/cluster/types'
 
 const hooks = vi.hoisted(() => {
   let slots: unknown[] = []
@@ -108,7 +108,7 @@ const read = (object: unknown) => ({ ok: true, object })
 let api: ReturnType<typeof fakeApi>
 function fakeApi() {
   const listeners = new Set<(m: LogMessage) => void>()
-  const started: Array<{ id: string; container: string; previous: boolean }> = []
+  const started: Array<{ id: string } & LogOptions> = []
   const stopped: string[] = []
   const reads: unknown[] = []
   /** What the next reads answer, in turn (a promise holds one back); after them, `answer`. */
@@ -119,8 +119,8 @@ function fakeApi() {
       api: {
         kube: {
           logs: {
-            start: async (id: string, spec: { options: { container: string; previous: boolean } }) => {
-              started.push({ id, container: spec.options.container, previous: spec.options.previous })
+            start: async (id: string, spec: { options: LogOptions }) => {
+              started.push({ id, ...spec.options })
             },
             stop: async (id: string) => {
               stopped.push(id)
@@ -260,6 +260,32 @@ describe('KubeLogView stream', () => {
     hooks.render(view())
     await vi.advanceTimersByTimeAsync(10_000)
     expect(api.reads).toHaveLength(2)
+  })
+
+  // Task 5 review (ruled in): follow off stops kubectl and keeps what it showed, lines not yet drawn included; on again,
+  // kubectl reads on from the last line, and that second's lines, which --since-time sends again, are dropped.
+  it('stops kubectl when follow is turned off, and reads on from the last line when it is turned on', async () => {
+    vi.useFakeTimers()
+    let tree = hooks.render(view())
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z one'] })
+    await vi.advanceTimersByTimeAsync(20)
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.2Z two'] })
+    tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view())
+    tree = hooks.render(view()) // what stopping applied
+    expect(api.stopped).toEqual([api.started[0].id])
+    expect(api.started).toHaveLength(1)
+    expect(textOf(tree)).toContain('two')
+    expect(textOf(tree)).not.toMatch(/kube\.logs\.(ended|streamEnded)|kube\.cluster\.loading/)
+
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view())
+    expect(api.started[1]).toMatchObject({ follow: true, sinceTime: '2026-11-20T01:12:03.2Z' })
+    api.emit({ logId: api.started[1].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z one', '2026-11-20T01:12:03.2Z two', '2026-11-20T01:12:03.3Z three'] })
+    await vi.advanceTimersByTimeAsync(20)
+    const text = textOf(hooks.render(view()))
+    expect(text.match(/one|two|three/g)).toEqual(['one', 'two', 'three'])
   })
 
   // Task 5 review I4: scrolled up, the lines in view stay where they are whatever comes in.

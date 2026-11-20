@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ansiSpans, appendLines, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
+import { ansiSpans, appendLines, compareStamps, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, linesAfter, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
 
 describe('log logic', () => {
   it('splits the kubectl time stamp', () => {
@@ -55,6 +55,18 @@ describe('log logic', () => {
     expect(exitLine(pod, 'worker', false, 3)).toBeNull()
     expect(exitLine(pod, 'worker', false)).toBeNull()
     expect(exitLine(pod, 'worker', false, null)).toBeNull()
+  })
+  // kubelet writes nanoseconds without their trailing zeros, so the text of two stamps does not sort by time.
+  it('orders time stamps by time', () => {
+    expect(compareStamps('2026-11-20T01:12:03.1Z', '2026-11-20T01:12:03.11Z')).toBeLessThan(0)
+    expect(compareStamps('2026-11-20T01:12:03.5Z', '2026-11-20T01:12:03.500000000Z')).toBe(0)
+    expect(compareStamps('2026-11-20T01:12:04Z', '2026-11-20T01:12:03.999Z')).toBeGreaterThan(0)
+    expect(compareStamps('2026-11-20T10:12:03+09:00', '2026-11-20T01:12:03.5Z')).toBeLessThan(0)
+  })
+  // --since-time counts whole seconds: read on from a line, that second's lines come again.
+  it('keeps the lines stamped after a time, and those without a stamp', () => {
+    const lines = ['2026-11-20T01:12:03.1Z a', '2026-11-20T01:12:03.2Z b', 'no stamp', '2026-11-20T01:12:03.25Z c']
+    expect(linesAfter(lines, '2026-11-20T01:12:03.2Z')).toEqual(['no stamp', '2026-11-20T01:12:03.25Z c'])
   })
   it('names the saved file', () => {
     expect(logFileName('worker-6b8f9c-x2kq7', 'worker', true)).toBe('worker-6b8f9c-x2kq7_worker_previous.log')

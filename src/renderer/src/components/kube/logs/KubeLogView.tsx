@@ -298,7 +298,8 @@ export function KubeLogView({
           disabled={previous}
           onClick={() => {
             setFollow(!follow)
-            pin()
+            // Turned on, the new lines come into view; turned off, the lines stay where they are.
+            if (!follow) pin()
           }}
         >
           {t('kube.logs.follow')}

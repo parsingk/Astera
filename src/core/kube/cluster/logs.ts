@@ -23,6 +23,30 @@ export function splitTimestamp(raw: string): { ts: string | null; text: string }
   return m ? { ts: m[1], text: raw.slice(m[0].length) } : { ts: null, text: raw }
 }
 
+const STAMP_PARTS = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/
+
+/** Orders two kubectl time stamps. kubelet writes nanoseconds without their trailing zeros, so the text of two stamps
+ *  does not sort by time: whole seconds compare as dates, then the fractions padded to nine digits. */
+export function compareStamps(a: string, b: string): number {
+  const pa = STAMP_PARTS.exec(a)
+  const pb = STAMP_PARTS.exec(b)
+  if (!pa || !pb) return a < b ? -1 : a > b ? 1 : 0
+  const seconds = Date.parse(pa[1] + pa[3]) - Date.parse(pb[1] + pb[3])
+  if (seconds !== 0) return seconds
+  const fa = (pa[2] ?? '').padEnd(9, '0')
+  const fb = (pb[2] ?? '').padEnd(9, '0')
+  return fa < fb ? -1 : fa > fb ? 1 : 0
+}
+
+/** The lines stamped after `since`: kubectl's --since-time counts whole seconds, so a stream read on from a line sends
+ *  that second's lines again. A line without a stamp stays. */
+export function linesAfter(raw: readonly string[], since: string): string[] {
+  return raw.filter((r) => {
+    const ts = splitTimestamp(r).ts
+    return ts === null || compareStamps(ts, since) > 0
+  })
+}
+
 export function appendLines(buf: LogBuffer, raw: string[], max: number = LOG_MAX_LINES): LogBuffer {
   let next = buf.next
   const lines = buf.lines.concat(

@@ -310,6 +310,16 @@ describe('Pod logs over IPC', () => {
     expect(t.logs.start).not.toHaveBeenCalled()
   })
 
+  it('forwards a time to read on from, and rejects one that is not a time', async () => {
+    const t = setup()
+    const since = { ...options, sinceTime: '2026-11-20T01:12:03.114539874Z' }
+    await t.call('kube.logs.start', 'l1', { ref: podRef, options: since })
+    expect(t.logs.start).toHaveBeenCalledWith('l1', { ref: podRef, options: since })
+    await expect(t.call('kube.logs.start', 'l2', { ref: podRef, options: { ...options, sinceTime: '-f' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l3', { ref: podRef, options: { ...options, sinceTime: 5 } })).rejects.toThrow()
+    expect(t.logs.start).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects a Pod ref without a namespace', async () => {
     const t = setup()
     await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, namespace: null }, options })).rejects.toThrow('kube: ref must be a namespaced Pod')

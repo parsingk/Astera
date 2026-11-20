@@ -53,7 +53,9 @@ export function countArgs(context: string, namespace: string | null, resources: 
  *  apply to previous logs: that container has already exited. */
 export function logsArgs(ref: ObjectRef, o: LogOptions): string[] {
   return [
-    'logs', ref.name, '-n', ref.namespace ?? '', '-c', o.container, '--timestamps', `--tail=${LOG_TAIL_LINES}`,
+    'logs', ref.name, '-n', ref.namespace ?? '', '-c', o.container, '--timestamps',
+    // Read on from a time, all of it: a tail would leave a gap nobody sees.
+    o.sinceTime !== undefined ? `--since-time=${o.sinceTime}` : `--tail=${LOG_TAIL_LINES}`,
     ...(o.previous ? ['--previous'] : []),
     ...(o.follow && !o.previous ? ['-f'] : []),
     '--context', ref.context
