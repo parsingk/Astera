@@ -538,9 +538,9 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   // retry starts the counts again; a Forbidden list is not that, and the counts are what greys such kinds in the tree.
   // Custom kinds are counted only while their group is open (customCountsKey): a cluster can serve hundreds.
   const customKey = customCountsKey(view.expanded.includes('custom'), crds !== null && crds.key === context, customKinds)
-  const listFailed = listFailure(listWatch) !== null
+  const listWatchFailed = listFailure(listWatch) !== null
   useEffect(() => {
-    if (!visible || context === null || listFailed) return
+    if (!visible || context === null || listWatchFailed) return
     const namespace = view.namespace
     const key = JSON.stringify([context, namespace])
     const kinds = customKey === '' ? FIXED_KINDS : [...FIXED_KINDS, ...latest.current.customKinds]
@@ -563,7 +563,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       stop()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, context, customKey, view.namespace, listFailed, gen])
+  }, [visible, context, customKey, view.namespace, listWatchFailed, gen])
 
   // --- The picked kind's list (K4: only while seen) ---
 
