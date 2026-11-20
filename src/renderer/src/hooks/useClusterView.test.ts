@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle, createSerialRead, customCountsKey, follow, listFailure, listState, liveOf, objectsFor, type WatchState } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, createSerialRead, customCountsKey, follow, listFailure, listState, liveOf, objectsFor, pauseReasonOf, type WatchState } from './useClusterView'
 import type { WatchClient } from '../lib/kubeWatchClient'
 import type { WatchMessage } from '../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../core/kube/objects'
@@ -231,5 +231,21 @@ describe('listState', () => {
     expect(at({ watch: { error: 'Unable to connect to the server' } })).toBe('ready')
     expect(at({ watch: { error: 'pods is forbidden', forbidden: true } })).toBe('ready')
     expect(at({ watch: 'ended' })).toBe('ready')
+  })
+})
+
+// Spec 4.2: "paused" with the reason. The indicator said only "paused" for a Forbidden picked kind and an ended watch.
+describe('pauseReasonOf', () => {
+  it('names a Forbidden picked kind by kubectl\'s line, and an ended watch', () => {
+    expect(pauseReasonOf({ error: FORBIDDEN, forbidden: true }, 'live')).toEqual({ forbidden: FORBIDDEN })
+    expect(pauseReasonOf('ended', 'live')).toBe('ended')
+    expect(pauseReasonOf('live', 'ended')).toBe('ended')
+  })
+
+  it('gives none while live, at the limit (which says so itself) or failed', () => {
+    expect(pauseReasonOf('live', 'live')).toBeNull()
+    expect(pauseReasonOf('limit', 'live')).toBeNull()
+    expect(pauseReasonOf('live', 'limit')).toBeNull()
+    expect(pauseReasonOf({ error: 'Unable to connect to the server' }, 'live')).toBeNull()
   })
 })

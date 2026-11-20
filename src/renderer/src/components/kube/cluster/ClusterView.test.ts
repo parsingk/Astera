@@ -45,6 +45,7 @@ const model = {
   selected: null,
   selectedRef: null,
   live: 'live',
+  pauseReason: null,
   setContext: noop,
   setNamespace: noop,
   selectKind: noop,
@@ -97,6 +98,19 @@ describe('ClusterView', () => {
   it('hands a failed one-shot list read to the table', () => {
     renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: 'limit', listFailed: 'Unable to connect to the server' }, detail: null }))
     expect(table!.failed).toBe('Unable to connect to the server')
+  })
+
+  // Spec 4.2: "paused" with the reason, the reason in full as its tooltip.
+  it('says why the view is paused, with the kubectl line as the tooltip of a Forbidden kind', () => {
+    const line = 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods"'
+    const forbidden = renderToStaticMarkup(
+      React.createElement(ClusterView, { model: { ...model, live: 'paused', listForbidden: line, pauseReason: { forbidden: line } }, detail: null })
+    )
+    expect(forbidden).toContain('title="Error from server (Forbidden): pods is forbidden: User &quot;u&quot; cannot list resource &quot;pods&quot;">kube.cluster.pausedForbidden</span>')
+    const ended = renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: 'paused', pauseReason: 'ended' }, detail: null }))
+    expect(ended).toContain('title="kube.cluster.pausedEnded">kube.cluster.pausedEnded</span>')
+    const limit = renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: 'limit', pauseReason: null }, detail: null }))
+    expect(limit).toContain('title="kube.cluster.limit">kube.cluster.limit</span>')
   })
 
   // Final review M4: a watch whose binary is missing says so in the person's language, not as main's English.

@@ -3402,5 +3402,7 @@ export const ko = {
   'kube.cluster.notFound': '클러스터에 없습니다.',
   'kube.cluster.kubectlMissing': 'kubectl 을 찾을 수 없습니다',
   'kube.cluster.restartsAgo': '{count}, 마지막 {ago} 전',
-  'kube.cluster.kubeconfigError': 'kubeconfig 를 읽지 못했습니다: {detail}'
+  'kube.cluster.kubeconfigError': 'kubeconfig 를 읽지 못했습니다: {detail}',
+  'kube.cluster.pausedForbidden': '멈춤: 권한 없음',
+  'kube.cluster.pausedEnded': '멈춤: 감시가 끝남'
 } as const

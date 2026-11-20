@@ -64,7 +64,18 @@ export function ClusterView({
   const nsNames = model.namespaces ?? []
   const nsOptions = view.namespace !== null && !nsNames.includes(view.namespace) ? [view.namespace, ...nsNames] : nsNames
 
-  const liveText = failed ? liveErrorText(live.error, t) : live === 'live' ? t('kube.cluster.live') : live === 'paused' ? t('kube.cluster.paused') : t('kube.cluster.limit')
+  const why = live === 'paused' ? model.pauseReason : null
+  const liveText = failed
+    ? liveErrorText(live.error, t)
+    : live === 'live'
+      ? t('kube.cluster.live')
+      : live === 'limit'
+        ? t('kube.cluster.limit')
+        : why === null
+          ? t('kube.cluster.paused')
+          : t(why === 'ended' ? 'kube.cluster.pausedEnded' : 'kube.cluster.pausedForbidden')
+  // Paused says why in a few words; the tooltip has it in full (spec 4.2, "paused" with the reason).
+  const liveTitle = why !== null && why !== 'ended' ? why.forbidden : liveText
   const liveTone = failed ? 'bad' : live === 'live' ? 'ok' : 'wait'
 
   return (
@@ -127,7 +138,7 @@ export function ClusterView({
 
         <span className="kube-cluster-live" role="status">
           <span className={`kube-cluster-dot ${liveTone}`} aria-hidden="true" />
-          <span className="kube-cluster-live-text" title={liveText}>
+          <span className="kube-cluster-live-text" title={liveTitle}>
             {liveText}
           </span>
           {failed && (

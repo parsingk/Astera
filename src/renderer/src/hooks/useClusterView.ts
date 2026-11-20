@@ -84,6 +84,9 @@ export interface ClusterViewModel {
   pods: Read<{ columns: Column[]; rows: Row[] }> | null
   /** Whether the table and the detail follow the cluster. */
   live: ClusterLive
+  /** Why `live` is 'paused', when a watch says so; null when the view is paused only because it is not seen or has
+   *  nothing to follow. */
+  pauseReason: PauseReason | null
   /** The picked kind may not be listed (kubectl's Forbidden line): the table says so instead of rows, and the view is
    *  not failed (§4.3). */
   listForbidden: string | null
@@ -365,6 +368,17 @@ export function listState(o: { watch: WatchState; read: ListRead | null; fresh: 
 /** The list watch's failure, which fails the view; not a Forbidden refusal, which is the picked kind's answer (§4.3). */
 export function listFailure(list: WatchState): { error: string } | null {
   return typeof list === 'object' && !list.forbidden ? list : null
+}
+
+/** Why the view is paused, for its live indicator (spec 4.2, "paused" with the reason): the picked kind may not be
+ *  listed (kubectl's line), or a watch ended. */
+export type PauseReason = { forbidden: string } | 'ended'
+
+/** The reason `liveOf` gives 'paused' for these watches; null when it does not (live, at the limit, failed). */
+export function pauseReasonOf(list: WatchState, pick: WatchState): PauseReason | null {
+  if (typeof list === 'object') return list.forbidden ? { forbidden: list.error } : null
+  if (list === 'limit' || pick === 'limit') return null
+  return list === 'ended' || pick === 'ended' ? 'ended' : null
 }
 
 /** The view's live state from its two watches. Only the list's failure fails the view: the selected object's is the
@@ -770,6 +784,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     describe: valueFor(describe, view.selected),
     pods: podsModel,
     live,
+    pauseReason: !visible || listSpec === null ? null : pauseReasonOf(listWatch, selectedRef !== null ? pickWatch : 'live'),
     listForbidden: !visible || listSpec === null ? null : listForbidden,
     detailError: visible && selectedRef !== null && typeof pickWatch === 'object' ? pickWatch.error : null,
     setContext(name) {

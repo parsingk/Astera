@@ -2725,5 +2725,7 @@ export const ja: Catalog = {
   'kube.cluster.notFound': 'クラスターにありません。',
   'kube.cluster.kubectlMissing': 'kubectl が見つかりません',
   'kube.cluster.restartsAgo': '{count}、最後は{ago}前',
-  'kube.cluster.kubeconfigError': 'kubeconfig を読み込めません: {detail}'
+  'kube.cluster.kubeconfigError': 'kubeconfig を読み込めません: {detail}',
+  'kube.cluster.pausedForbidden': '一時停止: 権限なし',
+  'kube.cluster.pausedEnded': '一時停止: 監視が終了しました'
 }
