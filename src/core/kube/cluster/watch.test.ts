@@ -38,6 +38,10 @@ describe('kubectl watch output', () => {
       { type: 'ADDED', object: cm('cm-0001') }
     ])
   })
+  it('keeps an object that is not a list as one event, even with a top-level items field', () => {
+    const widget = { apiVersion: 'a.io/v1', kind: 'Widget', metadata: { name: 'w' }, items: [{ sku: 'x' }, { sku: 'y' }] }
+    expect(toWatchEvents({ type: 'ADDED', object: widget })).toEqual([{ type: 'ADDED', object: widget }])
+  })
   it('expands a list of kind List and one without a kind, and invents no kind for an item without one', () => {
     const bare = { apiVersion: 'v1', metadata: { name: 'no-kind' } }
     expect(toWatchEvents({ type: 'ADDED', object: { apiVersion: 'v1', kind: 'List', items: [cm('a')] } })).toEqual([{ type: 'ADDED', object: cm('a') }])

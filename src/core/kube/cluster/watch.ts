@@ -44,14 +44,16 @@ const isObject = (v: unknown): v is object => typeof v === 'object' && v !== nul
 
 /** The events of one watch value: none for a value that is not an event, else one, or one per item when its object is
  *  a list. kubectl prints each page of a big initial list (500 objects) as one event whose object is the page's list
- *  (`ConfigMapList`, `List`, or no kind), its items carrying their own kind; small lists come an object per event. */
+ *  (`ConfigMapList`, `List`, or no kind), its items carrying their own kind; small lists come an object per event. Only
+ *  such a list is split: a custom resource may have a top-level `items` field of its own. */
 export function toWatchEvents(v: unknown): WatchEvent[] {
   if (!isObject(v)) return []
   const { type, object } = v as { type?: unknown; object?: unknown }
   if (typeof type !== 'string' || !EVENT_TYPES.has(type)) return []
   if (!isObject(object)) return []
-  const items = (object as { items?: unknown }).items
-  const objects = Array.isArray(items) ? items.filter(isObject) : [object]
+  const { items, kind } = object as { items?: unknown; kind?: unknown }
+  const isList = Array.isArray(items) && (kind === undefined || (typeof kind === 'string' && kind.endsWith('List')))
+  const objects = isList ? (items as unknown[]).filter(isObject) : [object]
   return objects.map((o) => ({ type: type as WatchEvent['type'], object: o as K8sObject }))
 }
 
