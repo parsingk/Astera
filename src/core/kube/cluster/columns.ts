@@ -218,15 +218,18 @@ function pathValue(o: K8sObject, jsonPath: string): string {
   return typeof cur === 'string' || typeof cur === 'number' || typeof cur === 'boolean' ? String(cur) : ''
 }
 
-/** As kubectl: NAME is implicit, AGE only stands in when the CRD declares no printer columns. */
+/** As kubectl: NAME is implicit, AGE only stands in when the CRD declares no printer columns (the server's default);
+ *  a CRD that declares only priority > 0 columns shows NAME alone. */
 function crdDefs(crd: K8sObject): Def[] {
   const version = list(rec(crd.spec).versions).find((v) => v.served === true && v.storage === true)
+  const declared = list(version?.additionalPrinterColumns)
   // kubectl hides priority > 0 columns without -o wide.
-  const printed = list(version?.additionalPrinterColumns)
+  const printed = declared
     .filter((c) => !(int(c.priority) > 0))
     .map(
-    (c): Def => ({
-      key: str(c.name),
+    (c, i): Def => ({
+      // A CRD may repeat a name, leave one empty, or call one "name": the index keeps every key its own.
+      key: `${str(c.name)}#${i}`,
       label: str(c.name),
       cell: (o, ctx) => {
         const value = pathValue(o, str(c.jsonPath))
@@ -234,7 +237,7 @@ function crdDefs(crd: K8sObject): Def[] {
       }
     })
   )
-  return printed.length > 0 ? [name, ...printed] : [name, age]
+  return declared.length > 0 ? [name, ...printed] : [name, age]
 }
 
 function isNamespaced(kind: string, crd?: K8sObject): boolean {
@@ -277,6 +280,9 @@ export function sortRows(rows: Row[], by: number, dir: 'asc' | 'desc'): Row[] {
     const x = a.cells[by]
     const y = b.cells[by]
     if (x?.sortKey !== undefined && y?.sortKey !== undefined) return sign * (x.sortKey - y.sortKey)
+    // In a column that sorts by key, a cell without one has no value (no timestamp): last, whichever the direction.
+    if (x?.sortKey !== undefined) return -1
+    if (y?.sortKey !== undefined) return 1
     return sign * COLLATOR.compare(x?.text ?? '', y?.text ?? '')
   })
 }

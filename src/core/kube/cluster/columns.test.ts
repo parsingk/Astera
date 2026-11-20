@@ -51,6 +51,24 @@ describe('cluster columns and rows', () => {
     const crd = { apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: {}, spec: { versions: [{ name: 'v1', served: true, storage: true, additionalPrinterColumns: [{ name: 'Phase', jsonPath: '.status.phase' }, { name: 'Detail', priority: 1, jsonPath: '.status.detail' }] }] } }
     expect(columnsOf('Widget', { allNamespaces: false, crd }).map((c) => c.label)).toEqual(['kube.cluster.col.name', 'Phase'])
   })
+  it('gives a CRD whose printer columns all have priority above zero only the name, as kubectl does', () => {
+    const crd = { apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: {}, spec: { versions: [{ name: 'v1', served: true, storage: true, additionalPrinterColumns: [{ name: 'Detail', priority: 1, jsonPath: '.status.detail' }] }] } }
+    expect(columnsOf('Widget', { allNamespaces: false, crd }).map((c) => c.key)).toEqual(['name'])
+  })
+  it('gives each printer column its own key, even with an empty or repeated name', () => {
+    const columns = [{ name: 'Status', jsonPath: '.status.a' }, { name: 'Status', jsonPath: '.status.b' }, { name: '', jsonPath: '.status.c' }, { name: 'name', jsonPath: '.spec.name' }]
+    const crd = { apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: {}, spec: { scope: 'Namespaced', versions: [{ name: 'v1', served: true, storage: true, additionalPrinterColumns: columns }] } }
+    const cols = columnsOf('Widget', { allNamespaces: true, crd })
+    expect(cols.map((c) => c.label)).toEqual(['kube.cluster.col.namespace', 'kube.cluster.col.name', 'Status', 'Status', '', 'name'])
+    expect(new Set(cols.map((c) => c.key)).size).toBe(cols.length)
+  })
+  it('sorts a cell without a timestamp last in both directions', () => {
+    const pod = (n: string, created?: string) => ({ apiVersion: 'v1', kind: 'Pod', metadata: { name: n, uid: n, ...(created ? { creationTimestamp: created } : {}) }, spec: {}, status: {} })
+    const rows = rowsOf('Pod', [pod('none'), pod('old', '2026-11-19T12:00:00Z'), pod('new', '2026-11-20T11:00:00Z')], { allNamespaces: false, nowMs: now })
+    const age = columnsOf('Pod', { allNamespaces: false }).findIndex((c) => c.key === 'age')
+    expect(sortRows(rows, age, 'asc').map((r) => r.name)).toEqual(['new', 'old', 'none'])
+    expect(sortRows(rows, age, 'desc').map((r) => r.name)).toEqual(['old', 'new', 'none'])
+  })
   it('sorts numerically and filters by name', () => {
     const rows = [{ uid: 'a', name: 'b-10', namespace: null, cells: [{ text: 'b-10' }], attention: false }, { uid: 'b', name: 'b-9', namespace: null, cells: [{ text: 'b-9' }], attention: false }]
     expect(sortRows(rows, 0, 'asc').map((r) => r.name)).toEqual(['b-9', 'b-10'])
