@@ -72,8 +72,20 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 }))
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }))
 vi.mock('../../../lib/toast', () => ({ toast }))
+/** How many lines each append handed the buffer: what waited for a frame. */
+const appended = vi.hoisted(() => [] as number[])
+vi.mock('../../../../../core/kube/cluster/logs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../../../core/kube/cluster/logs')>()
+  return {
+    ...real,
+    appendLines: (...a: Parameters<typeof real.appendLines>) => {
+      appended.push(a[1].length)
+      return real.appendLines(...a)
+    }
+  }
+})
 
-import { stampText } from '../../../../../core/kube/cluster/logs'
+import { LOG_MAX_LINES, stampText } from '../../../../../core/kube/cluster/logs'
 import { KubeLogView } from './KubeLogView'
 
 /** Every element of a rendered tree, depth first. */
@@ -170,6 +182,7 @@ const view = (seed: unknown = pod, filter?: string) => () =>
 
 beforeEach(() => {
   hooks.reset()
+  appended.length = 0
   api = fakeApi()
   vi.stubGlobal('window', api.window)
 })
@@ -416,6 +429,28 @@ describe('KubeLogView stream', () => {
     await vi.advanceTimersByTimeAsync(20)
     const text = textOf(hooks.render(view()))
     expect(text.match(/one|two|three/g)).toEqual(['one', 'two', 'three'])
+  })
+
+  // Final review I2: a hidden window (closed to the tray, minimised) gets no animation frames, while kubectl's lines keep
+  // coming. What waits for the next frame is held to what the view keeps, and what that drops counts in the notice.
+  it('holds the lines waiting for a frame to what the view keeps, counting the rest as dropped', async () => {
+    const frames: Array<() => void> = []
+    vi.stubGlobal('requestAnimationFrame', (fn: () => void) => frames.push(fn))
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void (frames[id - 1] = () => {}))
+    hooks.render(view())
+    const lines = Array.from({ length: LOG_MAX_LINES + 10 }, (_, i) => `line ${i}`)
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: lines.slice(0, 5) })
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: lines.slice(5) })
+    expect(frames).toHaveLength(1)
+    frames[0]()
+    expect(Math.max(...appended)).toBeLessThanOrEqual(LOG_MAX_LINES)
+    const tree = hooks.render(view())
+    expect(textOf(tree)).toContain('kube.logs.dropped{"count":10}')
+    ;(byLabel(tree, 'kube.logs.save').props.onClick as () => void)()
+    await settle()
+    const saved = api.saves[0].text.split('\n').slice(0, -1)
+    expect(saved).toHaveLength(LOG_MAX_LINES)
+    expect(saved[0]).toBe('line 10')
   })
 
   // Final review I1: a read that failed (the container not started yet, the cluster out of reach) or ended (a crashed

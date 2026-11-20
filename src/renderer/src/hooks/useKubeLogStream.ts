@@ -2,7 +2,7 @@
 // 'kube:log' channel; the hook keeps them in a bounded buffer, applied once per animation frame so a busy container
 // costs one render per frame rather than one per chunk.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { appendLines, emptyLogBuffer, linesAfter, splitTimestamp, type LogBuffer } from '../../../core/kube/cluster/logs'
+import { LOG_MAX_LINES, appendLines, emptyLogBuffer, linesAfter, splitTimestamp, type LogBuffer } from '../../../core/kube/cluster/logs'
 import type { LogMessage, LogOptions, LogSpec, ObjectRef } from '../../../core/kube/cluster/types'
 import { errText } from './useFileOps'
 
@@ -125,17 +125,25 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
     }
     let alive = true
     let pending: string[] = []
+    /** The oldest lines dropped from `pending` before a frame applied them, for the buffer's count. */
+    let trimmed = 0
     let cancelFrame: (() => void) | null = null
     const flush = (): void => {
       cancelFrame?.()
       cancelFrame = null
       if (pending.length === 0) return
       const batch = pending
+      const cut = trimmed
       pending = []
-      setBuffer((b) => appendLines(b, batch))
+      trimmed = 0
+      setBuffer((b) => {
+        const next = appendLines(b, batch)
+        return cut > 0 ? { ...next, dropped: next.dropped + cut } : next
+      })
     }
     dropPending.current = () => {
       pending = []
+      trimmed = 0
     }
     if (!resumed) {
       setBuffer(emptyLogBuffer())
@@ -162,6 +170,11 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
           }
           // A loop, not push(...lines): a very large batch would exceed the argument limit.
           for (const line of lines) pending.push(line)
+          // A hidden window gets no frames while the lines keep coming: no more wait than the buffer would keep.
+          if (pending.length > LOG_MAX_LINES) {
+            trimmed += pending.length - LOG_MAX_LINES
+            pending = pending.slice(pending.length - LOG_MAX_LINES)
+          }
           setState((s) => (s === 'starting' ? 'streaming' : s))
           cancelFrame ??= nextFrame(() => {
             cancelFrame = null
