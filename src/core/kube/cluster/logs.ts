@@ -213,9 +213,10 @@ export function restartCountOf(pod: K8sObject, container: string): number {
   return statusOf(pod, container)?.restartCount ?? 0
 }
 
-/** `restartsAtStart`: the container's restart count when the followed stream started. kubectl ends before the kubelet
- *  writes the exit, and by then a crashing container is waiting again with its exit in lastState: a count grown past
- *  this one says that exit is the followed container's. */
+/** A waiting container has no newer run than its last one, and kubectl gives that run for the current logs too: its
+ *  exit is in lastState. `restartsAtStart`: the container's restart count when the followed stream started. kubectl
+ *  ends before the kubelet writes the exit, and a container read running again has the followed one's exit in
+ *  lastState only when its count grew past this one. */
 export function exitLine(
   pod: K8sObject,
   container: string,
@@ -223,7 +224,7 @@ export function exitLine(
   restartsAtStart?: number | null
 ): { code: number; at: string | null } | null {
   const s = statusOf(pod, container)
-  let t = previous ? s?.lastState?.terminated : s?.state?.terminated
+  let t = previous || s?.state?.waiting !== undefined ? s?.lastState?.terminated : s?.state?.terminated
   if (t === undefined && !previous && typeof restartsAtStart === 'number' && restartCountOf(pod, container) > restartsAtStart) {
     t = s?.lastState?.terminated
   }

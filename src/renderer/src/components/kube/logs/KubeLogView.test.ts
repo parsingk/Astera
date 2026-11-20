@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { appendLines, emptyLogBuffer, finishedText, stampText } from '../../../../../core/kube/cluster/logs'
+import type { K8sObject } from '../../../../../core/kube/objects'
 import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
 import type { KubeLogStream, LogState } from '../../../hooks/useKubeLogStream'
 
@@ -42,9 +43,9 @@ const streamOf = (lines: string[], state: LogState = 'streaming', max?: number):
   restart: () => {},
   clear: () => {}
 })
-const render = (stream: KubeLogStream, initial: { container: string; previous: boolean; filter?: string } = { container: 'worker', previous: false }): string => {
+const render = (stream: KubeLogStream, initial: { container: string; previous: boolean; filter?: string } = { container: 'worker', previous: false }, seed: K8sObject = pod): string => {
   stub.stream = stream
-  return renderToStaticMarkup(React.createElement(KubeLogView, { pod, target, initial, visible: true }))
+  return renderToStaticMarkup(React.createElement(KubeLogView, { pod: seed, target, initial, visible: true }))
 }
 
 const button = (html: string, label: string): string => {
@@ -106,8 +107,13 @@ describe('KubeLogView', () => {
     expect(html).toContain('kube.logs.ended{&quot;code&quot;:1}')
     expect(html).toContain(finishedText('2026-11-20T01:12:11Z', new Date()))
     expect(html).toContain('kube.logs.previousContainer')
-    // The running container has not exited: the stream ended, with no code to give.
-    const unknown = render(streamOf(['ok'], 'ended'), { container: 'worker', previous: false })
+    // While it waits, the current logs are that last run's (kubectl gives the same run): the same exit closes them.
+    const waiting = render(streamOf(['boom'], 'ended'), { container: 'worker', previous: false })
+    expect(waiting).toContain('kube.logs.ended{&quot;code&quot;:1}')
+    expect(waiting).not.toContain('kube.logs.previousContainer')
+    // A running container has not exited: the stream ended, with no code to give.
+    const running = { ...pod, status: { containerStatuses: [{ name: 'worker', state: { running: { startedAt: '2026-11-20T01:12:12Z' } } }] } }
+    const unknown = render(streamOf(['ok'], 'ended'), { container: 'worker', previous: false }, running)
     expect(unknown).toContain('kube.logs.streamEnded')
     expect(unknown).not.toContain('kube.logs.ended')
     expect(unknown).not.toContain('kube.logs.previousContainer')

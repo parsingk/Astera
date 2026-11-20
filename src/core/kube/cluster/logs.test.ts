@@ -39,15 +39,22 @@ describe('log logic', () => {
     const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, status: { containerStatuses: [{ name: 'worker', state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 1, finishedAt: '2026-11-20T01:12:11Z' } } }] } }
     expect(previousByDefault(pod, 'worker')).toBe(true)
     expect(exitLine(pod, 'worker', true)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
-    expect(exitLine(pod, 'worker', false)).toBeNull()
+    // Task 7 screen check: while it waits there is no newer run, and kubectl gives that last run for the current logs
+    // too, so their closing line is that run's exit.
+    expect(exitLine(pod, 'worker', false)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
+    expect(exitLine(pod, 'worker', false, 0)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
   })
-  // Task 5 review I2: `kubectl logs -f` ends before the kubelet writes the exit, and by the time it does a crashing
-  // container is waiting again with its exit in lastState. A restart count grown past the one at the stream's start
-  // says that exit is the one of the container that was followed.
-  it('takes the exit from lastState once the container restarted since the stream started', () => {
+  it('has no exit line for a container waiting for its first run', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, status: { containerStatuses: [{ name: 'app', state: { waiting: { reason: 'ContainerCreating' } } }] } }
+    expect(exitLine(pod, 'app', false)).toBeNull()
+  })
+  // Task 5 review I2: `kubectl logs -f` ends before the kubelet writes the exit. When the container is already running
+  // again by the time the Pod is read, its exit is in lastState, and a restart count grown past the one at the stream's
+  // start says that exit is the one of the container that was followed.
+  it('takes the exit from lastState once the container runs again after the followed one', () => {
     const pod = {
       apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' },
-      status: { containerStatuses: [{ name: 'worker', restartCount: 3, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 137, finishedAt: '2026-11-20T01:12:11Z' } } }] }
+      status: { containerStatuses: [{ name: 'worker', restartCount: 3, state: { running: { startedAt: '2026-11-20T01:12:12Z' } }, lastState: { terminated: { exitCode: 137, finishedAt: '2026-11-20T01:12:11Z' } } }] }
     }
     expect(restartCountOf(pod, 'worker')).toBe(3)
     expect(restartCountOf(pod, 'sidecar')).toBe(0)
