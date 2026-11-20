@@ -2713,5 +2713,7 @@ export const ja: Catalog = {
   'kube.cluster.tab.pods': 'Pod',
   'kube.cluster.containers': 'コンテナー',
   'kube.cluster.conditions': 'コンディション',
-  'kube.cluster.warning': '警告'
+  'kube.cluster.warning': '警告',
+  'kube.cluster.requests': 'リクエスト',
+  'kube.cluster.limits': '上限'
 }

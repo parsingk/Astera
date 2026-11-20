@@ -3136,5 +3136,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.tab.pods': 'Pods',
   'kube.cluster.containers': 'Containers',
   'kube.cluster.conditions': 'Conditions',
-  'kube.cluster.warning': 'Warning'
+  'kube.cluster.warning': 'Warning',
+  'kube.cluster.requests': 'Requests',
+  'kube.cluster.limits': 'Limits'
 }

@@ -86,7 +86,7 @@ function SummaryTab({ model, object, kind, context }: { model: ClusterViewModel;
                 </span>
                 {(c.requests || c.limits) && (
                   <span className="kube-detail-container-res">
-                    {[c.requests && `requests ${c.requests}`, c.limits && `limits ${c.limits}`].filter(Boolean).join('; ')}
+                    {[c.requests && `${t('kube.cluster.requests')} ${c.requests}`, c.limits && `${t('kube.cluster.limits')} ${c.limits}`].filter(Boolean).join('; ')}
                   </span>
                 )}
               </li>
@@ -127,11 +127,14 @@ export function ClusterDetail({
   const { selected, selectedRef, view } = model
   const uid = view.selected
   // Values live here and nowhere else, tied to the selection they were read for; never logged.
-  const [revealed, setRevealed] = useState<{ uid: string; values: SecretValue[] } | null>(null)
+  const [revealed, setRevealed] = useState<{ uid: string; version: string; values: SecretValue[] } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const uidNow = useRef(uid)
   uidNow.current = uid
+  /** Bumped by hide and by a change of selection: an answer for an older request is dropped. */
+  const ticket = useRef(0)
   useEffect(() => {
+    ticket.current++
     setRevealed(null)
     setMenu(null)
   }, [uid])
@@ -142,21 +145,27 @@ export function ClusterDetail({
   const kind = model.kind.kind
   const tabs = TABS.filter((id) => id !== 'pods' || podSelectorOf(kind, selected) !== null)
   const tab = tabs.includes(view.detailTab) ? view.detailTab : 'summary'
-  const values = revealed !== null && revealed.uid === uid ? revealed.values : null
+  // Same Secret but changed in the cluster (a new resourceVersion): what was revealed is older data, so it is not shown.
+  const version = str(selected.metadata.resourceVersion)
+  const values = revealed !== null && revealed.uid === uid && revealed.version === version ? revealed.values : null
 
   const reveal =
     kind === 'Secret'
       ? {
           values,
           onReveal: () => {
+            const mine = ++ticket.current
             window.api.kube.cluster.reveal(selectedRef).then(
               (r) => {
-                if (r.ok && uidNow.current === uid) setRevealed({ uid, values: r.values })
+                if (r.ok && ticket.current === mine && uidNow.current === uid) setRevealed({ uid, version, values: r.values })
               },
               () => {}
             )
           },
-          onHide: () => setRevealed(null)
+          onHide: () => {
+            ticket.current++
+            setRevealed(null)
+          }
         }
       : null
 

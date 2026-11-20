@@ -2743,5 +2743,7 @@ export const es: Catalog = {
   'kube.cluster.tab.pods': 'Pods',
   'kube.cluster.containers': 'Contenedores',
   'kube.cluster.conditions': 'Condiciones',
-  'kube.cluster.warning': 'Aviso'
+  'kube.cluster.warning': 'Aviso',
+  'kube.cluster.requests': 'Solicitudes',
+  'kube.cluster.limits': 'Límites'
 }

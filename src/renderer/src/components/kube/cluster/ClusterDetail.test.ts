@@ -102,3 +102,19 @@ describe('KubeYamlView', () => {
     expect(html).toContain('kube.cluster.serverFields')
   })
 })
+
+describe('ClusterDetail containers', () => {
+  it('labels requests and limits with catalog keys', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'p', namespace: 'dev' },
+      spec: { containers: [{ name: 'app', image: 'x:1', resources: { requests: { cpu: '100m' }, limits: { memory: '1Gi' } } }] }
+    }
+    const html = render(model('Pod', 'pods', pod))
+    expect(html).toContain('kube.cluster.requests')
+    expect(html).toContain('kube.cluster.limits')
+    expect(html).not.toContain('>requests cpu')
+    expect(html).not.toContain('; limits ')
+  })
+})

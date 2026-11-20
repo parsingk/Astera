@@ -3390,5 +3390,7 @@ export const ko = {
   'kube.cluster.tab.pods': '파드',
   'kube.cluster.containers': '컨테이너',
   'kube.cluster.conditions': '컨디션',
-  'kube.cluster.warning': '경고'
+  'kube.cluster.warning': '경고',
+  'kube.cluster.requests': '요청',
+  'kube.cluster.limits': '제한'
 } as const

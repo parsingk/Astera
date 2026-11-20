@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { stringify } from 'yaml'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -52,7 +52,11 @@ export function KubeYamlView({ object, kind, reveal }: { object: K8sObject; kind
 
   useEffect(() => {
     const v = view.current
-    if (v !== null && v.state.doc.toString() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text } })
+    if (v !== null && v.state.doc.toString() !== text) v.dispatch({
+        changes: { from: 0, to: v.state.doc.length, insert: text },
+        // Undo must never bring back text that held revealed values.
+        annotations: Transaction.addToHistory.of(false)
+      })
   }, [text])
 
   return (
