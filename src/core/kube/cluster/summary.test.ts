@@ -44,6 +44,11 @@ describe('cluster summary', () => {
     expect(s.containers[0]).toMatchObject({ name: 'worker', state: 'Waiting: CrashLoopBackOff', tone: 'bad', requests: 'cpu 250m, memory 256Mi' })
     expect(s.warning).toBe('BackOff: Back-off restarting failed container')
   })
+  it('gives the last exit code alone when the termination has no reason', () => {
+    const status = crashingPod.status as { containerStatuses: Record<string, unknown>[] }
+    const pod: K8sObject = { ...crashingPod, status: { ...status, containerStatuses: [{ ...status.containerStatuses[0], lastState: { terminated: { exitCode: 137, finishedAt: '2026-11-20T11:48:00Z' } } }] } }
+    expect(summaryOf('Pod', pod, [], 'c', now).facts.find((f) => f.label === 'kube.cluster.fact.lastExit')?.value).toBe('137')
+  })
   it('summarises a deployment', () => {
     const d: K8sObject = {
       apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'd' },

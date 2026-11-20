@@ -125,7 +125,7 @@ function podFacts(o: K8sObject, context: string, nowMs: number, owners: ObjectRe
   const lastAge = last ? ageText(str(last.finishedAt), nowMs) : ''
 
   const facts: SummaryFact[] = [fact('status', ps.text, { tone: ps.tone }), fact('restarts', String(restarts), lastAge ? { ago: lastAge } : {})]
-  if (last) facts.push(fact('lastExit', `${numText(last.exitCode)} (${str(last.reason)})`))
+  if (last) facts.push(fact('lastExit', str(last.reason) ? `${numText(last.exitCode)} (${str(last.reason)})` : numText(last.exitCode)))
   if (rec(o.spec).nodeName) facts.push(fact('node', str(rec(o.spec).nodeName)))
   if (status.podIP) facts.push(fact('podIP', str(status.podIP)))
   return [...facts, ...ownerFact(o, context, owners)]
