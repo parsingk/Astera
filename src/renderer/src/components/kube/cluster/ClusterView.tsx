@@ -35,16 +35,19 @@ function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns
 }
 
 /** The Kubernetes tab's cluster view: toolbar, then the kind tree, the table and the detail column (spec 4.2). The
- *  Cluster | Operation log switch is drawn by the bottom panel, not here. */
+ *  Cluster | Operation log switch is drawn by the bottom panel, which hands it in as `toolbarStart`. */
 export function ClusterView({
   model,
   detail,
-  onOpenInEditor
+  onOpenInEditor,
+  toolbarStart
 }: {
   model: ClusterViewModel
   detail: React.ReactNode
   /** Task 14's editor tab; without it the row menu has no such item. */
   onOpenInEditor?: (ref: ObjectRef) => void
+  /** The toolbar row's first item, before the context pill: the bottom panel's segmented switch (spec 4.2). */
+  toolbarStart?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number } | null>(null)
@@ -62,6 +65,7 @@ export function ClusterView({
   return (
     <div className="kube-cluster">
       <div className="kube-cluster-bar">
+        {toolbarStart}
         {model.contextMissing && contextName !== null && (
           <span className="kube-pill kube-pill-bad" title={contextName}>
             <span className="kube-pill-text">{t('kube.cluster.contextMissing', { name: displayContextName(contextName).short })}</span>

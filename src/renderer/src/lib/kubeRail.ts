@@ -4,13 +4,16 @@
 /** The bottom panel's height when opened from the rail: the tree, table and detail need more than the 220px default. */
 export const KUBE_MIN_PANEL_H = 360
 
-/** What a click on the icon does. `height` is null when the panel keeps its height: a height the person dragged that
- *  is already tall enough stays, and the bump is for this opening only (the caller does not store it). */
+/** What a click on the icon does. It always lands on the Cluster segment: the icon is the way into the cluster view,
+ *  and the operation log has its own way in (the toast's "show log"). `height` is null when the panel keeps its height:
+ *  a height the person dragged that is already tall enough stays, and the bump is for this opening only (the caller
+ *  does not store it). */
 export function kubeRailClick(s: { panelOpen: boolean; shownTab: string; height: number }): {
   panelOpen: boolean
   tab: 'kube' | null
+  segment: 'cluster' | null
   height: number | null
 } {
-  if (s.panelOpen && s.shownTab === 'kube') return { panelOpen: false, tab: null, height: null }
-  return { panelOpen: true, tab: 'kube', height: s.height < KUBE_MIN_PANEL_H ? KUBE_MIN_PANEL_H : null }
+  if (s.panelOpen && s.shownTab === 'kube') return { panelOpen: false, tab: null, segment: null, height: null }
+  return { panelOpen: true, tab: 'kube', segment: 'cluster', height: s.height < KUBE_MIN_PANEL_H ? KUBE_MIN_PANEL_H : null }
 }

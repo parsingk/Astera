@@ -93,8 +93,9 @@ export function BottomPanel({
   /** The Kubernetes tab's segment: the cluster view or the operation log. */
   kubeSegment: KubeSegment
   onKubeSegment: (s: KubeSegment) => void
-  /** The Cluster segment's body. App owns the view's state, so it builds this (or the kubectl-missing notice). */
-  kubeCluster: React.ReactNode
+  /** The Cluster segment's body, given the segmented switch to put first in its toolbar row (spec 4.2). App owns the
+   *  view's state, so it builds this (or the kubectl-missing notice). */
+  kubeCluster: (switcher: React.ReactNode) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the

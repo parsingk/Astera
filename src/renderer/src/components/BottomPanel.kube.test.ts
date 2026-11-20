@@ -59,7 +59,7 @@ const render = ({
       kubeAvailable,
       kubeSegment,
       onKubeSegment: noop,
-      kubeCluster: React.createElement('div', { className: 'cluster-marker' })
+      kubeCluster: (switcher: React.ReactNode) => React.createElement('div', { className: 'cluster-marker' }, switcher)
     })
   )
 
@@ -77,6 +77,17 @@ describe('BottomPanel Kubernetes tab', () => {
     expect(html).toContain('kube.log.tab')
     expect(html).toContain('aria-selected="true"')
     expect(html).toContain('cluster-marker')
+  })
+
+  // Spec 4.2: one row, the switch first; the Cluster segment's body places it at the head of its toolbar.
+  it('hands the switch to the Cluster segment to lead its toolbar', () => {
+    expect(render({ kubeSegment: 'cluster' })).toContain('<div class="cluster-marker"><div class="kube-segment-switch" role="tablist">')
+  })
+
+  it('heads the log with the switch in the same place, a row above it', () => {
+    expect(render({ kubeLog: [entry()], kubeSegment: 'log' })).toMatch(
+      /<div class="kube-segment-bar"><div class="kube-segment-switch" role="tablist">.*?<\/div><\/div><div class="kube-log">/
+    )
   })
 
   it('shows the operation log in its segment', () => {

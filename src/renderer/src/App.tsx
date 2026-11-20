@@ -3744,6 +3744,7 @@ export default function App(): React.JSX.Element {
     const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
     setRunPanelOpen(next.panelOpen)
     if (next.tab !== null) setBottomTab(next.tab)
+    if (next.segment !== null) setKubeSegment(next.segment)
     // Room for this opening only (K3): cm.runPanelHeight keeps the height the person last dragged.
     if (next.height !== null) setRunPanelHeight(next.height)
   }
@@ -5141,15 +5142,16 @@ export default function App(): React.JSX.Element {
                     kubeAvailable={kubeAvailable}
                     kubeSegment={kubeSegment}
                     onKubeSegment={setKubeSegment}
-                    kubeCluster={
+                    kubeCluster={(switcher) =>
                       kubectlFound ? (
-                        <ClusterView model={cluster} detail={<ClusterDetail model={cluster} />} />
+                        <ClusterView model={cluster} detail={<ClusterDetail model={cluster} />} toolbarStart={switcher} />
                       ) : (
                         // The tab is there for its log while kubectl is missing (spec 4.12): the manifests strip's
-                        // notice, with its link to the setting, in the cluster view's frame.
+                        // notice, with its link to the setting, in the cluster view's frame and after the switch.
                         <div className="kube-cluster">
                           <div className="kube-strip">
                             <div className="kube-bar">
+                              {switcher}
                               <span className="kube-notice">{t('kube.toolbar.kubectlMissing')}</span>
                               <button
                                 type="button"
