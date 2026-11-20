@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Account, CliInstallStatus, CliStatus, HistoryEntry, HostDriverReport, HostHoldings, HostStatus, HostRuntimeInstallState, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
 import type { UnattendedPermission } from '../../core/chat/types'
 import type { Lang, MessageKey } from '../../core/i18n'
@@ -2687,6 +2688,18 @@ export default function App(): React.JSX.Element {
   const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId | log tab id
   /** Pods' logs tabs in the bottom panel (spec 4.8), opened from the cluster view. */
   const [logTabs, setLogTabs] = useState<KubeLogTab[]>([])
+  /** Each logs tab's own element, which its view renders into for the tab's life (see the portals after BottomPanel):
+   *  made the first time the tab is drawn, dropped when it closes. */
+  const logHosts = useRef(new Map<string, HTMLElement>())
+  const logHostOf = (id: string): HTMLElement => {
+    let host = logHosts.current.get(id)
+    if (host === undefined) {
+      host = document.createElement('div')
+      host.className = 'kube-logs-host'
+      logHosts.current.set(id, host)
+    }
+    return host
+  }
   /** The Kubernetes tab's segment: the cluster view or the operation log (spec D4). */
   const [kubeSegment, setKubeSegment] = useState<KubeSegment>('cluster')
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
@@ -4346,13 +4359,13 @@ export default function App(): React.JSX.Element {
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
    *  nearest remaining row. With no runs and no terminals left the panel collapses: a panel with nothing
-   *  but ＋ in it is worse than a collapsed one. */
+   *  but ＋ in it is worse than a collapsed one. An open logs tab keeps it open: it is something to see. */
   const runDismiss = (runId: string): void => {
     void window.api.run.dismiss(runId)
     const remaining = runs.filter((r) => r.runId !== runId)
     setRuns(remaining)
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
-    if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
+    if (remaining.length === 0 && terminals.length === 0 && logTabs.length === 0) setRunPanelOpen(false)
   }
   /** Opens the two-pane manager, snapshotting the current project the way managerFor's own comment
    *  explains. Shared by the toolbar's ⋮ item and the configuration menu's "Edit '<name>'…" row — the
@@ -4510,6 +4523,7 @@ export default function App(): React.JSX.Element {
   }
   /** A logs tab's ✕: its view unmounts, which stops its kubectl; the shown tab falls back as a closed terminal does. */
   const closeLogs = (id: string): void => {
+    logHosts.current.delete(id)
     setLogTabs((prev) => closeLogTab(prev, id))
     setBottomTab((cur) => (cur === id ? 'run' : cur))
   }
@@ -5216,16 +5230,25 @@ export default function App(): React.JSX.Element {
                     }
                     logTabs={logTabs}
                     onCloseLogTab={closeLogs}
-                    // The view reads the Pod itself, so the tab carries only where it lives.
-                    renderLog={(tab, visible) => (
-                      <KubeLogView
-                        pod={null}
-                        target={tab.ref}
-                        initial={{ container: tab.container, previous: tab.previous, request: tab.request }}
-                        visible={visible}
-                      />
-                    )}
+                    logHost={logHostOf}
                   />
+                )}
+                {/* The logs views live here, outside the panel's mount: collapsing the panel unmounts it, and a view's
+                    kubectl, lines and settings last as long as its tab (spec 4.8). Each renders into its tab's own
+                    element, which the tab's body holds while the panel is open. After the panel in the tree, so the
+                    body holds the element before the view's layout effects run. The view reads the Pod itself, so
+                    the tab carries only where it lives. */}
+                {logTabs.map((tab) =>
+                  createPortal(
+                    <KubeLogView
+                      pod={null}
+                      target={tab.ref}
+                      initial={{ container: tab.container, previous: tab.previous, request: tab.request }}
+                      visible={runPanelOpen && bottomTabShown === tab.id}
+                    />,
+                    logHostOf(tab.id),
+                    tab.id
+                  )
                 )}
               </div>
             )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
@@ -52,7 +52,7 @@ export function BottomPanel({
   kubeCluster,
   logTabs,
   onCloseLogTab,
-  renderLog
+  logHost
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -100,10 +100,12 @@ export function BottomPanel({
   /** The Cluster segment's body, given the segmented switch to put first in its toolbar row (spec 4.2). App owns the
    *  view's state, so it builds this (or the kubectl-missing notice). */
   kubeCluster: (switcher: React.ReactNode) => React.ReactNode
-  /** Pods' logs tabs, after the Kubernetes tab (spec 4.8). App owns them and builds each one's view. */
+  /** Pods' logs tabs, after the Kubernetes tab (spec 4.8). App keeps each one's view mounted in an element of its own
+   *  (`logHost`) for the tab's life, so collapsing this panel does not stop its kubectl; the tab's body holds that
+   *  element while the panel is open. */
   logTabs: KubeLogTab[]
   onCloseLogTab: (id: string) => void
-  renderLog: (tab: KubeLogTab, visible: boolean) => React.ReactNode
+  logHost: (id: string) => HTMLElement
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -315,11 +317,8 @@ export function BottomPanel({
             />
           </div>
         )}
-        {/* Mounted for the tab's life like a terminal, so its kubectl keeps reading while another tab shows. */}
         {logTabs.map((tab) => (
-          <div key={tab.id} className="bottom-body" style={{ display: activeTab === tab.id ? 'flex' : 'none' }}>
-            {renderLog(tab, activeTab === tab.id)}
-          </div>
+          <LogBody key={tab.id} host={logHost(tab.id)} shown={activeTab === tab.id} />
         ))}
         {terminals.map((term) => (
           <div
@@ -342,4 +341,19 @@ export function BottomPanel({
       </div>
     </div>
   )
+}
+
+/** Puts a logs view's element in its tab's body unless it is there already: an element moved out and back loses its
+ *  scroll position, so a body drawn again must leave it where it is. */
+export function holdHost(body: Node, host: Node): void {
+  if (host.parentNode !== body) body.appendChild(host)
+}
+
+/** A logs tab's body. The view is not mounted here: App keeps it in `host`, so the panel's own mount and unmount (a
+ *  collapse) leave its kubectl and lines alone, and the body only holds that element while it is drawn. */
+function LogBody({ host, shown }: { host: HTMLElement; shown: boolean }): React.JSX.Element {
+  const hold = useCallback((el: HTMLDivElement | null) => {
+    if (el !== null) holdHost(el, host)
+  }, [host])
+  return <div ref={hold} className="bottom-body" style={{ display: shown ? 'flex' : 'none' }} />
 }

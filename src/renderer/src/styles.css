@@ -3757,6 +3757,8 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
    wrapped. The view does its own scroll keeping, so the browser's scroll anchoring stays out of it: with wrapped lines
    it would answer the window's moves with scrolls of its own. The body is positioned so the end spacer's offsetTop
    counts from the top of the list. */
+/* The element App keeps a logs view in for the tab's life; its tab's body holds it while the panel is open. */
+.kube-logs-host { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .kube-logs { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); font-size: 12px; }
 .kube-logs-bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
 .kube-logs-picker { cursor: pointer; }
