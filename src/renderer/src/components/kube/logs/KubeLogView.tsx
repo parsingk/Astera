@@ -181,7 +181,7 @@ export function KubeLogView({
     <div className="kube-logs">
       <div className="kube-logs-bar">
         <select
-          className="kube-pill kube-logs-container"
+          className="kube-pill"
           title={t('kube.logs.container')}
           aria-label={t('kube.logs.container')}
           value={container}
