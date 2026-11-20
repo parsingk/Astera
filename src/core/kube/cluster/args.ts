@@ -1,4 +1,5 @@
 /** kubectl argument lists of the cluster view. Arrays only, never a command string; every list ends with `--context`. */
+import { LOG_TAIL_LINES } from './logs'
 import type { LogOptions, ObjectRef, WatchSpec } from './types'
 
 const nsArgs = (ns: string | null): string[] => (ns === null ? [] : ['-n', ns])
@@ -52,7 +53,7 @@ export function countArgs(context: string, namespace: string | null, resources: 
  *  apply to previous logs: that container has already exited. */
 export function logsArgs(ref: ObjectRef, o: LogOptions): string[] {
   return [
-    'logs', ref.name, '-n', ref.namespace ?? '', '-c', o.container, '--timestamps', '--tail=1000',
+    'logs', ref.name, '-n', ref.namespace ?? '', '-c', o.container, '--timestamps', `--tail=${LOG_TAIL_LINES}`,
     ...(o.previous ? ['--previous'] : []),
     ...(o.follow && !o.previous ? ['-f'] : []),
     '--context', ref.context

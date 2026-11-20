@@ -72,6 +72,9 @@ function applySgr(style: Style, params: number[]): Style {
     else if (p === 2) s.dim = true
     else if (p === 3) s.italic = true
     else if (p === 4) s.underline = true
+    else if (p === 22) { delete s.bold; delete s.dim }
+    else if (p === 23) delete s.italic
+    else if (p === 24) delete s.underline
     else if (p >= 30 && p <= 37) s.fg = token(p - 30)
     else if (p >= 90 && p <= 97) s.fg = token(p - 90 + 8)
     else if (p >= 40 && p <= 47) s.bg = token(p - 40)
@@ -97,10 +100,13 @@ function applySgr(style: Style, params: number[]): Style {
   return s
 }
 
-// CSI, OSC (BEL or ST terminated) and two-character escapes. Only a CSI ending in `m` is a style; the rest is dropped.
-const ESC_RE = /\u001b(?:\[([0-9;:?]*)[ -/]*([@-~])|\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[@-Z\\-_])/g
+// In order: a complete CSI (only one ending in `m` is a style), a CSI cut off at the end of the line, a charset designator
+// (`ESC ( B`), a string sequence (OSC, DCS, SOS, PM, APC) up to BEL or ST or the end of the line, any other two-character
+// escape, and a lone ESC. Whatever is removed never leaves its payload behind in the visible text.
+const ESC_RE = /\u001b(?:\[([0-9;:?]*)[ -/]*([@-~])|\[[0-9;:?]*[ -/]*$|[()*+]\S?|[\]PX^_][^\u0007\u001b]*(?:\u0007|\u001b\\|$)|[@-Z\\-_])?/g
 
 export function ansiSpans(text: string): Span[] {
+  if (!text.includes('\u001b')) return text === '' ? [] : [{ text }]
   const spans: Span[] = []
   let style: Style = {}
   let last = 0
@@ -119,6 +125,7 @@ export function ansiSpans(text: string): Span[] {
 }
 
 export function visibleText(text: string): string {
+  if (!text.includes('\u001b')) return text
   return ansiSpans(text).map((s) => s.text).join('')
 }
 

@@ -34,5 +34,6 @@ describe('cluster kubectl arguments', () => {
     const ref = { context: 'c', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
     expect(logsArgs(ref, { container: 'worker', previous: false, follow: true })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '-f', '--context', 'c'])
     expect(logsArgs(ref, { container: 'worker', previous: true, follow: true })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '--previous', '--context', 'c'])
+    expect(logsArgs(ref, { container: 'worker', previous: false, follow: false })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '--context', 'c'])
   })
 })
