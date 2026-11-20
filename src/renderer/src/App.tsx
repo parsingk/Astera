@@ -163,7 +163,8 @@ import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
 import { useClusterView } from './hooks/useClusterView'
 import type { ObjectRef } from '../../core/kube/cluster/types'
-import { kubeRailClick } from './lib/kubeRail'
+import { clusterSeen, kubeRailClick } from './lib/kubeRail'
+import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -3752,9 +3753,16 @@ export default function App(): React.JSX.Element {
       : runAvailable
         ? bottomTabWanted
         : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
-  /** The cluster view follows the cluster only while it is seen (K4): the panel open on the Kubernetes tab's Cluster
-   *  segment, with kubectl there to ask. */
-  const clusterVisible = bottomRoot !== null && runPanelOpen && kubectlFound && bottomTabShown === 'kube' && kubeSegment === 'cluster'
+  const windowShown = useDocumentShown()
+  /** The cluster view follows the cluster only while it is seen (K4). */
+  const clusterVisible = clusterSeen({
+    hasRoot: bottomRoot !== null,
+    panelOpen: runPanelOpen,
+    kubectlFound,
+    shownTab: bottomTabShown,
+    segment: kubeSegment,
+    windowShown
+  })
   const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
   /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
   const kubeRail = (): void => {

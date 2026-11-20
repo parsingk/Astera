@@ -19,6 +19,7 @@ import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
 import { KubeObjectTab } from './kube/cluster/KubeObjectTab'
+import { useDocumentShown } from '../hooks/useDocumentShown'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
 import type { RecordStatus } from '../../../core/understanding/types'
@@ -189,6 +190,8 @@ export function PaneGrid({
   renderApp: (appTabId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
+  /** A kube tab follows its object only while the window is shown too (K4): a window hidden to the tray is not seen. */
+  const windowShown = useDocumentShown()
   const hostRef = useRef<HTMLDivElement>(null)
   // Preview while dragging — which zone of which pane it would land in
   const [hover, setHover] = useState<{ paneId: string; zone: DropZone } | null>(null)
@@ -553,7 +556,7 @@ export function PaneGrid({
       {/* Cluster object slots (kube cluster view spec 4.6) — the media slots' rule: one per open kube tab for the tab's
           whole life, display:none unless it is its pane's active tab, in tab-id order so a drag to another pane does
           not move its node. The tab keeps what it read and its view across a switch; it watches the cluster only while
-          `visible` (K4). Closing the tab drops it from the tree, which unmounts the slot and stops its watch. */}
+          `visible` in a shown window (K4). Closing the tab drops it from the tree, which unmounts the slot and stops its watch. */}
       {[...paneOfKube.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([tabId, pane]) => {
         const target = parseKubeTab(tabId.slice('kube:'.length))
         if (!target) return null
@@ -576,7 +579,7 @@ export function PaneGrid({
             }
             onMouseDown={() => onFocusPane(pane.id)}
           >
-            <KubeObjectTab target={target} visible={visible} />
+            <KubeObjectTab target={target} visible={visible && windowShown} />
           </div>
         )
       })}

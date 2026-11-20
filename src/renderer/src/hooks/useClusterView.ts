@@ -26,6 +26,7 @@ import {
 import { keyOf } from '../../../core/kube/cluster/watch'
 import { createWatchClient, type WatchClient } from '../lib/kubeWatchClient'
 import { createLatest } from '../lib/latest'
+import { startSerialPoll } from '../lib/serialPoll'
 import { errText } from './useFileOps'
 
 export const COUNTS_INTERVAL_MS = 30_000
@@ -260,7 +261,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const selector = selected !== null && kind !== null ? podSelectorOf(kind.kind, selected.object) : null
   const podsRead = selector === null ? null : valueFor(pods, view.selected)
 
-  const now = { visible, contexts, view, context, customKinds, kind, listSpec, objects, selected, selectedRef, owner, ownerObject, podsRead }
+  const now = { contexts, view, context, customKinds, kind, listSpec, objects, selected, selectedRef, owner, ownerObject, podsRead }
   const latest = useRef(now)
   latest.current = now
 
@@ -303,20 +304,6 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   // --- Namespaces, custom kinds and counts ---
 
-  const countTicket = useRef(createLatest())
-  const countNow = (): void => {
-    const { context: ctx, view: v, customKinds: custom } = latest.current
-    if (ctx === null) return
-    const key = JSON.stringify([ctx, v.namespace])
-    const ticket = countTicket.current.next()
-    api.counts(ctx, v.namespace, [...FIXED_KINDS, ...custom]).then(
-      (value) => {
-        if (countTicket.current.isCurrent(ticket)) setCounts({ key, value })
-      },
-      () => {} // the last counts stay; the table's watch reports what is wrong with the cluster
-    )
-  }
-
   useEffect(() => {
     if (!visible || context === null) return
     let alive = true
@@ -344,22 +331,36 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   }, [visible, context, gen])
 
   // Counted once the custom kinds are known (so they are counted too), again for another namespace, and on a slow
-  // interval while seen (§4.3).
+  // interval while seen (§4.3). One request at a time, the next only an interval after the last answered, so a slow
+  // cluster is never asked twice at once; nothing while the window is hidden. Not while the list's watch fails either:
+  // the cluster is not answering, and retry starts the counts again.
+  const crdsKnown = crds !== null && crds.key === context
+  const listFailed = typeof listWatch === 'object'
   useEffect(() => {
-    if (!latest.current.visible || crds === null || crds.key !== latest.current.context) return
-    countNow()
+    if (!visible || context === null || !crdsKnown || listFailed) return
+    const namespace = view.namespace
+    const key = JSON.stringify([context, namespace])
+    const kinds = [...FIXED_KINDS, ...latest.current.customKinds]
+    let alive = true
+    let first = true
+    const stop = startSerialPoll(
+      async () => {
+        // Ages move on with each round of counts, also while nothing else changes.
+        if (!first) setTick((t) => t + 1)
+        first = false
+        const value = await api.counts(context, namespace, kinds)
+        if (alive) setCounts({ key, value })
+      },
+      COUNTS_INTERVAL_MS,
+      { paused: () => document.hidden }
+    )
+    return () => {
+      alive = false
+      stop()
+    }
+    // `crds` is a new object for every answer (a refresh too): the counts start again with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crds, view.namespace])
-
-  useEffect(() => {
-    if (!visible || context === null) return
-    const timer = setInterval(() => {
-      setTick((t) => t + 1)
-      countNow()
-    }, COUNTS_INTERVAL_MS)
-    return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, context])
+  }, [visible, context, crds, view.namespace, listFailed])
 
   // --- The picked kind's list (K4: only while seen) ---
 
