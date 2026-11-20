@@ -5,7 +5,7 @@ import type { K8sObject } from '../../../../../core/kube/objects'
 import type { ObjectRef, Read } from '../../../../../core/kube/cluster/types'
 import { ageText } from '../../../../../core/kube/cluster/status'
 import { displayContextName } from '../../../../../core/kube/contextName'
-import { follow, useRereadTick, useWatchClient, type WatchState } from '../../../hooks/useClusterView'
+import { follow, useFollowingRead, useRereadTick, useWatchClient, type WatchState } from '../../../hooks/useClusterView'
 import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { FileIcon } from '../../FileIcon'
@@ -103,39 +103,17 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
   // Describe and events are one-shot reads: read again when the object changes, throttled, so they follow it too.
   const reread = useRereadTick(uid, str(object?.metadata.resourceVersion))
 
-  useEffect(() => {
-    if (!visible || view !== 'describe') return
-    let alive = true
-    window.api.kube.cluster.describe(target).then(
-      (r) => {
-        if (alive) setDescribe(r)
-      },
-      (err) => {
-        if (alive) setDescribe({ ok: false, message: errText(err) })
-      }
-    )
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, view, key, gen, reread])
+  useFollowingRead(
+    visible && view === 'describe' ? { key: JSON.stringify([key, gen]), read: () => window.api.kube.cluster.describe(target), apply: setDescribe } : null,
+    reread
+  )
 
-  useEffect(() => {
-    if (!visible || view !== 'events' || uid === null) return
-    let alive = true
-    window.api.kube.cluster.events(target, uid).then(
-      (r) => {
-        if (alive) setEvents(r)
-      },
-      (err) => {
-        if (alive) setEvents({ ok: false, message: errText(err) })
-      }
-    )
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, view, key, gen, uid, reread])
+  useFollowingRead(
+    visible && view === 'events' && uid !== null
+      ? { key: JSON.stringify([key, gen, uid]), read: () => window.api.kube.cluster.events(target, uid), apply: setEvents }
+      : null,
+    reread
+  )
 
   // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle, follow, listFailure, liveOf, objectsFor, type WatchState } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, createSerialRead, follow, listFailure, liveOf, objectsFor, type WatchState } from './useClusterView'
 import type { WatchClient } from '../lib/kubeWatchClient'
 import type { WatchMessage } from '../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../core/kube/objects'
@@ -126,5 +126,64 @@ describe('createRereadThrottle', () => {
     throttle.stop()
     vi.advanceTimersByTime(REREAD_MS * 5)
     expect(reads()).toBe(0)
+  })
+})
+
+// Final re-review R2: each re-read tick cancelled the read on its way, so an object that changes faster than a read
+// takes (an exec auth plugin) never showed a new answer. One read on its way at a time, and at most one waiting.
+describe('createSerialRead', () => {
+  const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+  function reads() {
+    const answers: Array<{ resolve(v: string): void; reject(e: Error): void }> = []
+    const read = (): Promise<string> => new Promise<string>((resolve, reject) => void answers.push({ resolve, reject }))
+    return { read, answers }
+  }
+
+  it('lets the read on its way answer and apply before the next starts, however many asks came meanwhile', async () => {
+    const { read, answers } = reads()
+    const applied: string[] = []
+    const r = createSerialRead({ read, apply: (v) => void applied.push(v) })
+    expect(answers).toHaveLength(1)
+    r.again()
+    r.again()
+    r.again()
+    expect(answers).toHaveLength(1)
+    answers[0].resolve('first')
+    await settle()
+    expect(applied).toEqual(['first'])
+    expect(answers).toHaveLength(2)
+    answers[1].resolve('second')
+    await settle()
+    expect(applied).toEqual(['first', 'second'])
+    expect(answers).toHaveLength(2)
+    r.again() // nothing on its way: read at once
+    expect(answers).toHaveLength(3)
+  })
+
+  it('drops the answer on its way and the ask waiting once stopped', async () => {
+    const { read, answers } = reads()
+    const applied: string[] = []
+    const r = createSerialRead({ read, apply: (v) => void applied.push(v) })
+    r.again()
+    r.stop()
+    answers[0].resolve('late')
+    await settle()
+    expect(applied).toEqual([])
+    expect(answers).toHaveLength(1)
+    r.again()
+    expect(answers).toHaveLength(1)
+  })
+
+  it('reads the waiting ask after a read that failed', async () => {
+    const { read, answers } = reads()
+    const applied: string[] = []
+    const r = createSerialRead({ read, apply: (v) => void applied.push(v) })
+    r.again()
+    answers[0].reject(new Error('ipc'))
+    await settle()
+    expect(answers).toHaveLength(2)
+    answers[1].resolve('after')
+    await settle()
+    expect(applied).toEqual(['after'])
   })
 })

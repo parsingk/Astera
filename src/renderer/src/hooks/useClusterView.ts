@@ -197,20 +197,73 @@ export function follow(client: WatchClient, spec: WatchSpec, onEvent: (m: WatchE
   }
 }
 
-/** A one-shot read for the life of an effect, stored under `key` unless the effect was cleaned up first. */
-function readInto<T>(read: Promise<Read<T>>, key: string, set: (v: Keyed<Read<T>>) => void): () => void {
-  let alive = true
-  read.then(
-    (value) => {
-      if (alive) set({ key, value })
-    },
-    (err) => {
-      if (alive) set({ key, value: { ok: false, message: errText(err) } })
+/** A one-shot read that follows its object (final re-review R2): it reads at once, then again at each `again()`, one
+ *  read at a time. An ask made while a read is on its way waits for that read to answer and apply, then reads once more
+ *  however many asks came meanwhile, so an object that changes faster than a read takes still shows each answer instead
+ *  of none. `stop` drops the answer on its way and the ask waiting. A read that fails applies nothing. */
+export function createSerialRead<T>(o: { read(): Promise<T>; apply(value: T): void }): { again(): void; stop(): void } {
+  let busy = false
+  let waiting = false
+  let stopped = false
+  const run = (): void => {
+    busy = true
+    const done = (): void => {
+      busy = false
+      if (stopped || !waiting) return
+      waiting = false
+      run()
     }
-  )
-  return () => {
-    alive = false
+    o.read().then(
+      (value) => {
+        if (!stopped) o.apply(value)
+        done()
+      },
+      done
+    )
   }
+  run()
+  return {
+    again() {
+      if (stopped) return
+      if (busy) waiting = true
+      else run()
+    },
+    stop() {
+      stopped = true
+      waiting = false
+    }
+  }
+}
+
+/** A one-shot read of the detail that follows its object while seen (spec §11): read when `source` comes (null reads
+ *  nothing, and drops what is on its way) and when its `key` changes (another object, another tab, a refresh), and
+ *  again at each move of `tick`, through createSerialRead. `read` and `apply` are taken with the key, so an answer is
+ *  stored for what it was read for. A rejected read applies as a failed one. The editor tab of a cluster object uses it
+ *  too. */
+export function useFollowingRead<T>(source: { key: string; read(): Promise<Read<T>>; apply(value: Read<T>): void } | null, tick: number): void {
+  const reader = useRef<{ again(): void; stop(): void } | null>(null)
+  const readTick = useRef(tick)
+  const key = source?.key ?? null
+  useEffect(() => {
+    if (source === null) return
+    readTick.current = tick
+    const r = createSerialRead({
+      read: () => source.read().catch((err): Read<T> => ({ ok: false, message: errText(err) })),
+      apply: source.apply
+    })
+    reader.current = r
+    return () => {
+      r.stop()
+      reader.current = null
+    }
+    // `key` stands for `source`, which is a new object at every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  useEffect(() => {
+    if (readTick.current === tick) return
+    readTick.current = tick
+    reader.current?.again()
+  }, [tick])
 }
 
 /** At most this often the detail's one-shot reads follow a change of their object (a crash-looping Pod changes often). */
@@ -584,33 +637,40 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   // --- The detail's reads, for the tab that shows (the Summary needs the events too) ---
 
-  // Read again when the selected object changes in the cluster, throttled, so they follow it while seen (§11).
+  // Read again when the selected object changes in the cluster, throttled, so they follow it while seen (§11). Each is
+  // stored under the selection it was read for.
   const version = selected?.object.metadata.resourceVersion
   const reread = useRereadTick(view.selected, typeof version === 'string' ? version : '')
+  const pickedUid = view.selected
+  const objectUid = selected?.object.metadata.uid
   const eventsShown = view.detailTab === 'summary' || view.detailTab === 'events'
-  useEffect(() => {
-    const ref = latest.current.selectedRef
-    const uid = latest.current.selected?.object.metadata.uid
-    if (!visible || !eventsShown || ref === null || view.selected === null || typeof uid !== 'string') return
-    return readInto(api.events(ref, uid), view.selected, setEvents)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, selectedKey, view.selected, eventsShown, gen, reread])
+  useFollowingRead(
+    visible && eventsShown && selectedRef !== null && pickedUid !== null && typeof objectUid === 'string'
+      ? { key: JSON.stringify([selectedKey, pickedUid, gen]), read: () => api.events(selectedRef, objectUid), apply: (value) => setEvents({ key: pickedUid, value }) }
+      : null,
+    reread
+  )
 
   const describeShown = view.detailTab === 'describe'
-  useEffect(() => {
-    const ref = latest.current.selectedRef
-    if (!visible || !describeShown || ref === null || view.selected === null) return
-    return readInto(api.describe(ref), view.selected, setDescribe)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, selectedKey, view.selected, describeShown, gen, reread])
+  useFollowingRead(
+    visible && describeShown && selectedRef !== null && pickedUid !== null
+      ? { key: JSON.stringify([selectedKey, pickedUid, gen]), read: () => api.describe(selectedRef), apply: (value) => setDescribe({ key: pickedUid, value }) }
+      : null,
+    reread
+  )
 
   const podsShown = view.detailTab === 'pods' && selector !== null
-  useEffect(() => {
-    const ref = latest.current.selectedRef
-    if (!visible || !podsShown || selector === null || ref === null || ref.namespace === null || view.selected === null) return
-    return readInto(api.pods(ref.context, ref.namespace, selector), view.selected, setPods)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, selectedKey, view.selected, podsShown, selector, gen, reread])
+  const podsNamespace = selectedRef?.namespace ?? null
+  useFollowingRead(
+    visible && podsShown && selector !== null && selectedRef !== null && podsNamespace !== null && pickedUid !== null
+      ? {
+          key: JSON.stringify([selectedKey, pickedUid, selector, gen]),
+          read: () => api.pods(selectedRef.context, podsNamespace, selector),
+          apply: (value) => setPods({ key: pickedUid, value })
+        }
+      : null,
+    reread
+  )
 
   // --- What the view draws ---
 
