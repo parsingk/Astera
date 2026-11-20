@@ -6,8 +6,9 @@ export type { LogOptions } from './types'
 export const LOG_TAIL_LINES = 1000
 export const LOG_MAX_LINES = 50_000
 
-/** `n` is a running index over the whole read, so it stays stable when the oldest lines are dropped. */
-export interface LogLine { n: number; ts: string | null; text: string }
+/** `n` is a running index over the whole read, so it stays stable when the oldest lines are dropped. `lower`: the
+ *  visible text in lower case, worked out once as the line arrives, since the filter reads every line at every frame. */
+export interface LogLine { n: number; ts: string | null; text: string; lower: string }
 export interface LogBuffer { lines: LogLine[]; dropped: number; next: number }
 
 export function emptyLogBuffer(): LogBuffer {
@@ -24,7 +25,12 @@ export function splitTimestamp(raw: string): { ts: string | null; text: string }
 
 export function appendLines(buf: LogBuffer, raw: string[], max: number = LOG_MAX_LINES): LogBuffer {
   let next = buf.next
-  const lines = buf.lines.concat(raw.map((r) => ({ n: next++, ...splitTimestamp(r) })))
+  const lines = buf.lines.concat(
+    raw.map((r) => {
+      const { ts, text } = splitTimestamp(r)
+      return { n: next++, ts, text, lower: visibleText(text).toLowerCase() }
+    })
+  )
   const over = Math.max(0, lines.length - max)
   return { lines: over > 0 ? lines.slice(over) : lines, dropped: buf.dropped + over, next }
 }
@@ -32,7 +38,7 @@ export function appendLines(buf: LogBuffer, raw: string[], max: number = LOG_MAX
 export function filterLines(lines: readonly LogLine[], text: string): LogLine[] {
   if (text === '') return lines.slice()
   const needle = text.toLowerCase()
-  return lines.filter((l) => visibleText(l.text).toLowerCase().includes(needle))
+  return lines.filter((l) => l.lower.includes(needle))
 }
 
 /** Local HH:MM:SS.mmm. The fraction is cut to milliseconds by hand: Date parsing of nanoseconds is not specified. */

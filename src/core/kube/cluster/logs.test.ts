@@ -18,6 +18,13 @@ describe('log logic', () => {
     expect(filterLines(lines, 'error').map((l) => l.n)).toEqual([0])
     expect(filterLines(lines, '31m')).toEqual([])
   })
+  // Task 5 review I1: the filter ran visibleText and toLowerCase over every line at every frame (112 ms at 50,000
+  // coloured lines); a line's searchable text is worked out once, as it arrives, and the filter reads only that.
+  it('works out a line\'s searchable text once, as it arrives', () => {
+    const [line] = appendLines(emptyLogBuffer(), ['2026-11-20T01:12:03Z \u001b[31mERROR\u001b[0m Could Not']).lines
+    expect(line.lower).toBe('error could not')
+    expect(filterLines([{ n: 0, ts: null, text: 'x', lower: 'needle here' }], 'NEEDLE').map((l) => l.n)).toEqual([0])
+  })
   it('parses SGR colours', () => {
     expect(ansiSpans('\u001b[1;31mERR\u001b[0m x')).toEqual([{ text: 'ERR', fg: 'var(--ansi-red)', bold: true }, { text: ' x' }])
     expect(ansiSpans('\u001b[38;2;10;20;30mT\u001b[39m')).toEqual([{ text: 'T', fg: 'rgb(10, 20, 30)' }])
