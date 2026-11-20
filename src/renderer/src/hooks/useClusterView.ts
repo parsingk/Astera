@@ -63,6 +63,9 @@ export interface ClusterViewModel {
   rows: Row[]
   /** The list has not arrived yet, so empty `rows` do not mean an empty kind. */
   loading: boolean
+  /** The one-shot read of the list, made when its watch was refused at the limit, failed (its line): the table says so
+   *  where the rows would be. */
+  listFailed: string | null
   /** The selected object's latest content (a Secret masked); kept when it is deleted. */
   selected: K8sObject | null
   /** Where the selected object lives, for reads, reveal, the menu and the editor tab. */
@@ -347,6 +350,18 @@ export function customCountsKey(open: boolean, crdsKnown: boolean, customKinds: 
   return open && crdsKnown ? customKinds.map((k) => k.resource).join(',') : ''
 }
 
+/** The one-shot read of a list whose watch main refused at the limit. */
+export type ListRead = 'pending' | 'done' | { error: string }
+
+/** What the table says while it has no rows, from the list's own state rather than the view's `live` (which also
+ *  follows the selected object): `loading` until the watch brings something (or the counts say the kind is empty), or,
+ *  refused at the limit, until its one-shot read answers (`read` null: not asked yet); that read's failure; else
+ *  `ready`, where no rows mean an empty kind. */
+export function listState(o: { watch: WatchState; read: ListRead | null; fresh: boolean; size: number; saysEmpty: boolean }): 'loading' | 'ready' | { failed: string } {
+  if (o.watch === 'limit') return o.read === null || o.read === 'pending' ? 'loading' : o.read === 'done' ? 'ready' : { failed: o.read.error }
+  return o.watch === 'live' && o.fresh && o.size === 0 && !o.saysEmpty ? 'loading' : 'ready'
+}
+
 /** The list watch's failure, which fails the view; not a Forbidden refusal, which is the picked kind's answer (§4.3). */
 export function listFailure(list: WatchState): { error: string } | null {
   return typeof list === 'object' && !list.forbidden ? list : null
@@ -389,6 +404,8 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   /** Nothing has arrived since the list (re)started. */
   const [fresh, setFresh] = useState(true)
   const [listWatch, setListWatch] = useState<WatchState>('live')
+  /** The one-shot read of the list made when its watch is refused at the limit, kept with the list it was made for. */
+  const [listRead, setListRead] = useState<Keyed<ListRead> | null>(null)
   const [pick, setPick] = useState<Keyed<{ object: K8sObject; deleted: boolean }> | null>(null)
   const [pickWatch, setPickWatch] = useState<WatchState>('live')
   const [ownerUp, setOwnerUp] = useState<Keyed<K8sObject> | null>(null)
@@ -571,14 +588,20 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       (s) => {
         setListWatch(s)
         if (s !== 'limit') return
-        // Refused at the limit: one read so the table is not empty, again on refresh; `live` says it does not follow.
+        // Refused at the limit: one read so the table is not empty, again on refresh; `live` says it does not follow, and
+        // the table waits for this read and shows its failure.
+        setListRead({ key, value: 'pending' })
         api.list(spec).then(
           (r) => {
-            if (!alive || !r.ok) return
+            if (!alive) return
+            if (!r.ok) return setListRead({ key, value: { error: r.message } })
             setList({ key, value: new Map(r.objects.map((o) => [keyOf(o), o])) })
             setFresh(false)
+            setListRead({ key, value: 'done' })
           },
-          () => {}
+          (err) => {
+            if (alive) setListRead({ key, value: { error: errText(err) } })
+          }
         )
       }
     )
@@ -717,6 +740,10 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const nsRead = valueFor(namespaces, context)
   const live: ClusterLive = !visible || listSpec === null ? 'paused' : liveOf(listWatch, selectedRef !== null ? pickWatch : 'live')
   const nextOwner = ownerObject !== null && context !== null ? ownerRefOf(ownerObject, context) : null
+  const table =
+    !visible || listSpec === null
+      ? 'ready'
+      : listState({ watch: listWatch, read: valueFor(listRead, listKey), fresh: listFresh, size: listed.size, saysEmpty })
 
   // --- Actions ---
 
@@ -733,7 +760,8 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     kind,
     columns,
     rows,
-    loading: live === 'live' && listFresh && listed.size === 0 && !saysEmpty,
+    loading: table === 'loading',
+    listFailed: typeof table === 'object' ? table.failed : null,
     selected: selected?.object ?? null,
     selectedRef,
     deleted: selected?.deleted ?? false,

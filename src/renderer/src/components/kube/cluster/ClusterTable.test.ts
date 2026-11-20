@@ -74,4 +74,12 @@ describe('ClusterTable', () => {
     expect(html).not.toContain('kube.cluster.empty')
     expect(html).not.toContain('kube-cluster-table stale')
   })
+
+  // Task 10 minor: a one-shot list read at the watch limit that failed was swallowed, leaving "nothing here".
+  it('shows a failed one-shot read of the list in its body instead of "empty"', () => {
+    const html = renderToStaticMarkup(React.createElement(ClusterTable, { ...props, rows: [], failed: 'Unable to connect to the server' }))
+    expect(html).toContain('<div class="kube-cluster-empty kube-cluster-failed">Unable to connect to the server</div>')
+    expect(html).not.toContain('kube.cluster.empty')
+    expect(renderToStaticMarkup(React.createElement(ClusterTable, { ...props, rows: [], loading: true }))).toContain('kube.cluster.loading')
+  })
 })

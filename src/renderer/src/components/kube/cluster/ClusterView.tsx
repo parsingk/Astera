@@ -160,6 +160,7 @@ export function ClusterView({
           loading={model.loading}
           stale={failed}
           forbidden={model.listForbidden}
+          failed={model.listFailed}
           onSort={model.sortBy}
           onSelect={model.select}
           onRowMenu={(uid, x, y) => {

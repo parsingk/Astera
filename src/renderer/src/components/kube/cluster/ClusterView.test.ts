@@ -93,6 +93,12 @@ describe('ClusterView', () => {
     expect(html).not.toContain('kube.cluster.retry')
   })
 
+  // Task 10 minor: a failed one-shot list read at the watch limit says why in the table.
+  it('hands a failed one-shot list read to the table', () => {
+    renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: 'limit', listFailed: 'Unable to connect to the server' }, detail: null }))
+    expect(table!.failed).toBe('Unable to connect to the server')
+  })
+
   // Final review M4: a watch whose binary is missing says so in the person's language, not as main's English.
   it('says kubectl is missing in the catalog words', () => {
     const html = renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: { error: KUBECTL_MISSING } }, detail: null }))

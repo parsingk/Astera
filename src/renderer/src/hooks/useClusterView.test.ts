@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle, createSerialRead, customCountsKey, follow, listFailure, liveOf, objectsFor, type WatchState } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, createSerialRead, customCountsKey, follow, listFailure, listState, liveOf, objectsFor, type WatchState } from './useClusterView'
 import type { WatchClient } from '../lib/kubeWatchClient'
 import type { WatchMessage } from '../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../core/kube/objects'
@@ -204,5 +204,32 @@ describe('customCountsKey', () => {
     expect(customCountsKey(true, true, widgets)).toBe('widgets.example.com,gadgets.example.com')
     expect(customCountsKey(false, true, widgets)).toBe('')
     expect(customCountsKey(false, false, [])).toBe('')
+  })
+})
+
+// Task 10 minor: at the watch limit the table said "nothing here" before the one-shot list answered, and a failed
+// one-shot list was swallowed. The table's state follows the list's own (watching, one-shot pending, done, failed),
+// not the view's `live`, which also follows the selected object.
+describe('listState', () => {
+  const at = (o: Partial<Parameters<typeof listState>[0]>) => listState({ watch: 'live', read: null, fresh: true, size: 0, saysEmpty: false, ...o })
+
+  it('waits for the one-shot list at the limit, then shows its rows or its failure', () => {
+    expect(at({ watch: 'limit' })).toBe('loading')
+    expect(at({ watch: 'limit', read: 'pending' })).toBe('loading')
+    expect(at({ watch: 'limit', read: 'done', fresh: false })).toBe('ready')
+    expect(at({ watch: 'limit', read: { error: 'Unable to connect to the server' } })).toEqual({ failed: 'Unable to connect to the server' })
+  })
+
+  it('waits for a watched list until it brings something or the counts say the kind is empty', () => {
+    expect(at({})).toBe('loading')
+    expect(at({ saysEmpty: true })).toBe('ready')
+    expect(at({ fresh: false })).toBe('ready')
+    expect(at({ size: 3 })).toBe('ready')
+  })
+
+  it('does not wait on a list that failed, was refused or ended', () => {
+    expect(at({ watch: { error: 'Unable to connect to the server' } })).toBe('ready')
+    expect(at({ watch: { error: 'pods is forbidden', forbidden: true } })).toBe('ready')
+    expect(at({ watch: 'ended' })).toBe('ready')
   })
 })

@@ -20,6 +20,8 @@ export interface ClusterTableProps {
   stale?: boolean
   /** The kind may not be listed: kubectl's Forbidden line, shown where the rows would be. */
   forbidden?: string | null
+  /** The one-shot read of the list (its watch refused at the limit) failed: its line, shown where the rows would be. */
+  failed?: string | null
   /** Fixed values for tests; the live table measures its own scroll container. */
   viewportHeight?: number
   scrollTop?: number
@@ -128,6 +130,8 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
       {p.rows.length === 0 &&
         (p.forbidden ? (
           <div className="kube-cluster-empty kube-cluster-forbidden">{p.forbidden}</div>
+        ) : p.failed ? (
+          <div className="kube-cluster-empty kube-cluster-failed">{p.failed}</div>
         ) : (
           <div className="kube-cluster-empty">{p.loading ? t('kube.cluster.loading') : t('kube.cluster.empty')}</div>
         ))}
