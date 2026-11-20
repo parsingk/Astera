@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ansiSpans, appendLines, compareStamps, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, linesAfter, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
+import { ansiSpans, appendLines, compareStamps, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, finishedText, linesAfter, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
 
 describe('log logic', () => {
   it('splits the kubectl time stamp', () => {
@@ -67,6 +67,16 @@ describe('log logic', () => {
   it('keeps the lines stamped after a time, and those without a stamp', () => {
     const lines = ['2026-11-20T01:12:03.1Z a', '2026-11-20T01:12:03.2Z b', 'no stamp', '2026-11-20T01:12:03.25Z c']
     expect(linesAfter(lines, '2026-11-20T01:12:03.2Z')).toEqual(['no stamp', '2026-11-20T01:12:03.25Z c'])
+  })
+  // Task 5 review (ruled in): the closing line names the day too when the container did not finish today.
+  it('says when a container finished, with the date when not today', () => {
+    const at = '2026-11-20T01:12:11Z'
+    const d = new Date(at)
+    const p = (n: number): string => String(n).padStart(2, '0')
+    const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    expect(finishedText(at, new Date(d.getTime() + 1000))).toBe(time)
+    expect(finishedText(at, new Date(d.getTime() + 3 * 86_400_000))).toBe(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${time}`)
+    expect(finishedText('not a time', new Date())).toBe('not a time')
   })
   it('names the saved file', () => {
     expect(logFileName('worker-6b8f9c-x2kq7', 'worker', true)).toBe('worker-6b8f9c-x2kq7_worker_previous.log')

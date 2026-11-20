@@ -70,7 +70,10 @@ vi.mock('react', async (importOriginal) => {
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({ lang: 'en', t: (key: string, p?: Record<string, unknown>) => (p ? `${key}${JSON.stringify(p)}` : key) })
 }))
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }))
+vi.mock('../../../lib/toast', () => ({ toast }))
 
+import { stampText } from '../../../../../core/kube/cluster/logs'
 import { KubeLogView } from './KubeLogView'
 
 /** Every element of a rendered tree, depth first. */
@@ -111,6 +114,7 @@ function fakeApi() {
   const started: Array<{ id: string } & LogOptions> = []
   const stopped: string[] = []
   const reads: unknown[] = []
+  const saves: Array<{ name: string; text: string }> = []
   /** What the next reads answer, in turn (a promise holds one back); after them, `answer`. */
   const queue: unknown[] = []
   let answer: unknown = read(pod)
@@ -125,7 +129,10 @@ function fakeApi() {
             stop: async (id: string) => {
               stopped.push(id)
             },
-            save: async () => ({ saved: false })
+            save: async (name: string, text: string) => {
+              saves.push({ name, text })
+              return { saved: true, path: 'C:/Users/me/Downloads/' + name }
+            }
           },
           cluster: {
             get: async (r: unknown) => {
@@ -146,7 +153,8 @@ function fakeApi() {
     listeners,
     started,
     stopped,
-    reads
+    reads,
+    saves
   }
 }
 /** A read held back until the test lets it answer. */
@@ -156,7 +164,8 @@ function held(): { promise: Promise<unknown>; answer: (v: unknown) => void } {
   return { promise, answer }
 }
 
-const view = (seed: unknown = pod) => () => KubeLogView({ pod: seed as never, target, initial: { container: 'worker', previous: false }, visible: true })
+const view = (seed: unknown = pod, filter?: string) => () =>
+  KubeLogView({ pod: seed as never, target, initial: { container: 'worker', previous: false, filter }, visible: true })
 
 beforeEach(() => {
   hooks.reset()
@@ -260,6 +269,36 @@ describe('KubeLogView stream', () => {
     hooks.render(view())
     await vi.advanceTimersByTimeAsync(10_000)
     expect(api.reads).toHaveLength(2)
+  })
+
+  // Task 5 review (ruled in): the saved file holds the lines the filter shows, time stamps as shown, no colour codes.
+  it('saves the lines in view as they read', async () => {
+    let tree = hooks.render(view(pod, 'error'))
+    api.emit({
+      logId: api.started[0].id,
+      kind: 'lines',
+      lines: ['2026-11-20T01:12:03.114539874Z \u001b[31mERROR\u001b[0m one', '2026-11-20T01:12:04Z INFO two', 'ERROR three']
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    tree = hooks.render(view(pod, 'error'))
+    ;(byLabel(tree, 'kube.logs.save').props.onClick as () => void)()
+    await settle()
+    expect(api.saves[0]).toEqual({ name: 'worker-1_worker.log', text: `${stampText('2026-11-20T01:12:03.114539874Z')} ERROR one\nERROR three\n` })
+    expect(toast.success).toHaveBeenCalledWith('kube.logs.saved{"path":"C:/Users/me/Downloads/worker-1_worker.log"}')
+    ;(byLabel(tree, 'kube.logs.timestamps').props.onClick as () => void)()
+    tree = hooks.render(view(pod, 'error'))
+    ;(byLabel(tree, 'kube.logs.save').props.onClick as () => void)()
+    await settle()
+    expect(api.saves[1].text).toBe('ERROR one\nERROR three\n')
+  })
+
+  // Time stamps are always read and only shown or hidden: no new kubectl for it.
+  it('shows or hides time stamps without restarting kubectl', () => {
+    const tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.timestamps').props.onClick as () => void)()
+    hooks.render(view())
+    expect(api.started).toHaveLength(1)
+    expect(api.stopped).toEqual([])
   })
 
   // Task 5 review (ruled in): follow off stops kubectl and keeps what it showed, lines not yet drawn included; on again,

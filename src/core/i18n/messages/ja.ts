@@ -2744,5 +2744,7 @@ export const ja: Catalog = {
   'kube.logs.ended': '終了コード {code}',
   'kube.logs.streamEnded': 'ストリームが終了しました',
   'kube.logs.saved': '{path}に保存しました',
-  'kube.logs.saveFailed': 'ログを保存できませんでした: {detail}'
+  'kube.logs.saveFailed': 'ログを保存できませんでした: {detail}',
+  'kube.logs.toolbar': 'ログ',
+  'kube.logs.previousContainer': '再起動前のコンテナ'
 }

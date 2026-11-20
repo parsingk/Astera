@@ -73,6 +73,17 @@ export function stampText(ts: string): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
 }
 
+/** When a container finished, for the closing line: local HH:MM:SS (finishedAt counts whole seconds), with the local
+ *  date before it when that is not `now`'s day. */
+export function finishedText(at: string, now: Date): string {
+  const d = new Date(at)
+  if (Number.isNaN(d.getTime())) return at
+  const p = (n: number): string => String(n).padStart(2, '0')
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  const today = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return today ? time : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${time}`
+}
+
 export interface Span { text: string; fg?: string; bg?: string; bold?: boolean; dim?: boolean; italic?: boolean; underline?: boolean }
 
 const NAMES = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']

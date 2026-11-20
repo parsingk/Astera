@@ -7,6 +7,7 @@ import {
   containersOf,
   exitLine,
   filterLines,
+  finishedText,
   logFileName,
   previousByDefault,
   restartCountOf,
@@ -261,20 +262,17 @@ export function KubeLogView({
 
   return (
     <div className="kube-logs">
-      <div className="kube-logs-bar">
-        <select
-          className="kube-pill"
-          title={t('kube.logs.container')}
-          aria-label={t('kube.logs.container')}
-          value={container}
-          onChange={(e) => pickContainer(e.target.value)}
-        >
-          {choices.map((c) => (
-            <option key={c.name} value={c.name}>
-              {c.init ? t('kube.logs.initContainer', { name: c.name }) : c.name}
-            </option>
-          ))}
-        </select>
+      <div className="kube-logs-bar" role="toolbar" aria-label={t('kube.logs.toolbar')}>
+        <label className="kube-pill kube-logs-picker">
+          <span className="kube-logs-lab">{t('kube.logs.container')}</span>
+          <select title={t('kube.logs.container')} aria-label={t('kube.logs.container')} value={container} onChange={(e) => pickContainer(e.target.value)}>
+            {choices.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.init ? t('kube.logs.initContainer', { name: c.name }) : c.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="button"
           className={'kube-segment' + (previous ? ' on' : '')}
@@ -325,7 +323,7 @@ export function KubeLogView({
         )}
       </div>
       {buffer.dropped > 0 && (
-        <div className="kube-logs-dropped" role="status">
+        <div className="kube-logs-dropped" aria-live="off">
           {t('kube.logs.dropped', { count: buffer.dropped })}
         </div>
       )}
@@ -333,6 +331,9 @@ export function KubeLogView({
         ref={box}
         className={'kube-logs-body' + (wrap ? ' wrap' : '')}
         role="log"
+        // A log is a live region by default: a busy container would have a screen reader read out every line, and
+        // lines drawn as the view scrolls would count as new.
+        aria-live="off"
         aria-label={t('kube.logs.lines', { container })}
         onScroll={(e) => {
           const el = e.currentTarget
@@ -372,8 +373,8 @@ export function KubeLogView({
             {exit !== null ? (
               <>
                 <span>{t('kube.logs.ended', { code: exit.code })}</span>
-                {/* finishedAt counts whole seconds. */}
-                {exit.at !== null && <span className="kube-logs-end-time">{stampText(exit.at).replace(/\.000$/, '')}</span>}
+                {exit.at !== null && <span className="kube-logs-end-time">{finishedText(exit.at, new Date())}</span>}
+                {previous && <span className="kube-logs-end-time">{t('kube.logs.previousContainer')}</span>}
               </>
             ) : (
               <span>{t('kube.logs.streamEnded')}</span>

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { appendLines, emptyLogBuffer, stampText } from '../../../../../core/kube/cluster/logs'
+import { appendLines, emptyLogBuffer, finishedText, stampText } from '../../../../../core/kube/cluster/logs'
 import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
 import type { KubeLogStream, LogState } from '../../../hooks/useKubeLogStream'
 
@@ -73,6 +73,16 @@ describe('KubeLogView', () => {
     expect(html).toContain('worker starting')
   })
 
+  // Task 5 review (ruled in): a labelled toolbar, the picker's word on screen as on board E, and live regions kept
+  // quiet: a busy container would have a screen reader read out every line.
+  it('labels the toolbar and the picker, and keeps the lines out of live announcements', () => {
+    const html = render(streamOf(['a', 'b', 'c'], 'streaming', 2))
+    expect(html).toMatch(/<div[^>]*role="toolbar"[^>]*aria-label="kube.logs.toolbar"/)
+    expect(html).toMatch(/<label class="kube-pill kube-logs-picker"><span class="kube-logs-lab">kube.logs.container<\/span><select/)
+    expect(html).toMatch(/<div[^>]*role="log"[^>]*aria-live="off"/)
+    expect(html).toMatch(/<div class="kube-logs-dropped"[^>]*aria-live="off"/)
+  })
+
   // Review focus 2: the filter matches what shows, not the colour codes, and the colours stay.
   it('hides lines that do not match the filter', () => {
     const lines = ['\u001b[31mERROR\u001b[0m could not connect', 'INFO ok', 'debug 31m']
@@ -94,11 +104,13 @@ describe('KubeLogView', () => {
   it('shows the closing line with the exit code', () => {
     const html = render(streamOf(['boom'], 'ended'), { container: 'worker', previous: true })
     expect(html).toContain('kube.logs.ended{&quot;code&quot;:1}')
-    expect(html).toContain(stampText('2026-11-20T01:12:11Z').replace(/\.000$/, ''))
+    expect(html).toContain(finishedText('2026-11-20T01:12:11Z', new Date()))
+    expect(html).toContain('kube.logs.previousContainer')
     // The running container has not exited: the stream ended, with no code to give.
     const unknown = render(streamOf(['ok'], 'ended'), { container: 'worker', previous: false })
     expect(unknown).toContain('kube.logs.streamEnded')
     expect(unknown).not.toContain('kube.logs.ended')
+    expect(unknown).not.toContain('kube.logs.previousContainer')
     expect(render(streamOf(['ok']))).not.toMatch(/kube\.logs\.(ended|streamEnded)/)
   })
 

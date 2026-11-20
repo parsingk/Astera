@@ -3421,5 +3421,7 @@ export const ko = {
   'kube.logs.ended': '종료 코드 {code}',
   'kube.logs.streamEnded': '스트림이 끝났습니다',
   'kube.logs.saved': '{path} 에 저장했습니다',
-  'kube.logs.saveFailed': '로그를 저장하지 못했습니다: {detail}'
+  'kube.logs.saveFailed': '로그를 저장하지 못했습니다: {detail}',
+  'kube.logs.toolbar': '로그',
+  'kube.logs.previousContainer': '재시작 전 컨테이너'
 } as const
