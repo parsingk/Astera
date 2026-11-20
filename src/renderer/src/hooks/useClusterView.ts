@@ -265,10 +265,15 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   // --- Contexts and what the person picked ---
 
+  /** Bumped by every change of what is picked, so a `selectRef` read answering later is dropped instead of selecting an
+   *  object of another context, namespace or kind. */
+  const pickTicket = useRef(createLatest())
+
   const shownRoot = useRef(root)
   useEffect(() => {
     if (shownRoot.current === root) return
     shownRoot.current = root
+    pickTicket.current.next()
     setView(initialView(recall(root), latest.current.contexts ?? NO_CONTEXTS))
   }, [root])
 
@@ -385,8 +390,13 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       spec,
       (m) => {
         queueWatch(pending, m)
-        if (m === 'resync') setFresh(true) // a resync alone schedules nothing: it waits for the relist's events
-        else cancelFrame ??= nextFrame(flush)
+        if (m === 'resync') {
+          // It drops what was queued, so the reset waits for the relist's events: a frame already scheduled would show
+          // an empty table until kubectl relists.
+          cancelFrame?.()
+          cancelFrame = null
+          setFresh(true)
+        } else cancelFrame ??= nextFrame(flush)
       },
       (s) => {
         setListWatch(s)
@@ -527,8 +537,6 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   // --- Actions ---
 
-  const pickTicket = useRef(createLatest())
-
   return {
     view,
     contexts,
@@ -553,6 +561,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     setContext(name) {
       const { view: v, contexts: c } = latest.current
       if (name === v.context) return
+      pickTicket.current.next()
       const next = withContext(v, name, c ?? NO_CONTEXTS)
       remember(root, next.context, next.namespace)
       setView((s) => withContext(s, name, c ?? NO_CONTEXTS))
@@ -560,6 +569,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     setNamespace(namespace) {
       const { view: v } = latest.current
       if (namespace === v.namespace) return
+      pickTicket.current.next()
       remember(root, v.context, namespace)
       setView((s) => withNamespace(s, namespace))
     },
