@@ -93,6 +93,8 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
   const [state, setState] = useState<LogState>('starting')
   /** Bumped by restart. */
   const [gen, setGen] = useState(0)
+  /** Drops the lines the current stream received but has not yet applied; set by its effect. */
+  const dropPending = useRef<() => void>(() => {})
   const refKey = JSON.stringify(ref)
   const { container, previous, follow } = options
 
@@ -109,6 +111,9 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
       pending = []
       setBuffer((b) => appendLines(b, batch))
     }
+    dropPending.current = () => {
+      pending = []
+    }
     setBuffer(emptyLogBuffer())
     setState('starting')
     const stream = logClient().open(
@@ -116,7 +121,8 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
       (m) => {
         if (!alive) return
         if (m.kind === 'lines') {
-          pending.push(...m.lines)
+          // A loop, not push(...lines): a very large batch would exceed the argument limit.
+          for (const line of m.lines) pending.push(line)
           setState((s) => (s === 'starting' ? 'streaming' : s))
           cancelFrame ??= nextFrame(() => {
             cancelFrame = null
@@ -140,6 +146,9 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
   }, [refKey, container, previous, follow, gen])
 
   const restart = useCallback(() => setGen((g) => g + 1), [])
-  const clear = useCallback(() => setBuffer(emptyLogBuffer()), [])
+  const clear = useCallback(() => {
+    dropPending.current()
+    setBuffer(emptyLogBuffer())
+  }, [])
   return { buffer, state, restart, clear }
 }
