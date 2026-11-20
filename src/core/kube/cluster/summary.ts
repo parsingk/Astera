@@ -4,7 +4,8 @@ import { KIND_GROUPS } from './kinds'
 import { ageText, podStatus } from './status'
 import type { ObjectRef, Tone } from './types'
 
-export interface SummaryFact { label: string; value: string; tone?: Tone; ref?: ObjectRef }
+/** `refs`: objects the value names, each drawn as a link that selects it (the owner chain, nearest first). */
+export interface SummaryFact { label: string; value: string; tone?: Tone; refs?: ObjectRef[] }
 export interface ContainerFact { name: string; init: boolean; image: string; state: string; tone: Tone; requests: string; limits: string }
 export interface Summary { facts: SummaryFact[]; containers: ContainerFact[]; conditions: { type: string; status: string; reason?: string }[]; warning: string | null }
 
@@ -99,12 +100,18 @@ function newestWarning(events: K8sObject[]): string | null {
   return `${str(warnings[0].reason)}: ${str(warnings[0].message)}`
 }
 
-function ownerFact(o: K8sObject, context: string): SummaryFact[] {
+const sameRef = (a: ObjectRef, b: ObjectRef): boolean =>
+  a.context === b.context && a.namespace === b.namespace && a.resource === b.resource && a.name === b.name
+
+/** The owner, and further up the chain the caller read (a ReplicaSet's Deployment) when it starts at this owner. */
+function ownerFact(o: K8sObject, context: string, chain: ObjectRef[]): SummaryFact[] {
   const ref = ownerRefOf(o, context)
-  return ref ? [fact('owner', `${ref.kind} ${ref.name}`, { ref })] : []
+  if (!ref) return []
+  const refs = chain.length > 0 && sameRef(chain[0], ref) ? chain : [ref]
+  return [fact('owner', refs.map((r) => `${r.kind} ${r.name}`).join(' → '), { refs })]
 }
 
-function podFacts(o: K8sObject, context: string, nowMs: number): SummaryFact[] {
+function podFacts(o: K8sObject, context: string, nowMs: number, owners: ObjectRef[]): SummaryFact[] {
   const status = rec(o.status)
   const ps = podStatus(o)
   const containerStatuses = list(status.containerStatuses)
@@ -120,7 +127,7 @@ function podFacts(o: K8sObject, context: string, nowMs: number): SummaryFact[] {
   if (last) facts.push(fact('lastExit', `${numText(last.exitCode)} (${str(last.reason)})`))
   if (rec(o.spec).nodeName) facts.push(fact('node', str(rec(o.spec).nodeName)))
   if (status.podIP) facts.push(fact('podIP', str(status.podIP)))
-  return [...facts, ...ownerFact(o, context)]
+  return [...facts, ...ownerFact(o, context, owners)]
 }
 
 function imagesText(o: K8sObject): string {
@@ -128,14 +135,15 @@ function imagesText(o: K8sObject): string {
   return containers.map((c) => str(c.image)).filter(Boolean).join(', ')
 }
 
-export function summaryOf(kind: string, o: K8sObject, events: K8sObject[], context: string, nowMs: number): Summary {
+/** `owners`: the owner chain as far as the caller read it, nearest first; the owner fact links each one. */
+export function summaryOf(kind: string, o: K8sObject, events: K8sObject[], context: string, nowMs: number, owners: ObjectRef[] = []): Summary {
   const spec = rec(o.spec)
   const status = rec(o.status)
   let facts: SummaryFact[]
   let containers: ContainerFact[] = []
   switch (kind) {
     case 'Pod':
-      facts = podFacts(o, context, nowMs)
+      facts = podFacts(o, context, nowMs, owners)
       containers = podContainers(o)
       break
     case 'Deployment':
@@ -167,7 +175,7 @@ export function summaryOf(kind: string, o: K8sObject, events: K8sObject[], conte
       if (created) facts.push(fact('created', created))
       const labels = Object.entries(rec(o.metadata.labels)).map(([k, v]) => `${k}=${String(v)}`).join(', ')
       if (labels) facts.push(fact('labels', labels))
-      facts.push(...ownerFact(o, context))
+      facts.push(...ownerFact(o, context, owners))
     }
   }
   const conditions = list(status.conditions).map((c) => ({

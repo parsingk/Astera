@@ -103,6 +103,23 @@ describe('KubeYamlView', () => {
   })
 })
 
+// Final review I5 and spec 4.5: the owner chain (Pod, ReplicaSet, Deployment) is drawn, each owner a link that selects it.
+describe('ClusterDetail owner chain', () => {
+  it('draws every owner of the chain as a link, nearest first', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'w-1', namespace: 'dev', ownerReferences: [{ kind: 'ReplicaSet', name: 'w-6b8f9c', controller: true }] }
+    }
+    const rs = { context: 'c', namespace: 'dev', resource: 'replicasets.apps', kind: 'ReplicaSet', name: 'w-6b8f9c' }
+    const deploy = { context: 'c', namespace: 'dev', resource: 'deployments.apps', kind: 'Deployment', name: 'w' }
+    const html = render(model('Pod', 'pods', pod, { owners: [rs, deploy] }))
+    expect(html).toContain('<button type="button" class="kube-detail-link">ReplicaSet w-6b8f9c</button>')
+    expect(html).toContain('<button type="button" class="kube-detail-link">Deployment w</button>')
+    expect(html.indexOf('ReplicaSet w-6b8f9c')).toBeLessThan(html.indexOf('Deployment w'))
+  })
+})
+
 describe('ClusterDetail containers', () => {
   it('labels requests and limits with catalog keys', () => {
     const pod: K8sObject = {

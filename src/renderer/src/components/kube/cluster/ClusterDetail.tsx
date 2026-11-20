@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Ellipsis, SquarePen } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
@@ -48,7 +48,7 @@ export function EventsList({ events }: { events: K8sObject[] }): React.JSX.Eleme
 function SummaryTab({ model, object, kind, context }: { model: ClusterViewModel; object: K8sObject; kind: string; context: string }): React.JSX.Element {
   const { t } = useI18n()
   const events = model.events?.ok === true ? model.events.events : []
-  const s = summaryOf(kind, object, events, context, Date.now())
+  const s = summaryOf(kind, object, events, context, Date.now(), model.owners)
   return (
     <div className="kube-detail-summary">
       {s.warning !== null && (
@@ -62,13 +62,16 @@ function SummaryTab({ model, object, kind, context }: { model: ClusterViewModel;
             <dt>{t(f.label as MessageKey)}</dt>
             <dd>
               {f.tone && <span className={`kube-cluster-dot ${f.tone}`} aria-hidden="true" />}
-              {f.ref ? (
-                <button type="button" className="kube-detail-link" onClick={() => model.selectRef(f.ref as ObjectRef)}>
-                  {f.value}
-                </button>
-              ) : (
-                f.value
-              )}
+              {f.refs
+                ? f.refs.map((r, j) => (
+                    <Fragment key={j}>
+                      {j > 0 && <span aria-hidden="true">{' → '}</span>}
+                      <button type="button" className="kube-detail-link" onClick={() => model.selectRef(r)}>
+                        {`${r.kind} ${r.name}`}
+                      </button>
+                    </Fragment>
+                  ))
+                : f.value}
             </dd>
           </div>
         ))}
