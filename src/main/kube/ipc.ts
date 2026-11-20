@@ -1,4 +1,5 @@
 /** IPC for the kube feature. Every handler that receives a path asks assertAllowedPath first. */
+import path from 'node:path'
 import type { FirstRef, KubeRequest, KubeVerb, Remembered } from '../../core/kube/types'
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { AppSettingsStore } from '../appSettingsStore'
@@ -19,8 +20,10 @@ export interface KubeIpcDeps {
   cluster: ReturnType<typeof createClusterReads>
   watches: ReturnType<typeof createWatchRegistry>
   logs: ReturnType<typeof createLogRegistry>
-  /** Asks where to save; null when the person cancels. */
-  saveDialog(defaultName: string): Promise<string | null>
+  /** The folder the save dialog opens in. */
+  downloadsDir(): string
+  /** Asks where to save, starting at defaultPath; null when the person cancels. */
+  saveDialog(defaultPath: string): Promise<string | null>
   writeFile(path: string, text: string): Promise<void>
 }
 
@@ -121,7 +124,7 @@ function logSpec(v: unknown): LogSpec {
   const r = v as { ref?: unknown; options?: unknown } | null | undefined
   if (!r || typeof r !== 'object') throw new Error('kube: log spec must be { ref, options }')
   const ref = objectRef(r.ref)
-  if (ref.kind !== 'Pod' || ref.resource !== 'pods') throw new Error('kube: logs are read from a Pod')
+  if (ref.kind !== 'Pod' || ref.resource !== 'pods' || ref.namespace === null) throw new Error('kube: ref must be a namespaced Pod')
   const o = r.options as { container?: unknown; previous?: unknown; follow?: unknown } | null | undefined
   if (!o || typeof o !== 'object' || typeof o.previous !== 'boolean' || typeof o.follow !== 'boolean') {
     throw new Error('kube: log options must be { container, previous, follow }')
@@ -287,7 +290,7 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   ipcMain.handle('kube.logs.save', async (_e, defaultName, text) => {
     const name = fileName(defaultName)
     if (typeof text !== 'string') throw new Error('kube: text must be a string')
-    const target = await deps.saveDialog(name)
+    const target = await deps.saveDialog(path.join(deps.downloadsDir(), name))
     if (target === null) return { saved: false }
     try {
       await deps.writeFile(target, text)

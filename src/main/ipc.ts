@@ -4599,6 +4599,7 @@ export function registerIpc(
     cluster: kubeCluster,
     watches: kubeWatches,
     logs: kubeLogs,
+    downloadsDir: () => app.getPath('downloads'),
     saveDialog: async (defaultPath) => {
       const r = await dialog.showSaveDialog(win, { defaultPath })
       return r.canceled || !r.filePath ? null : r.filePath

@@ -45,9 +45,9 @@ function setup(denied: string[] = []) {
     size: vi.fn(() => 0)
   }
   const logs = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
-  const saveDialog = vi.fn(async (_defaultName: string): Promise<string | null> => '/out/p.log')
+  const saveDialog = vi.fn(async (_defaultPath: string): Promise<string | null> => '/out/p.log')
   const writeFile = vi.fn(async (_p: string, _text: string) => {})
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, saveDialog, writeFile } as never)
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
   return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, saveDialog, writeFile }
 }
 
@@ -310,6 +310,12 @@ describe('Pod logs over IPC', () => {
     expect(t.logs.start).not.toHaveBeenCalled()
   })
 
+  it('rejects a Pod ref without a namespace', async () => {
+    const t = setup()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, namespace: null }, options })).rejects.toThrow('kube: ref must be a namespaced Pod')
+    expect(t.logs.start).not.toHaveBeenCalled()
+  })
+
   it('forwards stop with the id', async () => {
     const t = setup()
     await t.call('kube.logs.stop', 'l1')
@@ -327,7 +333,7 @@ describe('Pod logs over IPC', () => {
   it('writes the text to the path the dialog answers', async () => {
     const t = setup()
     expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: true, path: '/out/p.log' })
-    expect(t.saveDialog).toHaveBeenCalledWith('p.log')
+    expect(t.saveDialog).toHaveBeenCalledWith(path.join('/dl', 'p.log'))
     expect(t.writeFile).toHaveBeenCalledWith('/out/p.log', 'hello')
   })
 
