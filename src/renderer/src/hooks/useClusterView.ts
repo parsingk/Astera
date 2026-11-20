@@ -11,11 +11,10 @@ import type { Column, CountInfo, GroupId, KindDef, KindGroup, ObjectRef, Read, R
 import {
   applyPending,
   contextMissing,
+  createWatchBatcher,
   initialView,
   memoryKey,
   mergeCounts,
-  noPending,
-  queueWatch,
   readMemory,
   withContext,
   withKind,
@@ -373,37 +372,34 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   useEffect(() => {
     const spec = latest.current.listSpec
     if (!visible || spec === null || listKey === null) return
-    let pending = noPending()
+    let alive = true
+    // One copy of the list per burst, not per event (a big namespace's first list is N ADDED events, Task 5 review),
+    // and a relist swapped in whole once it goes quiet (final review I3).
+    const batcher = createWatchBatcher({
+      apply: (burst) => {
+        setList((prev) => applyPending(prev, burst))
+        setFresh(false)
+      },
+      frame: nextFrame,
+      later: (fn, ms) => {
+        const timer = setTimeout(fn, ms)
+        return () => clearTimeout(timer)
+      }
+    })
     if (shownList.current !== listKey) {
       shownList.current = listKey
       setList(NO_OBJECTS)
     } else {
-      // Seen again or refreshed: the rows stay until the relisted objects replace them, so the table does not flash empty.
-      queueWatch(pending, 'resync')
+      // Seen again (the window restored too) or refreshed: the rows stay until the relisted objects replace them.
+      batcher.push('resync')
     }
     setFresh(true)
-    let alive = true
-    let cancelFrame: (() => void) | null = null
-    // One copy of the list per frame, not per event: a big namespace's first list is N ADDED events (Task 5 review).
-    const flush = (): void => {
-      cancelFrame = null
-      const burst = pending
-      pending = noPending()
-      setList((prev) => applyPending(prev, burst))
-      setFresh(false)
-    }
     const stop = follow(
       client,
       spec,
       (m) => {
-        queueWatch(pending, m)
-        if (m === 'resync') {
-          // It drops what was queued, so the reset waits for the relist's events: a frame already scheduled would show
-          // an empty table until kubectl relists.
-          cancelFrame?.()
-          cancelFrame = null
-          setFresh(true)
-        } else cancelFrame ??= nextFrame(flush)
+        batcher.push(m)
+        if (m === 'resync') setFresh(true)
       },
       (s) => {
         setListWatch(s)
@@ -422,7 +418,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     return () => {
       alive = false
       stop()
-      cancelFrame?.()
+      batcher.stop()
     }
   }, [visible, listKey, gen, client])
 

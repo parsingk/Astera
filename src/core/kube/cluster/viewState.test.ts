@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest'
-import { applyPending, contextMissing, initialView, mergeCounts, noPending, queueWatch, readMemory, withContext, withSort } from './viewState'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  RELIST_MAX_MS,
+  RELIST_SETTLE_MS,
+  applyPending,
+  contextMissing,
+  createWatchBatcher,
+  initialView,
+  mergeCounts,
+  noPending,
+  queueWatch,
+  readMemory,
+  withContext,
+  withSort,
+  type PendingWatch
+} from './viewState'
 import type { K8sObject } from '../objects'
 import type { KubeContexts } from '../types'
 
@@ -74,6 +88,72 @@ describe('watch bursts', () => {
     queueWatch(p, 'resync')
     queueWatch(p, { type: 'ADDED', object: pod('3') })
     expect([...applyPending(start, p).keys()]).toEqual(['3'])
+  })
+})
+
+// Final review I3: a relist (refresh, the view seen again, a watch restarted) arrives as many messages over several
+// frames; applied as they came, a big namespace's table shrank to the first objects and filled up again.
+describe('watch batcher', () => {
+  afterEach(() => vi.useRealTimers())
+  const ev = (uid: string) => ({ type: 'ADDED' as const, object: pod(uid) })
+  function setup() {
+    vi.useFakeTimers()
+    const applied: PendingWatch[] = []
+    const timer = (fn: () => void, ms: number): (() => void) => {
+      const id = setTimeout(fn, ms)
+      return () => clearTimeout(id)
+    }
+    const b = createWatchBatcher({ apply: (p) => void applied.push(p), frame: (fn) => timer(fn, 16), later: timer })
+    return { b, applied }
+  }
+
+  it('applies live changes once per frame', () => {
+    const { b, applied } = setup()
+    b.push(ev('1'))
+    b.push(ev('2'))
+    expect(applied).toHaveLength(0)
+    vi.advanceTimersByTime(16)
+    expect(applied.map((p) => [p.reset, [...p.changes.keys()]])).toEqual([[false, ['1', '2']]])
+  })
+
+  it('keeps the old rows through a relist and swaps them in one step once it goes quiet', () => {
+    const { b, applied } = setup()
+    b.push('resync')
+    vi.advanceTimersByTime(5_000) // kubectl starting up: nothing yet, and the old rows stay
+    expect(applied).toHaveLength(0)
+    for (const uid of ['1', '2', '3']) {
+      b.push(ev(uid))
+      vi.advanceTimersByTime(RELIST_SETTLE_MS - 50)
+    }
+    expect(applied).toHaveLength(0)
+    vi.advanceTimersByTime(50)
+    expect(applied.map((p) => [p.reset, [...p.changes.keys()]])).toEqual([[true, ['1', '2', '3']]])
+    b.push(ev('4'))
+    vi.advanceTimersByTime(16) // live again: once per frame
+    expect(applied.map((p) => p.reset)).toEqual([true, false])
+  })
+
+  it('swaps a relist that never goes quiet after RELIST_MAX_MS', () => {
+    const { b, applied } = setup()
+    b.push('resync')
+    for (let i = 0; i * 100 < RELIST_MAX_MS; i++) {
+      b.push(ev(String(i)))
+      vi.advanceTimersByTime(100)
+    }
+    expect(applied).toHaveLength(1)
+    expect(applied[0].reset).toBe(true)
+  })
+
+  it('a resync drops a frame already scheduled, and stop drops everything', () => {
+    const { b, applied } = setup()
+    b.push(ev('1'))
+    b.push('resync')
+    vi.advanceTimersByTime(10_000)
+    expect(applied).toHaveLength(0)
+    b.push(ev('2'))
+    b.stop()
+    vi.advanceTimersByTime(10_000)
+    expect(applied).toHaveLength(0)
   })
 })
 

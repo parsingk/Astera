@@ -94,6 +94,56 @@ export function queueWatch(p: PendingWatch, m: WatchEvent | 'resync'): void {
   p.changes.set(keyOf(m.object), m)
 }
 
+/** How long a relist must go quiet before it replaces the rows. kubectl prints the relisted objects at once, but they
+ *  reach the view as one message each, over several frames. */
+export const RELIST_SETTLE_MS = 250
+/** A relist still coming after this long (a namespace whose Events never stop) replaces the rows anyway, so the table
+ *  does not stay on the old list. */
+export const RELIST_MAX_MS = 3000
+
+/** Hands a watch's messages to `apply` in bursts: live changes once per frame; after a resync, the relisted objects in
+ *  one step once they stop coming, so the table keeps its old rows meanwhile instead of emptying, or shrinking to the
+ *  first objects and filling up again. A relist that brings nothing (an empty kind) is never applied here: the caller
+ *  learns that from the counts. */
+export function createWatchBatcher(o: {
+  apply(p: PendingWatch): void
+  frame(fn: () => void): () => void
+  later(fn: () => void, ms: number): () => void
+}): { push(m: WatchEvent | 'resync'): void; stop(): void } {
+  let pending = noPending()
+  let cancelFrame: (() => void) | null = null
+  let cancelSettle: (() => void) | null = null
+  let cancelMax: (() => void) | null = null
+  const stop = (): void => {
+    cancelFrame?.()
+    cancelSettle?.()
+    cancelMax?.()
+    cancelFrame = cancelSettle = cancelMax = null
+  }
+  const flush = (): void => {
+    stop()
+    const burst = pending
+    pending = noPending()
+    o.apply(burst)
+  }
+  return {
+    push(m) {
+      queueWatch(pending, m)
+      // A resync drops what was queued, and the wait starts with the relist's first object: kubectl may take seconds
+      // to start (an exec auth plugin), and the old rows stay until then.
+      if (m === 'resync') return stop()
+      if (!pending.reset) {
+        cancelFrame ??= o.frame(flush)
+        return
+      }
+      cancelSettle?.()
+      cancelSettle = o.later(flush, RELIST_SETTLE_MS)
+      cancelMax ??= o.later(flush, RELIST_MAX_MS)
+    },
+    stop
+  }
+}
+
 /** One copy of the list per burst, not one per event (a big namespace's initial list arrives as N ADDED events). */
 export function applyPending(list: ReadonlyMap<string, K8sObject>, p: PendingWatch): Map<string, K8sObject> {
   const next = p.reset ? new Map<string, K8sObject>() : new Map(list)
