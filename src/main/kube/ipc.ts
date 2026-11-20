@@ -75,19 +75,25 @@ function request(v: unknown): KubeRequest {
   }
 }
 
+/** A value the cluster view hands kubectl as an argument: one starting with `-` would be read as a flag. */
+function arg(v: unknown, what: string): string {
+  if (typeof v !== 'string' || v === '' || v.startsWith('-')) throw new Error(`kube: ${what} must be a non-empty string not starting with "-"`)
+  return v
+}
+
 function nsOrNull(v: unknown, what: string): string | null {
-  return v === null ? null : str(v, what)
+  return v === null ? null : arg(v, what)
 }
 
 function objectRef(v: unknown): ObjectRef {
   const r = v as { context?: unknown; namespace?: unknown; resource?: unknown; kind?: unknown; name?: unknown } | null | undefined
   if (!r || typeof r !== 'object') throw new Error('kube: ref must be { context, namespace, resource, kind, name }')
   return {
-    context: str(r.context, 'ref context'),
+    context: arg(r.context, 'ref context'),
     namespace: nsOrNull(r.namespace, 'ref namespace'),
-    resource: str(r.resource, 'ref resource'),
+    resource: arg(r.resource, 'ref resource'),
     kind: str(r.kind, 'ref kind'),
-    name: str(r.name, 'ref name')
+    name: arg(r.name, 'ref name')
   }
 }
 
@@ -97,11 +103,11 @@ function watchSpec(v: unknown): WatchSpec {
     throw new Error('kube: watch spec must be { context, namespace, namespaced, resource, name? }')
   }
   return {
-    context: str(r.context, 'watch context'),
+    context: arg(r.context, 'watch context'),
     namespace: nsOrNull(r.namespace, 'watch namespace'),
     namespaced: r.namespaced,
-    resource: str(r.resource, 'watch resource'),
-    ...(r.name !== undefined ? { name: str(r.name, 'watch name') } : {})
+    resource: arg(r.resource, 'watch resource'),
+    ...(r.name !== undefined ? { name: arg(r.name, 'watch name') } : {})
   }
 }
 
@@ -110,7 +116,7 @@ function kindDefs(v: unknown): KindDef[] {
   return v.map((x) => {
     const k = x as { kind?: unknown; resource?: unknown; namespaced?: unknown } | null
     if (!k || typeof k.namespaced !== 'boolean') throw new Error('kube: kinds must be an array of { kind, resource, namespaced }')
-    return { kind: str(k.kind, 'kind'), resource: str(k.resource, 'kind resource'), namespaced: k.namespaced }
+    return { kind: str(k.kind, 'kind'), resource: arg(k.resource, 'kind resource'), namespaced: k.namespaced }
   })
 }
 
@@ -230,16 +236,16 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
 
   // Read-only views of a cluster; the one channel that returns Secret values is `reveal`, called by an explicit click.
   const { cluster, watches } = deps
-  ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(str(context, 'context')))
-  ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(str(context, 'context')))
+  ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(arg(context, 'context')))
+  ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(arg(context, 'context')))
   ipcMain.handle('kube.cluster.counts', async (_e, context, namespace, kinds) =>
-    cluster.counts(str(context, 'context'), nsOrNull(namespace, 'namespace'), kindDefs(kinds))
+    cluster.counts(arg(context, 'context'), nsOrNull(namespace, 'namespace'), kindDefs(kinds))
   )
   ipcMain.handle('kube.cluster.get', async (_e, ref) => cluster.get(objectRef(ref)))
   ipcMain.handle('kube.cluster.describe', async (_e, ref) => cluster.describe(objectRef(ref)))
   ipcMain.handle('kube.cluster.events', async (_e, ref, uid) => cluster.events(objectRef(ref), str(uid, 'uid')))
   ipcMain.handle('kube.cluster.pods', async (_e, context, namespace, selector) =>
-    cluster.pods(str(context, 'context'), str(namespace, 'namespace'), str(selector, 'selector'))
+    cluster.pods(arg(context, 'context'), arg(namespace, 'namespace'), arg(selector, 'selector'))
   )
   ipcMain.handle('kube.cluster.reveal', async (_e, ref) => cluster.reveal(objectRef(ref)))
   ipcMain.handle('kube.cluster.list', async (_e, spec) => cluster.list(watchSpec(spec)))

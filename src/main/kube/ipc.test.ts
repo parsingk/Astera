@@ -245,4 +245,31 @@ describe('cluster view IPC', () => {
     expect(t.watches.watch).not.toHaveBeenCalled()
     expect(t.cluster.counts).not.toHaveBeenCalled()
   })
+
+  // kubectl would read a value starting with "-" as a flag (a resource or name is a positional argument).
+  it('rejects a context, namespace, resource, name or selector starting with "-"', async () => {
+    const t = setup()
+    const dash = (what: string) => `kube: ${what} must be a non-empty string not starting with "-"`
+    for (const [field, what] of [['context', 'ref context'], ['namespace', 'ref namespace'], ['resource', 'ref resource'], ['name', 'ref name']]) {
+      for (const channel of ['kube.cluster.get', 'kube.cluster.describe', 'kube.cluster.reveal']) {
+        await expect(t.call(channel, { ...ref, [field]: '-o=yaml' })).rejects.toThrow(dash(what))
+      }
+      await expect(t.call('kube.cluster.events', { ...ref, [field]: '-o=yaml' }, 'u1')).rejects.toThrow(dash(what))
+    }
+    const named = { ...spec, name: 'n' }
+    for (const [field, what] of [['context', 'watch context'], ['namespace', 'watch namespace'], ['resource', 'watch resource'], ['name', 'watch name']]) {
+      await expect(t.call('kube.cluster.watch', 'w', { ...named, [field]: '--all' })).rejects.toThrow(dash(what))
+      await expect(t.call('kube.cluster.list', { ...named, [field]: '--all' })).rejects.toThrow(dash(what))
+    }
+    await expect(t.call('kube.cluster.counts', 'c', null, [{ kind: 'Pod', resource: '-A', namespaced: true }])).rejects.toThrow(dash('kind resource'))
+    await expect(t.call('kube.cluster.counts', '-c', null, kinds)).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.counts', 'c', '-n', kinds)).rejects.toThrow(dash('namespace'))
+    await expect(t.call('kube.cluster.namespaces', '--kubeconfig=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.crds', '--kubeconfig=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.pods', '-c', 'ns', 'app=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.pods', 'c', '-n', 'app=x')).rejects.toThrow(dash('namespace'))
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', '-A')).rejects.toThrow(dash('selector'))
+    for (const read of ['get', 'describe', 'events', 'reveal', 'list', 'counts', 'namespaces', 'crds', 'pods'] as const) expect(t.cluster[read]).not.toHaveBeenCalled()
+    expect(t.watches.watch).not.toHaveBeenCalled()
+  })
 })
