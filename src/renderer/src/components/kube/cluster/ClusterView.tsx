@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, RotateCcw, Search } from 'lucide-react'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { useI18n } from '../../../i18n/I18nProvider'
@@ -19,14 +19,29 @@ export function rowRefOf(context: string, kind: KindDef, row: Row): ObjectRef {
   return { context, namespace: kind.namespaced ? row.namespace : null, resource: kind.resource, kind: kind.kind, name: row.name }
 }
 
-/** A namespace typed by hand, where the cluster does not let us list them: applied on Enter or when the field is left. */
+/** What the typed namespace field commits for `text`: the namespace, trimmed (null: emptied, All namespaces), or
+ *  undefined when that is the namespace last committed, unchanged or already committed by the Enter before a blur. */
+export function namespaceCommit(text: string, last: string | null): string | null | undefined {
+  const next = text.trim() === '' ? null : text.trim()
+  return next === last ? undefined : next
+}
+
+/** A namespace typed by hand, where the cluster does not let us list them: applied on Enter or when the field is left,
+ *  only when it changed. */
 function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns: string | null): void }): React.JSX.Element {
   const { t } = useI18n()
   const [text, setText] = useState(value ?? '')
-  useEffect(() => setText(value ?? ''), [value])
+  /** What was committed last (or picked elsewhere): the blur that follows an Enter must not commit it again. */
+  const committed = useRef(value)
+  useEffect(() => {
+    setText(value ?? '')
+    committed.current = value
+  }, [value])
   const commit = (): void => {
-    const next = text.trim()
-    onCommit(next === '' ? null : next)
+    const next = namespaceCommit(text, committed.current)
+    if (next === undefined) return
+    committed.current = next
+    onCommit(next)
   }
   return (
     <input

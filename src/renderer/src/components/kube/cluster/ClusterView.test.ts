@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ClusterView, rowRefOf } from './ClusterView'
+import { ClusterView, namespaceCommit, rowRefOf } from './ClusterView'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import type { ClusterTableProps } from './ClusterTable'
 import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
@@ -175,5 +175,22 @@ describe('rowRefOf', () => {
       kind: 'Node',
       name: 'n1'
     })
+  })
+})
+
+// Task 11 minor: the typed namespace (listing namespaces is Forbidden) was committed on every blur, unchanged too, and
+// twice on Enter (Enter, then the blur that follows). Only a changed value is committed, once.
+describe('namespaceCommit', () => {
+  it('commits a changed namespace, trimmed, and an emptied field as All namespaces', () => {
+    expect(namespaceCommit('  api ', 'web')).toBe('api')
+    expect(namespaceCommit('api', null)).toBe('api')
+    expect(namespaceCommit('', 'api')).toBeNull()
+    expect(namespaceCommit('   ', 'api')).toBeNull()
+  })
+
+  it('commits nothing for the namespace last committed, so the blur after Enter does nothing', () => {
+    expect(namespaceCommit('api', 'api')).toBeUndefined()
+    expect(namespaceCommit(' api ', 'api')).toBeUndefined()
+    expect(namespaceCommit('', null)).toBeUndefined()
   })
 })
