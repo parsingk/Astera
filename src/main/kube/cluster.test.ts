@@ -153,6 +153,20 @@ describe('createClusterReads', () => {
     expect(await createClusterReads({ run: only }).describe(secretRef)).toEqual({ ok: false, message: klog })
   })
 
+  // Re-review of the second fix pass: a read is judged Forbidden by the line it reports, as the watches are (A6), not by
+  // a klog or Warning line ahead of it; a server's Warning line is not the line worth showing either.
+  it('judges a refusal by the reported line, skipping klog and Warning lines', async () => {
+    const klog = 'E1120 10:00:00.123456   12345 memcache.go:265] couldn\'t get current server API group list: the server has asked for the client to provide credentials: Forbidden'
+    const warning = 'Warning: policy/v1beta1 PodSecurityPolicy is deprecated in v1.21+, unavailable in v1.25+; access is Forbidden there'
+    const refused = 'Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: connection refused'
+    const run = async (): Promise<KubectlResult> => ({ ok: false, exitCode: 1, stdout: '', stderr: [klog, warning, refused].join(String.fromCharCode(10)) })
+    expect(await createClusterReads({ run }).describe(secretRef)).toEqual({ ok: false, message: refused })
+    expect(await createClusterReads({ run }).get(secretRef)).toEqual({ ok: false, message: refused })
+    const forbidden = 'Error from server (Forbidden): secrets "s" is forbidden: User "u" cannot get resource "secrets"'
+    const refusedRun = async (): Promise<KubectlResult> => ({ ok: false, exitCode: 1, stdout: '', stderr: [klog, warning, forbidden].join(String.fromCharCode(10)) })
+    expect(await createClusterReads({ run: refusedRun }).describe(secretRef)).toEqual({ ok: false, message: forbidden, forbidden: true })
+  })
+
   it('pods and events mask a Secret item if one comes back', async () => {
     const reads = createClusterReads({ run: async () => ok(JSON.stringify({ items: [secret] })) })
     const p = await reads.pods('c', 'api', 'a=b')

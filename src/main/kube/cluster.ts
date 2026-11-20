@@ -16,20 +16,25 @@ type Result = Awaited<ReturnType<Run>>
 /** A klog line (`E1120 10:00:00.123456 12345 memcache.go:265] ...`): client-go's log, which kubectl prints before its
  *  own error when an aggregated API is down. */
 const KLOG = /^[EWI]\d{4} /
+/** A warning the server sent with its answer (a deprecated API version), which kubectl prints and goes on. */
+const SERVER_WARNING = /^Warning: /
 
-/** The stderr line worth showing: the first one that is not klog's, else the first line at all. */
+/** The stderr line worth showing, and the one a failure is judged by: the first that is neither klog's nor a server's
+ *  Warning, else the first line at all. */
 export function firstStderrLine(stderr: string): string | undefined {
   const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l)
-  return lines.find((l) => !KLOG.test(l)) ?? lines[0]
+  return lines.find((l) => !KLOG.test(l) && !SERVER_WARNING.test(l)) ?? lines[0]
 }
 
 /** kubectl was refused (RBAC): what the person may not do, not a failure of the cluster. */
 export const isForbidden = (stderr: string): boolean => /Forbidden|cannot list/.test(stderr)
 
-/** The first stderr line (already redacted by the service's wrapper), else the exit code. */
+/** The first stderr line (already redacted by the service's wrapper), else the exit code. Forbidden is judged by that
+ *  line, as the watches judge theirs: a klog or Warning line ahead of it may mention Forbidden about something else. */
 function failure(r: Result): { ok: false; message: string; forbidden?: true } {
-  const message = firstStderrLine(r.stderr) ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
-  return isForbidden(r.stderr) ? { ok: false, message, forbidden: true } : { ok: false, message }
+  const first = firstStderrLine(r.stderr)
+  const message = first ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
+  return first !== undefined && isForbidden(first) ? { ok: false, message, forbidden: true } : { ok: false, message }
 }
 
 /** Parsed stdout, or null when it is not JSON. The parse error is dropped: it may quote a Secret value. */
@@ -106,8 +111,6 @@ interface CountCall { namespaced: boolean; objects: boolean; kinds: KindDef[] }
 
 const UNKNOWN: CountInfo = { count: null, attention: false }
 const SERVER_REFUSAL = /^Error from server\b/
-/** A warning the server sent with its answer (a deprecated API version), which kubectl prints and goes on. */
-const SERVER_WARNING = /^Warning: /
 /** Custom resources per counting call: 40 of the longest plural.group names stay far below Windows' 32,767 characters. */
 const CUSTOM_PER_CALL = 40
 const FIXED_RESOURCES: ReadonlySet<string> = new Set(KIND_GROUPS.flatMap((g) => g.kinds.map((k) => k.resource)))
