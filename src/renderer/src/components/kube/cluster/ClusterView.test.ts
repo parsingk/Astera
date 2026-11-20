@@ -83,6 +83,16 @@ describe('ClusterView', () => {
     expect(renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))).not.toContain('kube.cluster.kubeconfigError')
   })
 
+  // Re-review R1 and spec 4.3: a picked kind the person may not list says why in the table, and nothing is greyed.
+  it('shows a Forbidden refusal of the picked kind in the table, not as the view\'s error', () => {
+    const line = 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods"'
+    const html = renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: 'paused', listForbidden: line }, detail: null }))
+    expect(table!.forbidden).toBe(line)
+    expect(html).toContain('pods is forbidden')
+    expect(html).not.toContain('stale')
+    expect(html).not.toContain('kube.cluster.retry')
+  })
+
   // Final review M4: a watch whose binary is missing says so in the person's language, not as main's English.
   it('says kubectl is missing in the catalog words', () => {
     const html = renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: { error: KUBECTL_MISSING } }, detail: null }))

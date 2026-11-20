@@ -65,4 +65,13 @@ describe('ClusterTable', () => {
     const html = renderToStaticMarkup(React.createElement(ClusterTable, { ...props, rows: [] }))
     expect(html).toContain('kube.cluster.empty')
   })
+
+  // Re-review R1 and spec 4.3: a kind the person may not list says why in the table, in kubectl's words.
+  it('shows a Forbidden refusal of the kind in its body instead of "empty"', () => {
+    const line = 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods"'
+    const html = renderToStaticMarkup(React.createElement(ClusterTable, { ...props, rows: [], forbidden: line }))
+    expect(html).toContain('<div class="kube-cluster-empty kube-cluster-forbidden">Error from server (Forbidden): pods is forbidden')
+    expect(html).not.toContain('kube.cluster.empty')
+    expect(html).not.toContain('kube-cluster-table stale')
+  })
 })

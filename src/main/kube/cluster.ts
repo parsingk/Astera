@@ -23,11 +23,13 @@ export function firstStderrLine(stderr: string): string | undefined {
   return lines.find((l) => !KLOG.test(l)) ?? lines[0]
 }
 
+/** kubectl was refused (RBAC): what the person may not do, not a failure of the cluster. */
+export const isForbidden = (stderr: string): boolean => /Forbidden|cannot list/.test(stderr)
+
 /** The first stderr line (already redacted by the service's wrapper), else the exit code. */
 function failure(r: Result): { ok: false; message: string; forbidden?: true } {
   const message = firstStderrLine(r.stderr) ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
-  const forbidden = /Forbidden|cannot list/.test(r.stderr)
-  return forbidden ? { ok: false, message, forbidden: true } : { ok: false, message }
+  return isForbidden(r.stderr) ? { ok: false, message, forbidden: true } : { ok: false, message }
 }
 
 /** Parsed stdout, or null when it is not JSON. The parse error is dropped: it may quote a Secret value. */

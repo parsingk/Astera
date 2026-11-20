@@ -22,7 +22,8 @@ export type WatchEvent = { type: 'ADDED' | 'MODIFIED' | 'DELETED'; object: K8sOb
 export type WatchMessage = { watchId: string } & (
   | { kind: 'event'; event: WatchEvent }
   | { kind: 'resync' }
-  | { kind: 'error'; message: string }
+  // `forbidden`: kubectl was refused the list (Forbidden), an answer about the kind rather than the cluster failing.
+  | { kind: 'error'; message: string; forbidden?: true }
   // No watch sends it (a watch that exits cleanly resyncs and restarts); P2's log streams will, when a log is read to
   // its end.
   | { kind: 'ended' }

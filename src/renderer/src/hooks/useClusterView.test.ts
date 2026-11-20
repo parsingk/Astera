@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle, liveOf } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, follow, listFailure, liveOf, type WatchState } from './useClusterView'
+import type { WatchClient } from '../lib/kubeWatchClient'
+import type { WatchMessage } from '../../../core/kube/cluster/types'
 
 afterEach(() => vi.useRealTimers())
+
+const FORBIDDEN = 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods" in API group "" in the namespace "api"'
 
 // Final review M5 and spec 4.3: an object the person may not read never fails the view; its watch's failure is the
 // detail's to show, and the tree and table stay as they are.
@@ -11,6 +15,41 @@ describe('liveOf', () => {
     expect(liveOf('live', 'limit')).toBe('limit')
     expect(liveOf('live', 'ended')).toBe('paused')
     expect(liveOf({ error: 'Unable to connect to the server' }, 'live')).toEqual({ error: 'Unable to connect to the server' })
+  })
+
+  // Re-review R1 and spec 4.3: a Forbidden kind never fails the view; the table says why it is empty instead.
+  it('pauses rather than fails the view when the picked kind\'s list is Forbidden', () => {
+    expect(liveOf({ error: FORBIDDEN, forbidden: true }, 'live')).toBe('paused')
+  })
+})
+
+// Re-review R1: the counts stop while the cluster does not answer, but not for a kind the person may not list; else the
+// first round is thrown away and the tree never learns which kinds are Forbidden.
+describe('listFailure', () => {
+  it('is the list watch\'s failure, except a Forbidden refusal', () => {
+    expect(listFailure({ error: 'Unable to connect to the server' })).toEqual({ error: 'Unable to connect to the server' })
+    expect(listFailure({ error: FORBIDDEN, forbidden: true })).toBeNull()
+    expect(listFailure('live')).toBeNull()
+    expect(listFailure('limit')).toBeNull()
+  })
+})
+
+describe('follow', () => {
+  it('hands on a Forbidden refusal as such', async () => {
+    let deliver: ((m: WatchMessage) => void) | null = null
+    const client: WatchClient = {
+      subscribe: async (_spec, cb) => {
+        deliver = cb
+        return { ok: true, stop: () => {} }
+      }
+    }
+    const states: WatchState[] = []
+    const stop = follow(client, { context: 'c', namespace: 'api', namespaced: true, resource: 'pods' }, () => {}, (s) => void states.push(s))
+    await Promise.resolve()
+    deliver!({ watchId: 'w', kind: 'error', message: FORBIDDEN, forbidden: true })
+    deliver!({ watchId: 'w', kind: 'error', message: 'Unable to connect to the server' })
+    expect(states).toEqual(['live', { error: FORBIDDEN, forbidden: true }, { error: 'Unable to connect to the server' }])
+    stop()
   })
 })
 

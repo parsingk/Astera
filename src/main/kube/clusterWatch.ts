@@ -4,7 +4,7 @@ import { listArgs } from '../../core/kube/cluster/args'
 import { createJsonSplitter, toWatchEvents } from '../../core/kube/cluster/watch'
 import { KUBECTL_MISSING, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
-import { firstStderrLine } from './cluster'
+import { firstStderrLine, isForbidden } from './cluster'
 
 export const MAX_WATCHES = 6
 export const RESTART_DELAY_MS = 1000
@@ -83,7 +83,7 @@ export function createWatchRegistry(deps: {
           first ?? (x.code !== null ? `kubectl exited ${x.code}` : x.errorCode === 'ENOENT' ? KUBECTL_MISSING : (x.errorCode ?? 'kubectl exited'))
         entries.delete(id)
         e.run = {}
-        deps.emit({ watchId: id, kind: 'error', message })
+        deps.emit(isForbidden(stderr) ? { watchId: id, kind: 'error', message, forbidden: true } : { watchId: id, kind: 'error', message })
       }
     })
   }

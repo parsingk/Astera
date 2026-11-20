@@ -18,6 +18,8 @@ export interface ClusterTableProps {
   loading?: boolean
   /** The cluster cannot be read right now: the last rows stay, greyed. */
   stale?: boolean
+  /** The kind may not be listed: kubectl's Forbidden line, shown where the rows would be. */
+  forbidden?: string | null
   /** Fixed values for tests; the live table measures its own scroll container. */
   viewportHeight?: number
   scrollTop?: number
@@ -123,7 +125,12 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
           {spacer(p.rows.length - last)}
         </tbody>
       </table>
-      {p.rows.length === 0 && <div className="kube-cluster-empty">{p.loading ? t('kube.cluster.loading') : t('kube.cluster.empty')}</div>}
+      {p.rows.length === 0 &&
+        (p.forbidden ? (
+          <div className="kube-cluster-empty kube-cluster-forbidden">{p.forbidden}</div>
+        ) : (
+          <div className="kube-cluster-empty">{p.loading ? t('kube.cluster.loading') : t('kube.cluster.empty')}</div>
+        ))}
     </div>
   )
 }

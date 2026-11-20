@@ -105,6 +105,16 @@ describe('createWatchRegistry', () => {
     expect(reg.size()).toBe(0)
   })
 
+  // Re-review R1: a Forbidden refusal is the kind's answer, not the cluster failing, and the renderer must tell them apart.
+  it('marks a Forbidden refusal as such', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.watch('w1', spec)
+    const line = 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods" in API group "" in the namespace "ns"'
+    spawns[0].h.onStderr(line + '\n')
+    spawns[0].h.onExit({ code: 1, stopped: false })
+    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: line, forbidden: true }])
+  })
+
   // Final review M4: a missing binary says so in words, not as "ENOENT".
   it('a failure without stderr reports the exit code, a missing kubectl, or the errorCode', () => {
     const { reg, spawns, emitted } = setup()

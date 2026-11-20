@@ -81,6 +81,9 @@ export interface ClusterViewModel {
   pods: Read<{ columns: Column[]; rows: Row[] }> | null
   /** Whether the table and the detail follow the cluster. */
   live: ClusterLive
+  /** The picked kind may not be listed (kubectl's Forbidden line): the table says so instead of rows, and the view is
+   *  not failed (§4.3). */
+  listForbidden: string | null
   /** The selected object's watch failed (kubectl's line): the detail says so and keeps its content, and the view stays
    *  as it is (§4.3). */
   detailError: string | null
@@ -105,8 +108,8 @@ export interface ClusterViewModel {
   retry(): void
 }
 
-/** What one watch is doing; `ended`: it stopped without an error. */
-export type WatchState = 'live' | 'limit' | 'ended' | { error: string }
+/** What one watch is doing; `ended`: it stopped without an error; `forbidden`: kubectl was refused the list. */
+export type WatchState = 'live' | 'limit' | 'ended' | { error: string; forbidden?: true }
 /** A value kept with what it was read for (a context, a namespace, a selection), so it never shows for another. */
 type Keyed<T> = { key: string; value: T }
 
@@ -166,7 +169,7 @@ export function follow(client: WatchClient, spec: WatchSpec, onEvent: (m: WatchE
   client
     .subscribe(spec, (m) => {
       if (!alive) return
-      if (m.kind === 'error') onState({ error: m.message })
+      if (m.kind === 'error') onState(m.forbidden ? { error: m.message, forbidden: true } : { error: m.message })
       else if (m.kind === 'ended') onState('ended')
       else onEvent(m.kind === 'resync' ? 'resync' : m.event)
     })
@@ -263,10 +266,18 @@ export function useRereadTick(uid: string | null, version: string): number {
   return tick
 }
 
+/** The list watch's failure, which fails the view; not a Forbidden refusal, which is the picked kind's answer (§4.3). */
+export function listFailure(list: WatchState): { error: string } | null {
+  return typeof list === 'object' && !list.forbidden ? list : null
+}
+
 /** The view's live state from its two watches. Only the list's failure fails the view: the selected object's is the
- *  detail's to show (`detailError`), since an object the person may not read never fails the view (§4.3). */
+ *  detail's to show (`detailError`), since an object the person may not read never fails the view (§4.3), and a kind
+ *  the person may not list leaves nothing followed (`listForbidden` says why). */
 export function liveOf(list: WatchState, pick: WatchState): ClusterLive {
-  if (typeof list === 'object') return list
+  const failed = listFailure(list)
+  if (failed !== null) return failed
+  if (typeof list === 'object') return 'paused'
   if (list === 'limit' || pick === 'limit') return 'limit'
   return list === 'ended' || pick === 'ended' ? 'paused' : 'live'
 }
@@ -323,7 +334,9 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   // A relist of an empty kind brings no event at all, so the counts are what says the old rows are gone: a 0 this round
   // read, not one kept from an earlier round. Not while the watch fails: the rows then stay as last seen (§4.12).
   const saysEmpty = listWatch === 'live' && kindCount?.count === 0 && !kindCount.forbidden && !kindCount.stale
-  const objects = fresh && saysEmpty ? NO_OBJECTS : list
+  const listForbidden = typeof listWatch === 'object' && listWatch.forbidden ? listWatch.error : null
+  // A refused list shows its reason, not rows a refresh may no longer be allowed to read.
+  const objects = listForbidden !== null || (fresh && saysEmpty) ? NO_OBJECTS : list
   const selected = valueFor(pick, view.selected)
   const selectedRef = selected !== null && context !== null && kind !== null ? refOf(context, kind, selected.object) : null
   const selectedKey = selectedRef && JSON.stringify(selectedRef)
@@ -405,12 +418,13 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   // Counted when the view opens, again for another namespace, on refresh, and on a slow interval while seen (§4.3). One
   // request at a time, the next only an interval after the last answered, so a slow cluster is never asked twice at
   // once; nothing while the window is hidden. Not while the list's watch fails either: the cluster is not answering, and
-  // retry starts the counts again. Custom kinds are counted only while their group is open, once this context's CRDs
-  // are known (`customKey` null until then): a cluster can serve hundreds.
+  // retry starts the counts again; a Forbidden list is not that, and the counts are what greys such kinds in the tree.
+  // Custom kinds are counted only while their group is open, once this context's CRDs are known (`customKey` null until
+  // then): a cluster can serve hundreds.
   const customOpen = view.expanded.includes('custom')
   const crdsKnown = crds !== null && crds.key === context
   const customKey = !customOpen ? '' : crdsKnown ? customKinds.map((k) => k.resource).join(',') : null
-  const listFailed = typeof listWatch === 'object'
+  const listFailed = listFailure(listWatch) !== null
   useEffect(() => {
     if (!visible || context === null || customKey === null || listFailed) return
     const namespace = view.namespace
@@ -636,6 +650,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     describe: valueFor(describe, view.selected),
     pods: podsModel,
     live,
+    listForbidden: !visible || listSpec === null ? null : listForbidden,
     detailError: visible && selectedRef !== null && typeof pickWatch === 'object' ? pickWatch.error : null,
     setContext(name) {
       const { view: v, contexts: c } = latest.current
