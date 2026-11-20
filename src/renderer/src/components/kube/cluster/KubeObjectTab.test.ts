@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab } from './KubeObjectTab'
+import { KubeObjectTab, followTabObject } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
 import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
 
@@ -69,5 +69,97 @@ describe('KubeObjectTab', () => {
     const target = { ...pod, resource: 'secrets', kind: 'Secret', name: 's' }
     const shown = renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, initial: secret }))
     expect([...shown.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.cluster.refresh', 'kube.cluster.showValues'])
+  })
+})
+
+// Task 14 minor: the tab's watch lifecycle was verified by reading only. Driven here by a fake watch client and read, as
+// kubeWatchClient.test.ts drives its api: stopped on hide and unmount, a late read ignored, a resync read again, paused
+// at the limit.
+describe('followTabObject', () => {
+  type Answer = Awaited<ReturnType<typeof window.api.kube.cluster.get>>
+  const obj = (rv: string) => ({ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api', uid: 'u1', resourceVersion: rv } })
+  const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  function setup(answer: { ok: true } | { ok: false; reason: 'limit' } = { ok: true }) {
+    let deliver: ((m: unknown) => void) | null = null
+    const specs: unknown[] = []
+    let stopped = 0
+    const client = {
+      subscribe: async (spec: unknown, cb: (m: unknown) => void) => {
+        specs.push(spec)
+        deliver = cb
+        return answer.ok ? { ok: true as const, stop: () => void stopped++ } : answer
+      }
+    }
+    const reads: Array<(a: Answer) => void> = []
+    const got: Array<{ object: unknown } | { fail: string | null } | { state: unknown }> = []
+    const stop = followTabObject({
+      client: client as never,
+      get: () => new Promise<Answer>((r) => void reads.push(r)),
+      target: pod,
+      take: (object) => void got.push({ object: object?.metadata.resourceVersion ?? null }),
+      fail: (message) => void got.push({ fail: message }),
+      state: (s) => void got.push({ state: s })
+    })
+    const send = (m: object): void => deliver!({ watchId: 'w', ...m })
+    return { stop, reads, got, specs, send, stopped: () => stopped }
+  }
+
+  it('reads the object, follows its watch by name, and drops a read that answers after the watch spoke', async () => {
+    const t = setup()
+    await settle()
+    expect(t.specs).toEqual([{ context: pod.context, namespace: 'api', namespaced: true, resource: 'pods', name: 'w-1' }])
+    t.send({ kind: 'event', event: { type: 'MODIFIED', object: obj('8') } })
+    t.reads[0]({ ok: true, object: obj('7') })
+    await settle()
+    expect(t.got).toEqual([{ state: 'live' }, { fail: null }, { object: '8' }])
+    t.send({ kind: 'event', event: { type: 'DELETED', object: obj('9') } })
+    expect(t.got.at(-1)).toEqual({ object: null })
+    t.stop()
+  })
+
+  it('reads again on a resync, and that read applies', async () => {
+    const t = setup()
+    await settle()
+    t.send({ kind: 'event', event: { type: 'ADDED', object: obj('7') } })
+    t.send({ kind: 'resync' })
+    expect(t.reads).toHaveLength(2)
+    t.reads[1]({ ok: true, object: obj('10') })
+    await settle()
+    expect(t.got.at(-1)).toEqual({ object: '10' })
+    t.stop()
+  })
+
+  it('shows a failed read until the watch brings the object', async () => {
+    const t = setup()
+    await settle()
+    t.reads[0]({ ok: false, message: 'Error from server (Forbidden): pods "w-1" is forbidden' })
+    await settle()
+    expect(t.got.at(-1)).toEqual({ fail: 'Error from server (Forbidden): pods "w-1" is forbidden' })
+    t.send({ kind: 'event', event: { type: 'ADDED', object: obj('7') } })
+    expect(t.got.slice(-2)).toEqual([{ fail: null }, { object: '7' }])
+    t.stop()
+  })
+
+  it('stops its watch on hide or unmount, and applies nothing after', async () => {
+    const t = setup()
+    await settle()
+    t.stop()
+    expect(t.stopped()).toBe(1)
+    const before = t.got.length
+    t.reads[0]({ ok: true, object: obj('7') })
+    t.send({ kind: 'event', event: { type: 'MODIFIED', object: obj('8') } })
+    await settle()
+    expect(t.got).toHaveLength(before)
+  })
+
+  it('is paused at the watch limit, where the read is all there is', async () => {
+    const t = setup({ ok: false, reason: 'limit' })
+    await settle()
+    t.reads[0]({ ok: true, object: obj('7') })
+    await settle()
+    expect(t.got).toEqual([{ state: 'live' }, { state: 'limit' }, { fail: null }, { object: '7' }])
+    t.stop()
+    expect(t.stopped()).toBe(0)
   })
 })

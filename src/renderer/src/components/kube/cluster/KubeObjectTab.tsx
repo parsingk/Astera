@@ -9,6 +9,7 @@ import { follow, useFollowingRead, useRereadTick, useWatchClient, type WatchStat
 import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { arrowStep } from '../../../lib/arrowStep'
+import type { WatchClient } from '../../../lib/kubeWatchClient'
 import { FileIcon } from '../../FileIcon'
 import { EventsList, ReadView } from './ClusterDetail'
 import { liveErrorText } from './ClusterView'
@@ -30,6 +31,59 @@ function ReadAgo({ at, visible }: { at: number; visible: boolean }): React.JSX.E
     return () => clearInterval(timer)
   }, [visible])
   return <span className="kube-tab-read">{t('kube.cluster.readAgo', { ago: ageText(new Date(at).toISOString(), Math.max(now, at)) })}</span>
+}
+
+/** The tab's object for as long as it shows (K4), apart from React so its lifecycle can be tested: read once, then
+ *  followed by a watch by name. Once the watch has spoken, a read answering later is older news and is dropped; a resync
+ *  reads again, since a watch filtered by name says nothing of an object deleted meanwhile. Refused at the limit, the
+ *  read is all there is: the object shows once and `state` says the tab is paused. `take(null)`: deleted. Returns the
+ *  stop, for hide and unmount, after which nothing applies. */
+export function followTabObject(o: {
+  client: WatchClient
+  get(ref: ObjectRef): Promise<Read<{ object: K8sObject | null }>>
+  target: ObjectRef
+  take(object: K8sObject | null): void
+  /** The read's first line of stderr, or null once something better arrived. */
+  fail(message: string | null): void
+  state(s: WatchState): void
+}): () => void {
+  const { target } = o
+  let alive = true
+  let watched = false
+  const read = (): void => {
+    o.get(target).then(
+      (r) => {
+        if (!alive || watched) return
+        if (!r.ok) return o.fail(r.message)
+        o.fail(null)
+        o.take(r.object)
+      },
+      (err) => {
+        if (alive && !watched) o.fail(errText(err))
+      }
+    )
+  }
+  read()
+  const stop = follow(
+    o.client,
+    { context: target.context, namespace: target.namespace, namespaced: target.namespace !== null, resource: target.resource, name: target.name },
+    (m) => {
+      if (m === 'resync') {
+        watched = false
+        read()
+        return
+      }
+      watched = true
+      o.fail(null)
+      // By name, not uid: an object deleted and made again under the same name (a StatefulSet's Pod) is this tab's.
+      o.take(m.type === 'DELETED' ? null : m.object)
+    },
+    o.state
+  )
+  return () => {
+    alive = false
+    stop()
+  }
 }
 
 /** A cluster object in an editor tab, read-only in P1 (spec 4.6, board B): its YAML, describe or events under a toolbar
@@ -68,47 +122,14 @@ export function KubeObjectTab({
 
   useEffect(() => {
     if (!visible) return
-    const api = window.api.kube.cluster
-    let alive = true
-    // Once the watch has spoken, a read answering later is older news.
-    let watched = false
-    const take = (object: K8sObject | null): void =>
-      setShown((prev) => ({ object: object ?? prev?.object ?? null, deleted: object === null, at: Date.now() }))
-    const read = (): void => {
-      api.get(target).then(
-        (r) => {
-          if (!alive || watched) return
-          if (!r.ok) return setFailed(r.message)
-          setFailed(null)
-          take(r.object)
-        },
-        (err) => {
-          if (alive && !watched) setFailed(errText(err))
-        }
-      )
-    }
-    read()
-    // Refused at the limit, the read above is all there is: the object shows once and the tab says it is paused.
-    const stop = follow(
+    return followTabObject({
       client,
-      { context: target.context, namespace: target.namespace, namespaced: target.namespace !== null, resource: target.resource, name: target.name },
-      (m) => {
-        if (m === 'resync') {
-          watched = false
-          read()
-          return
-        }
-        watched = true
-        setFailed(null)
-        // By name, not uid: an object deleted and made again under the same name (a StatefulSet's Pod) is this tab's.
-        take(m.type === 'DELETED' ? null : m.object)
-      },
-      setWatch
-    )
-    return () => {
-      alive = false
-      stop()
-    }
+      get: (ref) => window.api.kube.cluster.get(ref),
+      target,
+      take: (object) => setShown((prev) => ({ object: object ?? prev?.object ?? null, deleted: object === null, at: Date.now() })),
+      fail: setFailed,
+      state: setWatch
+    })
     // `key` stands for `target`, which is a new object at every render of the grid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, key, gen, client])
