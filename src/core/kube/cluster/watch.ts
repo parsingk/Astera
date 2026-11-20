@@ -2,14 +2,15 @@
 import type { K8sObject } from '../objects'
 import type { WatchEvent } from './types'
 
-type Parsed = { ok: true; value: unknown } | { ok: false }
+/** `tooLarge`: the value passed the cap and was given up, as against output that is merely not JSON. */
+type Parsed = { ok: true; value: unknown } | { ok: false; tooLarge?: true }
 
 /** The longest value the splitter holds. kubectl's values are a watch event or a page of 500 objects, which a namespace
  *  of Helm release Secrets can take past 16 MB; past this, the value is taken for broken output and given up. */
 const MAX_VALUE_CHARS = 64 * 1024 * 1024
 
 /** Scans for balanced top-level objects, aware of strings and escapes, so chunk edges and braces inside values are safe.
- *  A value that grows past `maxChars` (one that never closes) is reported unparsable and the scan starts afresh, so it
+ *  A value that grows past `maxChars` (one that never closes) is reported too large and the scan starts afresh, so it
  *  neither holds memory without bound nor swallows the values after it. */
 export function createJsonSplitter(maxChars = MAX_VALUE_CHARS): { push(chunk: string): Parsed[] } {
   let buf = ''
@@ -23,7 +24,7 @@ export function createJsonSplitter(maxChars = MAX_VALUE_CHARS): { push(chunk: st
         if (depth === 0 && ch !== '{') continue // whitespace between objects
         buf += ch
         if (buf.length > maxChars) {
-          out.push({ ok: false })
+          out.push({ ok: false, tooLarge: true })
           buf = ''
           depth = 0
           inString = false

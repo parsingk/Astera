@@ -28,6 +28,8 @@ interface Entry {
 export function createWatchRegistry(deps: {
   stream(args: string[], h: Handlers): KubectlStream
   redact(stderr: string): string
+  /** The splitter's cap on one value; only tests set it. */
+  maxValueChars?: number
   emit(m: WatchMessage): void
   later(fn: () => void, ms: number): { cancel(): void }
 }): {
@@ -51,13 +53,20 @@ export function createWatchRegistry(deps: {
     e.run = run
     e.timer = null
     const live = (): boolean => entries.get(id) === e && e.run === run
-    const splitter = createJsonSplitter()
+    const splitter = createJsonSplitter(deps.maxValueChars)
     let stderr = ''
     e.stream = deps.stream(listArgs(e.spec, true), {
       onStdout(chunk) {
         if (!live()) return
         for (const p of splitter.push(chunk)) {
-          if (!p.ok) continue
+          if (!p.ok) {
+            if (!p.tooLarge) continue
+            // Rows would go missing from here on without a word: end the watch as a failed one, so the view says so.
+            entries.delete(id)
+            halt(e)
+            deps.emit({ watchId: id, kind: 'error', message: 'a list page was too large to read' })
+            return
+          }
           // A page of a big list is many events, each Secret of it masked like a Secret of its own event.
           for (const ev of toWatchEvents(p.value)) {
             const object = ev.object.kind === 'Secret' ? (maskSecretPair(ev.object, null)[0] ?? ev.object) : ev.object

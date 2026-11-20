@@ -17,7 +17,7 @@ const secretEvent = JSON.stringify({
   }
 })
 
-function setup() {
+function setup(maxValueChars?: number) {
   const spawns: Array<{ args: string[]; h: Handlers; stops: number }> = []
   const emitted: WatchMessage[] = []
   const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = []
@@ -28,6 +28,7 @@ function setup() {
       return { stop: () => void (s.stops += 1) }
     },
     redact: (s) => s.replace(/10\.0\.0\.1/g, 'HOST'),
+    maxValueChars,
     emit: (m) => void emitted.push(m),
     later(fn, ms) {
       const t = { fn, ms, cancelled: false }
@@ -39,6 +40,15 @@ function setup() {
 }
 
 describe('createWatchRegistry', () => {
+  it('stops the watch and says so when a value is over the cap, instead of dropping rows silently', () => {
+    const { reg, spawns, emitted } = setup(64)
+    reg.watch('w1', spec)
+    spawns[0].h.onStdout('{"type":"ADDED","object":{"kind":"Pod","metadata":{"name":"' + 'x'.repeat(200) + '"}}}')
+    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: 'a list page was too large to read' }])
+    expect(spawns[0].stops).toBe(1)
+    expect(reg.size()).toBe(0)
+  })
+
   it('emits events and watch events mask Secrets', () => {
     const { reg, spawns, emitted } = setup()
     reg.watch('w1', spec)
