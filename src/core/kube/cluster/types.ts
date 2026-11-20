@@ -36,3 +36,11 @@ export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidd
 export interface SecretValue { key: string; text: string | null; base64: string }
 /** Options of one `kubectl logs` read; main, the renderer and the IPC types share them. */
 export interface LogOptions { container: string; previous: boolean; follow: boolean }
+/** What main needs to start one log stream. */
+export interface LogSpec { ref: ObjectRef; options: LogOptions }
+/** What a log stream sends the renderer: whole lines in batches, then how it ended. */
+export type LogMessage = { logId: string } & (
+  | { kind: 'lines'; lines: string[] }
+  | { kind: 'ended' }
+  | { kind: 'error'; message: string }
+)
