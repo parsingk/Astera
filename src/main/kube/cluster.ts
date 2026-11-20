@@ -47,6 +47,15 @@ function itemMatches(o: K8sObject, k: KindDef): boolean {
   return group === groupOf(k.resource)
 }
 
+/** Whether a stderr line names the plural as a whole word, so "roles" is not found inside "clusterroles". */
+function namesResource(line: string, plural: string): boolean {
+  const isNameChar = (c: string | undefined): boolean => c !== undefined && /[a-z0-9_.-]/i.test(c)
+  for (let at = line.indexOf(plural); at !== -1; at = line.indexOf(plural, at + 1)) {
+    if (!isNameChar(line[at - 1]) && !/[a-z0-9_-]/i.test(line[at + plural.length] ?? ' ')) return true
+  }
+  return false
+}
+
 const eventTime = (e: K8sObject): number => {
   const raw = e as unknown as { lastTimestamp?: string; eventTime?: string; metadata: { creationTimestamp?: string } }
   const t = Date.parse(raw.lastTimestamp ?? raw.eventTime ?? raw.metadata?.creationTimestamp ?? '')
@@ -78,7 +87,7 @@ export function createClusterReads(deps: { run: Run }) {
       const mine = items.filter((o) => itemMatches(o, k))
       const info: CountInfo = { count: mine.length, attention: mine.some((o) => needsAttention(k.kind, o)) }
       const plural = pluralOf(k.resource)
-      const line = lines.find((l) => new RegExp(`(^|[^\w.-])${plural.replace(/[^\w-]/g, '\$&')}([^\w-]|$)`).test(l))
+      const line = lines.find((l) => namesResource(l, plural))
       if (line) info.forbidden = line
       out[k.resource] = info
     }
