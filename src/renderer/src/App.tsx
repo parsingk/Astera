@@ -3759,12 +3759,11 @@ export default function App(): React.JSX.Element {
   // The Run tab is there for as long as a project is. Rows are closed one by one in the list; with none
   // left the tab shows where to start one rather than disappearing.
   const runAvailable = currentProject !== null
-  /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
-   *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
-   *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
-  // The Kubernetes tab is there while kubectl is found or its log has entries; shownBottomTab says where the panel falls
-  // back when the tab asked for is not there (lib/bottomTab.ts).
+  // The Kubernetes tab is there while kubectl is found or its log has entries.
   const kubeAvailable = kubectlFound || kubeOps.log.length > 0
+  /** 아래쪽 패널에 실제로 넘길 탭. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
+   *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. 없는 탭을
+   *  어디로 떨어뜨리는지는 shownBottomTab(lib/bottomTab.ts)이 정한다. */
   const bottomTabShown = shownBottomTab({ wanted: bottomTab, runAvailable, kubeAvailable, terminalIds: terminals.map((x) => x.id) })
   const windowShown = useDocumentShown()
   /** The cluster view follows the cluster only while it is seen (K4). */
