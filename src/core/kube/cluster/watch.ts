@@ -40,12 +40,19 @@ export function createJsonSplitter(): { push(chunk: string): Parsed[] } {
 
 const EVENT_TYPES = new Set(['ADDED', 'MODIFIED', 'DELETED'])
 
-export function toWatchEvent(v: unknown): WatchEvent | null {
-  if (typeof v !== 'object' || v === null) return null
+const isObject = (v: unknown): v is object => typeof v === 'object' && v !== null
+
+/** The events of one watch value: none for a value that is not an event, else one, or one per item when its object is
+ *  a list. kubectl prints each page of a big initial list (500 objects) as one event whose object is the page's list
+ *  (`ConfigMapList`, `List`, or no kind), its items carrying their own kind; small lists come an object per event. */
+export function toWatchEvents(v: unknown): WatchEvent[] {
+  if (!isObject(v)) return []
   const { type, object } = v as { type?: unknown; object?: unknown }
-  if (typeof type !== 'string' || !EVENT_TYPES.has(type)) return null
-  if (typeof object !== 'object' || object === null) return null
-  return { type: type as WatchEvent['type'], object: object as K8sObject }
+  if (typeof type !== 'string' || !EVENT_TYPES.has(type)) return []
+  if (!isObject(object)) return []
+  const items = (object as { items?: unknown }).items
+  const objects = Array.isArray(items) ? items.filter(isObject) : [object]
+  return objects.map((o) => ({ type: type as WatchEvent['type'], object: o as K8sObject }))
 }
 
 export const keyOf = (o: K8sObject): string => (typeof o.metadata.uid === 'string' ? o.metadata.uid : `${o.metadata.namespace ?? ''}/${o.metadata.name}`)

@@ -51,6 +51,31 @@ describe('createWatchRegistry', () => {
     expect(JSON.stringify(emitted)).not.toContain('aHVudGVyMg==')
   })
 
+  // Task 15 S1: a big initial list comes as one event per 500-object page, its object the page's list.
+  it('emits one event per item of a page list', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.watch('w1', spec)
+    const cm = (name: string) => ({ apiVersion: 'v1', kind: 'ConfigMap', metadata: { name, namespace: 'ns' }, data: { k: name } })
+    spawns[0].h.onStdout(JSON.stringify({ type: 'ADDED', object: { apiVersion: 'v1', items: [cm('a'), cm('b')], kind: 'ConfigMapList', metadata: { resourceVersion: '5611' } } }))
+    expect(emitted).toEqual([
+      { watchId: 'w1', kind: 'event', event: { type: 'ADDED', object: cm('a') } },
+      { watchId: 'w1', kind: 'event', event: { type: 'ADDED', object: cm('b') } }
+    ])
+  })
+
+  it('masks every Secret of a page list', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.watch('w1', spec)
+    const secret = (JSON.parse(secretEvent) as { object: unknown }).object
+    const other = { ...(secret as object), metadata: { name: 's2' }, data: { q: 'c2VjcmV0LXR3bw==' } }
+    spawns[0].h.onStdout(JSON.stringify({ type: 'ADDED', object: { apiVersion: 'v1', items: [secret, other], kind: 'SecretList', metadata: { continue: 'x', resourceVersion: '1' } } }))
+    expect(emitted).toHaveLength(2)
+    const data = emitted.map((m) => ((m as Extract<WatchMessage, { kind: 'event' }>).event.object as unknown as { data: Record<string, string> }).data)
+    expect(data).toEqual([{ p: '***' }, { q: '***' }])
+    expect(JSON.stringify(emitted)).not.toContain('aHVudGVyMg==')
+    expect(JSON.stringify(emitted)).not.toContain('c2VjcmV0LXR3bw==')
+  })
+
   it('skips unparsable and non-event values', () => {
     const { reg, spawns, emitted } = setup()
     reg.watch('w1', spec)

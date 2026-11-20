@@ -1,7 +1,7 @@
 /** The live `kubectl get --watch` processes of the cluster view, bounded so a busy window cannot fork-bomb the machine. */
 import { maskSecretPair } from '../../core/kube/objects'
 import { listArgs } from '../../core/kube/cluster/args'
-import { createJsonSplitter, toWatchEvent } from '../../core/kube/cluster/watch'
+import { createJsonSplitter, toWatchEvents } from '../../core/kube/cluster/watch'
 import { KUBECTL_MISSING, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
 import { firstStderrLine } from './cluster'
@@ -58,10 +58,11 @@ export function createWatchRegistry(deps: {
         if (!live()) return
         for (const p of splitter.push(chunk)) {
           if (!p.ok) continue
-          const ev = toWatchEvent(p.value)
-          if (!ev) continue
-          const object = ev.object.kind === 'Secret' ? (maskSecretPair(ev.object, null)[0] ?? ev.object) : ev.object
-          deps.emit({ watchId: id, kind: 'event', event: { type: ev.type, object } })
+          // A page of a big list is many events, each Secret of it masked like a Secret of its own event.
+          for (const ev of toWatchEvents(p.value)) {
+            const object = ev.object.kind === 'Secret' ? (maskSecretPair(ev.object, null)[0] ?? ev.object) : ev.object
+            deps.emit({ watchId: id, kind: 'event', event: { type: ev.type, object } })
+          }
         }
       },
       onStderr(chunk) {
