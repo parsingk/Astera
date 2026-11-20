@@ -34,7 +34,7 @@ const pod = {
     ]
   }
 }
-const ref = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'worker-1' }
+const target = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'worker-1' }
 
 const streamOf = (lines: string[], state: LogState = 'streaming', max?: number): KubeLogStream => ({
   buffer: appendLines(emptyLogBuffer(), lines, max),
@@ -44,7 +44,7 @@ const streamOf = (lines: string[], state: LogState = 'streaming', max?: number):
 })
 const render = (stream: KubeLogStream, initial: { container: string; previous: boolean; filter?: string } = { container: 'worker', previous: false }): string => {
   stub.stream = stream
-  return renderToStaticMarkup(React.createElement(KubeLogView, { pod, ref, initial, visible: true }))
+  return renderToStaticMarkup(React.createElement(KubeLogView, { pod, target, initial, visible: true }))
 }
 
 const button = (html: string, label: string): string => {

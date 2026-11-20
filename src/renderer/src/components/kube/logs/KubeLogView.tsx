@@ -60,19 +60,19 @@ const plainLine = (l: LogLine, timestamps: boolean): string => (timestamps && l.
  *  open, shown or not, as a terminal does; `visible` only puts the scroll position back when the tab shows again. */
 export function KubeLogView({
   pod,
-  ref,
+  target,
   initial,
   visible
 }: {
   /** The Pod as the opener knew it: its containers, and the exit code once the stream ends. */
   pod: K8sObject | null
-  ref: ObjectRef
+  target: ObjectRef
   /** `filter`: for tests, since a static render cannot type into the field. */
   initial: { container: string; previous: boolean; filter?: string }
   visible: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
-  const refKey = JSON.stringify(ref)
+  const targetKey = JSON.stringify(target)
   const [container, setContainer] = useState(initial.container)
   const [previous, setPrevious] = useState(initial.previous)
   const [follow, setFollow] = useState(true)
@@ -82,13 +82,13 @@ export function KubeLogView({
   /** The Pod read again when the stream ended: a container that just exited says how only in a fresh read. */
   const [reread, setReread] = useState<K8sObject | null>(null)
   const podNow = reread ?? pod
-  const stream = useKubeLogStream(ref, { container, previous, follow })
+  const stream = useKubeLogStream(target, { container, previous, follow })
   const { buffer, state } = stream
 
   useEffect(() => {
     if (state !== 'ended') return
     let alive = true
-    window.api.kube.cluster.get(JSON.parse(refKey) as ObjectRef).then(
+    window.api.kube.cluster.get(JSON.parse(targetKey) as ObjectRef).then(
       (r) => {
         if (alive && r.ok && r.object !== null) setReread(r.object)
       },
@@ -98,7 +98,7 @@ export function KubeLogView({
     return () => {
       alive = false
     }
-  }, [state, refKey])
+  }, [state, targetKey])
 
   const rows = useMemo(() => (filter === '' ? buffer.lines : filterLines(buffer.lines, filter)), [buffer.lines, filter])
 
@@ -145,7 +145,7 @@ export function KubeLogView({
   const exit = state === 'ended' && podNow !== null ? exitLine(podNow, container, previous) : null
   const choices = podNow !== null ? containersOf(podNow) : []
   if (!choices.some((c) => c.name === container)) choices.unshift({ name: container, init: false })
-  const where = ref.namespace !== null ? ` / ${ref.namespace}` : ''
+  const where = target.namespace !== null ? ` / ${target.namespace}` : ''
 
   const pickContainer = (name: string): void => {
     setContainer(name)
@@ -156,7 +156,7 @@ export function KubeLogView({
   const save = async (): Promise<void> => {
     const text = rows.map((l) => plainLine(l, timestamps) + '\n').join('')
     try {
-      const r = await window.api.kube.logs.save(logFileName(ref.name, container, previous), text)
+      const r = await window.api.kube.logs.save(logFileName(target.name, container, previous), text)
       if (r.saved) toast.success(t('kube.logs.saved', { path: r.path ?? '' }))
       else if (r.error !== undefined) toast.error(t('kube.logs.saveFailed', { detail: r.error }))
     } catch (err) {
@@ -225,8 +225,8 @@ export function KubeLogView({
           <Search size={12} aria-hidden="true" />
           <input value={filter} placeholder={t('kube.logs.filter')} aria-label={t('kube.logs.filter')} onChange={(e) => setFilter(e.target.value)} />
         </label>
-        <span className="kube-pill kube-logs-where" title={ref.context + where}>
-          <span className="kube-pill-text">{displayContextName(ref.context).short + where}</span>
+        <span className="kube-pill kube-logs-where" title={target.context + where}>
+          <span className="kube-pill-text">{displayContextName(target.context).short + where}</span>
         </span>
         {iconButton(t('kube.logs.timestamps'), <Clock size={14} />, () => setTimestamps(!timestamps), { pressed: timestamps })}
         {iconButton(t('kube.logs.wrap'), <TextWrap size={14} />, () => setWrap(!wrap), { pressed: wrap })}

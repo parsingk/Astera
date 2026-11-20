@@ -93,7 +93,7 @@ const byLabel = (tree: unknown, label: string): ReactElement<Record<string, unkn
 }
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-const ref = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'worker-1' }
+const target = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'worker-1' }
 const pod = {
   apiVersion: 'v1',
   kind: 'Pod',
@@ -144,7 +144,7 @@ function fakeApi() {
   }
 }
 
-const view = () => KubeLogView({ pod, ref, initial: { container: 'worker', previous: false }, visible: true })
+const view = () => KubeLogView({ pod, target, initial: { container: 'worker', previous: false }, visible: true })
 
 beforeEach(() => {
   hooks.reset()
@@ -186,7 +186,7 @@ describe('KubeLogView stream', () => {
     })
     api.emit({ logId: api.started[0].id, kind: 'ended' })
     expect(textOf(hooks.render(view))).toContain('kube.logs.streamEnded')
-    expect(api.reads).toEqual([ref])
+    expect(api.reads).toEqual([target])
     await settle()
     expect(textOf(hooks.render(view))).toContain('kube.logs.ended{"code":137}')
   })
