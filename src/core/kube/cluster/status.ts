@@ -15,7 +15,12 @@ export function podStatus(o: K8sObject): { text: string; tone: Tone } {
   if (o.metadata.deletionTimestamp) return { text: 'Terminating', tone: 'wait' }
 
   const inits = list(status.initContainerStatuses)
+  // A native sidecar (an init container with restartPolicy Always, Kubernetes 1.28+) keeps running beside the others:
+  // kubectl's printPod counts it as done once it has started, so a healthy pod does not read Init:n-1/n.
+  const sidecars = new Set(list(rec(o.spec).initContainers).filter((c) => c.restartPolicy === 'Always').map((c) => c.name))
+  const sidecarUp = (c: Rec): boolean => sidecars.has(c.name) && c.started === true
   for (const c of inits) {
+    if (sidecarUp(c)) continue
     // A failed init container, named as kubectl's printPod names it: its reason, else its signal, else its exit code.
     const terminated = rec(rec(c.state).terminated)
     if (Object.keys(terminated).length > 0 && num(terminated.exitCode, 0) !== 0) {
@@ -29,7 +34,7 @@ export function podStatus(o: K8sObject): { text: string; tone: Tone } {
   }
   const initDone = inits.filter((c) => {
     const t = rec(rec(c.state).terminated)
-    return Object.keys(t).length > 0 && t.exitCode === 0
+    return sidecarUp(c) || (Object.keys(t).length > 0 && t.exitCode === 0)
   }).length
   if (initDone < inits.length) return { text: `Init:${initDone}/${inits.length}`, tone: 'wait' }
 

@@ -31,6 +31,24 @@ describe('cluster status', () => {
     expect(failed({ exitCode: 2 })).toEqual({ text: 'Init:ExitCode:2', tone: 'bad' })
     expect(failed({ exitCode: 137, signal: 9 })).toEqual({ text: 'Init:Signal:9', tone: 'bad' })
   })
+  // kubectl's printPod (Kubernetes 1.28+): a native sidecar, an init container with restartPolicy Always, is done once
+  // it has started, and does not hold the pod in Init while it keeps running.
+  it('counts a started sidecar init container as done, as kubectl does', () => {
+    const withSidecar = (sidecar: object, statuses: object = {}) => ({
+      ...pod({
+        phase: 'Running',
+        initContainerStatuses: [{ name: 'init', state: { terminated: { exitCode: 0 } } }, { name: 'proxy', ...sidecar }],
+        containerStatuses: [{ name: 'app', ready: true, state: { running: {} } }],
+        ...statuses
+      }),
+      spec: { initContainers: [{ name: 'init' }, { name: 'proxy', restartPolicy: 'Always' }], containers: [{ name: 'app' }] }
+    })
+    expect(podStatus(withSidecar({ started: true, ready: true, state: { running: {} } }))).toEqual({ text: 'Running', tone: 'ok' })
+    expect(podStatus(withSidecar({ started: false, state: { running: {} } }, { phase: 'Pending', containerStatuses: [] }))).toEqual({ text: 'Init:1/2', tone: 'wait' })
+    // Started alone is not enough for an ordinary init container: it must finish.
+    const ordinary = { ...withSidecar({ started: true, state: { running: {} } }), spec: { initContainers: [{ name: 'init' }, { name: 'proxy' }] } }
+    expect(podStatus(ordinary).text).toBe('Init:1/2')
+  })
   it('says why an init container is stuck waiting', () => {
     expect(podStatus(pod({ phase: 'Pending', initContainerStatuses: [{ name: 'a', state: { waiting: { reason: 'CrashLoopBackOff' } } }] }))).toEqual({ text: 'Init:CrashLoopBackOff', tone: 'bad' })
   })
