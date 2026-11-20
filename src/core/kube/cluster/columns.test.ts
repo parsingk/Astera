@@ -15,6 +15,19 @@ describe('cluster columns and rows', () => {
     expect(r.cells[1].tone).toBe('bad')
     expect(r.attention).toBe(true)
   })
+  it('counts a started native sidecar in a Pod READY as kubectl does, and not a finished init container', () => {
+    const pod = {
+      apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p', uid: 'p' },
+      spec: { initContainers: [{ name: 'proxy', restartPolicy: 'Always' }, { name: 'migrate' }], containers: [{ name: 'app' }] },
+      status: {
+        phase: 'Running',
+        initContainerStatuses: [{ name: 'proxy', ready: true }, { name: 'migrate', ready: true }],
+        containerStatuses: [{ name: 'app', ready: true }]
+      }
+    }
+    const ready = columnsOf('Pod', { allNamespaces: false }).findIndex((c) => c.key === 'ready')
+    expect(rowsOf('Pod', [pod], { allNamespaces: false, nowMs: now })[0].cells[ready].text).toBe('2/2')
+  })
   it('adds a namespace column for all namespaces', () => {
     expect(columnsOf('Pod', { allNamespaces: true }).map((c) => c.key).slice(0, 2)).toEqual(['namespace', 'name'])
     expect(columnsOf('Node', { allNamespaces: true }).map((c) => c.key)[0]).toBe('name')

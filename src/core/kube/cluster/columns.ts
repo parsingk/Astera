@@ -47,8 +47,16 @@ const numStatus = (key: string, field: string): Def => count(key, (o) => int(sta
 
 const podReady = (o: K8sObject): string => {
   const statuses = list(status(o).containerStatuses)
-  const total = list(spec(o).containers).length || statuses.length
-  return `${statuses.filter((c) => c.ready === true).length}/${total}`
+  let total = list(spec(o).containers).length || statuses.length
+  let ready = statuses.filter((c) => c.ready === true).length
+  // kubectl's printPod counts each native sidecar (an init container that restarts always) too, once it reports ready.
+  const initStatuses = list(status(o).initContainerStatuses)
+  for (const c of list(spec(o).initContainers)) {
+    if (c.restartPolicy !== 'Always') continue
+    total++
+    if (initStatuses.some((s) => s.name === c.name && s.ready === true)) ready++
+  }
+  return `${ready}/${total}`
 }
 
 const MODES: Record<string, string> = { ReadWriteOnce: 'RWO', ReadOnlyMany: 'ROX', ReadWriteMany: 'RWX', ReadWriteOncePod: 'RWOP' }
