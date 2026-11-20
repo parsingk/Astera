@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ClusterTable } from './ClusterTable'
+import { ClusterTable, ROW_HEIGHT, scrollRowTop } from './ClusterTable'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -81,5 +81,17 @@ describe('ClusterTable', () => {
     expect(html).toContain('<div class="kube-cluster-empty kube-cluster-failed">Unable to connect to the server</div>')
     expect(html).not.toContain('kube.cluster.empty')
     expect(renderToStaticMarkup(React.createElement(ClusterTable, { ...props, rows: [], loading: true }))).toContain('kube.cluster.loading')
+  })
+})
+
+// Task 11 minor: the table drew again at every pixel of a scroll. The position is kept by row, so a scroll inside one
+// row changes nothing the table draws from.
+describe('scrollRowTop', () => {
+  it('gives the same position for every pixel inside one row', () => {
+    expect(scrollRowTop(0)).toBe(0)
+    expect(scrollRowTop(ROW_HEIGHT - 1)).toBe(0)
+    expect(scrollRowTop(ROW_HEIGHT)).toBe(ROW_HEIGHT)
+    expect(scrollRowTop(ROW_HEIGHT * 2 - 1)).toBe(ROW_HEIGHT)
+    expect(scrollRowTop(ROW_HEIGHT * 1000 + 13)).toBe(ROW_HEIGHT * 1000)
   })
 })

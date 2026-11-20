@@ -9,6 +9,10 @@ export const ROW_HEIGHT = 26
 const OVERSCAN = 10
 const DEFAULT_VIEWPORT = 400
 
+/** The scroll position as the table keeps it: the top of the row it falls in. The rows drawn change only from one row
+ *  to the next (the overscan covers the rest of a row), so a scroll inside one row draws nothing again. */
+export const scrollRowTop = (scrollTop: number): number => Math.floor(scrollTop / ROW_HEIGHT) * ROW_HEIGHT
+
 export interface ClusterTableProps {
   columns: Column[]
   rows: Row[]
@@ -66,7 +70,7 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
       ref={box}
       className={'kube-cluster-table' + (p.stale ? ' stale' : '')}
       onScroll={(e) => {
-        const next = e.currentTarget.scrollTop
+        const next = scrollRowTop(e.currentTarget.scrollTop)
         setMeasured((m) => (m.top === next ? m : { ...m, top: next }))
       }}
     >
