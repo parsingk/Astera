@@ -10,7 +10,8 @@ export interface ObjectRef { context: string; namespace: string | null; resource
 /** `namespace` null with `namespaced` true means all namespaces. */
 export interface WatchSpec { context: string; namespace: string | null; namespaced: boolean; resource: string; name?: string }
 export type Tone = 'ok' | 'bad' | 'wait' | 'done'
-export interface Cell { text: string; tone?: Tone }
+/** `sortKey`: what sorting compares instead of the text (a count, or an age in ms). */
+export interface Cell { text: string; tone?: Tone; sortKey?: number }
 /** `i18n` false: the label is shown as is (CRD printer columns). */
 export interface Column { key: string; label: string; i18n: boolean }
 export interface Row { uid: string; name: string; namespace: string | null; cells: Cell[]; attention: boolean }

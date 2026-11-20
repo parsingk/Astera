@@ -14,10 +14,19 @@ interface Ctx { nowMs: number }
 /** `label` set: shown as is (CRD printer columns); otherwise the label is the `kube.cluster.col.<key>` catalog key. */
 interface Def { key: string; label?: string; cell: (o: K8sObject, ctx: Ctx) => Cell }
 
+/** The age as text, with its length in ms as sort key so the newest sorts first ascending. */
+const ageCell = (iso: string, nowMs: number): Cell => {
+  const t = ageText(iso, nowMs)
+  return t ? { text: t, sortKey: Math.max(0, nowMs - Date.parse(iso)) } : { text: t }
+}
+/** A count shown as text that sorts by value. */
+const countCell = (n: number): Cell => ({ text: String(n), sortKey: n })
+const count = (key: string, get: (o: K8sObject) => number): Def => ({ key, cell: (o) => countCell(get(o)) })
+
 const text = (key: string, get: (o: K8sObject) => string): Def => ({ key, cell: (o) => ({ text: get(o) }) })
 const age: Def = {
   key: 'age',
-  cell: (o, c) => ({ text: ageText(str(o.metadata.creationTimestamp), c.nowMs) })
+  cell: (o, c) => ageCell(str(o.metadata.creationTimestamp), c.nowMs)
 }
 const name: Def = text('name', (o) => o.metadata.name ?? '')
 const spec = (o: K8sObject): Rec => rec(o.spec)
@@ -34,7 +43,7 @@ const replicas = (readyKey: string): Def => ({
     return { text: `${ready}/${wanted}`, tone: ready < wanted ? 'bad' : undefined }
   }
 })
-const numStatus = (key: string, field: string): Def => text(key, (o) => String(int(status(o)[field])))
+const numStatus = (key: string, field: string): Def => count(key, (o) => int(status(o)[field]))
 
 const podReady = (o: K8sObject): string => {
   const statuses = list(status(o).containerStatuses)
@@ -50,8 +59,7 @@ const condition = (o: K8sObject, type: string): boolean =>
   list(status(o).conditions).some((c) => c.type === type && c.status === 'True')
 const loadBalancer = (o: K8sObject): string =>
   list(rec(status(o).loadBalancer).ingress).map((i) => str(i.ip) || str(i.hostname)).filter(Boolean).join(',')
-const dataCount = (o: K8sObject): string =>
-  String(Object.keys(rec(o.data)).length + Object.keys(rec(o.binaryData)).length)
+const dataCount = (o: K8sObject): number => Object.keys(rec(o.data)).length + Object.keys(rec(o.binaryData)).length
 
 const servicePorts = (o: K8sObject): string =>
   list(spec(o).ports)
@@ -68,7 +76,7 @@ const BY_KIND: Record<string, Def[]> = {
     name,
     { key: 'status', cell: (o) => podStatus(o) },
     text('ready', podReady),
-    text('restarts', (o) => String(list(status(o).containerStatuses).reduce((n, c) => n + int(c.restartCount), 0))),
+    count('restarts', (o) => list(status(o).containerStatuses).reduce((n, c) => n + int(c.restartCount), 0)),
     age,
     text('node', (o) => str(spec(o).nodeName))
   ],
@@ -92,7 +100,7 @@ const BY_KIND: Record<string, Def[]> = {
   ],
   ReplicaSet: [
     name,
-    text('desired', (o) => String(int(spec(o).replicas, 1))),
+    count('desired', (o) => int(spec(o).replicas, 1)),
     numStatus('current', 'replicas'),
     numStatus('ready', 'readyReplicas'),
     age
@@ -115,8 +123,8 @@ const BY_KIND: Record<string, Def[]> = {
     name,
     text('schedule', (o) => str(spec(o).schedule)),
     text('suspend', (o) => (spec(o).suspend === true ? 'True' : 'False')),
-    text('active', (o) => String(list(status(o).active).length)),
-    { key: 'lastSchedule', cell: (o, c) => ({ text: ageText(str(status(o).lastScheduleTime), c.nowMs) }) },
+    count('active', (o) => list(status(o).active).length),
+    { key: 'lastSchedule', cell: (o, c) => ageCell(str(status(o).lastScheduleTime), c.nowMs) },
     age
   ],
   Service: [
@@ -135,8 +143,8 @@ const BY_KIND: Record<string, Def[]> = {
     text('ports', (o) => (list(spec(o).tls).length > 0 ? '80, 443' : '80')),
     age
   ],
-  ConfigMap: [name, text('data', dataCount), age],
-  Secret: [name, text('type', (o) => str(o.type)), text('data', dataCount), age],
+  ConfigMap: [name, count('data', dataCount), age],
+  Secret: [name, text('type', (o) => str(o.type)), count('data', dataCount), age],
   PersistentVolumeClaim: [
     name,
     {
@@ -186,7 +194,7 @@ const BY_KIND: Record<string, Def[]> = {
   ],
   Namespace: [name, text('status', (o) => str(status(o).phase)), age],
   Event: [
-    { key: 'lastSeen', cell: (o, c) => ({ text: ageText(str(o.lastTimestamp) || str(o.eventTime), c.nowMs) }) },
+    { key: 'lastSeen', cell: (o, c) => ageCell(str(o.lastTimestamp) || str(o.eventTime), c.nowMs) },
     { key: 'type', cell: (o) => ({ text: str(o.type), tone: o.type === 'Warning' ? 'bad' : undefined }) },
     text('reason', (o) => str(o.reason)),
     text('object', (o) => {
@@ -213,13 +221,16 @@ function pathValue(o: K8sObject, jsonPath: string): string {
 /** As kubectl: NAME is implicit, AGE only stands in when the CRD declares no printer columns. */
 function crdDefs(crd: K8sObject): Def[] {
   const version = list(rec(crd.spec).versions).find((v) => v.served === true && v.storage === true)
-  const printed = list(version?.additionalPrinterColumns).map(
+  // kubectl hides priority > 0 columns without -o wide.
+  const printed = list(version?.additionalPrinterColumns)
+    .filter((c) => !(int(c.priority) > 0))
+    .map(
     (c): Def => ({
       key: str(c.name),
       label: str(c.name),
       cell: (o, ctx) => {
         const value = pathValue(o, str(c.jsonPath))
-        return { text: c.type === 'date' ? ageText(value, ctx.nowMs) : value }
+        return c.type === 'date' ? ageCell(value, ctx.nowMs) : { text: value }
       }
     })
   )
@@ -259,7 +270,12 @@ export function rowsOf(kind: string, objects: K8sObject[], o: { allNamespaces: b
 
 export function sortRows(rows: Row[], by: number, dir: 'asc' | 'desc'): Row[] {
   const sign = dir === 'asc' ? 1 : -1
-  return [...rows].sort((a, b) => sign * (a.cells[by]?.text ?? '').localeCompare(b.cells[by]?.text ?? '', undefined, { numeric: true }))
+  return [...rows].sort((a, b) => {
+    const x = a.cells[by]
+    const y = b.cells[by]
+    if (x?.sortKey !== undefined && y?.sortKey !== undefined) return sign * (x.sortKey - y.sortKey)
+    return sign * (x?.text ?? '').localeCompare(y?.text ?? '', undefined, { numeric: true })
+  })
 }
 
 export function filterRows(rows: Row[], filter: string): Row[] {

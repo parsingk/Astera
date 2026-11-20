@@ -37,6 +37,20 @@ describe('cluster columns and rows', () => {
     const w = { apiVersion: 'example.com/v1', kind: 'Widget', metadata: { name: 'w', uid: 'w', creationTimestamp: '2026-11-20T10:00:00Z' } }
     expect(rowsOf('Widget', [w], { allNamespaces: false, nowMs: now, crd })[0].cells.map((c) => c.text)).toEqual(['w', '120m'])
   })
+  it('sorts the age column by duration and counts by value', () => {
+    const at = (secs: number): string => new Date(now - secs * 1000).toISOString()
+    const pod = (n: string, secs: number, restarts: number) => ({ apiVersion: 'v1', kind: 'Pod', metadata: { name: n, uid: n, creationTimestamp: at(secs) }, spec: {}, status: { containerStatuses: [{ restartCount: restarts }] } })
+    const rows = rowsOf('Pod', [pod('c', 3 * 86400, 10), pod('a', 45, 9), pod('b', 300, 100)], { allNamespaces: false, nowMs: now })
+    const age = columnsOf('Pod', { allNamespaces: false }).findIndex((c) => c.key === 'age')
+    const restarts = columnsOf('Pod', { allNamespaces: false }).findIndex((c) => c.key === 'restarts')
+    expect(sortRows(rows, age, 'asc').map((r) => r.name)).toEqual(['a', 'b', 'c'])
+    expect(sortRows(rows, age, 'desc').map((r) => r.name)).toEqual(['c', 'b', 'a'])
+    expect(sortRows(rows, restarts, 'asc').map((r) => r.name)).toEqual(['a', 'c', 'b'])
+  })
+  it('leaves out printer columns with priority above zero', () => {
+    const crd = { apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: {}, spec: { versions: [{ name: 'v1', served: true, storage: true, additionalPrinterColumns: [{ name: 'Phase', jsonPath: '.status.phase' }, { name: 'Detail', priority: 1, jsonPath: '.status.detail' }] }] } }
+    expect(columnsOf('Widget', { allNamespaces: false, crd }).map((c) => c.label)).toEqual(['kube.cluster.col.name', 'Phase'])
+  })
   it('sorts numerically and filters by name', () => {
     const rows = [{ uid: 'a', name: 'b-10', namespace: null, cells: [{ text: 'b-10' }], attention: false }, { uid: 'b', name: 'b-9', namespace: null, cells: [{ text: 'b-9' }], attention: false }]
     expect(sortRows(rows, 0, 'asc').map((r) => r.name)).toEqual(['b-9', 'b-10'])
