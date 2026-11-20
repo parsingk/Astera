@@ -1,0 +1,104 @@
+import { describe, it, expect, vi } from 'vitest'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { ClusterDetail } from './ClusterDetail'
+import { KubeYamlView } from './KubeYamlView'
+import type { ClusterViewModel } from '../../../hooks/useClusterView'
+import type { K8sObject } from '../../../../../core/kube/objects'
+
+vi.mock('../../../i18n/I18nProvider', () => ({
+  useI18n: () => ({
+    lang: 'ko',
+    t: (key: string, p?: Record<string, unknown>) => (p ? `${key}${JSON.stringify(p)}` : key),
+    tm: (m: unknown) => String(m)
+  })
+}))
+
+const noop = (): void => {}
+const ref = (kind: string, resource: string, name: string) => ({ context: 'c', namespace: 'dev', resource, kind, name })
+
+function model(kind: string, resource: string, object: K8sObject, extra: Partial<ClusterViewModel> = {}): ClusterViewModel {
+  return {
+    view: { context: 'c', namespace: 'dev', resource, selected: 'u1', filter: '', sort: { by: 0, dir: 'asc' }, expanded: [], detailTab: 'summary' },
+    kind: { kind, resource, namespaced: true },
+    selected: object,
+    selectedRef: ref(kind, resource, object.metadata.name ?? ''),
+    deleted: false,
+    owners: [],
+    events: null,
+    describe: null,
+    pods: null,
+    setDetailTab: noop,
+    select: noop,
+    selectRef: noop,
+    ...extra
+  } as unknown as ClusterViewModel
+}
+
+const render = (m: ClusterViewModel, props: Record<string, unknown> = {}): string =>
+  renderToStaticMarkup(React.createElement(ClusterDetail, { model: m, ...props }))
+
+describe('ClusterDetail', () => {
+  it('shows a Pods tab only for kinds with a selector', () => {
+    const deployment: K8sObject = {
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: { name: 'web', namespace: 'dev' },
+      spec: { selector: { matchLabels: { app: 'web' } } }
+    }
+    const configMap: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    expect(render(model('Deployment', 'deployments.apps', deployment))).toContain('kube.cluster.tab.pods')
+    expect(render(model('ConfigMap', 'configmaps', configMap))).not.toContain('kube.cluster.tab.pods')
+  })
+
+  it('draws the header, and the editor button only when it is handled', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    const without = render(model('ConfigMap', 'configmaps', cm))
+    expect(without).toContain('cfg')
+    expect(without).toContain('kube.cluster.more')
+    expect(without).not.toContain('kube.cluster.openInEditor')
+    expect(render(model('ConfigMap', 'configmaps', cm), { onOpenInEditor: noop })).toContain('kube.cluster.openInEditor')
+  })
+
+  it('says a deleted object is deleted and keeps its content', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    const html = render(model('ConfigMap', 'configmaps', cm, { deleted: true }))
+    expect(html).toContain('kube.cluster.deleted')
+    expect(html).toContain('cfg')
+  })
+
+  it('draws nothing without a selection', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg' } }
+    expect(render(model('ConfigMap', 'configmaps', cm, { selected: null, selectedRef: null }))).toBe('')
+  })
+})
+
+describe('KubeYamlView', () => {
+  const masked: K8sObject = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 's', namespace: 'dev' }, data: { password: '***' } }
+  const view = (reveal: React.ComponentProps<typeof KubeYamlView>['reveal']): string =>
+    renderToStaticMarkup(React.createElement(KubeYamlView, { object: masked, kind: 'Secret', reveal }))
+
+  it('masks a Secret until revealed', () => {
+    const hidden = view({ values: null, onReveal: noop, onHide: noop })
+    expect(hidden).toContain('***')
+    expect(hidden).toContain('kube.cluster.showValues')
+    expect(hidden).not.toContain('hunter2')
+    const shown = view({ values: [{ key: 'password', text: 'hunter2', base64: 'aHVudGVyMg==' }], onReveal: noop, onHide: noop })
+    expect(shown).toContain('hunter2')
+    expect(shown).toContain('kube.cluster.hideValues')
+    expect(shown).not.toContain('***')
+  })
+
+  it('lists the keys kept as base64', () => {
+    const html = view({ values: [{ key: 'blob', text: null, base64: 'AAEC' }], onReveal: noop, onHide: noop })
+    expect(html).toContain('kube.cluster.binaryKeys')
+    expect(html).toContain('blob')
+  })
+
+  it('has no reveal button for other kinds', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'c' }, data: { a: 'b' } }
+    const html = renderToStaticMarkup(React.createElement(KubeYamlView, { object: cm, kind: 'ConfigMap', reveal: null }))
+    expect(html).not.toContain('kube.cluster.showValues')
+    expect(html).toContain('kube.cluster.serverFields')
+  })
+})

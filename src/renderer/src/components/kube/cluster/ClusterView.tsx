@@ -3,8 +3,11 @@ import { RefreshCw, RotateCcw, Search } from 'lucide-react'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
+import type { ObjectRef } from '../../../../../core/kube/cluster/types'
+import { ContextMenu } from '../../ContextMenu'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
+import { clusterMenuItems } from './clusterMenu'
 
 /** A namespace typed by hand, where the cluster does not let us list them: applied on Enter or when the field is left. */
 function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns: string | null): void }): React.JSX.Element {
@@ -33,8 +36,18 @@ function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns
 
 /** The Kubernetes tab's cluster view: toolbar, then the kind tree, the table and the detail column (spec 4.2). The
  *  Cluster | Operation log switch is drawn by the bottom panel, not here. */
-export function ClusterView({ model, detail }: { model: ClusterViewModel; detail: React.ReactNode }): React.JSX.Element {
+export function ClusterView({
+  model,
+  detail,
+  onOpenInEditor
+}: {
+  model: ClusterViewModel
+  detail: React.ReactNode
+  /** Task 14's editor tab; without it the row menu has no such item. */
+  onOpenInEditor?: (ref: ObjectRef) => void
+}): React.JSX.Element {
   const { t } = useI18n()
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number } | null>(null)
   const { view, live } = model
   const failed = typeof live === 'object'
   const names = model.contexts?.contexts.map((c) => c.name) ?? []
@@ -134,11 +147,33 @@ export function ClusterView({ model, detail }: { model: ClusterViewModel; detail
           stale={failed}
           onSort={model.sortBy}
           onSelect={model.select}
-          onRowMenu={() => {}}
+          onRowMenu={(uid, x, y) => {
+            model.select(uid)
+            setRowMenu({ x, y })
+          }}
           onRowOpen={model.select}
         />
         {detail}
       </div>
+      {rowMenu !== null && model.kind !== null && (
+        <ContextMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          // Built from the model at each render: the menu opens as the row is selected, and its actions run on what is selected by then.
+          items={clusterMenuItems(
+            {
+              kind: model.kind.kind,
+              onOpenInEditor: onOpenInEditor ? () => model.selectedRef && onOpenInEditor(model.selectedRef) : undefined,
+              onDescribe: () => model.setDetailTab('describe'),
+              onCopyName: () => {
+                if (model.selectedRef) void window.api.clipboard.writeText(model.selectedRef.name)
+              }
+            },
+            t
+          )}
+          onClose={() => setRowMenu(null)}
+        />
+      )}
     </div>
   )
 }

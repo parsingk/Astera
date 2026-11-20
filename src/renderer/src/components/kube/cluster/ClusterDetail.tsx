@@ -1,0 +1,265 @@
+import { useEffect, useRef, useState } from 'react'
+import { Ellipsis, SquarePen } from 'lucide-react'
+import type { MessageKey } from '../../../../../core/i18n'
+import type { K8sObject } from '../../../../../core/kube/objects'
+import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
+import type { ObjectRef, SecretValue } from '../../../../../core/kube/cluster/types'
+import type { DetailTab } from '../../../../../core/kube/cluster/viewState'
+import { ageText } from '../../../../../core/kube/cluster/status'
+import type { ClusterViewModel } from '../../../hooks/useClusterView'
+import { useI18n } from '../../../i18n/I18nProvider'
+import { ContextMenu } from '../../ContextMenu'
+import { clusterMenuItems } from './clusterMenu'
+import { KubeYamlView } from './KubeYamlView'
+
+const TABS: DetailTab[] = ['summary', 'yaml', 'events', 'describe', 'pods']
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+type ReadOf<T> = ({ ok: true } & T) | { ok: false; message: string } | null
+
+/** A one-shot read: a wait line until it arrives, its first line of stderr when it failed. */
+function ReadView<T>({ read, render }: { read: ReadOf<T>; render(r: { ok: true } & T): React.ReactNode }): React.JSX.Element {
+  const { t } = useI18n()
+  if (read === null) return <div className="kube-cluster-empty">{t('kube.cluster.loading')}</div>
+  if (!read.ok) return <div className="kube-cluster-empty kube-detail-error">{read.message}</div>
+  return <>{render(read)}</>
+}
+
+function EventsList({ events }: { events: K8sObject[] }): React.JSX.Element {
+  const { t } = useI18n()
+  if (events.length === 0) return <div className="kube-cluster-empty">{t('kube.cluster.empty')}</div>
+  const now = Date.now()
+  return (
+    <ul className="kube-detail-events">
+      {events.map((e, i) => (
+        <li key={i} className={e.type === 'Warning' ? 'warning' : ''}>
+          <span className="kube-detail-event-head">
+            {str(e.reason)}{' '}
+            <span className="kube-detail-event-age">{ageText(str(e.lastTimestamp) || str(e.eventTime) || str(e.metadata.creationTimestamp), now)}</span>
+          </span>
+          <span className="kube-detail-event-msg">{str(e.message)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function SummaryTab({ model, object, kind, context }: { model: ClusterViewModel; object: K8sObject; kind: string; context: string }): React.JSX.Element {
+  const { t } = useI18n()
+  const events = model.events?.ok === true ? model.events.events : []
+  const s = summaryOf(kind, object, events, context, Date.now())
+  return (
+    <div className="kube-detail-summary">
+      {s.warning !== null && (
+        <div className="kube-detail-warning">
+          <span className="kube-detail-section">{t('kube.cluster.warning')}</span> {s.warning}
+        </div>
+      )}
+      <dl className="kube-detail-facts">
+        {s.facts.map((f, i) => (
+          <div key={i} className="kube-detail-fact">
+            <dt>{t(f.label as MessageKey)}</dt>
+            <dd>
+              {f.tone && <span className={`kube-cluster-dot ${f.tone}`} aria-hidden="true" />}
+              {f.ref ? (
+                <button type="button" className="kube-detail-link" onClick={() => model.selectRef(f.ref as ObjectRef)}>
+                  {f.value}
+                </button>
+              ) : (
+                f.value
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {s.containers.length > 0 && (
+        <>
+          <div className="kube-detail-section">{t('kube.cluster.containers')}</div>
+          <ul className="kube-detail-containers">
+            {s.containers.map((c, i) => (
+              <li key={i}>
+                <span className={`kube-cluster-dot ${c.tone}`} aria-hidden="true" />
+                <span className="kube-detail-container-name">{c.name}</span>
+                <span className="kube-detail-container-state">{c.state}</span>
+                <span className="kube-detail-container-image" title={c.image}>
+                  {c.image}
+                </span>
+                {(c.requests || c.limits) && (
+                  <span className="kube-detail-container-res">
+                    {[c.requests && `requests ${c.requests}`, c.limits && `limits ${c.limits}`].filter(Boolean).join('; ')}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {s.conditions.length > 0 && (
+        <>
+          <div className="kube-detail-section">{t('kube.cluster.conditions')}</div>
+          <ul className="kube-detail-conditions">
+            {s.conditions.map((c, i) => (
+              <li key={i}>
+                {c.type} {c.status}
+                {c.reason ? ` (${c.reason})` : ''}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** The detail column of the cluster view (spec 4.5): header, then the tab the person picked. */
+export function ClusterDetail({
+  model,
+  onOpenInEditor,
+  onMenu
+}: {
+  model: ClusterViewModel
+  /** Task 14's editor tab; without it the header button and the menu item are not drawn. */
+  onOpenInEditor?: (ref: ObjectRef) => void
+  /** Where the more button opens the menu; without it the detail opens the menu itself. */
+  onMenu?: (x: number, y: number) => void
+}): React.JSX.Element | null {
+  const { t } = useI18n()
+  const { selected, selectedRef, view } = model
+  const uid = view.selected
+  // Values live here and nowhere else, tied to the selection they were read for; never logged.
+  const [revealed, setRevealed] = useState<{ uid: string; values: SecretValue[] } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const uidNow = useRef(uid)
+  uidNow.current = uid
+  useEffect(() => {
+    setRevealed(null)
+    setMenu(null)
+  }, [uid])
+  // Dropped on unmount: a closed tab keeps no plaintext.
+  useEffect(() => () => setRevealed(null), [])
+
+  if (selected === null || selectedRef === null || model.kind === null || uid === null) return null
+  const kind = model.kind.kind
+  const tabs = TABS.filter((id) => id !== 'pods' || podSelectorOf(kind, selected) !== null)
+  const tab = tabs.includes(view.detailTab) ? view.detailTab : 'summary'
+  const values = revealed !== null && revealed.uid === uid ? revealed.values : null
+
+  const reveal =
+    kind === 'Secret'
+      ? {
+          values,
+          onReveal: () => {
+            window.api.kube.cluster.reveal(selectedRef).then(
+              (r) => {
+                if (r.ok && uidNow.current === uid) setRevealed({ uid, values: r.values })
+              },
+              () => {}
+            )
+          },
+          onHide: () => setRevealed(null)
+        }
+      : null
+
+  const menuItems = clusterMenuItems(
+    {
+      kind,
+      onOpenInEditor: onOpenInEditor ? () => onOpenInEditor(selectedRef) : undefined,
+      onDescribe: () => model.setDetailTab('describe'),
+      onCopyName: () => void window.api.clipboard.writeText(selectedRef.name)
+    },
+    t
+  )
+
+  return (
+    <aside className={'kube-detail' + (model.deleted ? ' deleted' : '')}>
+      <div className="kube-detail-head">
+        <span className="kube-detail-kind">{kind}</span>
+        <span className="kube-detail-name" title={selectedRef.name}>
+          {selectedRef.name}
+        </span>
+        {onOpenInEditor && (
+          <button
+            type="button"
+            className="kube-btn"
+            title={t('kube.cluster.openInEditor')}
+            aria-label={t('kube.cluster.openInEditor')}
+            onClick={() => onOpenInEditor(selectedRef)}
+          >
+            <SquarePen size={14} />
+          </button>
+        )}
+        <button
+          type="button"
+          className="kube-btn"
+          title={t('kube.cluster.more')}
+          aria-label={t('kube.cluster.more')}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            if (onMenu) onMenu(r.left, r.bottom)
+            else setMenu({ x: r.left, y: r.bottom })
+          }}
+        >
+          <Ellipsis size={14} />
+        </button>
+      </div>
+      {menu !== null && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {model.deleted && <div className="kube-detail-deleted">{t('kube.cluster.deleted')}</div>}
+      <div className="kube-detail-tabs" role="tablist">
+        {tabs.map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={id === tab}
+            className={'kube-detail-tab' + (id === tab ? ' active' : '')}
+            onClick={() => model.setDetailTab(id)}
+          >
+            {t(`kube.cluster.tab.${id}` as MessageKey)}
+            {id === 'events' && model.events?.ok === true && <span className="kube-detail-count">{model.events.events.length}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="kube-detail-body">
+        {tab === 'summary' && <SummaryTab model={model} object={selected} kind={kind} context={selectedRef.context} />}
+        {tab === 'yaml' && <KubeYamlView object={selected} kind={kind} reveal={reveal} />}
+        {tab === 'events' && <ReadView read={model.events} render={(r) => <EventsList events={r.events} />} />}
+        {tab === 'describe' && <ReadView read={model.describe} render={(r) => <pre className="kube-detail-describe">{r.text}</pre>} />}
+        {tab === 'pods' && (
+          <ReadView
+            read={model.pods}
+            render={(r) => (
+              <table className="kube-detail-pods">
+                <thead>
+                  <tr>
+                    {r.columns.map((c, i) => (
+                      <th key={c.key + i}>{c.i18n ? t(`kube.cluster.col.${c.key}` as MessageKey) : c.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.rows.map((row) => (
+                    <tr
+                      key={row.uid}
+                      className="kube-detail-pod"
+                      tabIndex={0}
+                      onClick={() =>
+                        model.selectRef({ context: selectedRef.context, namespace: row.namespace ?? selectedRef.namespace, resource: 'pods', kind: 'Pod', name: row.name })
+                      }
+                    >
+                      {row.cells.map((c, i) => (
+                        <td key={i} title={c.text}>
+                          {c.tone && <span className={`kube-cluster-dot ${c.tone}`} aria-hidden="true" />}
+                          {c.text}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          />
+        )}
+      </div>
+    </aside>
+  )
+}
