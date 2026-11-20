@@ -1,5 +1,5 @@
 /** kubectl argument lists of the cluster view. Arrays only, never a command string; every list ends with `--context`. */
-import { LOG_TAIL_LINES } from './logs'
+import { LOG_MAX_LINES, LOG_TAIL_LINES } from './logs'
 import type { LogOptions, ObjectRef, WatchSpec } from './types'
 
 const nsArgs = (ns: string | null): string[] => (ns === null ? [] : ['-n', ns])
@@ -54,8 +54,9 @@ export function countArgs(context: string, namespace: string | null, resources: 
 export function logsArgs(ref: ObjectRef, o: LogOptions): string[] {
   return [
     'logs', ref.name, '-n', ref.namespace ?? '', '-c', o.container, '--timestamps',
-    // Read on from a time, all of it: a tail would leave a gap nobody sees.
-    o.sinceTime !== undefined ? `--since-time=${o.sinceTime}` : `--tail=${LOG_TAIL_LINES}`,
+    // Read on from a time, as many lines as the view keeps: the usual tail would leave a gap nobody sees, and a long
+    // pause could otherwise send any number at once.
+    ...(o.sinceTime !== undefined ? [`--since-time=${o.sinceTime}`, `--tail=${LOG_MAX_LINES}`] : [`--tail=${LOG_TAIL_LINES}`]),
     ...(o.previous ? ['--previous'] : []),
     ...(o.follow && !o.previous ? ['-f'] : []),
     '--context', ref.context

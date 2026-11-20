@@ -36,9 +36,10 @@ describe('cluster kubectl arguments', () => {
     expect(logsArgs(ref, { container: 'worker', previous: true, follow: true })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '--previous', '--context', 'c'])
     expect(logsArgs(ref, { container: 'worker', previous: false, follow: false })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '--context', 'c'])
   })
-  // Follow turned on again reads on from the last line shown, all of it: a tail would leave a gap nobody sees.
-  it('reads on from a time stamp, without a tail', () => {
+  // Follow turned on again reads on from the last line shown, at most as many lines as the view keeps: the 1000 line
+  // tail would leave a gap nobody sees, no tail would let a long pause send any number at once.
+  it('reads on from a time stamp, as many lines as the view keeps', () => {
     const ref = { context: 'c', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
-    expect(logsArgs(ref, { container: 'worker', previous: false, follow: true, sinceTime: '2026-11-20T01:12:03.114539874Z' })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--since-time=2026-11-20T01:12:03.114539874Z', '-f', '--context', 'c'])
+    expect(logsArgs(ref, { container: 'worker', previous: false, follow: true, sinceTime: '2026-11-20T01:12:03.114539874Z' })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--since-time=2026-11-20T01:12:03.114539874Z', '--tail=50000', '-f', '--context', 'c'])
   })
 })
