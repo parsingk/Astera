@@ -35,19 +35,25 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
     const forbidden = info?.forbidden
     const stale = info?.stale ? ' stale' : ''
     const cls = 'kube-cluster-kind' + (k.resource === p.resource ? ' selected' : '') + (forbidden ? ' forbidden' : '')
+    const attention = !!info?.attention && !forbidden
+    // No number for a count that could not be read: it is not 0. One kept from the last read is greyed.
+    const count = info === undefined || forbidden || info.count === null ? '' : String(info.count)
+    // Named as it reads: without it the name came from the title, the raw resource ("deployments.apps").
+    const label = [plural(k.kind), attention ? t('kube.cluster.attention') : '', count].filter((s) => s !== '').join(' ')
     return (
       <button
         key={k.resource}
         type="button"
         className={cls}
         title={forbidden ?? k.resource}
+        aria-label={label}
         aria-current={k.resource === p.resource ? 'true' : undefined}
         // Forbidden: inert, since its watch could only fail, and a kind the person may not list never fails the view (4.3).
         aria-disabled={forbidden ? 'true' : undefined}
         onClick={forbidden ? undefined : () => p.onSelect(k.resource)}
       >
         <span className="kube-cluster-kind-name">{plural(k.kind)}</span>
-        {info?.attention && !forbidden && (
+        {attention && (
           <span
             className={'kube-cluster-attn' + stale}
             role="img"
@@ -55,8 +61,7 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
             aria-label={t('kube.cluster.attention')}
           />
         )}
-        {/* No number for a count that could not be read: it is not 0. One kept from the last read is greyed. */}
-        <span className={'kube-cluster-count' + stale}>{info === undefined || forbidden || info.count === null ? '' : info.count}</span>
+        <span className={'kube-cluster-count' + stale}>{count}</span>
       </button>
     )
   }

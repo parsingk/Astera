@@ -71,10 +71,35 @@ describe('ClusterTree', () => {
       onSelect: (r: string) => void picked.push(r),
       onToggle: noop
     }
-    expect(renderToStaticMarkup(React.createElement(ClusterTree, props))).toMatch(/<button type="button" class="kube-cluster-kind forbidden" title="secrets is forbidden" aria-disabled="true">/)
+    expect(renderToStaticMarkup(React.createElement(ClusterTree, props))).toMatch(/<button type="button" class="kube-cluster-kind forbidden" title="secrets is forbidden" aria-label="Secrets" aria-disabled="true">/)
     const buttons = elements(ClusterTree(props)).filter((e) => typeof e.props.className === 'string' && e.props.className.startsWith('kube-cluster-kind'))
     for (const b of buttons) (b.props.onClick as (() => void) | undefined)?.()
     expect(picked).toEqual(['configmaps', 'horizontalpodautoscalers.autoscaling'])
+  })
+
+  // Task 15 S6: a kind button is named as it reads (its plural, the problem dot, the count), not by its raw resource.
+  it('names each kind button by its display name, problem dot and count', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ClusterTree, {
+        groups: KIND_GROUPS,
+        custom: [],
+        counts: {
+          pods: { count: 8, attention: true },
+          'deployments.apps': { count: 3, attention: false },
+          'statefulsets.apps': { count: null, attention: false },
+          secrets: { count: null, attention: false, forbidden: 'secrets is forbidden' }
+        },
+        resource: 'pods',
+        expanded: ['workloads', 'config'],
+        onSelect: noop,
+        onToggle: noop
+      })
+    )
+    expect(html).toContain('aria-label="Pods kube.cluster.attention 8"')
+    expect(html).toContain('aria-label="Deployments 3"')
+    expect(html).toContain('aria-label="StatefulSets"')
+    expect(html).toContain('aria-label="Secrets"')
+    expect(html).not.toContain('aria-label="deployments.apps"')
   })
 
   // Final review I1: a count that could not be read shows no number (never a false 0), and one kept from the last read
