@@ -37,3 +37,18 @@ describe('a new document in the window', () => {
     expect(ipc).toContain('onNewDocument.push(() => accountUsage.stop())')
   })
 })
+
+// Kubernetes cluster view P2 final review: a renderer that dies without a reload starts no new document, so the kubectl
+// processes its logs tabs and cluster view asked for ran on until the app quit.
+describe('a renderer that dies', () => {
+  const ipc = readFileSync(path.join(__dirname, 'ipc.ts'), 'utf8')
+
+  it('stops every Kubernetes log stream and watch', () => {
+    const at = ipc.indexOf("win.webContents.on('render-process-gone'")
+    expect(at).toBeGreaterThan(-1)
+    const gone = ipc.slice(at)
+    const handler = gone.slice(0, gone.indexOf('\n  })'))
+    expect(handler).toContain('kubeWatches.stopAll()')
+    expect(handler).toContain('kubeLogs.stopAll()')
+  })
+})

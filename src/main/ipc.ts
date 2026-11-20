@@ -4611,6 +4611,11 @@ export function registerIpc(
   app.once('will-quit', () => kubeWatches.stopAll())
   onNewDocument.push(() => kubeLogs.stopAll())
   app.once('will-quit', () => kubeLogs.stopAll())
+  // A renderer that dies without a reload starts no new document: its kubectl processes would run on until quit.
+  win.webContents.on('render-process-gone', () => {
+    kubeWatches.stopAll()
+    kubeLogs.stopAll()
+  })
 
   /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
    *  — 그 아래 전부가 아니다.
