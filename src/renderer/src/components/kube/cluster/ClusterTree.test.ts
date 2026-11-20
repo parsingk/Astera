@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { KIND_GROUPS } from '../../../../../core/kube/cluster/kinds'
-import { ClusterTree } from './ClusterTree'
+import { ClusterTree, kindPlural } from './ClusterTree'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -122,5 +122,43 @@ describe('ClusterTree', () => {
     expect(html).toContain('<span class="kube-cluster-count stale">3</span>')
     expect(html).toContain('kube-cluster-attn stale')
     expect(html).toMatch(/Deployments<\/span><span class="kube-cluster-count"><\/span>/)
+  })
+})
+
+// Task 11 minor: the tree guessed a custom kind's plural from its kind (PodChaos read "PodChaoses"). It shows the CRD's
+// own plural, the resource before its group, in the kind's case where the two agree.
+describe('kindPlural', () => {
+  it('shows a custom kind by its CRD plural', () => {
+    expect(kindPlural({ kind: 'PodChaos', resource: 'podchaos.chaos-mesh.org', namespaced: true })).toBe('PodChaos')
+    expect(kindPlural({ kind: 'Prometheus', resource: 'prometheuses.monitoring.coreos.com', namespaced: true })).toBe('Prometheuses')
+    expect(kindPlural({ kind: 'Person', resource: 'people.example.com', namespaced: true })).toBe('People')
+    expect(kindPlural({ kind: 'Widget', resource: 'gizmos.example.com', namespaced: true })).toBe('gizmos')
+  })
+
+  it('reads every fixed kind as spec 4.3 lists it', () => {
+    expect(KIND_GROUPS.flatMap((g) => g.kinds).map(kindPlural)).toEqual([
+      'Deployments', 'StatefulSets', 'DaemonSets', 'ReplicaSets', 'Jobs', 'CronJobs', 'Pods',
+      'Services', 'Ingresses', 'EndpointSlices', 'NetworkPolicies',
+      'ConfigMaps', 'Secrets', 'HorizontalPodAutoscalers',
+      'PersistentVolumeClaims', 'PersistentVolumes', 'StorageClasses',
+      'ServiceAccounts', 'Roles', 'RoleBindings', 'ClusterRoles', 'ClusterRoleBindings',
+      'Nodes', 'Namespaces', 'Events'
+    ])
+  })
+
+  it('draws a custom kind in the tree by its CRD plural', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ClusterTree, {
+        groups: KIND_GROUPS,
+        custom: [{ kind: 'PodChaos', resource: 'podchaos.chaos-mesh.org', namespaced: true }],
+        counts: {},
+        resource: 'pods',
+        expanded: ['custom'],
+        onSelect: noop,
+        onToggle: noop
+      })
+    )
+    expect(html).toContain('<span class="kube-cluster-kind-name">PodChaos</span>')
+    expect(html).not.toContain('PodChaoses')
   })
 })

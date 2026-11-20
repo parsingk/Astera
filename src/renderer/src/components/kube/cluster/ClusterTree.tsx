@@ -19,10 +19,14 @@ export interface ClusterTreeProps {
 
 const CUSTOM_GROUP: KindGroup = { id: 'custom', kinds: [] }
 
-/** The kind's plural as the tree writes it (Pod, Pods; NetworkPolicy, NetworkPolicies; Ingress, Ingresses). */
-function plural(kind: string): string {
-  if (/[^aeiou]y$/i.test(kind)) return `${kind.slice(0, -1)}ies`
-  return /(s|x|ch|sh)$/i.test(kind) ? `${kind}es` : `${kind}s`
+/** The kind's plural as the tree writes it: its resource's plural (a CRD's `spec.names.plural`, the resource before its
+ *  group), in the kind's case for as far as the two agree: Pods, NetworkPolicies, and a custom PodChaos as its CRD names
+ *  it rather than a guessed PodChaoses. */
+export function kindPlural(k: KindDef): string {
+  const plural = k.resource.split('.')[0]
+  let same = 0
+  while (same < plural.length && same < k.kind.length && plural[same] === k.kind[same].toLowerCase()) same++
+  return k.kind.slice(0, same) + plural.slice(same)
 }
 
 /** The tree on the cluster view's left: the kind groups with their counts (spec 4.3). */
@@ -39,7 +43,7 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
     // No number for a count that could not be read: it is not 0. One kept from the last read is greyed.
     const count = info === undefined || forbidden || info.count === null ? '' : String(info.count)
     // Named as it reads: without it the name came from the title, the raw resource ("deployments.apps").
-    const label = [plural(k.kind), attention ? t('kube.cluster.attention') : '', count].filter((s) => s !== '').join(' ')
+    const label = [kindPlural(k), attention ? t('kube.cluster.attention') : '', count].filter((s) => s !== '').join(' ')
     return (
       <button
         key={k.resource}
@@ -52,7 +56,7 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
         aria-disabled={forbidden ? 'true' : undefined}
         onClick={forbidden ? undefined : () => p.onSelect(k.resource)}
       >
-        <span className="kube-cluster-kind-name">{plural(k.kind)}</span>
+        <span className="kube-cluster-kind-name">{kindPlural(k)}</span>
         {attention && (
           <span
             className={'kube-cluster-attn' + stale}
