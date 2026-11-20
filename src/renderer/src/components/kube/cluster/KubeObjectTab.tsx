@@ -36,7 +36,16 @@ function ReadAgo({ at, visible }: { at: number; visible: boolean }): React.JSX.E
  *  that says where it lives, that it is read-only, when it was read and whether it is live. Mounted for the tab's life
  *  (PaneGrid's kube slots); it reads the object, then follows it through a watch only while the tab shows (K4), and
  *  reads afresh when it shows again. Edit, apply and compare come with P3 and are absent until then. */
-export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible: boolean }): React.JSX.Element {
+export function KubeObjectTab({
+  target,
+  visible,
+  initial
+}: {
+  target: ObjectRef
+  visible: boolean
+  /** Content shown before the first read answers: for tests, since a static render runs no effect to read it. */
+  initial?: K8sObject
+}): React.JSX.Element {
   const { t } = useI18n()
   const client = useWatchClient()
   const key = JSON.stringify(target)
@@ -46,7 +55,9 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
   const panelId = `${ids}-panel`
   /** The object as last read or watched, and when; `deleted`: the cluster says it is gone, and `object` is its last
    *  content (null when it was never there). */
-  const [shown, setShown] = useState<{ object: K8sObject | null; deleted: boolean; at: number } | null>(null)
+  const [shown, setShown] = useState<{ object: K8sObject | null; deleted: boolean; at: number } | null>(() =>
+    initial !== undefined ? { object: initial, deleted: false, at: Date.now() } : null
+  )
   /** The read's first line of stderr, until something better arrives. */
   const [failed, setFailed] = useState<string | null>(null)
   const [watch, setWatch] = useState<WatchState>('live')

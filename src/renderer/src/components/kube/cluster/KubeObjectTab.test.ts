@@ -55,8 +55,19 @@ describe('KubeObjectTab', () => {
     expect(liveErrorText('Unable to connect to the server', (k) => `t:${k}`)).toBe('Unable to connect to the server')
   })
 
-  it('offers no control that would change the object', () => {
-    const labels = [...render(pod).matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])
-    expect(labels).toEqual(['kube.cluster.refresh'])
+  // Task 14 minor: this rendered only the loading state. Loaded (the YAML drawn), the tab still offers only reads: refresh,
+  // and a Secret's show values; edit, apply and compare come with P3.
+  it('offers no control that would change the object, once it is loaded', () => {
+    const object = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api', uid: 'u1', resourceVersion: '7' }, spec: { containers: [{ name: 'app', image: 'x:1' }] } }
+    const html = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object }))
+    expect(html).not.toContain('kube.cluster.loading')
+    expect(html).toContain('name: w-1')
+    expect([...html.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.cluster.refresh'])
+    expect(html).not.toMatch(/contenteditable|<textarea|kube\.toolbar\.(apply|compare|edit)|kube\.cluster\.(edit|apply|compare)/)
+
+    const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 's', namespace: 'api', uid: 'u2', resourceVersion: '3' }, data: { p: '***' } }
+    const target = { ...pod, resource: 'secrets', kind: 'Secret', name: 's' }
+    const shown = renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, initial: secret }))
+    expect([...shown.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.cluster.refresh', 'kube.cluster.showValues'])
   })
 })
