@@ -6,8 +6,16 @@ import type { WatchMessage, WatchSpec } from '../../core/kube/cluster/types'
 
 type Handlers = { onStdout(c: string): void; onStderr(c: string): void; onExit(e: StreamExit): void }
 const spec: WatchSpec = { context: 'c1', namespace: 'ns', namespaced: true, resource: 'pods' }
-const secretEvent =
-  '{"type":"ADDED","object":{"apiVersion":"v1","kind":"Secret","metadata":{"name":"s"},"data":{"p":"eA=="}}}'
+// The last-applied annotation holds the values too, as a JSON string (the manifests slice's C22).
+const secretEvent = JSON.stringify({
+  type: 'ADDED',
+  object: {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: { name: 's', annotations: { 'kubectl.kubernetes.io/last-applied-configuration': '{"data":{"p":"aHVudGVyMg=="}}' } },
+    data: { p: 'aHVudGVyMg==' }
+  }
+})
 
 function setup() {
   const spawns: Array<{ args: string[]; h: Handlers; stops: number }> = []
@@ -40,6 +48,7 @@ describe('createWatchRegistry', () => {
     const m = emitted[0] as Extract<WatchMessage, { kind: 'event' }>
     expect(m.watchId).toBe('w1')
     expect((m.event.object as unknown as { data: Record<string, string> }).data.p).toBe('***')
+    expect(JSON.stringify(emitted)).not.toContain('aHVudGVyMg==')
   })
 
   it('skips unparsable and non-event values', () => {
