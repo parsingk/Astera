@@ -2,12 +2,13 @@
 import type { K8sObject } from '../objects'
 import type { SecretValue } from './types'
 
-/** Null when the bytes are not UTF-8 text, so a binary value is never shown as garbage. */
+/** Null when the bytes are not UTF-8 text, so a binary value is never shown as garbage. A leading BOM is kept: the text
+ *  must hold the value's bytes exactly, for whatever writes it back. */
 export function decodeSecretValue(base64: string): string | null {
   try {
     const bin = atob(base64)
     const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
   } catch {
     return null
   }
