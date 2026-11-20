@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { createClusterReads } from './cluster'
+import { createClusterReads, streamFailureMessage } from './cluster'
 import { UNREADABLE } from './operations'
 import { listArgs } from '../../core/kube/cluster/args'
 import { KIND_GROUPS, crdKinds } from '../../core/kube/cluster/kinds'
 import { columnsOf, rowsOf } from '../../core/kube/cluster/columns'
 import type { KubectlResult } from '../../core/kube/kubectl'
+import { KUBECTL_MISSING } from '../../core/kube/cluster/types'
 
 const ok = (stdout: string): KubectlResult => ({ ok: true, stdout, stderr: '' })
 const secret = {
@@ -318,5 +319,15 @@ describe('createClusterReads counts', () => {
     ])
     expect(c['widgets.a.io'].count).toBe(1)
     expect(c['widgets.b.io'].count).toBe(0)
+  })
+})
+
+describe('streamFailureMessage', () => {
+  it('prefers the first stderr line, then the exit code, then the missing binary, then the error code', () => {
+    expect(streamFailureMessage({ code: 1, stopped: false }, 'boom\n')).toBe('boom')
+    expect(streamFailureMessage({ code: 2, stopped: false }, '')).toBe('kubectl exited 2')
+    expect(streamFailureMessage({ code: null, errorCode: 'ENOENT', stopped: false }, '')).toBe(KUBECTL_MISSING)
+    expect(streamFailureMessage({ code: null, errorCode: 'EACCES', stopped: false }, '')).toBe('EACCES')
+    expect(streamFailureMessage({ code: null, stopped: false }, '')).toBe('kubectl exited')
   })
 })

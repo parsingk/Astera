@@ -10,7 +10,7 @@ const spec: LogSpec = {
   options: { container: 'worker', previous: false, follow: true }
 }
 
-function setup() {
+function setup(maxLineChars?: number) {
   const spawns: Array<{ args: string[]; h: Handlers; stops: number }> = []
   const emitted: LogMessage[] = []
   const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = []
@@ -21,6 +21,7 @@ function setup() {
       return { stop: () => void (s.stops += 1) }
     },
     redact: (s) => s.replace(/10\.0\.0\.1/g, 'HOST'),
+    maxLineChars,
     emit: (m) => void emitted.push(m),
     later(fn, ms) {
       const t = { fn, ms, cancelled: false }
@@ -141,5 +142,33 @@ describe('createLogRegistry', () => {
     reg.stopAll()
     expect(spawns.map((s) => s.stops)).toEqual([1, 1, 1])
     expect(reg.size()).toBe(0)
+  })
+
+  it('joins a CR and LF split across chunks into one clean line', () => {
+    const { reg, spawns, emitted, flush } = setup()
+    reg.start('l1', spec)
+    spawns[0].h.onStdout('a\r')
+    spawns[0].h.onStdout('\nb\n')
+    flush()
+    expect(emitted).toEqual([{ logId: 'l1', kind: 'lines', lines: ['a', 'b'] }])
+  })
+
+  it('does nothing for an empty chunk', () => {
+    const { reg, spawns, emitted, flush, timers } = setup()
+    reg.start('l1', spec)
+    spawns[0].h.onStdout('')
+    expect(timers).toHaveLength(0)
+    flush()
+    expect(emitted).toEqual([])
+  })
+
+  it('splits a line longer than the cap at the cap, however the chunks fall', () => {
+    const { reg, spawns, emitted, flush } = setup(4)
+    reg.start('l1', spec)
+    spawns[0].h.onStdout('abc')
+    spawns[0].h.onStdout('defghij')
+    spawns[0].h.onStdout('k\nz\n')
+    flush()
+    expect(emitted).toEqual([{ logId: 'l1', kind: 'lines', lines: ['abcd', 'efgh', 'ijk', 'z'] }])
   })
 })

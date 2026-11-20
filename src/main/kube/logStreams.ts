@@ -3,10 +3,12 @@
 import { logsArgs } from '../../core/kube/cluster/args'
 import { KUBECTL_MISSING, type LogMessage, type LogSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
-import { firstStderrLine } from './cluster'
+import { streamFailureMessage } from './cluster'
 
 export type { LogMessage, LogSpec }
 export const LOG_FLUSH_MS = 50
+/** A line longer than this is cut here: a process that never prints a newline would otherwise grow one string without end. */
+export const LOG_LINE_MAX_CHARS = 1_000_000
 /** Only the first stderr line is reported, so there is no need to keep more than this. */
 const STDERR_CAP = 4096
 
@@ -25,9 +27,21 @@ interface Entry {
   pending: string[]
 }
 
+/** One whole line, its CR removed, cut at the cap when it is longer. */
+function pushLine(e: Entry, raw: string, max: number): void {
+  let line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+  while (line.length > max) {
+    e.pending.push(line.slice(0, max))
+    line = line.slice(max)
+  }
+  e.pending.push(line)
+}
+
 export function createLogRegistry(deps: {
   stream(args: string[], h: Handlers): KubectlStream
   redact(stderr: string): string
+  /** The cap on one line; only tests set it. */
+  maxLineChars?: number
   emit(m: LogMessage): void
   later(fn: () => void, ms: number): { cancel(): void }
 }): {
@@ -36,6 +50,7 @@ export function createLogRegistry(deps: {
   stopAll(): void
   size(): number
 } {
+  const max = deps.maxLineChars ?? LOG_LINE_MAX_CHARS
   const entries = new Map<string, Entry>()
 
   const halt = (e: Entry): void => {
@@ -56,10 +71,6 @@ export function createLogRegistry(deps: {
     deps.emit({ logId, kind: 'lines', lines })
   }
 
-  const failMessage = (x: StreamExit, stderr: string): string =>
-    firstStderrLine(deps.redact(stderr)) ??
-    (x.code !== null ? `kubectl exited ${x.code}` : x.errorCode === 'ENOENT' ? KUBECTL_MISSING : (x.errorCode ?? 'kubectl exited'))
-
   const spawn = (logId: string, spec: LogSpec, e: Entry): void => {
     const run = {}
     e.run = run
@@ -68,10 +79,16 @@ export function createLogRegistry(deps: {
     let stderr = ''
     e.stream = deps.stream(logsArgs(spec.ref, spec.options), {
       onStdout(chunk) {
-        if (!live()) return
-        const parts = (carry + chunk).split('\n')
+        if (!live() || chunk === '') return
+        // Only the new chunk is scanned for a newline: the carry is never re-split, so a long line costs linear time.
+        const parts = chunk.split('\n')
+        parts[0] = carry + parts[0]
         carry = parts.pop() ?? ''
-        for (const p of parts) e.pending.push(p.endsWith('\r') ? p.slice(0, -1) : p)
+        for (const p of parts) pushLine(e, p, max)
+        while (carry.length > max) {
+          e.pending.push(carry.slice(0, max))
+          carry = carry.slice(max)
+        }
         if (e.pending.length > 0 && !e.timer) {
           e.timer = deps.later(() => {
             e.timer = null
@@ -85,12 +102,12 @@ export function createLogRegistry(deps: {
       onExit(x) {
         if (!live() || x.stopped) return
         e.stream = null
-        if (carry !== '') e.pending.push(carry.endsWith('\r') ? carry.slice(0, -1) : carry)
+        if (carry !== '') pushLine(e, carry, max)
         carry = ''
         flush(logId, e)
         entries.delete(logId)
         e.run = {}
-        deps.emit(x.code === 0 ? { logId, kind: 'ended' } : { logId, kind: 'error', message: failMessage(x, stderr) })
+        deps.emit(x.code === 0 ? { logId, kind: 'ended' } : { logId, kind: 'error', message: streamFailureMessage(x, deps.redact(stderr)) })
       }
     })
   }

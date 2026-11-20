@@ -2,9 +2,9 @@
 import { maskSecretPair } from '../../core/kube/objects'
 import { listArgs } from '../../core/kube/cluster/args'
 import { createJsonSplitter, toWatchEvents } from '../../core/kube/cluster/watch'
-import { KUBECTL_MISSING, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
+import type { WatchMessage, WatchSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
-import { firstStderrLine, isForbidden } from './cluster'
+import { firstStderrLine, isForbidden, streamFailureMessage } from './cluster'
 
 export const MAX_WATCHES = 6
 export const RESTART_DELAY_MS = 1000
@@ -87,9 +87,9 @@ export function createWatchRegistry(deps: {
           }, RESTART_DELAY_MS)
           return
         }
-        const first = firstStderrLine(deps.redact(stderr))
-        const message =
-          first ?? (x.code !== null ? `kubectl exited ${x.code}` : x.errorCode === 'ENOENT' ? KUBECTL_MISSING : (x.errorCode ?? 'kubectl exited'))
+        const redacted = deps.redact(stderr)
+        const first = firstStderrLine(redacted)
+        const message = streamFailureMessage(x, redacted)
         entries.delete(id)
         e.run = {}
         // The reported line decides: a klog line saying Forbidden may come before the line that says the cluster failed.

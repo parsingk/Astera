@@ -1,4 +1,5 @@
 /** One-shot reads of the cluster view: lists and objects that are fetched once, not watched. */
+import type { StreamExit } from '../../core/kube/stream'
 import type { KubeServiceDeps } from './service'
 import { UNREADABLE } from './operations'
 import { maskSecretPair, type K8sObject } from '../../core/kube/objects'
@@ -6,7 +7,7 @@ import { ATTENTION_KINDS, needsAttention } from '../../core/kube/cluster/status'
 import { KIND_GROUPS, crdKinds } from '../../core/kube/cluster/kinds'
 import { secretValuesOf } from '../../core/kube/cluster/secret'
 import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, namespacesArgs, podsArgs } from '../../core/kube/cluster/args'
-import type { CountInfo, KindDef, ObjectRef, Read, SecretValue, WatchSpec } from '../../core/kube/cluster/types'
+import { KUBECTL_MISSING, type CountInfo, type KindDef, type ObjectRef, type Read, type SecretValue, type WatchSpec } from '../../core/kube/cluster/types'
 
 export type { Read }
 
@@ -24,6 +25,15 @@ const SERVER_WARNING = /^Warning: /
 export function firstStderrLine(stderr: string): string | undefined {
   const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l)
   return lines.find((l) => !KLOG.test(l) && !SERVER_WARNING.test(l)) ?? lines[0]
+}
+
+/** Why a long-running kubectl (a watch, a log) ended badly: the first line of its redacted stderr, else the exit code,
+ *  else the missing binary or the error that stopped it from starting. */
+export function streamFailureMessage(x: StreamExit, redactedStderr: string): string {
+  return (
+    firstStderrLine(redactedStderr) ??
+    (x.code !== null ? `kubectl exited ${x.code}` : x.errorCode === 'ENOENT' ? KUBECTL_MISSING : (x.errorCode ?? 'kubectl exited'))
+  )
 }
 
 /** kubectl was refused (RBAC): what the person may not do, not a failure of the cluster. */
