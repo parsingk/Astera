@@ -84,13 +84,19 @@ function itemMatches(o: K8sObject, k: KindDef): boolean {
   return group === groupOf(k.resource)
 }
 
-/** Whether a stderr line names the plural as a whole word, so "roles" is not found inside "clusterroles". */
+/** The lead kubectl puts before the server's own message: `Error from server (Forbidden): `. */
+const SERVER_LEAD = /^Error from server \([^)]*\): /
+
+/** Whether a stderr line refuses the plural, in the forms kubectl writes it: the server's message led by `<plural> is
+ *  forbidden` or `<plural>.<group> is forbidden`, `cannot list resource "<plural>"` within it, or `the server doesn't
+ *  have a resource type "<plural>"`. Nowhere else: the line also names a user and a namespace, which may be spelled
+ *  like a kind ("services"), and "roles" is not "clusterroles". */
 function namesResource(line: string, plural: string): boolean {
-  const isNameChar = (c: string | undefined): boolean => c !== undefined && /[a-z0-9_.-]/i.test(c)
-  for (let at = line.indexOf(plural); at !== -1; at = line.indexOf(plural, at + 1)) {
-    if (!isNameChar(line[at - 1]) && !/[a-z0-9_-]/i.test(line[at + plural.length] ?? ' ')) return true
-  }
-  return false
+  const message = line.replace(SERVER_LEAD, '')
+  const at = message.indexOf(' is forbidden')
+  const subject = at === -1 ? null : message.slice(0, at)
+  if (subject === plural || (subject?.startsWith(`${plural}.`) && !subject.includes(' '))) return true
+  return message.includes(`cannot list resource "${plural}"`) || message.includes(`the server doesn't have a resource type "${plural}"`)
 }
 
 /** One counting call: kinds of one scope, read as objects (`-o json`, for the problem dot) or only by name. */

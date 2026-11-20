@@ -238,6 +238,15 @@ describe('createClusterReads counts', () => {
     expect(c.pods).toEqual({ count: 2, attention: true })
   })
 
+  // Re-review R4: the refusal names other words too (a user, a namespace); only the resource kubectl refused is greyed.
+  it('does not grey Services for a Secrets refusal in a namespace named "services"', async () => {
+    const line = 'Error from server (Forbidden): secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "services"'
+    const c = await createClusterReads({ run: fakeGet(OBJECTS, { refuse: { secrets: line } }) }).counts('c', 'services', FIXED)
+    expect(c.secrets).toEqual({ count: null, attention: false, forbidden: line })
+    expect(c.services).toEqual({ count: 0, attention: false })
+    expect(c.configmaps).toEqual({ count: 2, attention: false })
+  })
+
   it('counts custom kinds 40 to a call, apart from the built-in kinds, so an unserved CRD fails only its own call', async () => {
     const custom = Array.from({ length: 45 }, (_, i) => ({ kind: `Widget${i}`, resource: `widget${i}s.a.io`, namespaced: true }))
     const objects: Record<string, Obj[]> = { ...OBJECTS }
