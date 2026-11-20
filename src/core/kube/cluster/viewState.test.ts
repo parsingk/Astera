@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { applyWatch } from './watch'
 import { applyPending, contextMissing, initialView, noPending, queueWatch, readMemory, withContext, withSort } from './viewState'
 import type { K8sObject } from '../objects'
 import type { KubeContexts } from '../types'
@@ -55,8 +54,7 @@ describe('watch bursts', () => {
     ]
     const p = noPending()
     for (const e of events) queueWatch(p, e)
-    const oneByOne = events.reduce((l, e) => applyWatch(l, e), start as ReadonlyMap<string, K8sObject>)
-    expect([...applyPending(start, p)]).toEqual([...oneByOne])
+    expect([...applyPending(start, p)]).toEqual([['1', pod('1', 'Failed')], ['3', pod('3', 'Pending')]])
     expect(p.changes.size).toBe(3)
     expect(start.size).toBe(2)
 
@@ -67,8 +65,7 @@ describe('watch bursts', () => {
     ]
     const q = noPending()
     for (const e of again) queueWatch(q, e)
-    const expected = again.reduce((l, e) => applyWatch(l, e), new Map() as ReadonlyMap<string, K8sObject>)
-    expect([...applyPending(new Map(), q)]).toEqual([...expected])
+    expect([...applyPending(new Map(), q)]).toEqual([['a', pod('a', 'Failed')], ['b', pod('b')]])
   })
   it('a resync in a burst drops the list and what came before it', () => {
     const start = new Map([['1', pod('1')]])

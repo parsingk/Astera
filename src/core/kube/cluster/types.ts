@@ -21,6 +21,8 @@ export type WatchMessage = { watchId: string } & (
   | { kind: 'event'; event: WatchEvent }
   | { kind: 'resync' }
   | { kind: 'error'; message: string }
+  // No watch sends it (a watch that exits cleanly resyncs and restarts); P2's log streams will, when a log is read to
+  // its end.
   | { kind: 'ended' }
 )
 /** A one-shot read of the cluster: the data, or a failure with a redacted first line of stderr. */

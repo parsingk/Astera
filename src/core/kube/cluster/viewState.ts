@@ -81,8 +81,7 @@ export function queueWatch(p: PendingWatch, m: WatchEvent | 'resync'): void {
   p.changes.set(keyOf(m.object), m)
 }
 
-/** One copy of the list per burst, where `applyWatch` per event made one per event (a big namespace's initial list
- *  arrives as N ADDED events). */
+/** One copy of the list per burst, not one per event (a big namespace's initial list arrives as N ADDED events). */
 export function applyPending(list: ReadonlyMap<string, K8sObject>, p: PendingWatch): Map<string, K8sObject> {
   const next = p.reset ? new Map<string, K8sObject>() : new Map(list)
   for (const [key, e] of p.changes) {

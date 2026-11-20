@@ -49,12 +49,3 @@ export function toWatchEvent(v: unknown): WatchEvent | null {
 }
 
 export const keyOf = (o: K8sObject): string => (typeof o.metadata.uid === 'string' ? o.metadata.uid : `${o.metadata.namespace ?? ''}/${o.metadata.name}`)
-
-/** Returns a new map; 'resync' empties it because the relisted objects arrive as ADDED events. */
-export function applyWatch(list: ReadonlyMap<string, K8sObject>, m: WatchEvent | 'resync'): Map<string, K8sObject> {
-  if (m === 'resync') return new Map()
-  const next = new Map(list)
-  if (m.type === 'DELETED') next.delete(keyOf(m.object))
-  else next.set(keyOf(m.object), m.object)
-  return next
-}
