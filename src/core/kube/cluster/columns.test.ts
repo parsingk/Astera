@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { columnsOf, filterRows, rowsOf, sortRows } from './columns'
 
 const now = Date.parse('2026-11-20T12:00:00Z')
@@ -56,5 +56,16 @@ describe('cluster columns and rows', () => {
     expect(sortRows(rows, 0, 'asc').map((r) => r.name)).toEqual(['b-9', 'b-10'])
     expect(filterRows(rows, 'B-1').map((r) => r.name)).toEqual(['b-10'])
     expect(filterRows(rows, '')).toHaveLength(2)
+  })
+  // Final review I2: localeCompare with options builds a collator per comparison, 179 ms per sort at 5,000 rows.
+  it('sorts text without building a collator per comparison', () => {
+    const rows = ['b-10', 'a', 'b-9'].map((n) => ({ uid: n, name: n, namespace: null, cells: [{ text: n }], attention: false }))
+    const compare = vi.spyOn(String.prototype, 'localeCompare')
+    try {
+      expect(sortRows(rows, 0, 'asc').map((r) => r.name)).toEqual(['a', 'b-9', 'b-10'])
+      expect(compare).not.toHaveBeenCalled()
+    } finally {
+      compare.mockRestore()
+    }
   })
 })
