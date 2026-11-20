@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Clock, Download, Eraser, Search, TextWrap } from 'lucide-react'
+import { Clock, Download, Eraser, RotateCcw, Search, TextWrap } from 'lucide-react'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import type { ObjectRef } from '../../../../../core/kube/cluster/types'
 import {
@@ -274,6 +274,12 @@ export function KubeLogView({
       {icon}
     </button>
   )
+  // A read that failed or ended, read again: a fresh read of what the tab shows (a new kubectl, the lines emptied, the
+  // tail read again), not a resume, since that read may have been of another run of the container.
+  const readAgain = iconButton(t('kube.logs.retry'), <RotateCcw size={13} />, () => {
+    stream.restart()
+    pin()
+  })
 
   return (
     <div className="kube-logs">
@@ -382,7 +388,12 @@ export function KubeLogView({
         ))}
         {rows.length > last && <div ref={tail} aria-hidden="true" style={{ height: (rows.length - last) * LINE_HEIGHT }} />}
         {state === 'starting' && buffer.lines.length === 0 && <div className="kube-logs-note">{t('kube.cluster.loading')}</div>}
-        {typeof state === 'object' && <div className="kube-logs-error">{liveErrorText(state.error, t)}</div>}
+        {typeof state === 'object' && (
+          <div className="kube-logs-error">
+            <span>{liveErrorText(state.error, t)}</span>
+            {readAgain}
+          </div>
+        )}
         {state === 'ended' && (
           <div className="kube-logs-end">
             {exit !== null ? (
@@ -394,6 +405,7 @@ export function KubeLogView({
             ) : (
               <span>{t('kube.logs.streamEnded')}</span>
             )}
+            {readAgain}
           </div>
         )}
       </div>

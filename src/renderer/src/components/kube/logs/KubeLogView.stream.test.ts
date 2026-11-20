@@ -418,6 +418,51 @@ describe('KubeLogView stream', () => {
     expect(text.match(/one|two|three/g)).toEqual(['one', 'two', 'three'])
   })
 
+  // Final review I1: a read that failed (the container not started yet, the cluster out of reach) or ended (a crashed
+  // run) is read again from its tab. A fresh read of what the tab shows, not a resume: the failed or finished read may
+  // have been of another run of the container.
+  describe('read again', () => {
+    const readAgain = (tree: unknown): void => (byLabel(tree, 'kube.logs.retry').props.onClick as () => void)()
+    const sameAsk = (): void => {
+      expect(api.started).toHaveLength(2)
+      expect(api.started[1].id).not.toBe(api.started[0].id)
+      expect({ ...api.started[1], id: '' }).toEqual({ ...api.started[0], id: '' })
+      expect(api.started[1].sinceTime).toBeUndefined()
+      expect(api.stopped).toEqual([api.started[0].id])
+    }
+
+    it('starts a new read from the error line', () => {
+      let tree = hooks.render(view())
+      api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z first read'] })
+      api.emit({ logId: api.started[0].id, kind: 'error', message: 'container "worker" in pod "worker-1" is waiting to start: ContainerCreating' })
+      tree = hooks.render(view())
+      expect(textOf(tree)).toContain('waiting to start')
+      readAgain(tree)
+      hooks.render(view())
+      sameAsk()
+      tree = hooks.render(view())
+      expect(textOf(tree)).not.toMatch(/first read|waiting to start/)
+      expect(textOf(tree)).toContain('kube.cluster.loading')
+    })
+
+    it('starts a new read from the closing line', async () => {
+      hooks.render(view())
+      await settle()
+      api.answer(read(podWith({ state: { terminated: { exitCode: 1, finishedAt: '2026-11-20T01:12:11Z' } } })))
+      api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z last run'] })
+      api.emit({ logId: api.started[0].id, kind: 'ended' })
+      hooks.render(view())
+      await settle()
+      let tree = hooks.render(view())
+      expect(textOf(tree)).toContain('kube.logs.ended{"code":1}')
+      readAgain(tree)
+      hooks.render(view())
+      sameAsk()
+      tree = hooks.render(view())
+      expect(textOf(tree)).not.toMatch(/last run|kube\.logs\.ended/)
+    })
+  })
+
   // Task 5 review I4: scrolled up, the lines in view stay where they are whatever comes in.
   describe('scrolled up', () => {
     /** A stand-in for the scrolled box: the view reads and sets these as the browser would. */

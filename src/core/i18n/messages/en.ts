@@ -3167,6 +3167,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.logs.dropped': 'Older lines dropped: {count}',
   'kube.logs.ended': 'Exit code {code}',
   'kube.logs.streamEnded': 'Stream ended',
+  'kube.logs.retry': 'Read again',
   'kube.logs.saved': 'Saved to {path}',
   'kube.logs.saveFailed': 'Could not save the logs: {detail}',
   'kube.logs.toolbar': 'Logs',

@@ -2774,6 +2774,7 @@ export const es: Catalog = {
   'kube.logs.dropped': 'Líneas antiguas descartadas: {count}',
   'kube.logs.ended': 'Código de salida {code}',
   'kube.logs.streamEnded': 'La transmisión terminó',
+  'kube.logs.retry': 'Leer de nuevo',
   'kube.logs.saved': 'Guardado en {path}',
   'kube.logs.saveFailed': 'No se pudieron guardar los registros: {detail}',
   'kube.logs.toolbar': 'Registros',

@@ -3421,6 +3421,7 @@ export const ko = {
   'kube.logs.dropped': '오래된 줄 {count}개를 버렸습니다',
   'kube.logs.ended': '종료 코드 {code}',
   'kube.logs.streamEnded': '스트림이 끝났습니다',
+  'kube.logs.retry': '다시 읽기',
   'kube.logs.saved': '{path} 에 저장했습니다',
   'kube.logs.saveFailed': '로그를 저장하지 못했습니다: {detail}',
   'kube.logs.toolbar': '로그',
