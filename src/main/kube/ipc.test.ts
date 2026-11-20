@@ -246,6 +246,16 @@ describe('cluster view IPC', () => {
     expect(t.cluster.counts).not.toHaveBeenCalled()
   })
 
+  // A workload without a selector is a normal case: its Pods tab gets a failed read, not a thrown error. kubectl is not
+  // asked, as `-l ''` would list every Pod of the namespace.
+  it('answers pods with an empty selector as a failed read, without reading', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.pods', 'c', 'ns', '')).toEqual({ ok: false, message: 'No label selector to list Pods by' })
+    expect(t.cluster.pods).not.toHaveBeenCalled()
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', undefined)).rejects.toThrow('kube: selector must be a string')
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', 3)).rejects.toThrow('kube: selector must be a string')
+  })
+
   // kubectl would read a value starting with "-" as a flag (a resource or name is a positional argument).
   it('rejects a context, namespace, resource, name or selector starting with "-"', async () => {
     const t = setup()
@@ -268,7 +278,7 @@ describe('cluster view IPC', () => {
     await expect(t.call('kube.cluster.crds', '--kubeconfig=x')).rejects.toThrow(dash('context'))
     await expect(t.call('kube.cluster.pods', '-c', 'ns', 'app=x')).rejects.toThrow(dash('context'))
     await expect(t.call('kube.cluster.pods', 'c', '-n', 'app=x')).rejects.toThrow(dash('namespace'))
-    await expect(t.call('kube.cluster.pods', 'c', 'ns', '-A')).rejects.toThrow(dash('selector'))
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', '-A')).rejects.toThrow('kube: selector must be a string not starting with "-"')
     for (const read of ['get', 'describe', 'events', 'reveal', 'list', 'counts', 'namespaces', 'crds', 'pods'] as const) expect(t.cluster[read]).not.toHaveBeenCalled()
     expect(t.watches.watch).not.toHaveBeenCalled()
   })

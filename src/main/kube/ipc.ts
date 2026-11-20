@@ -244,9 +244,14 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   ipcMain.handle('kube.cluster.get', async (_e, ref) => cluster.get(objectRef(ref)))
   ipcMain.handle('kube.cluster.describe', async (_e, ref) => cluster.describe(objectRef(ref)))
   ipcMain.handle('kube.cluster.events', async (_e, ref, uid) => cluster.events(objectRef(ref), str(uid, 'uid')))
-  ipcMain.handle('kube.cluster.pods', async (_e, context, namespace, selector) =>
-    cluster.pods(arg(context, 'context'), arg(namespace, 'namespace'), arg(selector, 'selector'))
-  )
+  ipcMain.handle('kube.cluster.pods', async (_e, context, namespace, selector) => {
+    const ctx = arg(context, 'context')
+    const ns = arg(namespace, 'namespace')
+    if (typeof selector !== 'string' || selector.startsWith('-')) throw new Error('kube: selector must be a string not starting with "-"')
+    // A workload without a selector is a normal case; `-l ''` would list every Pod of the namespace instead.
+    if (selector === '') return { ok: false, message: 'No label selector to list Pods by' }
+    return cluster.pods(ctx, ns, selector)
+  })
   ipcMain.handle('kube.cluster.reveal', async (_e, ref) => cluster.reveal(objectRef(ref)))
   ipcMain.handle('kube.cluster.list', async (_e, spec) => cluster.list(watchSpec(spec)))
   ipcMain.handle('kube.cluster.watch', async (_e, id, spec) => watches.watch(str(id, 'watchId'), watchSpec(spec)))
