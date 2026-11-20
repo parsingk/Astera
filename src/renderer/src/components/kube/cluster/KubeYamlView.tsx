@@ -14,6 +14,8 @@ import { useI18n } from '../../../i18n/I18nProvider'
 export interface YamlReveal {
   /** The decoded values while shown; null while masked. */
   values: SecretValue[] | null
+  /** The last "show values" failed: why (main's line), until the next try, a hide or another object. */
+  failed: string | null
   onReveal(): void
   onHide(): void
 }
@@ -78,6 +80,11 @@ export function KubeYamlView({ object, kind, reveal }: { object: K8sObject; kind
           </button>
         )}
       </div>
+      {reveal !== null && reveal.failed !== null && (
+        <div className="kube-yaml-note kube-yaml-error" role="alert" title={reveal.failed}>
+          {t('kube.cluster.revealFailed')}
+        </div>
+      )}
       {binary.length > 0 && (
         <div className="kube-yaml-note">
           {t('kube.cluster.binaryKeys')} {binary.join(', ')}

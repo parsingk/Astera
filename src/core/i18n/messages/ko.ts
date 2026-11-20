@@ -3404,5 +3404,6 @@ export const ko = {
   'kube.cluster.restartsAgo': '{count}, 마지막 {ago} 전',
   'kube.cluster.kubeconfigError': 'kubeconfig 를 읽지 못했습니다: {detail}',
   'kube.cluster.pausedForbidden': '멈춤: 권한 없음',
-  'kube.cluster.pausedEnded': '멈춤: 감시가 끝남'
+  'kube.cluster.pausedEnded': '멈춤: 감시가 끝남',
+  'kube.cluster.revealFailed': '값을 보여주지 못했습니다'
 } as const

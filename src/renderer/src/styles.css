@@ -3718,6 +3718,7 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-yaml-bar { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-bottom: 1px solid var(--line-soft); }
 .kube-yaml-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; }
 .kube-yaml-note { flex: none; padding: 4px 10px; color: var(--text-dim); font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+.kube-yaml-note.kube-yaml-error { color: var(--danger); }
 .kube-yaml-host { flex: 1; min-height: 0; overflow: hidden; }
 .kube-yaml-host .cm-editor { height: 100%; }
 .kube-yaml-host .cm-editor, .kube-yaml-host .cm-gutters { background: var(--md-code-bg); }

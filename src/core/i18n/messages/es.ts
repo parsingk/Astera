@@ -2757,5 +2757,6 @@ export const es: Catalog = {
   'kube.cluster.restartsAgo': '{count}, la última hace {ago}',
   'kube.cluster.kubeconfigError': 'No se pudo leer kubeconfig: {detail}',
   'kube.cluster.pausedForbidden': 'En pausa: sin permiso',
-  'kube.cluster.pausedEnded': 'En pausa: la vigilancia terminó'
+  'kube.cluster.pausedEnded': 'En pausa: la vigilancia terminó',
+  'kube.cluster.revealFailed': 'No se pudieron mostrar los valores'
 }

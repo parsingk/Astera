@@ -3150,5 +3150,6 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.restartsAgo': '{count}, last {ago} ago',
   'kube.cluster.kubeconfigError': 'Could not read kubeconfig: {detail}',
   'kube.cluster.pausedForbidden': 'Paused: no permission',
-  'kube.cluster.pausedEnded': 'Paused: the watch ended'
+  'kube.cluster.pausedEnded': 'Paused: the watch ended',
+  'kube.cluster.revealFailed': 'Could not show the values'
 }

@@ -98,18 +98,25 @@ describe('KubeYamlView', () => {
     renderToStaticMarkup(React.createElement(KubeYamlView, { object: masked, kind: 'Secret', reveal }))
 
   it('masks a Secret until revealed', () => {
-    const hidden = view({ values: null, onReveal: noop, onHide: noop })
+    const hidden = view({ values: null, failed: null, onReveal: noop, onHide: noop })
     expect(hidden).toContain('***')
     expect(hidden).toContain('kube.cluster.showValues')
     expect(hidden).not.toContain('hunter2')
-    const shown = view({ values: [{ key: 'password', text: 'hunter2', base64: 'aHVudGVyMg==' }], onReveal: noop, onHide: noop })
+    const shown = view({ values: [{ key: 'password', text: 'hunter2', base64: 'aHVudGVyMg==' }], failed: null, onReveal: noop, onHide: noop })
     expect(shown).toContain('hunter2')
     expect(shown).toContain('kube.cluster.hideValues')
     expect(shown).not.toContain('***')
   })
 
+  // Task 12 minor: a failed "show values" showed nothing. It says so in a short line, kubectl's line as the tooltip.
+  it('says a failed reveal failed, and nothing while there is no failure', () => {
+    const html = view({ values: null, failed: 'Error from server (Forbidden): secrets "s" is forbidden', onReveal: noop, onHide: noop })
+    expect(html).toContain('<div class="kube-yaml-note kube-yaml-error" role="alert" title="Error from server (Forbidden): secrets &quot;s&quot; is forbidden">kube.cluster.revealFailed</div>')
+    expect(view({ values: null, failed: null, onReveal: noop, onHide: noop })).not.toContain('kube.cluster.revealFailed')
+  })
+
   it('lists the keys kept as base64', () => {
-    const html = view({ values: [{ key: 'blob', text: null, base64: 'AAEC' }], onReveal: noop, onHide: noop })
+    const html = view({ values: [{ key: 'blob', text: null, base64: 'AAEC' }], failed: null, onReveal: noop, onHide: noop })
     expect(html).toContain('kube.cluster.binaryKeys')
     expect(html).toContain('blob')
   })
