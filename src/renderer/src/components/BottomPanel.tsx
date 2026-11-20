@@ -184,6 +184,8 @@ export function BottomPanel({
               aria-selected={activeTab === tab.id}
               tabIndex={0}
               className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
+              // Two tabs of one Pod read the same: where each reads from tells them apart.
+              title={`${[tab.ref.context, tab.ref.namespace].filter((s) => s !== null).join(' / ')} · ${t('kube.logs.container')} ${tab.container}`}
               onClick={() => onSelectTab(tab.id)}
               onKeyDown={tabKeyDown(tab.id)}
             >

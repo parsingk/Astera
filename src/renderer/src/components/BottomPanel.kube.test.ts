@@ -168,6 +168,12 @@ describe('BottomPanel log tabs', () => {
     expect(strip[2]).toContain('kube.logs.tab{&quot;pod&quot;:&quot;web-2&quot;}')
   })
 
+  // Task 6 review minor: two tabs of one Pod read the same; the tooltip tells where each reads from.
+  it('says the context, namespace and container in the tab\'s tooltip', () => {
+    const strip = tabTags(render({ logTabs: tabs }))
+    expect(strip[1]).toMatch(/^<span role="tab"[^>]* title="kind-dev \/ api · kube\.logs\.container worker"/)
+  })
+
   it('draws the log tabs before the terminals', () => {
     const html = render({ logTabs: tabs.slice(0, 1), terminals: [{ id: 't1', buffer: '' }] })
     expect(html.indexOf('kube.logs.tab')).toBeGreaterThan(html.indexOf('kube.log.tab'))
