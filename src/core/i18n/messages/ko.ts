@@ -3392,5 +3392,9 @@ export const ko = {
   'kube.cluster.conditions': '컨디션',
   'kube.cluster.warning': '경고',
   'kube.cluster.requests': '요청',
-  'kube.cluster.limits': '제한'
+  'kube.cluster.limits': '제한',
+  'kube.cluster.rail': 'Kubernetes',
+  'kube.cluster.segment.cluster': '클러스터',
+  'kube.cluster.segment.log': '작업 기록',
+  'kube.cluster.noOperations': '아직 작업 기록이 없습니다'
 } as const

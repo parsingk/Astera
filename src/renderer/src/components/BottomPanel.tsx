@@ -7,6 +7,7 @@ import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
 import { FileIcon } from './FileIcon'
 import { KubeLogPanel } from './kube/KubeLogPanel'
+import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
 import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
 import { ChevronDown, Delete, Plus, X } from 'lucide-react'
@@ -43,7 +44,11 @@ export function BottomPanel({
   kubeLog = [],
   onKubeRerun,
   onKubeCancel,
-  onKubeClear
+  onKubeClear,
+  kubeAvailable,
+  kubeSegment,
+  onKubeSegment,
+  kubeCluster
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -78,11 +83,18 @@ export function BottomPanel({
   onNewTerminal: () => void
   onCloseTerminal: (id: string) => void
   onCollapse: () => void
-  /** The session's Kubernetes operations. The Kubernetes tab is there only while this is not empty. */
+  /** The session's Kubernetes operations, shown in the Kubernetes tab's Operation log segment. */
   kubeLog?: KubeLogEntry[]
   onKubeRerun?: (id: string) => void
   onKubeCancel?: (id: string) => void
   onKubeClear?: () => void
+  /** Whether to draw the Kubernetes tab: kubectl is found, or the log has entries to show (spec 4.1, 4.12). */
+  kubeAvailable: boolean
+  /** The Kubernetes tab's segment: the cluster view or the operation log. */
+  kubeSegment: KubeSegment
+  onKubeSegment: (s: KubeSegment) => void
+  /** The Cluster segment's body. App owns the view's state, so it builds this (or the kubectl-missing notice). */
+  kubeCluster: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -136,7 +148,7 @@ export function BottomPanel({
               {t('run.panel.tab')}
             </span>
           )}
-          {kubeLog.length > 0 && (
+          {kubeAvailable && (
             <span
               role="tab"
               aria-selected={activeTab === 'kube'}
@@ -247,18 +259,26 @@ export function BottomPanel({
             hidden wraps at that width, but opening the tab makes the ResizeObserver refit and corrects it
             — cosmetic and self-correcting. The same applies to a RunPanel mounted for a tab that is not
             selected. */}
-        {kubeLog.length > 0 && (
+        {kubeAvailable && (
           <div className="bottom-body kube-body" style={{ display: activeTab === 'kube' ? 'flex' : 'none' }}>
-            <KubeLogPanel
-              log={kubeLog}
-              onRerun={(id) => onKubeRerun?.(id)}
-              onCancel={(id) => onKubeCancel?.(id)}
-              onCopy={(id) => {
-                const e = kubeLog.find((x) => x.id === id)
-                if (e) window.api.clipboard.writeText(e.commandLines.map((a) => kubeCommandText(a, window.api.platform)).join(String.fromCharCode(10)))
-              }}
-              onClear={() => onKubeClear?.()}
-              onOpenFile={(path) => onOpenFile(path, {})}
+            <KubeSegments
+              segment={kubeSegment}
+              onSegment={onKubeSegment}
+              logCount={kubeLog.length}
+              cluster={kubeCluster}
+              log={
+                <KubeLogPanel
+                  log={kubeLog}
+                  onRerun={(id) => onKubeRerun?.(id)}
+                  onCancel={(id) => onKubeCancel?.(id)}
+                  onCopy={(id) => {
+                    const e = kubeLog.find((x) => x.id === id)
+                    if (e) window.api.clipboard.writeText(e.commandLines.map((a) => kubeCommandText(a, window.api.platform)).join(String.fromCharCode(10)))
+                  }}
+                  onClear={() => onKubeClear?.()}
+                  onOpenFile={(path) => onOpenFile(path, {})}
+                />
+              }
             />
           </div>
         )}

@@ -2715,5 +2715,9 @@ export const ja: Catalog = {
   'kube.cluster.conditions': 'コンディション',
   'kube.cluster.warning': '警告',
   'kube.cluster.requests': 'リクエスト',
-  'kube.cluster.limits': '上限'
+  'kube.cluster.limits': '上限',
+  'kube.cluster.rail': 'Kubernetes',
+  'kube.cluster.segment.cluster': 'クラスター',
+  'kube.cluster.segment.log': '操作ログ',
+  'kube.cluster.noOperations': 'まだ操作はありません'
 }

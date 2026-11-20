@@ -3606,6 +3606,17 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-log-line.warning { color: var(--warn-ink); }
 .kube-log-line.error { color: var(--danger); }
 .kube-log-file { background: transparent; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.kube-log-empty { padding: 12px; font-size: 12px; color: var(--text-faint); }
+/* The Kubernetes tab's switch (KubeSegments), Cluster | Operation log, over the segment it picks. "On" reads as the
+   app's other segmented switches do (.kind-segmented): accent border on the lifted background. */
+.kube-segments { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.kube-segment-bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+.kube-segment { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-dim); font-size: 11.5px; cursor: pointer; }
+.kube-segment:hover { color: var(--text); }
+.kube-segment:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.kube-segment.on { color: var(--text); border-color: var(--accent); background: var(--elevated); }
+.kube-segment-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.kube-segment-body { flex: 1; min-width: 0; min-height: 0; }
 /* The explorer's mark on a file whose last Kubernetes operation failed. */
 .fx-kube-failed { flex: none; display: inline-flex; align-items: center; margin-left: auto; padding-left: 6px; color: var(--warn); }
 

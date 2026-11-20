@@ -3138,5 +3138,9 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.conditions': 'Conditions',
   'kube.cluster.warning': 'Warning',
   'kube.cluster.requests': 'Requests',
-  'kube.cluster.limits': 'Limits'
+  'kube.cluster.limits': 'Limits',
+  'kube.cluster.rail': 'Kubernetes',
+  'kube.cluster.segment.cluster': 'Cluster',
+  'kube.cluster.segment.log': 'Operation log',
+  'kube.cluster.noOperations': 'No operations yet'
 }

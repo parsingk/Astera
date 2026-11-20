@@ -2745,5 +2745,9 @@ export const es: Catalog = {
   'kube.cluster.conditions': 'Condiciones',
   'kube.cluster.warning': 'Aviso',
   'kube.cluster.requests': 'Solicitudes',
-  'kube.cluster.limits': 'Límites'
+  'kube.cluster.limits': 'Límites',
+  'kube.cluster.rail': 'Kubernetes',
+  'kube.cluster.segment.cluster': 'Clúster',
+  'kube.cluster.segment.log': 'Registro de operaciones',
+  'kube.cluster.noOperations': 'Aún no hay operaciones'
 }
