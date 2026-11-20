@@ -82,7 +82,8 @@ export function KubeLogView({
   pod,
   target,
   initial,
-  visible
+  visible,
+  onContainer
 }: {
   /** The Pod as the opener knew it, if it did: shown until the view's own read of it answers. */
   pod: K8sObject | null
@@ -91,6 +92,8 @@ export function KubeLogView({
    *  asks (KubeLogTab), so an ask the same as the last one still applies. */
   initial: { container: string; previous: boolean; filter?: string; request?: number }
   visible: boolean
+  /** The person picked a container: the tab keeps it as its own (its tooltip, and which Logs ask it answers). */
+  onContainer: (name: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const targetKey = JSON.stringify(target)
@@ -196,12 +199,15 @@ export function KubeLogView({
 
   // The opener asks again for this tab (previous logs of the same container): the tab follows what it asks, and the
   // new stream starts at its end. The request count makes an ask the same as the last one, after the person changed
-  // the view, apply again.
+  // the view, apply again. The tab's container changes only to follow a pick here (onContainer), which asks nothing:
+  // applied, it would put back the tab's previous over the one the pick chose.
   useEffect(() => {
     setContainer(initial.container)
     setPrevious(initial.previous)
     pin()
-  }, [initial.container, initial.previous, initial.request])
+    // `initial.container` is this render's: the tab's, which follows the view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial.previous, initial.request])
 
   useEffect(() => {
     const el = box.current
@@ -250,6 +256,7 @@ export function KubeLogView({
     // Previous follows the container picked: on for one in CrashLoopBackOff, where the reason is (spec 4.8).
     setPrevious(podNow !== null && previousByDefault(podNow, name))
     pin()
+    onContainer(name)
   }
   const save = async (): Promise<void> => {
     const text = rows.map((l) => plainLine(l, timestamps) + '\n').join('')

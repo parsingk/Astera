@@ -5,8 +5,8 @@ import type { ObjectRef } from '../../../core/kube/cluster/types'
 import { defaultContainer, previousByDefault } from '../../../core/kube/cluster/logs'
 
 /** `request`: how often the opener asked this tab for previous logs. The view applies `container` and `previous` when
- *  they change, so asking for what the tab already says (the person turned previous off in the view since) has to show
- *  as a change too. */
+ *  `previous` or `request` change, so asking for what the tab already says (the person turned previous off in the view
+ *  since) has to show as a change too. `container` follows the person's pick in the view (setLogTabContainer). */
 export interface KubeLogTab { id: string; ref: ObjectRef; container: string; previous: boolean; request: number }
 
 const PREFIX = 'kubelog:'
@@ -41,6 +41,12 @@ export function openLogTab(
 
 export function closeLogTab(tabs: readonly KubeLogTab[], id: string): KubeLogTab[] {
   return tabs.filter((tab) => tab.id !== id)
+}
+
+/** The container the person picked in a tab: the tab follows it, so its tooltip names what it shows and Logs for the
+ *  container it showed before opens a tab of its own. */
+export function setLogTabContainer(tabs: readonly KubeLogTab[], id: string, container: string): KubeLogTab[] {
+  return tabs.map((tab) => (tab.id === id ? { ...tab, container } : tab))
 }
 
 /** Opens a Pod's logs from the cluster view (spec 4.7, 4.8) on its default container. A new tab starts with previous on

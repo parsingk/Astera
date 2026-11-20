@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { K8sObject } from '../../../core/kube/objects'
-import { closeLogTab, isLogTabId, openLogTab, openPodLogs, type KubeLogTab } from './kubeLogTabs'
+import { closeLogTab, isLogTabId, openLogTab, openPodLogs, setLogTabContainer, type KubeLogTab } from './kubeLogTabs'
 
 const ref = (name: string, over: Partial<{ context: string; namespace: string | null }> = {}) => ({
   context: 'kind-dev',
@@ -79,6 +79,22 @@ describe('closeLogTab', () => {
     const c = openLogTab(b, ref('worker-3'), 'worker', plain, newId).tabs
     expect(closeLogTab(c, 'kubelog:2').map((t) => t.ref.name)).toEqual(['worker-1', 'worker-3'])
     expect(closeLogTab(c, 'kubelog:9')).toEqual(c)
+  })
+})
+
+// Final review M1: the tab follows the container picked in it, so its tooltip names what it shows, and Logs for the
+// container it showed before opens a tab of its own (spec 4.8: one tab per Pod and container).
+describe('setLogTabContainer', () => {
+  it('changes that tab\'s container only, so a Logs ask matches what each tab shows', () => {
+    const newId = ids()
+    const a = openLogTab([], ref('worker-1'), 'worker', plain, newId).tabs
+    const b = openLogTab(a, ref('worker-2'), 'worker', plain, newId).tabs
+    const picked = setLogTabContainer(b, 'kubelog:1', 'sidecar')
+    expect(picked).toEqual([{ ...b[0], container: 'sidecar' }, b[1]])
+    const again = openLogTab(picked, ref('worker-1'), 'worker', plain, newId)
+    expect(again.tabs).toHaveLength(3)
+    expect(again.focus).toBe('kubelog:3')
+    expect(openLogTab(picked, ref('worker-1'), 'sidecar', plain, newId).focus).toBe('kubelog:1')
   })
 })
 

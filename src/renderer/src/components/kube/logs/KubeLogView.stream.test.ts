@@ -178,7 +178,7 @@ function held(): { promise: Promise<unknown>; answer: (v: unknown) => void } {
 }
 
 const view = (seed: unknown = pod, filter?: string) => () =>
-  KubeLogView({ pod: seed as never, target, initial: { container: 'worker', previous: false, filter }, visible: true })
+  KubeLogView({ pod: seed as never, target, initial: { container: 'worker', previous: false, filter }, visible: true, onContainer: () => {} })
 
 beforeEach(() => {
   hooks.reset()
@@ -337,7 +337,7 @@ describe('KubeLogView stream', () => {
   it('takes the start count from the new target\'s Pod', async () => {
     vi.useFakeTimers()
     let at = target
-    const v = () => KubeLogView({ pod: null, target: at, initial: { container: 'worker', previous: false }, visible: true })
+    const v = () => KubeLogView({ pod: null, target: at, initial: { container: 'worker', previous: false }, visible: true, onContainer: () => {} })
     api.answer(read(podWith({ restartCount: 5, state: { running: {} } })))
     hooks.render(v)
     await vi.advanceTimersByTimeAsync(0)
@@ -381,7 +381,7 @@ describe('KubeLogView stream', () => {
   // view as the same `initial` with a higher request count, and previous comes back on.
   it('applies what the opener asks again when its request count grows, though the ask is the same', () => {
     const asked = (request: number) => () =>
-      KubeLogView({ pod: pod as never, target, initial: { container: 'worker', previous: true, request }, visible: true })
+      KubeLogView({ pod: pod as never, target, initial: { container: 'worker', previous: true, request }, visible: true, onContainer: () => {} })
     const tree = hooks.render(asked(0))
     expect(api.started[0]).toMatchObject({ container: 'worker', previous: true })
     ;(byLabel(tree, 'kube.logs.previous').props.onClick as () => void)()
@@ -393,6 +393,38 @@ describe('KubeLogView stream', () => {
     const shown = hooks.render(asked(1))
     expect(api.started).toHaveLength(3)
     expect(api.started[2]).toMatchObject({ container: 'worker', previous: true })
+    expect(byLabel(shown, 'kube.logs.previous').props['aria-pressed']).toBe(true)
+  })
+
+  // Final review M1: the tab follows the container picked in it (App keeps it in the tab), so its tooltip and a later Logs
+  // ask match what it shows. That container comes back as the tab's, which asks the view nothing: previous stays as the
+  // pick set it, and no other kubectl starts.
+  it('tells the tab the container picked, and takes it back without undoing the pick', () => {
+    const crashing = podWith({ state: { running: {} } })
+    crashing.status.containerStatuses.push({ name: 'sidecar', restartCount: 2, state: { waiting: { reason: 'CrashLoopBackOff' } } } as never)
+    api.answer(read(crashing))
+    let container = 'worker'
+    const picked: string[] = []
+    const v = () =>
+      KubeLogView({
+        pod: crashing as never,
+        target,
+        initial: { container, previous: false, request: 0 },
+        visible: true,
+        onContainer: (name: string) => {
+          picked.push(name)
+          container = name
+        }
+      })
+    const tree = hooks.render(v)
+    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    expect(picked).toEqual(['sidecar'])
+    hooks.render(v)
+    const shown = hooks.render(v)
+    expect(api.started.map((s) => [s.container, s.previous])).toEqual([
+      ['worker', false],
+      ['sidecar', true]
+    ])
     expect(byLabel(shown, 'kube.logs.previous').props['aria-pressed']).toBe(true)
   })
 

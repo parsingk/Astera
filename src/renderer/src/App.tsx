@@ -168,7 +168,7 @@ import { useClusterView } from './hooks/useClusterView'
 import type { ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
-import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, type KubeLogTab } from './lib/kubeLogTabs'
+import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, setLogTabContainer, type KubeLogTab } from './lib/kubeLogTabs'
 import { shownBottomTab } from './lib/bottomTab'
 import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
@@ -5238,6 +5238,7 @@ export default function App(): React.JSX.Element {
                       target={tab.ref}
                       initial={{ container: tab.container, previous: tab.previous, request: tab.request }}
                       visible={runPanelOpen && bottomTabShown === tab.id}
+                      onContainer={(name) => setLogTabs((prev) => setLogTabContainer(prev, tab.id, name))}
                     />,
                     logHostOf(tab.id),
                     tab.id

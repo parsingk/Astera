@@ -45,7 +45,7 @@ const streamOf = (lines: string[], state: LogState = 'streaming', max?: number):
 })
 const render = (stream: KubeLogStream, initial: { container: string; previous: boolean; filter?: string } = { container: 'worker', previous: false }, seed: K8sObject = pod): string => {
   stub.stream = stream
-  return renderToStaticMarkup(React.createElement(KubeLogView, { pod: seed, target, initial, visible: true }))
+  return renderToStaticMarkup(React.createElement(KubeLogView, { pod: seed, target, initial, visible: true, onContainer: () => {} }))
 }
 
 const button = (html: string, label: string): string => {
