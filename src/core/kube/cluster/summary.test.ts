@@ -38,7 +38,8 @@ describe('cluster summary', () => {
       { apiVersion: 'v1', kind: 'Event', metadata: { name: 'e' }, type: 'Warning', reason: 'BackOff', message: 'Back-off restarting failed container', lastTimestamp: '2026-11-20T11:48:00Z' }
     ], 'live-cluster', now)
     expect(s.facts.find((f) => f.label === 'kube.cluster.fact.lastExit')?.value).toBe('1 (Error)')
-    expect(s.facts.find((f) => f.label === 'kube.cluster.fact.restarts')?.value).toBe('14, last 12m ago')
+    // Final review M3: the count and the age, worded by the renderer's catalog, not English prose made here.
+    expect(s.facts.find((f) => f.label === 'kube.cluster.fact.restarts')).toMatchObject({ value: '14', ago: '12m' })
     expect(s.facts.find((f) => f.label === 'kube.cluster.fact.owner')?.refs).toEqual([{ context: 'live-cluster', namespace: 'api', resource: 'replicasets.apps', kind: 'ReplicaSet', name: 'worker-6b8f9c' }])
     expect(s.containers[0]).toMatchObject({ name: 'worker', state: 'Waiting: CrashLoopBackOff', tone: 'bad', requests: 'cpu 250m, memory 256Mi' })
     expect(s.warning).toBe('BackOff: Back-off restarting failed container')

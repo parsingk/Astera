@@ -2753,5 +2753,6 @@ export const es: Catalog = {
   'kube.cluster.readOnly': 'Solo lectura',
   'kube.cluster.readAgo': 'Leído hace {ago}',
   'kube.cluster.notFound': 'No está en el clúster.',
-  'kube.cluster.kubectlMissing': 'No se encontró kubectl'
+  'kube.cluster.kubectlMissing': 'No se encontró kubectl',
+  'kube.cluster.restartsAgo': '{count}, la última hace {ago}'
 }

@@ -71,7 +71,9 @@ function SummaryTab({ model, object, kind, context }: { model: ClusterViewModel;
                       </button>
                     </Fragment>
                   ))
-                : f.value}
+                : f.ago !== undefined
+                  ? t('kube.cluster.restartsAgo', { count: f.value, ago: f.ago })
+                  : f.value}
             </dd>
           </div>
         ))}

@@ -120,6 +120,24 @@ describe('ClusterDetail owner chain', () => {
   })
 })
 
+// Final review M3: "14, last 12m ago" is worded through the catalogs.
+describe('ClusterDetail restarts', () => {
+  it('words the restart count and when the last one was with a catalog key', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'p', namespace: 'dev' },
+      status: {
+        phase: 'Running',
+        containerStatuses: [{ name: 'a', restartCount: 14, lastState: { terminated: { exitCode: 1, reason: 'Error', finishedAt: new Date(Date.now() - 12 * 60_000).toISOString() } } }]
+      }
+    }
+    const html = render(model('Pod', 'pods', pod))
+    expect(html).toContain('kube.cluster.restartsAgo{&quot;count&quot;:&quot;14&quot;,&quot;ago&quot;:&quot;12m&quot;}')
+    expect(html).not.toContain(' ago')
+  })
+})
+
 describe('ClusterDetail containers', () => {
   it('labels requests and limits with catalog keys', () => {
     const pod: K8sObject = {

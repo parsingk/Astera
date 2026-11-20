@@ -2723,5 +2723,6 @@ export const ja: Catalog = {
   'kube.cluster.readOnly': '読み取り専用',
   'kube.cluster.readAgo': '{ago}前に読み込み',
   'kube.cluster.notFound': 'クラスターにありません。',
-  'kube.cluster.kubectlMissing': 'kubectl が見つかりません'
+  'kube.cluster.kubectlMissing': 'kubectl が見つかりません',
+  'kube.cluster.restartsAgo': '{count}、最後は{ago}前'
 }

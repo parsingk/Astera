@@ -4,8 +4,9 @@ import { KIND_GROUPS } from './kinds'
 import { ageText, podStatus } from './status'
 import type { ObjectRef, Tone } from './types'
 
-/** `refs`: objects the value names, each drawn as a link that selects it (the owner chain, nearest first). */
-export interface SummaryFact { label: string; value: string; tone?: Tone; refs?: ObjectRef[] }
+/** `refs`: objects the value names, each drawn as a link that selects it (the owner chain, nearest first). `ago`: how
+ *  long ago the last restart was; the renderer words it with the value through `kube.cluster.restartsAgo`. */
+export interface SummaryFact { label: string; value: string; tone?: Tone; refs?: ObjectRef[]; ago?: string }
 export interface ContainerFact { name: string; init: boolean; image: string; state: string; tone: Tone; requests: string; limits: string }
 export interface Summary { facts: SummaryFact[]; containers: ContainerFact[]; conditions: { type: string; status: string; reason?: string }[]; warning: string | null }
 
@@ -123,7 +124,7 @@ function podFacts(o: K8sObject, context: string, nowMs: number, owners: ObjectRe
   const last = terminations[0]
   const lastAge = last ? ageText(str(last.finishedAt), nowMs) : ''
 
-  const facts: SummaryFact[] = [fact('status', ps.text, { tone: ps.tone }), fact('restarts', lastAge ? `${restarts}, last ${lastAge} ago` : String(restarts))]
+  const facts: SummaryFact[] = [fact('status', ps.text, { tone: ps.tone }), fact('restarts', String(restarts), lastAge ? { ago: lastAge } : {})]
   if (last) facts.push(fact('lastExit', `${numText(last.exitCode)} (${str(last.reason)})`))
   if (rec(o.spec).nodeName) facts.push(fact('node', str(rec(o.spec).nodeName)))
   if (status.podIP) facts.push(fact('podIP', str(status.podIP)))
