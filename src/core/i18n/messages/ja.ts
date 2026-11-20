@@ -2728,5 +2728,21 @@ export const ja: Catalog = {
   'kube.cluster.kubeconfigError': 'kubeconfig を読み込めません: {detail}',
   'kube.cluster.pausedForbidden': '一時停止: 権限なし',
   'kube.cluster.pausedEnded': '一時停止: 監視が終了しました',
-  'kube.cluster.revealFailed': '値を表示できませんでした'
+  'kube.cluster.revealFailed': '値を表示できませんでした',
+  'kube.logs.container': 'コンテナ',
+  'kube.logs.initContainer': '{name}（初期化）',
+  'kube.logs.previous': '再起動前',
+  'kube.logs.previousTitle': '最後の再起動前のコンテナのログ',
+  'kube.logs.follow': '追従',
+  'kube.logs.filter': '絞り込み',
+  'kube.logs.timestamps': 'タイムスタンプを表示',
+  'kube.logs.wrap': '長い行を折り返す',
+  'kube.logs.save': 'ファイルに保存',
+  'kube.logs.clear': '表示をクリア',
+  'kube.logs.lines': '{container}コンテナのログ',
+  'kube.logs.dropped': '古い行を{count}行破棄しました',
+  'kube.logs.ended': '終了コード {code}',
+  'kube.logs.streamEnded': 'ストリームが終了しました',
+  'kube.logs.saved': '{path}に保存しました',
+  'kube.logs.saveFailed': 'ログを保存できませんでした: {detail}'
 }

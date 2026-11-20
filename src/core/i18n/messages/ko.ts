@@ -3405,5 +3405,21 @@ export const ko = {
   'kube.cluster.kubeconfigError': 'kubeconfig 를 읽지 못했습니다: {detail}',
   'kube.cluster.pausedForbidden': '멈춤: 권한 없음',
   'kube.cluster.pausedEnded': '멈춤: 감시가 끝남',
-  'kube.cluster.revealFailed': '값을 보여주지 못했습니다'
+  'kube.cluster.revealFailed': '값을 보여주지 못했습니다',
+  'kube.logs.container': '컨테이너',
+  'kube.logs.initContainer': '{name} (초기화)',
+  'kube.logs.previous': '재시작 전',
+  'kube.logs.previousTitle': '마지막 재시작 전 컨테이너의 로그',
+  'kube.logs.follow': '따라가기',
+  'kube.logs.filter': '거르기',
+  'kube.logs.timestamps': '시간 보이기',
+  'kube.logs.wrap': '긴 줄 감싸기',
+  'kube.logs.save': '파일로 저장',
+  'kube.logs.clear': '화면 지우기',
+  'kube.logs.lines': '{container} 컨테이너 로그',
+  'kube.logs.dropped': '오래된 줄 {count}개를 버렸습니다',
+  'kube.logs.ended': '종료 코드 {code}',
+  'kube.logs.streamEnded': '스트림이 끝났습니다',
+  'kube.logs.saved': '{path} 에 저장했습니다',
+  'kube.logs.saveFailed': '로그를 저장하지 못했습니다: {detail}'
 } as const

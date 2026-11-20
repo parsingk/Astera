@@ -3151,5 +3151,21 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.kubeconfigError': 'Could not read kubeconfig: {detail}',
   'kube.cluster.pausedForbidden': 'Paused: no permission',
   'kube.cluster.pausedEnded': 'Paused: the watch ended',
-  'kube.cluster.revealFailed': 'Could not show the values'
+  'kube.cluster.revealFailed': 'Could not show the values',
+  'kube.logs.container': 'Container',
+  'kube.logs.initContainer': '{name} (init)',
+  'kube.logs.previous': 'Previous',
+  'kube.logs.previousTitle': 'Logs of the container before its last restart',
+  'kube.logs.follow': 'Follow',
+  'kube.logs.filter': 'Filter',
+  'kube.logs.timestamps': 'Show time stamps',
+  'kube.logs.wrap': 'Wrap long lines',
+  'kube.logs.save': 'Save to a file',
+  'kube.logs.clear': 'Clear the view',
+  'kube.logs.lines': 'Logs of {container}',
+  'kube.logs.dropped': 'Older lines dropped: {count}',
+  'kube.logs.ended': 'Exit code {code}',
+  'kube.logs.streamEnded': 'Stream ended',
+  'kube.logs.saved': 'Saved to {path}',
+  'kube.logs.saveFailed': 'Could not save the logs: {detail}'
 }

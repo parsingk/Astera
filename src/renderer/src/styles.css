@@ -181,6 +181,26 @@
   --pr-merged: #a371f7;
   --pr-closed: #f85149;
   --pr-draft: #8b949e;
+  /* ANSI colours in a Pod's logs (KubeLogView; ansiSpans in core/kube/cluster/logs.ts names them). **Outside the theme
+     pipeline** for the reason xtermThemeOf gives in apply.ts: the 16 colours belong to the program that printed them.
+     They are xterm's own defaults, which the terminal tab shows, so a line reads the same in a logs tab as in
+     `kubectl logs` at a prompt. Every theme is dark, so this one set serves them all. */
+  --ansi-black: #2e3436;
+  --ansi-red: #cc0000;
+  --ansi-green: #4e9a06;
+  --ansi-yellow: #c4a000;
+  --ansi-blue: #3465a4;
+  --ansi-magenta: #75507b;
+  --ansi-cyan: #06989a;
+  --ansi-white: #d3d7cf;
+  --ansi-bright-black: #555753;
+  --ansi-bright-red: #ef2929;
+  --ansi-bright-green: #8ae234;
+  --ansi-bright-yellow: #fce94f;
+  --ansi-bright-blue: #729fcf;
+  --ansi-bright-magenta: #ad7fa8;
+  --ansi-bright-cyan: #34e2e2;
+  --ansi-bright-white: #eeeeec;
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
@@ -3733,3 +3753,22 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-tab-bar .kube-segment-switch { margin-left: auto; }
 .kube-tab-body { flex: 1; min-height: 0; overflow: auto; }
 .kube-tab.deleted .kube-tab-body { opacity: .5; }
+/* A Pod's logs tab (KubeLogView, board E): the toolbar, then the lines in monospace, LINE_HEIGHT (20px) a line unless
+   wrapped. The view does its own scroll keeping, so the browser's scroll anchoring stays out of it: with wrapped lines
+   it would answer the window's moves with scrolls of its own. */
+.kube-logs { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); font-size: 12px; }
+.kube-logs-bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+.kube-logs-bar select.kube-pill { max-width: 220px; background: transparent; color: var(--text-dim); font-family: inherit; cursor: pointer; }
+.kube-logs-bar select.kube-pill:hover { background: var(--elevated); color: var(--text); }
+.kube-logs-bar .kube-segment:disabled { opacity: .4; color: var(--text-dim); cursor: default; }
+.kube-logs-where { margin-left: auto; }
+.kube-logs-dropped { flex: none; padding: 3px 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 11.5px; }
+.kube-logs-body { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--text); }
+.kube-logs-line { display: flex; gap: 12px; padding: 0 12px; white-space: pre; }
+.kube-logs-body.wrap .kube-logs-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.kube-logs-body.wrap .kube-logs-text { flex: 1; min-width: 0; }
+.kube-logs-ts { flex: none; min-width: 12ch; color: var(--text-faint); }
+.kube-logs-note { padding: 0 12px; font-family: var(--sans); color: var(--text-faint); }
+.kube-logs-error { padding: 0 12px; color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; }
+.kube-logs-end { display: inline-flex; gap: 8px; margin: 6px 12px; padding: 2px 10px; border: 1px solid var(--line-soft); border-radius: var(--radius); font-family: var(--sans); font-size: 11.5px; color: var(--text-dim); }
+.kube-logs-end-time { color: var(--text-faint); }

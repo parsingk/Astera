@@ -2758,5 +2758,21 @@ export const es: Catalog = {
   'kube.cluster.kubeconfigError': 'No se pudo leer kubeconfig: {detail}',
   'kube.cluster.pausedForbidden': 'En pausa: sin permiso',
   'kube.cluster.pausedEnded': 'En pausa: la vigilancia terminó',
-  'kube.cluster.revealFailed': 'No se pudieron mostrar los valores'
+  'kube.cluster.revealFailed': 'No se pudieron mostrar los valores',
+  'kube.logs.container': 'Contenedor',
+  'kube.logs.initContainer': '{name} (inicialización)',
+  'kube.logs.previous': 'Anterior',
+  'kube.logs.previousTitle': 'Registros del contenedor antes de su último reinicio',
+  'kube.logs.follow': 'Seguir',
+  'kube.logs.filter': 'Filtrar',
+  'kube.logs.timestamps': 'Mostrar marcas de tiempo',
+  'kube.logs.wrap': 'Ajustar líneas largas',
+  'kube.logs.save': 'Guardar en un archivo',
+  'kube.logs.clear': 'Limpiar la vista',
+  'kube.logs.lines': 'Registros de {container}',
+  'kube.logs.dropped': 'Líneas antiguas descartadas: {count}',
+  'kube.logs.ended': 'Código de salida {code}',
+  'kube.logs.streamEnded': 'La transmisión terminó',
+  'kube.logs.saved': 'Guardado en {path}',
+  'kube.logs.saveFailed': 'No se pudieron guardar los registros: {detail}'
 }
