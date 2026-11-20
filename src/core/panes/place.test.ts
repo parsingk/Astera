@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { placeTab } from './place'
+import { placeKubeTab, placeTab } from './place'
+import { kubeTab } from './tabId'
 import {
   MAX_PANES,
   addTab,
@@ -264,5 +265,41 @@ describe('placeTab — splitDir (Ctrl+\\ 가 예약한 분할)', () => {
     expect(countLeaves(res.root)).toBe(4)
     expect(groupOfTab(res.root, 's1')!.id).toBe(ids[0]) // s1은 원래 그룹에 남는다
     assertInvariants(res.root, ['s1', 's2', 's3', 'sNew'])
+  })
+})
+
+// Kube cluster view spec 4.6: opening the same cluster object again focuses the tab already showing it, in whichever
+// pane it sits.
+describe('placeKubeTab', () => {
+  const ref = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
+
+  it('focuses an open kube tab instead of opening a second', () => {
+    const g = createGroup('s1')
+    const once = placeKubeTab(g, ref, { activePaneId: g.id })
+    const back = placeTab(once.root, 's2', { activePaneId: g.id })
+    const twice = placeKubeTab(back.root, ref, { activePaneId: g.id })
+    const ids = leaves(twice.root).flatMap((l) => l.tabIds)
+    expect(ids.filter((id) => id === kubeTab(ref))).toHaveLength(1)
+    expect(leafOf(twice.root, g.id)!.activeTabId).toBe(kubeTab(ref))
+    expect(twice.paneId).toBe(g.id)
+    assertInvariants(twice.root, ['s1', 's2', kubeTab(ref)])
+  })
+
+  it('finds it in another pane than the active one', () => {
+    const { root, ids } = threePane()
+    const once = placeKubeTab(root, ref, { activePaneId: ids[0] })
+    const twice = placeKubeTab(once.root, ref, { activePaneId: ids[2], splitDir: 'row' })
+    expect(countLeaves(twice.root)).toBe(3)
+    expect(groupOfTab(twice.root, kubeTab(ref))!.id).toBe(ids[0])
+    expect(leafOf(twice.root, ids[0])!.activeTabId).toBe(kubeTab(ref))
+    expect(twice.paneId).toBe(ids[0])
+    assertInvariants(twice.root, ['s1', 's2', 's3', kubeTab(ref)])
+  })
+
+  it('opens a new tab in the active pane otherwise', () => {
+    const { root, ids } = threePane()
+    const res = placeKubeTab(root, ref, { activePaneId: ids[1] })
+    expect(leafOf(res.root, ids[1])!.tabIds).toEqual(['s2', kubeTab(ref)])
+    expect(res.paneId).toBe(ids[1])
   })
 })

@@ -27,8 +27,25 @@ function setup(denied: string[] = []) {
     if (denied.includes(p)) throw new Error('path not allowed')
     return p
   }
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath } as never)
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath }
+  const cluster = {
+    namespaces: vi.fn(async () => ({ ok: true, names: [] })),
+    crds: vi.fn(async () => ({ ok: true, kinds: [], crds: [] })),
+    counts: vi.fn(async () => ({})),
+    get: vi.fn(async () => ({ ok: true, object: null })),
+    describe: vi.fn(async () => ({ ok: true, text: '' })),
+    events: vi.fn(async () => ({ ok: true, events: [] })),
+    pods: vi.fn(async () => ({ ok: true, objects: [] })),
+    reveal: vi.fn(async () => ({ ok: true, values: [] })),
+    list: vi.fn(async () => ({ ok: true, objects: [] }))
+  }
+  const watches = {
+    watch: vi.fn((): { ok: true } | { ok: false; reason: 'limit' } => ({ ok: true })),
+    unwatch: vi.fn(),
+    stopAll: vi.fn(),
+    size: vi.fn(() => 0)
+  }
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches } as never)
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -171,5 +188,98 @@ describe('files.watch in ipc.ts', () => {
     expect(start).toBeGreaterThan(0)
     expect(handler.indexOf('await assertAllowedPath(root)')).toBeGreaterThan(0)
     expect(handler.indexOf('kubeService.forgetGraph(root)')).toBeGreaterThan(handler.indexOf('await assertAllowedPath(root)'))
+  })
+})
+
+describe('cluster view IPC', () => {
+  const ref = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const kinds = [{ kind: 'Pod', resource: 'pods', namespaced: true }]
+  const spec = { context: 'c', namespace: null, namespaced: true, resource: 'pods' }
+
+  it('forwards validated arguments to the reads', async () => {
+    const t = setup()
+    await t.call('kube.cluster.namespaces', 'c')
+    expect(t.cluster.namespaces).toHaveBeenCalledWith('c')
+    await t.call('kube.cluster.crds', 'c')
+    expect(t.cluster.crds).toHaveBeenCalledWith('c')
+    await t.call('kube.cluster.counts', 'c', null, kinds)
+    expect(t.cluster.counts).toHaveBeenCalledWith('c', null, kinds)
+    await t.call('kube.cluster.get', ref)
+    expect(t.cluster.get).toHaveBeenCalledWith(ref)
+    await t.call('kube.cluster.describe', ref)
+    expect(t.cluster.describe).toHaveBeenCalledWith(ref)
+    await t.call('kube.cluster.events', ref, 'u1')
+    expect(t.cluster.events).toHaveBeenCalledWith(ref, 'u1')
+    await t.call('kube.cluster.pods', 'c', 'ns', 'app=x')
+    expect(t.cluster.pods).toHaveBeenCalledWith('c', 'ns', 'app=x')
+    await t.call('kube.cluster.reveal', ref)
+    expect(t.cluster.reveal).toHaveBeenCalledWith(ref)
+  })
+
+  it('forwards a one-shot list validated as a watch spec', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.list', spec)).toEqual({ ok: true, objects: [] })
+    expect(t.cluster.list).toHaveBeenCalledWith(spec)
+    await expect(t.call('kube.cluster.list', { context: 'c', namespace: null, resource: 'pods' })).rejects.toThrow('kube: watch spec')
+    expect(t.cluster.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('forwards watch and unwatch, returning the registry answer', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.watch', 'w1', spec)).toEqual({ ok: true })
+    expect(t.watches.watch).toHaveBeenCalledWith('w1', spec)
+    t.watches.watch.mockReturnValueOnce({ ok: false, reason: 'limit' })
+    expect(await t.call('kube.cluster.watch', 'w2', { ...spec, name: 'n' })).toEqual({ ok: false, reason: 'limit' })
+    await t.call('kube.cluster.unwatch', 'w1')
+    expect(t.watches.unwatch).toHaveBeenCalledWith('w1')
+  })
+
+  it('rejects malformed arguments before reaching main', async () => {
+    const t = setup()
+    await expect(t.call('kube.cluster.get', { ...ref, context: '' })).rejects.toThrow('kube: ref')
+    await expect(t.call('kube.cluster.watch', 'w', { context: 'c', namespace: null, resource: 'pods' })).rejects.toThrow('kube: watch spec')
+    await expect(t.call('kube.cluster.counts', 'c', null, 'pods')).rejects.toThrow('kube: kinds')
+    await expect(t.call('kube.cluster.counts', 'c', null, [{ kind: 'Pod' }])).rejects.toThrow('kube: kinds')
+    await expect(t.call('kube.cluster.events', ref, '')).rejects.toThrow('kube: uid')
+    expect(t.cluster.get).not.toHaveBeenCalled()
+    expect(t.watches.watch).not.toHaveBeenCalled()
+    expect(t.cluster.counts).not.toHaveBeenCalled()
+  })
+
+  // A workload without a selector is a normal case: its Pods tab gets a failed read, not a thrown error. kubectl is not
+  // asked, as `-l ''` would list every Pod of the namespace.
+  it('answers pods with an empty selector as a failed read, without reading', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.pods', 'c', 'ns', '')).toEqual({ ok: false, message: 'No label selector to list Pods by' })
+    expect(t.cluster.pods).not.toHaveBeenCalled()
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', undefined)).rejects.toThrow('kube: selector must be a string')
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', 3)).rejects.toThrow('kube: selector must be a string')
+  })
+
+  // kubectl would read a value starting with "-" as a flag (a resource or name is a positional argument).
+  it('rejects a context, namespace, resource, name or selector starting with "-"', async () => {
+    const t = setup()
+    const dash = (what: string) => `kube: ${what} must be a non-empty string not starting with "-"`
+    for (const [field, what] of [['context', 'ref context'], ['namespace', 'ref namespace'], ['resource', 'ref resource'], ['name', 'ref name']]) {
+      for (const channel of ['kube.cluster.get', 'kube.cluster.describe', 'kube.cluster.reveal']) {
+        await expect(t.call(channel, { ...ref, [field]: '-o=yaml' })).rejects.toThrow(dash(what))
+      }
+      await expect(t.call('kube.cluster.events', { ...ref, [field]: '-o=yaml' }, 'u1')).rejects.toThrow(dash(what))
+    }
+    const named = { ...spec, name: 'n' }
+    for (const [field, what] of [['context', 'watch context'], ['namespace', 'watch namespace'], ['resource', 'watch resource'], ['name', 'watch name']]) {
+      await expect(t.call('kube.cluster.watch', 'w', { ...named, [field]: '--all' })).rejects.toThrow(dash(what))
+      await expect(t.call('kube.cluster.list', { ...named, [field]: '--all' })).rejects.toThrow(dash(what))
+    }
+    await expect(t.call('kube.cluster.counts', 'c', null, [{ kind: 'Pod', resource: '-A', namespaced: true }])).rejects.toThrow(dash('kind resource'))
+    await expect(t.call('kube.cluster.counts', '-c', null, kinds)).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.counts', 'c', '-n', kinds)).rejects.toThrow(dash('namespace'))
+    await expect(t.call('kube.cluster.namespaces', '--kubeconfig=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.crds', '--kubeconfig=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.pods', '-c', 'ns', 'app=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.pods', 'c', '-n', 'app=x')).rejects.toThrow(dash('namespace'))
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', '-A')).rejects.toThrow('kube: selector must be a string not starting with "-"')
+    for (const read of ['get', 'describe', 'events', 'reveal', 'list', 'counts', 'namespaces', 'crds', 'pods'] as const) expect(t.cluster[read]).not.toHaveBeenCalled()
+    expect(t.watches.watch).not.toHaveBeenCalled()
   })
 })

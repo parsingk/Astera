@@ -369,6 +369,8 @@ export function createKubeService(deps: KubeServiceDeps) {
   })
 
   return {
+    /** The redacting wrapper, so the cluster reads share it instead of redacting a second time. */
+    kubectl,
     classify,
     contexts,
     invalidateContexts,

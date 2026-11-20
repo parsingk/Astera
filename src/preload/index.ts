@@ -19,6 +19,7 @@ const fire =
     ipcRenderer.send(channel, ...args)
 
 const EVENT_CHANNELS = [
+  'kube:watch',
   'session:data',
   'session:reset',
   'session:remote-size',
@@ -147,7 +148,20 @@ const api = {
     cancel: invoke('kube.cancel'),
     reload: invoke('kube.reload'),
     render: invoke('kube.render'),
-    status: invoke('kube.status')
+    status: invoke('kube.status'),
+    cluster: {
+      namespaces: invoke('kube.cluster.namespaces'),
+      crds: invoke('kube.cluster.crds'),
+      counts: invoke('kube.cluster.counts'),
+      get: invoke('kube.cluster.get'),
+      describe: invoke('kube.cluster.describe'),
+      events: invoke('kube.cluster.events'),
+      pods: invoke('kube.cluster.pods'),
+      reveal: invoke('kube.cluster.reveal'),
+      list: invoke('kube.cluster.list'),
+      watch: invoke('kube.cluster.watch'),
+      unwatch: invoke('kube.cluster.unwatch')
+    }
   },
   github: {
     status: invoke('github.status'),

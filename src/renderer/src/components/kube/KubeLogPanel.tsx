@@ -126,6 +126,7 @@ export function KubeLogPanel({
         {rail('kube.log.clear', <Eraser size={14} />, onClear, log.length === 0)}
       </div>
       <div className="kube-log-list">
+        {log.length === 0 && <div className="kube-log-empty">{t('kube.cluster.noOperations')}</div>}
         {log.map((e) => {
           const badge = kubeBadge(e)
           const open = isOpen(e.id)

@@ -146,7 +146,7 @@ import {
 import { browserTab, fileTab, isRemoteSessionKey, mediaTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
-import { mediaTabsUnder, placeMediaTab, placeTab } from '../../core/panes/place'
+import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
@@ -158,6 +158,14 @@ import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
 import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
+import type { KubeSegment } from './components/kube/KubeSegments'
+import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
+import { ClusterView } from './components/kube/cluster/ClusterView'
+import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
+import { useClusterView } from './hooks/useClusterView'
+import type { ObjectRef } from '../../core/kube/cluster/types'
+import { clusterSeen, kubeRailClick } from './lib/kubeRail'
+import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -977,12 +985,13 @@ export default function App(): React.JSX.Element {
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
    *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
-   *  both belong here. Browser tabs too — closing one closes a page, not a process. */
+   *  both belong here. Browser tabs too — closing one closes a page, not a process. A cluster object's
+   *  tab too: closing it ends only its own watch, never anything in the cluster. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media'
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media' || activeTab?.kind === 'kube'
       ? activeTabId
       : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
@@ -1974,6 +1983,15 @@ export default function App(): React.JSX.Element {
     if (reopened) setMediaNonces((prev) => ({ ...prev, [reopened]: (prev[reopened] ?? 0) + 1 }))
   }
 
+  /** Opens a cluster object in its read-only editor tab, or focuses the tab already showing it (placeKubeTab; kube
+   *  cluster view spec 4.6). The tab id is the whole record, so nothing else is kept, and like every non-session tab
+   *  it is not restored after a restart. */
+  const openKubeObject = (ref: ObjectRef): void => {
+    const placed = placeKubeTab(layoutRef.current, ref, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
   /** A resolved path link (a console, a terminal, a SendUserFile row): media goes to the viewer, any
    *  other file to an ordinary file tab at the line the output named. */
   const openLinkedPath = (path: string, at?: { line?: number; col?: number }): void => {
@@ -2160,6 +2178,12 @@ export default function App(): React.JSX.Element {
       // The tab id is the whole record (tabId's mediaTab): dropping it, and its reload nonce, is the
       // whole close; the viewer's slot unmounts with it
       setMediaNonces(({ [tabId]: _n, ...rest }) => rest)
+      dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'kube') {
+      // The tab id is the whole record too: dropping it unmounts its slot, which stops its watch and drops any
+      // revealed Secret values with it (D6)
       dropTabFromTree(tabId)
       return
     }
@@ -2658,6 +2682,8 @@ export default function App(): React.JSX.Element {
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
   const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId
+  /** The Kubernetes tab's segment: the cluster view or the operation log (spec D4). */
+  const [kubeSegment, setKubeSegment] = useState<KubeSegment>('cluster')
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
     const v = Number(localStorage.getItem('cm.runPanelHeight'))
     return v >= 120 && v <= 800 ? v : 220
@@ -2946,6 +2972,7 @@ export default function App(): React.JSX.Element {
               dismiss(id)
               setRunPanelOpen(true)
               setBottomTab('kube')
+              setKubeSegment('log')
             }
           }
         })
@@ -2962,6 +2989,25 @@ export default function App(): React.JSX.Element {
     else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel, e.involved)
     else kubeOps.startDelete(e.req, e.namespaceLabel, e.involved)
   }
+  /** kubectl answers (K1): the rail's Kubernetes icon and the cluster view are there only then. Asked at mount and again
+   *  when the settings modal closes, where kubectl's path and the kubeconfig files are set. A rejected ask counts as not
+   *  found, like ENOENT. */
+  const [kubectlFound, setKubectlFound] = useState(false)
+  useEffect(() => {
+    if (showSettings) return
+    let alive = true
+    window.api.kube.contexts().then(
+      (c) => {
+        if (alive) setKubectlFound(c.error?.errorCode !== 'ENOENT')
+      },
+      () => {
+        if (alive) setKubectlFound(false)
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [showSettings])
 
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
@@ -3697,8 +3743,10 @@ export default function App(): React.JSX.Element {
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
-  // The Kubernetes tab exists only while its log has entries; once it is cleared the tab falls back like a closed terminal.
-  const kubeTabGone = bottomTab === 'kube' && kubeOps.log.length === 0
+  // The Kubernetes tab is there while kubectl is found or its log has entries; without either it falls back like a closed
+  // terminal.
+  const kubeAvailable = kubectlFound || kubeOps.log.length > 0
+  const kubeTabGone = bottomTab === 'kube' && !kubeAvailable
   const bottomTabWanted = kubeTabGone ? 'run' : bottomTab
   const bottomTabShown =
     bottomTabWanted === 'kube'
@@ -3706,6 +3754,26 @@ export default function App(): React.JSX.Element {
       : runAvailable
         ? bottomTabWanted
         : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
+  const windowShown = useDocumentShown()
+  /** The cluster view follows the cluster only while it is seen (K4). */
+  const clusterVisible = clusterSeen({
+    hasRoot: bottomRoot !== null,
+    panelOpen: runPanelOpen,
+    kubectlFound,
+    shownTab: bottomTabShown,
+    segment: kubeSegment,
+    windowShown
+  })
+  const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
+  /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
+  const kubeRail = (): void => {
+    const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
+    setRunPanelOpen(next.panelOpen)
+    if (next.tab !== null) setBottomTab(next.tab)
+    if (next.segment !== null) setKubeSegment(next.segment)
+    // Room for this opening only (K3): cm.runPanelHeight keeps the height the person last dragged.
+    if (next.height !== null) setRunPanelHeight(next.height)
+  }
 
   // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
@@ -4661,6 +4729,33 @@ export default function App(): React.JSX.Element {
               아래에 붙는다 — 터미널 버튼에 따로 auto 마진을 주면(auto 형제가 둘) 남은 공간이 균등
               분배되어 버튼들이 벌어진다. */}
           <span className="rail-bottom">
+            {kubectlFound && bottomRoot && (
+              <button
+                className={runPanelOpen && bottomTabShown === 'kube' ? 'rail-btn on' : 'rail-btn'}
+                aria-label={t('kube.cluster.rail')}
+                title={t('kube.cluster.rail')}
+                onClick={kubeRail}
+              >
+                {/* The Kubernetes mark as the explorer's file icon draws it (FileIcon's kubernetes: a heptagon around a
+                    seven-spoke wheel), in the app's SVG convention: a 16 viewBox in a single currentColor, the outline
+                    at 1.4 and the wheel inside it at 1.2, so the spokes stay apart on a 30px button. */}
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
+                >
+                  <path d="M8 1.4 13.2 3.9 14.5 9.5 10.9 14H5.1L1.5 9.5 2.8 3.9Z" />
+                  <g strokeWidth="1.2" strokeLinecap="round">
+                    <circle cx="8" cy="8.3" r="2.9" />
+                    <path d="M8.0 7.2L8.0 4.1M8.86 7.61L11.28 5.68M9.07 8.54L12.09 9.23M8.48 9.29L9.82 12.08M7.52 9.29L6.18 12.08M6.93 8.54L3.91 9.23M7.14 7.61L4.72 5.68" />
+                  </g>
+                </svg>
+              </button>
+            )}
             {bottomRoot && (
               <button
                 className="rail-btn"
@@ -5070,6 +5165,34 @@ export default function App(): React.JSX.Element {
                     onKubeRerun={kubeRerun}
                     onKubeCancel={kubeOps.cancel}
                     onKubeClear={kubeOps.clear}
+                    kubeAvailable={kubeAvailable}
+                    kubeSegment={kubeSegment}
+                    onKubeSegment={setKubeSegment}
+                    kubeCluster={(switcher) =>
+                      kubectlFound ? (
+                        <ClusterView
+                          model={cluster}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} />}
+                          onOpenInEditor={openKubeObject}
+                          toolbarStart={switcher}
+                        />
+                      ) : (
+                        // The tab is there for its log while kubectl is missing (spec 4.12): the manifests strip's
+                        // notice, with its link to the setting, after the switch in the log row's frame, so the switch
+                        // sits where it does in the log.
+                        <div className="kube-cluster">
+                          <div className="kube-segment-bar">
+                            {switcher}
+                            <KubectlMissingNotice
+                              onOpenSettings={() => {
+                                setSettingsTab('kubernetes')
+                                setShowSettings(true)
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    }
                   />
                 )}
               </div>

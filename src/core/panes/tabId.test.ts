@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { appTab, browserTab, recordTab, fileTab, parseTab, sessionTab, remoteSessionKey, parseRemoteSessionKey, isRemoteSessionKey } from './tabId'
+import { appTab, browserTab, recordTab, fileTab, parseTab, sessionTab, remoteSessionKey, parseRemoteSessionKey, isRemoteSessionKey, kubeTab, parseKubeTab } from './tabId'
 
 describe('tabId', () => {
   it('세션 탭 id를 만들고 되읽는다', () => {
@@ -64,5 +64,22 @@ describe('tabId', () => {
     expect(isRemoteSessionKey('term_1')).toBe(false)
     expect(parseRemoteSessionKey(':s1')).toBeNull()
     expect(parseRemoteSessionKey('rt_1:')).toBeNull()
+  })
+
+  // A cluster object's editor tab (kube cluster view spec 4.6): the id is the whole record, so every part is encoded and
+  // an EKS context's colons and slash cannot split it.
+  it('round-trips a kube tab id with odd characters', () => {
+    const ref = { context: 'arn:aws:eks:ap-northeast-2:1:cluster/a b', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
+    const id = kubeTab(ref)
+    expect(parseTab(id)?.kind).toBe('kube')
+    expect(parseKubeTab(parseTab(id)!.id)).toEqual(ref)
+  })
+
+  it('keeps a cluster-scoped ref and refuses junk', () => {
+    expect(parseKubeTab(parseTab(kubeTab({ context: 'c', namespace: null, resource: 'nodes', kind: 'Node', name: 'n1' }))!.id)?.namespace).toBeNull()
+    expect(parseKubeTab('only/three/parts')).toBeNull()
+    expect(parseKubeTab('c//pods/Pod/w/extra')).toBeNull()
+    expect(parseKubeTab('c/api/pods/Pod/')).toBeNull() // no name
+    expect(parseKubeTab('%E0%A4%A/api/pods/Pod/w')).toBeNull() // a broken escape
   })
 })
