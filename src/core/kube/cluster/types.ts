@@ -30,7 +30,20 @@ export type WatchMessage = { watchId: string } & (
 )
 /** A watch's error when the kubectl binary is missing (ENOENT); the renderer shows the catalog's words for it. */
 export const KUBECTL_MISSING = 'kubectl was not found'
+/** A watch's error when one page of a list is over the splitter's cap; the renderer shows the catalog's words for it. */
+export const LIST_PAGE_TOO_LARGE = 'a list page was too large to read'
 /** A one-shot read of the cluster: the data, or a failure with a redacted first line of stderr. */
 export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidden?: true }
 /** `text` null: the value is not UTF-8 text. */
 export interface SecretValue { key: string; text: string | null; base64: string }
+/** Options of one `kubectl logs` read; main, the renderer and the IPC types share them. `sinceTime`: read on from this
+ *  time stamp (follow turned on again) instead of the last lines. */
+export interface LogOptions { container: string; previous: boolean; follow: boolean; sinceTime?: string }
+/** What main needs to start one log stream. */
+export interface LogSpec { ref: ObjectRef; options: LogOptions }
+/** What a log stream sends the renderer: whole lines in batches, then how it ended. */
+export type LogMessage = { logId: string } & (
+  | { kind: 'lines'; lines: string[] }
+  | { kind: 'ended' }
+  | { kind: 'error'; message: string }
+)

@@ -13,7 +13,7 @@ import type {
   Remembered
 } from './kube/types'
 import type { K8sObject } from './kube/objects'
-import type { CountInfo, KindDef, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
+import type { CountInfo, KindDef, LogMessage, LogSpec, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -939,6 +939,7 @@ export interface RuntimeView {
 
 export interface CoreEvents {
   'kube:watch': WatchMessage
+  'kube:log': LogMessage
   'session:data': { sessionId: string; data: string }
   /** A remote session tab's checkpoint (Phase 9b, main/remote/remoteStreams.ts): the view resets, writes `state`, then
    *  `pending`. `sessionId` is the tab's key, `<runtimeId>:<sessionId>`. */
@@ -1459,6 +1460,13 @@ export interface CoreApi {
       /** Events arrive on `'kube:watch'`. `limit`: MAX_WATCHES processes already run. */
       watch(watchId: string, spec: WatchSpec): Promise<{ ok: true } | { ok: false; reason: 'limit' }>
       unwatch(watchId: string): Promise<void>
+    }
+    /** Pod logs: lines arrive on `'kube:log'`, tagged with the logId. */
+    logs: {
+      start(logId: string, spec: LogSpec): Promise<void>
+      stop(logId: string): Promise<void>
+      /** `defaultName` is a bare file name; a cancelled dialog is `{ saved: false }`. */
+      save(defaultName: string, text: string): Promise<{ saved: boolean; path?: string; error?: string }>
     }
   }
   github: {

@@ -1,22 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, RotateCcw, Search } from 'lucide-react'
 import { displayContextName } from '../../../../../core/kube/contextName'
+import type { K8sObject } from '../../../../../core/kube/objects'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
-import { KUBECTL_MISSING, type KindDef, type ObjectRef, type Row } from '../../../../../core/kube/cluster/types'
+import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE, type KindDef, type ObjectRef, type Row } from '../../../../../core/kube/cluster/types'
 import { ContextMenu } from '../../ContextMenu'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
 import { clusterMenuItems } from './clusterMenu'
 
-/** A watch's error line as shown: kubectl's own words, except a missing binary, which main names in English. */
-export function liveErrorText(message: string, t: (key: 'kube.cluster.kubectlMissing') => string): string {
-  return message === KUBECTL_MISSING ? t('kube.cluster.kubectlMissing') : message
+/** A watch's error line as shown: kubectl's own words, except a missing binary and a list page over the cap, which main
+ *  names in English. */
+export function liveErrorText(message: string, t: (key: 'kube.cluster.kubectlMissing' | 'kube.cluster.pageTooLarge') => string): string {
+  if (message === KUBECTL_MISSING) return t('kube.cluster.kubectlMissing')
+  return message === LIST_PAGE_TOO_LARGE ? t('kube.cluster.pageTooLarge') : message
 }
 
 /** Where a row of the table lives: what opening the row and its menu act on, whatever is selected by then. */
 export function rowRefOf(context: string, kind: KindDef, row: Row): ObjectRef {
   return { context, namespace: kind.namespaced ? row.namespace : null, resource: kind.resource, kind: kind.kind, name: row.name }
+}
+
+/** The right-clicked row's object, which the right-click selected: the selected object when it is the row's, else null
+ *  (the selection did not come through, as when the row went meanwhile). */
+export function rowObjectOf(selected: K8sObject | null, selectedRef: ObjectRef | null, row: ObjectRef): K8sObject | null {
+  if (selected === null || selectedRef === null) return null
+  const same =
+    selectedRef.context === row.context && selectedRef.namespace === row.namespace && selectedRef.resource === row.resource && selectedRef.name === row.name
+  return same ? selected : null
 }
 
 /** What the typed namespace field commits for `text`: the namespace, trimmed (null: emptied, All namespaces), or
@@ -65,12 +77,15 @@ export function ClusterView({
   model,
   detail,
   onOpenInEditor,
+  onOpenLogs,
   toolbarStart
 }: {
   model: ClusterViewModel
   detail: React.ReactNode
   /** The editor tab; without it the row menu has no such item and a double-click only selects. */
   onOpenInEditor?: (ref: ObjectRef) => void
+  /** A Pod's logs tab (spec 4.8), `previous` true for previous logs; without it the row menu has no logs items. */
+  onOpenLogs?: (ref: ObjectRef, pod: K8sObject, previous: boolean) => void
   /** The toolbar row's first item, before the context pill: the bottom panel's segmented switch (spec 4.2). */
   toolbarStart?: React.ReactNode
 }): React.JSX.Element {
@@ -102,6 +117,8 @@ export function ClusterView({
   // Paused says why in a few words; the tooltip has it in full (spec 4.2, "paused" with the reason).
   const liveTitle = why !== null && why !== 'ended' ? why.forbidden : liveText
   const liveTone = failed ? 'bad' : live === 'live' ? 'ok' : 'wait'
+  // Logs open on the Pod's default container, which only the object says.
+  const rowPod = rowMenu !== null ? rowObjectOf(model.selected, model.selectedRef, rowMenu.ref) : null
 
   return (
     <div className="kube-cluster">
@@ -224,7 +241,8 @@ export function ClusterView({
               kind: rowMenu.ref.kind,
               onOpenInEditor: onOpenInEditor ? () => onOpenInEditor(rowMenu.ref) : undefined,
               onDescribe: () => model.setDetailTab('describe'),
-              onCopyName: () => void window.api.clipboard.writeText(rowMenu.ref.name)
+              onCopyName: () => void window.api.clipboard.writeText(rowMenu.ref.name),
+              onLogs: onOpenLogs && rowPod !== null ? (previous) => onOpenLogs(rowMenu.ref, rowPod, previous) : undefined
             },
             t
           )}

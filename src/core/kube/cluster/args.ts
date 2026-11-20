@@ -1,5 +1,6 @@
 /** kubectl argument lists of the cluster view. Arrays only, never a command string; every list ends with `--context`. */
-import type { ObjectRef, WatchSpec } from './types'
+import { LOG_MAX_LINES, LOG_TAIL_LINES } from './logs'
+import type { LogOptions, ObjectRef, WatchSpec } from './types'
 
 const nsArgs = (ns: string | null): string[] => (ns === null ? [] : ['-n', ns])
 
@@ -46,4 +47,18 @@ export function crdArgs(context: string): string[] {
 /** `name` prints one `kind.group/name` line per object: enough to count, and no object's content (a Secret's data). */
 export function countArgs(context: string, namespace: string | null, resources: string[], namespaced: boolean, output: 'json' | 'name'): string[] {
   return ['get', resources.join(','), ...scopeArgs(namespace, namespaced), '-o', output, '--context', context]
+}
+
+/** Time stamps are always requested so the renderer can show or hide them without restarting kubectl. `-f` does not
+ *  apply to previous logs: that container has already exited. */
+export function logsArgs(ref: ObjectRef, o: LogOptions): string[] {
+  return [
+    'logs', ref.name, '-n', ref.namespace ?? '', '-c', o.container, '--timestamps',
+    // Read on from a time, as many lines as the view keeps: the usual tail would leave a gap nobody sees, and a long
+    // pause could otherwise send any number at once.
+    ...(o.sinceTime !== undefined ? [`--since-time=${o.sinceTime}`, `--tail=${LOG_MAX_LINES}`] : [`--tail=${LOG_TAIL_LINES}`]),
+    ...(o.previous ? ['--previous'] : []),
+    ...(o.follow && !o.previous ? ['-f'] : []),
+    '--context', ref.context
+  ]
 }

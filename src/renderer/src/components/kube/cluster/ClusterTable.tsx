@@ -83,8 +83,12 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
     row?.focus({ preventScroll: true })
     return row !== undefined
   }
+  // Tried once, after the render the move caused (it draws the row, or the rows changed and it never will be); kept
+  // longer, the uid could pull the focus when a later render draws that row again.
   useEffect(() => {
-    if (focusNext.current !== null && focusRow(focusNext.current)) focusNext.current = null
+    if (focusNext.current === null) return
+    focusRow(focusNext.current)
+    focusNext.current = null
   })
   // Selects row `index` and keeps it in view, moving the drawn window with the scroll at once so the row is drawn to take
   // the focus.

@@ -16,9 +16,9 @@ describe('kubectl watch output', () => {
   })
   it('gives up on a value longer than its cap, and reads the next one', () => {
     const sp = createJsonSplitter(16)
-    expect(sp.push('{"a":"0123456789abcdef"}{"b":1}')).toEqual([{ ok: false }, { ok: true, value: { b: 1 } }])
+    expect(sp.push('{"a":"0123456789abcdef"}{"b":1}')).toEqual([{ ok: false, tooLarge: true }, { ok: true, value: { b: 1 } }])
     // One that never closes is bounded too, and what follows it is still read.
-    expect(sp.push('{"a":' + 'x'.repeat(100))).toEqual([{ ok: false }])
+    expect(sp.push('{"a":' + 'x'.repeat(100))).toEqual([{ ok: false, tooLarge: true }])
     expect(sp.push('{"c":2}')).toEqual([{ ok: true, value: { c: 2 } }])
   })
   it('ignores a value that is not a watch event', () => {

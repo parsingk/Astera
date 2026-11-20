@@ -1,0 +1,593 @@
+// The log view's kubectl for as long as it is mounted (review focus 5): closing the tab stops it, and picking another
+// container or previous starts another. This suite has no DOM, so the view is called as a function with a stand-in for
+// React's hooks (as FindingsSection.reload.test.ts does): each call is a render that reads the state the last one left,
+// then the effects React would run, by their dependencies. The stream goes through the real log client (Task 4) to a
+// fake window.api.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { ReactElement } from 'react'
+import type { LogMessage, LogOptions } from '../../../../../core/kube/cluster/types'
+
+const hooks = vi.hoisted(() => {
+  let slots: unknown[] = []
+  let at = 0
+  let effects: Array<{ run: () => unknown; deps?: unknown[] }> = []
+  let mounted: Array<{ deps?: unknown[]; cleanup: unknown }> = []
+  return {
+    reset(): void {
+      slots = []
+      at = 0
+      effects = []
+      mounted = []
+    },
+    /** One render, then each effect whose dependencies changed, after the cleanup its last run left. */
+    render<R>(component: () => R): R {
+      at = 0
+      effects = []
+      const out = component()
+      effects.forEach((e, k) => {
+        const last = mounted[k]
+        if (last !== undefined && e.deps !== undefined && last.deps !== undefined && e.deps.every((d, j) => Object.is(d, last.deps![j]))) return
+        if (typeof last?.cleanup === 'function') (last.cleanup as () => void)()
+        mounted[k] = { deps: e.deps, cleanup: e.run() }
+      })
+      return out
+    },
+    /** The tab goes: every effect's cleanup runs. */
+    unmount(): void {
+      for (const m of mounted) if (typeof m.cleanup === 'function') (m.cleanup as () => void)()
+      mounted = []
+    },
+    useState<T>(init: T | (() => T)): [T, (v: T | ((old: T) => T)) => void] {
+      const k = at++
+      if (!(k in slots)) slots[k] = typeof init === 'function' ? (init as () => T)() : init
+      return [slots[k] as T, (v) => void (slots[k] = typeof v === 'function' ? (v as (old: T) => T)(slots[k] as T) : v)]
+    },
+    useRef<T>(init: T): { current: T } {
+      const k = at++
+      if (!(k in slots)) slots[k] = { current: init }
+      return slots[k] as { current: T }
+    },
+    useEffect(run: () => unknown, deps?: unknown[]): void {
+      effects.push({ run, deps })
+    },
+    useMemo: <T>(make: () => T): T => make(),
+    useCallback: <T>(fn: T): T => fn
+  }
+})
+
+vi.mock('react', async (importOriginal) => {
+  const real = await importOriginal<typeof import('react')>()
+  return {
+    ...real,
+    useState: hooks.useState,
+    useRef: hooks.useRef,
+    useEffect: hooks.useEffect,
+    useLayoutEffect: hooks.useEffect,
+    useMemo: hooks.useMemo,
+    useCallback: hooks.useCallback
+  }
+})
+vi.mock('../../../i18n/I18nProvider', () => ({
+  useI18n: () => ({ lang: 'en', t: (key: string, p?: Record<string, unknown>) => (p ? `${key}${JSON.stringify(p)}` : key) })
+}))
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }))
+vi.mock('../../../lib/toast', () => ({ toast }))
+/** How many lines each append handed the buffer: what waited for a frame. */
+const appended = vi.hoisted(() => [] as number[])
+vi.mock('../../../../../core/kube/cluster/logs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../../../core/kube/cluster/logs')>()
+  return {
+    ...real,
+    appendLines: (...a: Parameters<typeof real.appendLines>) => {
+      appended.push(a[1].length)
+      return real.appendLines(...a)
+    }
+  }
+})
+
+import { LOG_MAX_LINES, stampText } from '../../../../../core/kube/cluster/logs'
+import { KubeLogView } from './KubeLogView'
+
+/** Every element of a rendered tree, depth first. */
+function elements(node: unknown): ReactElement[] {
+  if (Array.isArray(node)) return node.flatMap(elements)
+  if (node === null || typeof node !== 'object' || !('props' in node)) return []
+  const el = node as ReactElement<{ children?: unknown }>
+  return [el, ...elements(el.props.children)]
+}
+function textOf(node: unknown): string {
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (node === null || typeof node !== 'object' || !('props' in node)) return ''
+  return textOf((node as ReactElement<{ children?: unknown }>).props.children)
+}
+const byLabel = (tree: unknown, label: string): ReactElement<Record<string, unknown>> => {
+  const hit = elements(tree).find((e) => (e.props as Record<string, unknown>)['aria-label'] === label)
+  if (!hit) throw new Error(`no element labelled ${label}`)
+  return hit as ReactElement<Record<string, unknown>>
+}
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+const target = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'worker-1' }
+type Status = Record<string, unknown>
+const podWith = (worker: Status) => ({
+  apiVersion: 'v1',
+  kind: 'Pod',
+  metadata: { name: 'worker-1', namespace: 'api' },
+  spec: { containers: [{ name: 'worker' }, { name: 'sidecar' }] },
+  status: { containerStatuses: [{ name: 'worker', restartCount: 0, ...worker }] }
+})
+const pod = podWith({ state: { running: {} } })
+const read = (object: unknown) => ({ ok: true, object })
+
+let api: ReturnType<typeof fakeApi>
+function fakeApi() {
+  const listeners = new Set<(m: LogMessage) => void>()
+  const started: Array<{ id: string } & LogOptions> = []
+  const stopped: string[] = []
+  const reads: unknown[] = []
+  const saves: Array<{ name: string; text: string }> = []
+  /** What the next reads answer, in turn (a promise holds one back); after them, `answer`. */
+  const queue: unknown[] = []
+  let answer: unknown = read(pod)
+  return {
+    window: {
+      api: {
+        kube: {
+          logs: {
+            start: async (id: string, spec: { options: LogOptions }) => {
+              started.push({ id, ...spec.options })
+            },
+            stop: async (id: string) => {
+              stopped.push(id)
+            },
+            save: async (name: string, text: string) => {
+              saves.push({ name, text })
+              return { saved: true, path: 'C:/Users/me/Downloads/' + name }
+            }
+          },
+          cluster: {
+            get: async (r: unknown) => {
+              reads.push(r)
+              if (queue.length > 0) return queue.shift()
+              return typeof answer === 'function' ? (answer as (r: unknown) => unknown)(r) : answer
+            }
+          }
+        },
+        on: (_channel: string, cb: (m: LogMessage) => void) => {
+          listeners.add(cb)
+          return () => void listeners.delete(cb)
+        }
+      }
+    },
+    emit: (m: LogMessage) => [...listeners].forEach((cb) => cb(m)),
+    answer: (a: unknown) => void (answer = a),
+    queue,
+    listeners,
+    started,
+    stopped,
+    reads,
+    saves
+  }
+}
+/** A read held back until the test lets it answer. */
+function held(): { promise: Promise<unknown>; answer: (v: unknown) => void } {
+  let answer: (v: unknown) => void = () => {}
+  const promise = new Promise<unknown>((resolve) => (answer = resolve))
+  return { promise, answer }
+}
+
+const view = (seed: unknown = pod, filter?: string) => () =>
+  KubeLogView({ pod: seed as never, target, initial: { container: 'worker', previous: false, filter }, visible: true, onContainer: () => {} })
+
+beforeEach(() => {
+  hooks.reset()
+  appended.length = 0
+  api = fakeApi()
+  vi.stubGlobal('window', api.window)
+})
+afterEach(() => {
+  hooks.unmount()
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
+
+describe('KubeLogView stream', () => {
+  it('stops its stream on unmount', () => {
+    hooks.render(view())
+    expect(api.started).toHaveLength(1)
+    expect(api.listeners.size).toBe(1)
+    hooks.unmount()
+    expect(api.stopped).toEqual([api.started[0].id])
+    expect(api.listeners.size).toBe(0)
+  })
+
+  it('restarts its stream when the container or previous changes', () => {
+    const tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    const next = hooks.render(view())
+    expect(api.started.map((s) => s.container)).toEqual(['worker', 'sidecar'])
+    expect(api.stopped).toEqual([api.started[0].id])
+    ;(byLabel(next, 'kube.logs.previous').props.onClick as () => void)()
+    hooks.render(view())
+    expect(api.started[2]).toMatchObject({ container: 'sidecar', previous: true })
+    expect(api.stopped).toEqual([api.started[0].id, api.started[1].id])
+  })
+
+  // Task 5 review I3: the tab knows only where the Pod lives (Task 6), so the view reads the Pod itself; a Pod handed in
+  // is only what shows until the read answers.
+  it('reads the Pod itself, so the picker lists its containers', async () => {
+    const options = (tree: unknown): string[] =>
+      elements(tree)
+        .filter((e) => e.type === 'option')
+        .map((e) => textOf(e))
+    expect(options(hooks.render(view(null)))).toEqual(['worker'])
+    expect(api.reads).toEqual([target])
+    await settle()
+    expect(options(hooks.render(view(null)))).toEqual(['worker', 'sidecar'])
+  })
+
+  it('reads the Pod again when the stream ends, for its exit code', async () => {
+    hooks.render(view())
+    await settle()
+    api.answer(read(podWith({ state: { terminated: { exitCode: 137, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    api.emit({ logId: api.started[0].id, kind: 'ended' })
+    expect(textOf(hooks.render(view()))).toContain('kube.logs.streamEnded')
+    expect(api.reads).toEqual([target, target])
+    await settle()
+    expect(textOf(hooks.render(view()))).toContain('kube.logs.ended{"code":137}')
+  })
+
+  // Task 5 review I2: kubectl ends before the kubelet writes the exit, and then the container is waiting again with the
+  // exit in lastState. Read again after 1, 2 and 4 s, and take lastState once the restart count grew.
+  it('finds a crashed container\'s exit code once the kubelet has written it', async () => {
+    vi.useFakeTimers()
+    hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(view(null))
+    api.emit({ logId: api.started[0].id, kind: 'ended' })
+    hooks.render(view(null)) // still running in the first read
+    await vi.advanceTimersByTimeAsync(0)
+    expect(textOf(hooks.render(view(null)))).toContain('kube.logs.streamEnded')
+    api.answer(read(podWith({ restartCount: 1, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 2, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.reads).toHaveLength(3)
+    expect(textOf(hooks.render(view(null)))).toContain('kube.logs.ended{"code":2}')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.reads).toHaveLength(3) // found: no more reads
+  })
+
+  it('drops a Pod read that answers after a newer one', async () => {
+    const mount = held()
+    api.queue.push(mount.promise)
+    hooks.render(view(null))
+    api.answer(read(podWith({ state: { terminated: { exitCode: 137, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    api.emit({ logId: api.started[0].id, kind: 'ended' })
+    hooks.render(view(null))
+    await settle()
+    expect(textOf(hooks.render(view(null)))).toContain('kube.logs.ended{"code":137}')
+    mount.answer(read(pod))
+    await settle()
+    expect(textOf(hooks.render(view(null)))).toContain('kube.logs.ended{"code":137}')
+  })
+
+  it('stops reading the Pod again once the stream restarts', async () => {
+    vi.useFakeTimers()
+    const tree = hooks.render(view())
+    await vi.advanceTimersByTimeAsync(0)
+    api.emit({ logId: api.started[0].id, kind: 'ended' })
+    hooks.render(view())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.reads).toHaveLength(2)
+    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    hooks.render(view())
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.reads).toHaveLength(2)
+  })
+
+  // Task 5 re-review (round 2): a read without follow ends by itself, with no exit to wait for: one read, no backoff.
+  it('reads the Pod once when a read without follow ends', async () => {
+    vi.useFakeTimers()
+    let tree = hooks.render(view())
+    await vi.advanceTimersByTimeAsync(0)
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    hooks.render(view())
+    expect(api.started[1]).toMatchObject({ container: 'sidecar', follow: false })
+    api.emit({ logId: api.started[1].id, kind: 'ended' })
+    hooks.render(view())
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.reads).toHaveLength(2) // the mount read, and one at the end
+  })
+
+  // Task 5 re-review (round 2): the start count belongs to a kubectl that starts. Follow turned off after the end
+  // starts none, so the exit stays; follow turned on again starts one, so the count is taken again.
+  it('keeps the exit code when follow is turned off after the end, and counts again when a resumed read starts', async () => {
+    vi.useFakeTimers()
+    let tree = hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(view(null))
+    const crashed = podWith({ restartCount: 1, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 2, finishedAt: '2026-11-20T01:12:11Z' } } })
+    api.answer(read(crashed))
+    api.emit({ logId: api.started[0].id, kind: 'ended' })
+    hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    tree = hooks.render(view(null))
+    expect(textOf(tree)).toContain('kube.logs.ended{"code":2}')
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view(null))
+    tree = hooks.render(view(null))
+    expect(textOf(tree)).toContain('kube.logs.ended{"code":2}')
+
+    // On again: the resumed read starts at restart count 1. It ends with the container running again and the same old
+    // exit in lastState, which is not this read's.
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view(null))
+    hooks.render(view(null))
+    api.answer(read(podWith({ restartCount: 1, state: { running: {} }, lastState: { terminated: { exitCode: 2, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    api.emit({ logId: api.started[1].id, kind: 'ended' })
+    hooks.render(view(null))
+    await vi.advanceTimersByTimeAsync(0)
+    tree = hooks.render(view(null))
+    expect(textOf(tree)).toContain('kube.logs.streamEnded')
+  })
+
+  // Task 5 re-review (round 2): on a target change the start count waits for the new Pod's read, not the old one's.
+  it('takes the start count from the new target\'s Pod', async () => {
+    vi.useFakeTimers()
+    let at = target
+    const v = () => KubeLogView({ pod: null, target: at, initial: { container: 'worker', previous: false }, visible: true, onContainer: () => {} })
+    api.answer(read(podWith({ restartCount: 5, state: { running: {} } })))
+    hooks.render(v)
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(v)
+    at = { ...target, name: 'worker-2' }
+    const second = held()
+    api.queue.push(second.promise)
+    hooks.render(v)
+    second.answer(read(podWith({ restartCount: 0, state: { running: {} } })))
+    await vi.advanceTimersByTimeAsync(0)
+    hooks.render(v)
+    api.answer(read(podWith({ restartCount: 1, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 9, finishedAt: '2026-11-20T01:12:11Z' } } })))
+    api.emit({ logId: api.started[1].id, kind: 'ended' })
+    hooks.render(v)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(textOf(hooks.render(v))).toContain('kube.logs.ended{"code":9}')
+  })
+
+  // Task 5 review (ruled in): the saved file holds the lines the filter shows, time stamps as shown, no colour codes.
+  it('saves the lines in view as they read', async () => {
+    let tree = hooks.render(view(pod, 'error'))
+    api.emit({
+      logId: api.started[0].id,
+      kind: 'lines',
+      lines: ['2026-11-20T01:12:03.114539874Z \u001b[31mERROR\u001b[0m one', '2026-11-20T01:12:04Z INFO two', 'ERROR three']
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    tree = hooks.render(view(pod, 'error'))
+    ;(byLabel(tree, 'kube.logs.save').props.onClick as () => void)()
+    await settle()
+    expect(api.saves[0]).toEqual({ name: 'worker-1_worker.log', text: `${stampText('2026-11-20T01:12:03.114539874Z')} ERROR one\nERROR three\n` })
+    expect(toast.success).toHaveBeenCalledWith('kube.logs.saved{"path":"C:/Users/me/Downloads/worker-1_worker.log"}')
+    ;(byLabel(tree, 'kube.logs.timestamps').props.onClick as () => void)()
+    tree = hooks.render(view(pod, 'error'))
+    ;(byLabel(tree, 'kube.logs.save').props.onClick as () => void)()
+    await settle()
+    expect(api.saves[1].text).toBe('ERROR one\nERROR three\n')
+  })
+
+  // Task 5 note for Task 6: previous logs asked again of a tab where the person has since turned previous off reach the
+  // view as the same `initial` with a higher request count, and previous comes back on.
+  it('applies what the opener asks again when its request count grows, though the ask is the same', () => {
+    const asked = (request: number) => () =>
+      KubeLogView({ pod: pod as never, target, initial: { container: 'worker', previous: true, request }, visible: true, onContainer: () => {} })
+    const tree = hooks.render(asked(0))
+    expect(api.started[0]).toMatchObject({ container: 'worker', previous: true })
+    ;(byLabel(tree, 'kube.logs.previous').props.onClick as () => void)()
+    hooks.render(asked(0))
+    expect(api.started[1]).toMatchObject({ previous: false })
+    hooks.render(asked(0))
+    expect(api.started).toHaveLength(2)
+    hooks.render(asked(1))
+    const shown = hooks.render(asked(1))
+    expect(api.started).toHaveLength(3)
+    expect(api.started[2]).toMatchObject({ container: 'worker', previous: true })
+    expect(byLabel(shown, 'kube.logs.previous').props['aria-pressed']).toBe(true)
+  })
+
+  // Final review M1: the tab follows the container picked in it (App keeps it in the tab), so its tooltip and a later Logs
+  // ask match what it shows. That container comes back as the tab's, which asks the view nothing: previous stays as the
+  // pick set it, and no other kubectl starts.
+  it('tells the tab the container picked, and takes it back without undoing the pick', () => {
+    const crashing = podWith({ state: { running: {} } })
+    crashing.status.containerStatuses.push({ name: 'sidecar', restartCount: 2, state: { waiting: { reason: 'CrashLoopBackOff' } } } as never)
+    api.answer(read(crashing))
+    let container = 'worker'
+    const picked: string[] = []
+    const v = () =>
+      KubeLogView({
+        pod: crashing as never,
+        target,
+        initial: { container, previous: false, request: 0 },
+        visible: true,
+        onContainer: (name: string) => {
+          picked.push(name)
+          container = name
+        }
+      })
+    const tree = hooks.render(v)
+    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    expect(picked).toEqual(['sidecar'])
+    hooks.render(v)
+    const shown = hooks.render(v)
+    expect(api.started.map((s) => [s.container, s.previous])).toEqual([
+      ['worker', false],
+      ['sidecar', true]
+    ])
+    expect(byLabel(shown, 'kube.logs.previous').props['aria-pressed']).toBe(true)
+  })
+
+  // Time stamps are always read and only shown or hidden: no new kubectl for it.
+  it('shows or hides time stamps without restarting kubectl', () => {
+    const tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.timestamps').props.onClick as () => void)()
+    hooks.render(view())
+    expect(api.started).toHaveLength(1)
+    expect(api.stopped).toEqual([])
+  })
+
+  // Task 5 review (ruled in): follow off stops kubectl and keeps what it showed, lines not yet drawn included; on again,
+  // kubectl reads on from the last line, and that second's lines, which --since-time sends again, are dropped.
+  it('stops kubectl when follow is turned off, and reads on from the last line when it is turned on', async () => {
+    vi.useFakeTimers()
+    let tree = hooks.render(view())
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z one'] })
+    await vi.advanceTimersByTimeAsync(20)
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.2Z two'] })
+    tree = hooks.render(view())
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view())
+    tree = hooks.render(view()) // what stopping applied
+    expect(api.stopped).toEqual([api.started[0].id])
+    expect(api.started).toHaveLength(1)
+    expect(textOf(tree)).toContain('two')
+    expect(textOf(tree)).not.toMatch(/kube\.logs\.(ended|streamEnded)|kube\.cluster\.loading/)
+
+    ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
+    hooks.render(view())
+    expect(api.started[1]).toMatchObject({ follow: true, sinceTime: '2026-11-20T01:12:03.2Z' })
+    api.emit({ logId: api.started[1].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z one', '2026-11-20T01:12:03.2Z two', '2026-11-20T01:12:03.3Z three'] })
+    await vi.advanceTimersByTimeAsync(20)
+    const text = textOf(hooks.render(view()))
+    expect(text.match(/one|two|three/g)).toEqual(['one', 'two', 'three'])
+  })
+
+  // Final review I2: a hidden window (closed to the tray, minimised) gets no animation frames, while kubectl's lines keep
+  // coming. What waits for the next frame is held to what the view keeps, and what that drops counts in the notice.
+  it('holds the lines waiting for a frame to what the view keeps, counting the rest as dropped', async () => {
+    const frames: Array<() => void> = []
+    vi.stubGlobal('requestAnimationFrame', (fn: () => void) => frames.push(fn))
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void (frames[id - 1] = () => {}))
+    hooks.render(view())
+    const lines = Array.from({ length: LOG_MAX_LINES + 10 }, (_, i) => `line ${i}`)
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: lines.slice(0, 5) })
+    api.emit({ logId: api.started[0].id, kind: 'lines', lines: lines.slice(5) })
+    expect(frames).toHaveLength(1)
+    frames[0]()
+    expect(Math.max(...appended)).toBeLessThanOrEqual(LOG_MAX_LINES)
+    const tree = hooks.render(view())
+    expect(textOf(tree)).toContain('kube.logs.dropped{"count":10}')
+    ;(byLabel(tree, 'kube.logs.save').props.onClick as () => void)()
+    await settle()
+    const saved = api.saves[0].text.split('\n').slice(0, -1)
+    expect(saved).toHaveLength(LOG_MAX_LINES)
+    expect(saved[0]).toBe('line 10')
+  })
+
+  // Final review I1: a read that failed (the container not started yet, the cluster out of reach) or ended (a crashed
+  // run) is read again from its tab. A fresh read of what the tab shows, not a resume: the failed or finished read may
+  // have been of another run of the container.
+  describe('read again', () => {
+    const readAgain = (tree: unknown): void => (byLabel(tree, 'kube.logs.retry').props.onClick as () => void)()
+    const sameAsk = (): void => {
+      expect(api.started).toHaveLength(2)
+      expect(api.started[1].id).not.toBe(api.started[0].id)
+      expect({ ...api.started[1], id: '' }).toEqual({ ...api.started[0], id: '' })
+      expect(api.started[1].sinceTime).toBeUndefined()
+      expect(api.stopped).toEqual([api.started[0].id])
+    }
+
+    it('starts a new read from the error line', () => {
+      let tree = hooks.render(view())
+      api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z first read'] })
+      api.emit({ logId: api.started[0].id, kind: 'error', message: 'container "worker" in pod "worker-1" is waiting to start: ContainerCreating' })
+      tree = hooks.render(view())
+      expect(textOf(tree)).toContain('waiting to start')
+      readAgain(tree)
+      hooks.render(view())
+      sameAsk()
+      tree = hooks.render(view())
+      expect(textOf(tree)).not.toMatch(/first read|waiting to start/)
+      expect(textOf(tree)).toContain('kube.cluster.loading')
+    })
+
+    it('starts a new read from the closing line', async () => {
+      hooks.render(view())
+      await settle()
+      api.answer(read(podWith({ state: { terminated: { exitCode: 1, finishedAt: '2026-11-20T01:12:11Z' } } })))
+      api.emit({ logId: api.started[0].id, kind: 'lines', lines: ['2026-11-20T01:12:03.1Z last run'] })
+      api.emit({ logId: api.started[0].id, kind: 'ended' })
+      hooks.render(view())
+      await settle()
+      let tree = hooks.render(view())
+      expect(textOf(tree)).toContain('kube.logs.ended{"code":1}')
+      readAgain(tree)
+      hooks.render(view())
+      sameAsk()
+      tree = hooks.render(view())
+      expect(textOf(tree)).not.toMatch(/last run|kube\.logs\.ended/)
+    })
+  })
+
+  // Task 5 review I4: scrolled up, the lines in view stay where they are whatever comes in.
+  describe('scrolled up', () => {
+    /** A stand-in for the scrolled box: the view reads and sets these as the browser would. */
+    const attachBox = (tree: unknown): { scrollTop: number; clientHeight: number; scrollHeight: number } => {
+      const el = { scrollTop: 0, clientHeight: 400, scrollHeight: 0 }
+      ;(byRole(tree, 'log').props.ref as { current: unknown }).current = el
+      return el
+    }
+    const byRole = (tree: unknown, role: string): ReactElement<Record<string, unknown>> =>
+      elements(tree).find((e) => (e.props as Record<string, unknown>).role === role) as ReactElement<Record<string, unknown>>
+    const scrollTo = (tree: unknown, el: { scrollTop: number }, top: number): void => {
+      el.scrollTop = top
+      ;(byRole(tree, 'log').props.onScroll as (e: unknown) => void)({ currentTarget: el })
+    }
+    const drawn = (tree: unknown): number[] =>
+      elements(tree)
+        .filter((e) => (e.props as { className?: string }).className === 'kube-logs-line')
+        .map((e) => Number(e.key))
+    const lines = (from: number, count: number): string[] => Array.from({ length: count }, (_, i) => `line ${from + i}`)
+    const emit = async (l: string[]): Promise<void> => {
+      api.emit({ logId: api.started[0].id, kind: 'lines', lines: l })
+      await vi.advanceTimersByTimeAsync(20)
+    }
+
+    // At the cap the oldest lines go from the front; the box moves up by as many, so the view does not crawl.
+    it('stays on its lines when the oldest are dropped at the cap', async () => {
+      vi.useFakeTimers()
+      const el = attachBox(hooks.render(view()))
+      await emit(lines(0, 50_000))
+      let tree = hooks.render(view())
+      el.scrollHeight = 50_000 * 20
+      scrollTo(tree, el, 1000 * 20)
+      tree = hooks.render(view())
+      await emit(lines(50_000, 3))
+      hooks.render(view())
+      expect(el.scrollTop).toBe(997 * 20)
+    })
+
+    it('stays on its wrapped lines as lines come in below', async () => {
+      vi.useFakeTimers()
+      let tree = hooks.render(view())
+      const el = attachBox(tree)
+      await emit(lines(0, 100))
+      tree = hooks.render(view())
+      ;(byLabel(tree, 'kube.logs.wrap').props.onClick as () => void)()
+      tree = hooks.render(view())
+      // Wrapped two lines high: just above the bottom the scroll position counts past the end window.
+      el.scrollHeight = 100 * 40
+      scrollTo(tree, el, 90 * 20)
+      expect(drawn(hooks.render(view()))[0]).toBe(60)
+      await emit(lines(100, 5))
+      tree = hooks.render(view())
+      expect(drawn(tree)[0]).toBe(60)
+      // Scrolled on past the lines drawn, into those that came since: the end window moves to them.
+      const spacers = elements(tree).filter((e) => e.type === 'div' && (e.props as Record<string, unknown>)['aria-hidden'] === 'true')
+      ;((spacers[spacers.length - 1].props as Record<string, unknown>).ref as { current: unknown }).current = { offsetTop: 1900 }
+      scrollTo(tree, el, 90 * 20)
+      expect(drawn(hooks.render(view()))[0]).toBe(65)
+    })
+  })
+})

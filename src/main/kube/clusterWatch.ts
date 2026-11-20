@@ -2,9 +2,9 @@
 import { maskSecretPair } from '../../core/kube/objects'
 import { listArgs } from '../../core/kube/cluster/args'
 import { createJsonSplitter, toWatchEvents } from '../../core/kube/cluster/watch'
-import { KUBECTL_MISSING, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
+import { LIST_PAGE_TOO_LARGE, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
-import { firstStderrLine, isForbidden } from './cluster'
+import { firstStderrLine, isForbidden, streamFailureMessage } from './cluster'
 
 export const MAX_WATCHES = 6
 export const RESTART_DELAY_MS = 1000
@@ -28,6 +28,8 @@ interface Entry {
 export function createWatchRegistry(deps: {
   stream(args: string[], h: Handlers): KubectlStream
   redact(stderr: string): string
+  /** The splitter's cap on one value; only tests set it. */
+  maxValueChars?: number
   emit(m: WatchMessage): void
   later(fn: () => void, ms: number): { cancel(): void }
 }): {
@@ -51,13 +53,20 @@ export function createWatchRegistry(deps: {
     e.run = run
     e.timer = null
     const live = (): boolean => entries.get(id) === e && e.run === run
-    const splitter = createJsonSplitter()
+    const splitter = createJsonSplitter(deps.maxValueChars)
     let stderr = ''
     e.stream = deps.stream(listArgs(e.spec, true), {
       onStdout(chunk) {
         if (!live()) return
         for (const p of splitter.push(chunk)) {
-          if (!p.ok) continue
+          if (!p.ok) {
+            if (!p.tooLarge) continue
+            // Rows would go missing from here on without a word: end the watch as a failed one, so the view says so.
+            entries.delete(id)
+            halt(e)
+            deps.emit({ watchId: id, kind: 'error', message: LIST_PAGE_TOO_LARGE })
+            return
+          }
           // A page of a big list is many events, each Secret of it masked like a Secret of its own event.
           for (const ev of toWatchEvents(p.value)) {
             const object = ev.object.kind === 'Secret' ? (maskSecretPair(ev.object, null)[0] ?? ev.object) : ev.object
@@ -78,9 +87,9 @@ export function createWatchRegistry(deps: {
           }, RESTART_DELAY_MS)
           return
         }
-        const first = firstStderrLine(deps.redact(stderr))
-        const message =
-          first ?? (x.code !== null ? `kubectl exited ${x.code}` : x.errorCode === 'ENOENT' ? KUBECTL_MISSING : (x.errorCode ?? 'kubectl exited'))
+        const redacted = deps.redact(stderr)
+        const first = firstStderrLine(redacted)
+        const message = streamFailureMessage(x, redacted)
         entries.delete(id)
         e.run = {}
         // The reported line decides: a klog line saying Forbidden may come before the line that says the cluster failed.

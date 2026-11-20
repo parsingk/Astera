@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { TerminalBuffer } from '../../../core/types'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
-import { BottomPanel } from './BottomPanel'
+import type { KubeLogTab } from '../lib/kubeLogTabs'
+import { BottomPanel, holdHost } from './BottomPanel'
 
 vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -26,11 +28,21 @@ const entry = (over: Partial<KubeLogEntry> = {}): KubeLogEntry => ({
   ...over
 })
 
+const logTab = (id: string, name: string): KubeLogTab => ({
+  id,
+  ref: { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name },
+  container: 'worker',
+  previous: false,
+  request: 0
+})
+
 const render = ({
   kubeLog = [] as KubeLogEntry[],
   activeTab = 'kube',
   kubeAvailable = true,
-  kubeSegment = 'cluster' as 'cluster' | 'log'
+  kubeSegment = 'cluster' as 'cluster' | 'log',
+  logTabs = [] as KubeLogTab[],
+  terminals = [] as TerminalBuffer[]
 } = {}): string =>
   renderToStaticMarkup(
     React.createElement(BottomPanel, {
@@ -45,7 +57,7 @@ const render = ({
       onOpenFile: noop,
       onOpenUrl: noop,
       onOpenPreview: noop,
-      terminals: [],
+      terminals,
       terminalCwd: null,
       activeTab,
       onSelectTab: noop,
@@ -59,7 +71,11 @@ const render = ({
       kubeAvailable,
       kubeSegment,
       onKubeSegment: noop,
-      kubeCluster: (switcher: React.ReactNode) => React.createElement('div', { className: 'cluster-marker' }, switcher)
+      kubeCluster: (switcher: React.ReactNode) => React.createElement('div', { className: 'cluster-marker' }, switcher),
+      logTabs,
+      onCloseLogTab: noop,
+      // A static render attaches no refs: the host only has to be there.
+      logHost: (id: string) => ({ id }) as unknown as HTMLElement
     })
   )
 
@@ -134,5 +150,93 @@ describe('BottomPanel Kubernetes tab', () => {
 
   it('keeps the panel mounted but hidden when another tab is active', () => {
     expect(render({ kubeLog: [entry()], activeTab: 'other' })).toContain('kube-body" style="display:none"')
+  })
+})
+
+// Spec 4.8 (board E): a Pod's logs are a bottom tab of their own, "Logs <pod>", closed with a ✕ as a terminal is.
+describe('BottomPanel log tabs', () => {
+  const tabs = [logTab('kubelog:1', 'worker-1'), logTab('kubelog:2', 'web-2')]
+  const tabTags = (html: string): string[] => [...html.matchAll(/<span role="tab"[^>]*>.*?<\/span>(?=<span role="tab"|<button class="bottom-tab-new")/g)].map((m) => m[0])
+
+  it('draws a log tab with its label and a close button, after the Kubernetes tab', () => {
+    const html = render({ logTabs: tabs })
+    const strip = tabTags(html)
+    expect(strip).toHaveLength(3)
+    expect(strip[0]).toContain('kube.log.tab')
+    expect(strip[1]).toContain('kube.logs.tab{&quot;pod&quot;:&quot;worker-1&quot;}')
+    expect(strip[1]).toMatch(/<button class="bottom-tab-close" aria-label="kube\.logs\.closeTab" title="kube\.logs\.closeTab">/)
+    expect(strip[2]).toContain('kube.logs.tab{&quot;pod&quot;:&quot;web-2&quot;}')
+  })
+
+  // Task 6 review minor: two tabs of one Pod read the same; the tooltip tells where each reads from.
+  it('says the context, namespace and container in the tab\'s tooltip', () => {
+    const strip = tabTags(render({ logTabs: tabs }))
+    expect(strip[1]).toMatch(/^<span role="tab"[^>]* title="kind-dev \/ api · kube\.logs\.container worker"/)
+  })
+
+  it('draws the log tabs before the terminals', () => {
+    const html = render({ logTabs: tabs.slice(0, 1), terminals: [{ id: 't1', buffer: '' }] })
+    expect(html.indexOf('kube.logs.tab')).toBeGreaterThan(html.indexOf('kube.log.tab'))
+    expect(html.indexOf('kube.logs.tab')).toBeLessThan(html.indexOf('terminal.tab.label'))
+  })
+
+  // Task 6 review I1: the views live in App, each in an element of its own, so collapsing the panel does not stop them;
+  // the body is only where that element is held, and draws nothing itself.
+  it('draws a body for every log tab, hidden unless its tab is the one shown, holding nothing of its own', () => {
+    const html = render({ logTabs: tabs, activeTab: 'kubelog:2' })
+    expect(html.match(/<div class="bottom-body" style="display:none"><\/div>/g)).toHaveLength(1)
+    expect(html.match(/<div class="bottom-body" style="display:flex"><\/div>/g)).toHaveLength(1)
+    expect(tabTags(html)[2]).toContain('aria-selected="true"')
+    expect(html).toContain('kube-body" style="display:none"')
+  })
+
+  // The header's clear empties a terminal's xterm; the log view has its own clear in its toolbar.
+  it('offers no terminal clear in the header while a log tab shows', () => {
+    expect(render({ logTabs: tabs, activeTab: 'kubelog:1' })).not.toContain('run.panel.clear')
+  })
+})
+
+describe('holdHost', () => {
+  type FakeNode = { parentNode: unknown; appendChild?: (n: FakeNode) => void; removeChild?: (n: FakeNode) => void }
+  const body = (moved: FakeNode[]): FakeNode => {
+    const self: FakeNode = {
+      parentNode: null,
+      appendChild: (n) => {
+        moved.push(n)
+        n.parentNode = self
+      }
+    }
+    return self
+  }
+
+  // Moving an element out and back resets its scroll position: a body drawn again keeps the view where it is.
+  it('moves the view\'s element into the body only when it is not there yet', () => {
+    const moved: FakeNode[] = []
+    const host: FakeNode = { parentNode: null }
+    const first = body(moved)
+    holdHost(first as unknown as Node, host as unknown as Node)
+    holdHost(first as unknown as Node, host as unknown as Node)
+    expect(moved).toEqual([host])
+    // The panel opened again: a new body takes the element over.
+    const next = body(moved)
+    holdHost(next as unknown as Node, host as unknown as Node)
+    expect(moved).toHaveLength(2)
+    expect(host.parentNode).toBe(next)
+  })
+  // Task 6 re-review: left in a body the collapse removed, the element would keep that whole panel's DOM in memory
+  // until the panel opened again.
+  it('takes the view\'s element out of a body that goes away', () => {
+    const moved: FakeNode[] = []
+    const host: FakeNode = { parentNode: null }
+    const gone = body(moved)
+    gone.removeChild = (n) => {
+      n.parentNode = null
+    }
+    holdHost(gone as unknown as Node, host as unknown as Node)
+    expect(host.parentNode).toBe(gone)
+    holdHost(null, host as unknown as Node)
+    expect(host.parentNode).toBeNull()
+    holdHost(null, host as unknown as Node)
+    expect(host.parentNode).toBeNull()
   })
 })

@@ -3,7 +3,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { KubeObjectTab, followTabObject } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
-import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
+import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -53,6 +53,11 @@ describe('KubeObjectTab', () => {
   it('says kubectl is missing in the catalog words', () => {
     expect(liveErrorText(KUBECTL_MISSING, (k) => `t:${k}`)).toBe('t:kube.cluster.kubectlMissing')
     expect(liveErrorText('Unable to connect to the server', (k) => `t:${k}`)).toBe('Unable to connect to the server')
+  })
+
+  // Final review M3: the app's own words for a list page over the cap, not kubectl's, so they are translated too.
+  it('says a list page was too large in the catalog words', () => {
+    expect(liveErrorText(LIST_PAGE_TOO_LARGE, (k) => `t:${k}`)).toBe('t:kube.cluster.pageTooLarge')
   })
 
   // Task 14 minor: this rendered only the loading state. Loaded (the YAML drawn), the tab still offers only reads: refresh,

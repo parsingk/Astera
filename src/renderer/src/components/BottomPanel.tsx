@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
@@ -10,6 +10,7 @@ import { KubeLogPanel } from './kube/KubeLogPanel'
 import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
 import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
+import type { KubeLogTab } from '../lib/kubeLogTabs'
 import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 
 /**
@@ -48,7 +49,10 @@ export function BottomPanel({
   kubeAvailable,
   kubeSegment,
   onKubeSegment,
-  kubeCluster
+  kubeCluster,
+  logTabs,
+  onCloseLogTab,
+  logHost
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -96,6 +100,12 @@ export function BottomPanel({
   /** The Cluster segment's body, given the segmented switch to put first in its toolbar row (spec 4.2). App owns the
    *  view's state, so it builds this (or the kubectl-missing notice). */
   kubeCluster: (switcher: React.ReactNode) => React.ReactNode
+  /** Pods' logs tabs, after the Kubernetes tab (spec 4.8). App keeps each one's view mounted in an element of its own
+   *  (`logHost`) for the tab's life, so collapsing this panel does not stop its kubectl; the tab's body holds that
+   *  element while the panel is open. */
+  logTabs: KubeLogTab[]
+  onCloseLogTab: (id: string) => void
+  logHost: (id: string) => HTMLElement
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -167,6 +177,32 @@ export function BottomPanel({
               )}
             </span>
           )}
+          {logTabs.map((tab) => (
+            <span
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              tabIndex={0}
+              className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
+              // Two tabs of one Pod read the same: where each reads from tells them apart.
+              title={`${[tab.ref.context, tab.ref.namespace].filter((s) => s !== null).join(' / ')} · ${t('kube.logs.container')} ${tab.container}`}
+              onClick={() => onSelectTab(tab.id)}
+              onKeyDown={tabKeyDown(tab.id)}
+            >
+              {t('kube.logs.tab', { pod: tab.ref.name })}
+              <button
+                className="bottom-tab-close"
+                aria-label={t('kube.logs.closeTab')}
+                title={t('kube.logs.closeTab')}
+                onClick={(e) => {
+                  e.stopPropagation() // keeps close from also selecting the tab it closes
+                  onCloseLogTab(tab.id)
+                }}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
           {terminals.map((term, i) => (
             <span
               key={term.id}
@@ -203,8 +239,8 @@ export function BottomPanel({
         </span>
         <span className="run-panel-actions">
           {/* On the Run tab, stop and clear live in the rail beside the console; the header keeps them
-              for terminal tabs, which have no rail. */}
-          {activeTab !== 'run' && activeTab !== 'kube' && (
+              for terminal tabs, which have no rail. A logs tab clears from its own toolbar. */}
+          {terminals.some((term) => term.id === activeTab) && (
             <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
               <Delete size={12} />
             </button>
@@ -283,6 +319,9 @@ export function BottomPanel({
             />
           </div>
         )}
+        {logTabs.map((tab) => (
+          <LogBody key={tab.id} host={logHost(tab.id)} shown={activeTab === tab.id} />
+        ))}
         {terminals.map((term) => (
           <div
             key={term.id}
@@ -304,4 +343,19 @@ export function BottomPanel({
       </div>
     </div>
   )
+}
+
+/** Puts a logs view's element in its tab's body unless it is there already: an element moved out and back loses its
+ *  scroll position, so a body drawn again must leave it where it is. A body going away (null) lets go of it, or the
+ *  element would keep the removed panel's DOM in memory until the panel opened again. */
+export function holdHost(body: Node | null, host: Node): void {
+  if (body === null) host.parentNode?.removeChild(host)
+  else if (host.parentNode !== body) body.appendChild(host)
+}
+
+/** A logs tab's body. The view is not mounted here: App keeps it in `host`, so the panel's own mount and unmount (a
+ *  collapse) leave its kubectl and lines alone, and the body only holds that element while it is drawn. */
+function LogBody({ host, shown }: { host: HTMLElement; shown: boolean }): React.JSX.Element {
+  const hold = useCallback((el: HTMLDivElement | null) => holdHost(el, host), [host])
+  return <div ref={hold} className="bottom-body" style={{ display: shown ? 'flex' : 'none' }} />
 }

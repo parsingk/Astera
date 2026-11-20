@@ -1,0 +1,160 @@
+import { describe, expect, it } from 'vitest'
+import { LOG_MAX_CHARS, ansiSpans, appendLines, compareStamps, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, finishedText, linesAfter, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
+
+describe('log logic', () => {
+  it('splits the kubectl time stamp', () => {
+    expect(splitTimestamp('2026-11-20T01:12:03.114539874Z worker starting')).toEqual({ ts: '2026-11-20T01:12:03.114539874Z', text: 'worker starting' })
+    expect(splitTimestamp('no stamp here')).toEqual({ ts: null, text: 'no stamp here' })
+  })
+  it('drops the oldest beyond the cap and counts them', () => {
+    let b = emptyLogBuffer()
+    b = appendLines(b, ['a', 'b', 'c'], 2)
+    expect(b.lines.map((l) => l.text)).toEqual(['b', 'c'])
+    expect(b.dropped).toBe(1)
+    expect(appendLines(b, ['d'], 2).lines.map((l) => l.n)).toEqual([2, 3])
+  })
+  // Final review M2: 50,000 lines of up to 1 MB each bound nothing in memory. The kept lines' text has a size cap too,
+  // and the lines it takes count as dropped. The time stamp is not part of a line's text.
+  it('drops the oldest beyond the size cap and counts them', () => {
+    let b = appendLines(emptyLogBuffer(), ['aaaa', 'bbbb', '2026-11-20T01:12:03Z cccc'], 100, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['bbbb', 'cccc'])
+    expect(b.dropped).toBe(1)
+    // The size of what is kept carries over from the last append, less what went.
+    b = appendLines(b, ['dd'], 100, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['bbbb', 'cccc', 'dd'])
+    b = appendLines(b, ['e'], 100, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['cccc', 'dd', 'e'])
+    expect(b.dropped).toBe(2)
+    // Both caps hold together: the count takes one, then the size another.
+    b = appendLines(b, ['ffffffff'], 3, 10)
+    expect(b.lines.map((l) => l.text)).toEqual(['e', 'ffffffff'])
+    expect(b.dropped).toBe(4)
+    expect(LOG_MAX_CHARS).toBe(64 * 1024 * 1024)
+  })
+  it('filters by visible text', () => {
+    const lines = appendLines(emptyLogBuffer(), ['\u001b[31mERROR\u001b[0m could not connect', 'INFO ok']).lines
+    expect(filterLines(lines, 'error').map((l) => l.n)).toEqual([0])
+    expect(filterLines(lines, '31m')).toEqual([])
+  })
+  // Task 5 review I1: the filter ran visibleText and toLowerCase over every line at every frame (112 ms at 50,000
+  // coloured lines); a line's searchable text is worked out once, as it arrives, and the filter reads only that.
+  it('works out a line\'s searchable text once, as it arrives', () => {
+    const [line] = appendLines(emptyLogBuffer(), ['2026-11-20T01:12:03Z \u001b[31mERROR\u001b[0m Could Not']).lines
+    expect(line.lower).toBe('error could not')
+    expect(filterLines([{ n: 0, ts: null, text: 'x', lower: 'needle here' }], 'NEEDLE').map((l) => l.n)).toEqual([0])
+  })
+  it('parses SGR colours', () => {
+    expect(ansiSpans('\u001b[1;31mERR\u001b[0m x')).toEqual([{ text: 'ERR', fg: 'var(--ansi-red)', bold: true }, { text: ' x' }])
+    expect(ansiSpans('\u001b[38;2;10;20;30mT\u001b[39m')).toEqual([{ text: 'T', fg: 'rgb(10, 20, 30)' }])
+    expect(visibleText('\u001b[2K\u001b[32mok\u001b[0m')).toBe('ok')
+  })
+  it('picks containers and the default', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p', annotations: { 'kubectl.kubernetes.io/default-container': 'app' } }, spec: { initContainers: [{ name: 'init' }], containers: [{ name: 'side' }, { name: 'app' }] } }
+    expect(containersOf(pod)).toEqual([{ name: 'init', init: true }, { name: 'side', init: false }, { name: 'app', init: false }])
+    expect(defaultContainer(pod)).toBe('app')
+  })
+  // Task 7 screen check: a native sidecar (an init container with restartPolicy Always) keeps running beside the others,
+  // as the Pod's status counts it (status.ts), so it is not labelled an init container.
+  it('tells a native sidecar from an init container', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, spec: { initContainers: [{ name: 'setup' }, { name: 'log-shipper', restartPolicy: 'Always' }], containers: [{ name: 'app' }] } }
+    expect(containersOf(pod)).toEqual([{ name: 'setup', init: true }, { name: 'log-shipper', init: false, sidecar: true }, { name: 'app', init: false }])
+    expect(defaultContainer(pod)).toBe('app')
+  })
+  it('turns previous on for a crash loop and reads the exit line', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, status: { containerStatuses: [{ name: 'worker', state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 1, finishedAt: '2026-11-20T01:12:11Z' } } }] } }
+    expect(previousByDefault(pod, 'worker')).toBe(true)
+    expect(exitLine(pod, 'worker', true)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
+    // Task 7 screen check: while it waits there is no newer run, and kubectl gives that last run for the current logs
+    // too, so their closing line is that run's exit.
+    expect(exitLine(pod, 'worker', false)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
+    expect(exitLine(pod, 'worker', false, 0)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
+  })
+  it('has no exit line for a container waiting for its first run', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, status: { containerStatuses: [{ name: 'app', state: { waiting: { reason: 'ContainerCreating' } } }] } }
+    expect(exitLine(pod, 'app', false)).toBeNull()
+  })
+  // Task 5 review I2: `kubectl logs -f` ends before the kubelet writes the exit. When the container is already running
+  // again by the time the Pod is read, its exit is in lastState, and a restart count grown past the one at the stream's
+  // start says that exit is the one of the container that was followed.
+  it('takes the exit from lastState once the container runs again after the followed one', () => {
+    const pod = {
+      apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' },
+      status: { containerStatuses: [{ name: 'worker', restartCount: 3, state: { running: { startedAt: '2026-11-20T01:12:12Z' } }, lastState: { terminated: { exitCode: 137, finishedAt: '2026-11-20T01:12:11Z' } } }] }
+    }
+    expect(restartCountOf(pod, 'worker')).toBe(3)
+    expect(restartCountOf(pod, 'sidecar')).toBe(0)
+    expect(exitLine(pod, 'worker', false, 2)).toEqual({ code: 137, at: '2026-11-20T01:12:11Z' })
+    expect(exitLine(pod, 'worker', false, 3)).toBeNull()
+    expect(exitLine(pod, 'worker', false)).toBeNull()
+    expect(exitLine(pod, 'worker', false, null)).toBeNull()
+  })
+  // kubelet writes nanoseconds without their trailing zeros, so the text of two stamps does not sort by time.
+  it('orders time stamps by time', () => {
+    expect(compareStamps('2026-11-20T01:12:03.1Z', '2026-11-20T01:12:03.11Z')).toBeLessThan(0)
+    expect(compareStamps('2026-11-20T01:12:03.5Z', '2026-11-20T01:12:03.500000000Z')).toBe(0)
+    expect(compareStamps('2026-11-20T01:12:04Z', '2026-11-20T01:12:03.999Z')).toBeGreaterThan(0)
+    expect(compareStamps('2026-11-20T10:12:03+09:00', '2026-11-20T01:12:03.5Z')).toBeLessThan(0)
+  })
+  // --since-time counts whole seconds: read on from a line, that second's lines come again. Final review M4: with
+  // --timestamps kubectl stamps every line, so a line without one is a piece of a line main cut at LOG_LINE_MAX_CHARS,
+  // and goes or stays with its head. Pieces before any stamp belong to a line whose head went already.
+  it('keeps the lines stamped after a time, each with the pieces cut from it', () => {
+    const lines = [
+      'piece of an earlier line',
+      '2026-11-20T01:12:03.1Z a',
+      '2026-11-20T01:12:03.2Z b',
+      'piece of b',
+      '2026-11-20T01:12:03.25Z c',
+      'piece of c'
+    ]
+    expect(linesAfter(lines, '2026-11-20T01:12:03.2Z')).toEqual(['2026-11-20T01:12:03.25Z c', 'piece of c'])
+  })
+  // Task 5 review (ruled in): the closing line names the day too when the container did not finish today.
+  it('says when a container finished, with the date when not today', () => {
+    const at = '2026-11-20T01:12:11Z'
+    const d = new Date(at)
+    const p = (n: number): string => String(n).padStart(2, '0')
+    const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    expect(finishedText(at, new Date(d.getTime() + 1000))).toBe(time)
+    expect(finishedText(at, new Date(d.getTime() + 3 * 86_400_000))).toBe(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${time}`)
+    expect(finishedText('not a time', new Date())).toBe('not a time')
+  })
+  it('names the saved file', () => {
+    expect(logFileName('worker-6b8f9c-x2kq7', 'worker', true)).toBe('worker-6b8f9c-x2kq7_worker_previous.log')
+  })
+  it('keeps init containers apart and reads their exit line', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, spec: { initContainers: [{ name: 'init' }], containers: [{ name: 'app' }] }, status: { initContainerStatuses: [{ name: 'init', state: { terminated: { exitCode: 0, finishedAt: '2026-11-20T01:00:00Z' } } }] } }
+    expect(containersOf(pod).map((c) => c.init)).toEqual([true, false])
+    expect(exitLine(pod, 'init', false)).toEqual({ code: 0, at: '2026-11-20T01:00:00Z' })
+    expect(exitLine(pod, 'app', false)).toBeNull()
+  })
+  it('reads 256 colours, and ESC[m as a reset', () => {
+    expect(ansiSpans('\u001b[38;5;196mR\u001b[mx')).toEqual([{ text: 'R', fg: 'rgb(255, 0, 0)' }, { text: 'x' }])
+  })
+  it('turns bold, dim, italic and underline off with 22, 23 and 24', () => {
+    expect(ansiSpans('\u001b[1;2;3;4ma\u001b[22mb\u001b[23mc\u001b[24md')).toEqual([
+      { text: 'a', bold: true, dim: true, italic: true, underline: true },
+      { text: 'b', italic: true, underline: true },
+      { text: 'c', underline: true },
+      { text: 'd' }
+    ])
+  })
+  it('keeps the text of an OSC 8 link', () => {
+    expect(visibleText('\u001b]8;;https://x.test\u001b\\link\u001b]8;;\u001b\\ and \u001b]8;;u\u0007bel\u001b]8;;\u0007')).toBe('link and bel')
+  })
+  it('removes unterminated and partial escapes at the end of a line', () => {
+    expect(visibleText('ok\u001b[31')).toBe('ok')
+    expect(visibleText('ok\u001b')).toBe('ok')
+    expect(visibleText('ok\u001b]8;;http://x')).toBe('ok')
+    expect(visibleText('ok\u001b[')).toBe('ok')
+  })
+  it('removes charset designators and DCS, APC and PM strings', () => {
+    expect(visibleText('\u001b(Bplain\u001b)0 x')).toBe('plain x')
+    expect(visibleText('a\u001bPq1\u001b\\b\u001b_app\u001b\\c\u001b^pm\u001b\\d\u001bPtail')).toBe('abcd')
+  })
+  it('returns plain text unchanged', () => {
+    expect(visibleText('plain')).toBe('plain')
+    expect(ansiSpans('plain')).toEqual([{ text: 'plain' }])
+    expect(ansiSpans('')).toEqual([])
+  })
+})
