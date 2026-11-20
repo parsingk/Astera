@@ -5,7 +5,8 @@ import type { AppSettingsStore } from '../appSettingsStore'
 import type { KubeService } from './service'
 import type { createClusterReads } from './cluster'
 import type { createWatchRegistry } from './clusterWatch'
-import type { KindDef, ObjectRef, WatchSpec } from '../../core/kube/cluster/types'
+import type { createLogRegistry } from './logStreams'
+import type { KindDef, LogSpec, ObjectRef, WatchSpec } from '../../core/kube/cluster/types'
 
 export interface KubeIpcDeps {
   service: KubeService
@@ -17,6 +18,10 @@ export interface KubeIpcDeps {
   binPath(): string
   cluster: ReturnType<typeof createClusterReads>
   watches: ReturnType<typeof createWatchRegistry>
+  logs: ReturnType<typeof createLogRegistry>
+  /** Asks where to save; null when the person cancels. */
+  saveDialog(defaultName: string): Promise<string | null>
+  writeFile(path: string, text: string): Promise<void>
 }
 
 /** `kubectl version --client` only reads its own build info; it never needs the cluster deadline. */
@@ -109,6 +114,26 @@ function watchSpec(v: unknown): WatchSpec {
     resource: arg(r.resource, 'watch resource'),
     ...(r.name !== undefined ? { name: arg(r.name, 'watch name') } : {})
   }
+}
+
+/** Logs are per Pod; the container is passed as a `-c` value, so a leading `-` would be read as a flag. */
+function logSpec(v: unknown): LogSpec {
+  const r = v as { ref?: unknown; options?: unknown } | null | undefined
+  if (!r || typeof r !== 'object') throw new Error('kube: log spec must be { ref, options }')
+  const ref = objectRef(r.ref)
+  if (ref.kind !== 'Pod' || ref.resource !== 'pods') throw new Error('kube: logs are read from a Pod')
+  const o = r.options as { container?: unknown; previous?: unknown; follow?: unknown } | null | undefined
+  if (!o || typeof o !== 'object' || typeof o.previous !== 'boolean' || typeof o.follow !== 'boolean') {
+    throw new Error('kube: log options must be { container, previous, follow }')
+  }
+  return { ref, options: { container: arg(o.container, 'log container'), previous: o.previous, follow: o.follow } }
+}
+
+/** A bare file name: the save dialog decides the folder, so a path in the name has no use. */
+function fileName(v: unknown): string {
+  const name = str(v, 'file name')
+  if (name.includes('/') || name.includes(String.fromCharCode(92))) throw new Error('kube: file name must not contain a path separator')
+  return name
 }
 
 function kindDefs(v: unknown): KindDef[] {
@@ -235,7 +260,7 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   })
 
   // Read-only views of a cluster; the one channel that returns Secret values is `reveal`, called by an explicit click.
-  const { cluster, watches } = deps
+  const { cluster, watches, logs } = deps
   ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(arg(context, 'context')))
   ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(arg(context, 'context')))
   ipcMain.handle('kube.cluster.counts', async (_e, context, namespace, kinds) =>
@@ -256,4 +281,19 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   ipcMain.handle('kube.cluster.list', async (_e, spec) => cluster.list(watchSpec(spec)))
   ipcMain.handle('kube.cluster.watch', async (_e, id, spec) => watches.watch(str(id, 'watchId'), watchSpec(spec)))
   ipcMain.handle('kube.cluster.unwatch', async (_e, id) => watches.unwatch(str(id, 'watchId')))
+
+  ipcMain.handle('kube.logs.start', async (_e, id, spec) => logs.start(str(id, 'logId'), logSpec(spec)))
+  ipcMain.handle('kube.logs.stop', async (_e, id) => logs.stop(str(id, 'logId')))
+  ipcMain.handle('kube.logs.save', async (_e, defaultName, text) => {
+    const name = fileName(defaultName)
+    if (typeof text !== 'string') throw new Error('kube: text must be a string')
+    const target = await deps.saveDialog(name)
+    if (target === null) return { saved: false }
+    try {
+      await deps.writeFile(target, text)
+      return { saved: true, path: target }
+    } catch (err) {
+      return { saved: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 }

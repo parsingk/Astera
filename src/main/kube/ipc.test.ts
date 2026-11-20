@@ -44,8 +44,11 @@ function setup(denied: string[] = []) {
     stopAll: vi.fn(),
     size: vi.fn(() => 0)
   }
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches } as never)
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches }
+  const logs = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const saveDialog = vi.fn(async (_defaultName: string): Promise<string | null> => '/out/p.log')
+  const writeFile = vi.fn(async (_p: string, _text: string) => {})
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, saveDialog, writeFile } as never)
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, saveDialog, writeFile }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -281,5 +284,63 @@ describe('cluster view IPC', () => {
     await expect(t.call('kube.cluster.pods', 'c', 'ns', '-A')).rejects.toThrow('kube: selector must be a string not starting with "-"')
     for (const read of ['get', 'describe', 'events', 'reveal', 'list', 'counts', 'namespaces', 'crds', 'pods'] as const) expect(t.cluster[read]).not.toHaveBeenCalled()
     expect(t.watches.watch).not.toHaveBeenCalled()
+  })
+})
+
+describe('Pod logs over IPC', () => {
+  const podRef = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const options = { container: 'app', previous: false, follow: true }
+
+  it('forwards a valid spec to the registry', async () => {
+    const t = setup()
+    await t.call('kube.logs.start', 'l1', { ref: podRef, options })
+    expect(t.logs.start).toHaveBeenCalledWith('l1', { ref: podRef, options })
+  })
+
+  it('rejects a ref that is not a Pod, a bad container and a non-boolean flag, starting nothing', async () => {
+    const t = setup()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, kind: 'Deployment' }, options })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, resource: 'deployments' }, options })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, name: '-x' }, options })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, container: '-c' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, container: '' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, follow: 'yes' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, previous: 1 } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', '', { ref: podRef, options })).rejects.toThrow()
+    expect(t.logs.start).not.toHaveBeenCalled()
+  })
+
+  it('forwards stop with the id', async () => {
+    const t = setup()
+    await t.call('kube.logs.stop', 'l1')
+    expect(t.logs.stop).toHaveBeenCalledWith('l1')
+  })
+
+  it('rejects a save name with a path separator, asking nothing', async () => {
+    const t = setup()
+    await expect(t.call('kube.logs.save', 'a/b.log', 'x')).rejects.toThrow()
+    await expect(t.call('kube.logs.save', 'a' + String.fromCharCode(92) + 'b.log', 'x')).rejects.toThrow()
+    await expect(t.call('kube.logs.save', 'p.log', 5)).rejects.toThrow()
+    expect(t.saveDialog).not.toHaveBeenCalled()
+  })
+
+  it('writes the text to the path the dialog answers', async () => {
+    const t = setup()
+    expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: true, path: '/out/p.log' })
+    expect(t.saveDialog).toHaveBeenCalledWith('p.log')
+    expect(t.writeFile).toHaveBeenCalledWith('/out/p.log', 'hello')
+  })
+
+  it('answers saved: false without writing when the dialog is cancelled', async () => {
+    const t = setup()
+    t.saveDialog.mockResolvedValueOnce(null)
+    expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: false })
+    expect(t.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('answers the message of a failed write', async () => {
+    const t = setup()
+    t.writeFile.mockRejectedValueOnce(new Error('disk full'))
+    expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: false, error: 'disk full' })
   })
 })

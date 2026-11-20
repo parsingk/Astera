@@ -304,6 +304,7 @@ import { createKubeService } from './kube/service'
 import { createRealKubeDeps, kubeEnv, kubectlDisplayPath } from './kube/runtime'
 import { createClusterReads } from './kube/cluster'
 import { createWatchRegistry } from './kube/clusterWatch'
+import { createLogRegistry } from './kube/logStreams'
 import { kubectlBin } from '../core/kube/kubectl'
 import { streamKubectl } from '../core/kube/stream'
 import { redactKubectlStderr } from '../core/kube/redact'
@@ -4575,6 +4576,20 @@ export function registerIpc(
       return { cancel: () => clearTimeout(t) }
     }
   })
+  const kubeLogs = createLogRegistry({
+    stream: (args, h) =>
+      streamKubectl(args, {
+        bin: kubectlBin(core.appSettings.getKubectlPath()),
+        env: kubeEnv(core.appSettings.getKubeconfigFiles(), process.env, os.homedir()),
+        ...h
+      }),
+    redact: redactKubectlStderr,
+    emit: (m) => send('kube:log', m),
+    later: (fn, ms) => {
+      const t = setTimeout(fn, ms)
+      return { cancel: () => clearTimeout(t) }
+    }
+  })
   registerKubeIpc(ipcMain, {
     service: kubeService,
     assertAllowedPath,
@@ -4582,11 +4597,19 @@ export function registerIpc(
     run: kubeDeps.run,
     binPath: () => kubectlDisplayPath(core.appSettings.getKubectlPath(), process.env),
     cluster: kubeCluster,
-    watches: kubeWatches
+    watches: kubeWatches,
+    logs: kubeLogs,
+    saveDialog: async (defaultPath) => {
+      const r = await dialog.showSaveDialog(win, { defaultPath })
+      return r.canceled || !r.filePath ? null : r.filePath
+    },
+    writeFile: (p, text) => fs.writeFile(p, text, 'utf8')
   })
   // Watch processes die with the document that asked for them and with the app.
   onNewDocument.push(() => kubeWatches.stopAll())
   app.once('will-quit', () => kubeWatches.stopAll())
+  onNewDocument.push(() => kubeLogs.stopAll())
+  app.once('will-quit', () => kubeLogs.stopAll())
 
   /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
    *  — 그 아래 전부가 아니다.
