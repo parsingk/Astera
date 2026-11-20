@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ClusterTable, ROW_HEIGHT, scrollRowTop } from './ClusterTable'
+import { ClusterTable, ROW_HEIGHT, arrowTarget, scrollRowTop, scrollToShow } from './ClusterTable'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -93,5 +93,39 @@ describe('scrollRowTop', () => {
     expect(scrollRowTop(ROW_HEIGHT)).toBe(ROW_HEIGHT)
     expect(scrollRowTop(ROW_HEIGHT * 2 - 1)).toBe(ROW_HEIGHT)
     expect(scrollRowTop(ROW_HEIGHT * 1000 + 13)).toBe(ROW_HEIGHT * 1000)
+  })
+})
+
+// Task 11 minor: every drawn row was a tab stop. One row is (the selected one, else the first drawn), and the arrow keys
+// move the selection, keeping the row it moves to in view.
+describe('ClusterTable keyboard', () => {
+  const rows = Array.from({ length: 50 }, (_, i) => ({ uid: `u${i}`, name: `p-${i}`, namespace: null, cells: [{ text: `p-${i}` }], attention: false }))
+  const stops = (html: string): string[] => [...html.matchAll(/<tr class="kube-cluster-row[^"]*"[^>]*data-uid="([^"]+)"[^>]*tabindex="0"/g)].map((m) => m[1])
+  const render = (extra: Record<string, unknown>): string => renderToStaticMarkup(React.createElement(ClusterTable, { ...props, rows, ...extra }))
+
+  it('makes the selected row the one tab stop, else the first drawn row', () => {
+    expect(stops(render({ selected: 'u3' }))).toEqual(['u3'])
+    expect(stops(render({ selected: null }))).toEqual(['u0'])
+    expect((render({ selected: 'u3' }).match(/tabindex="-1"/g) ?? []).length).toBeGreaterThan(5)
+    // The selected row scrolled out of the drawn window: the first drawn row stands in, so the table stays reachable.
+    expect(stops(render({ selected: 'u0', scrollTop: ROW_HEIGHT * 30, viewportHeight: ROW_HEIGHT * 5 }))).toEqual(['u20'])
+  })
+
+  it('moves one row with the arrow keys, and not past either end', () => {
+    expect(arrowTarget(3, 'ArrowDown', 50)).toBe(4)
+    expect(arrowTarget(3, 'ArrowUp', 50)).toBe(2)
+    expect(arrowTarget(0, 'ArrowUp', 50)).toBeNull()
+    expect(arrowTarget(49, 'ArrowDown', 50)).toBeNull()
+    expect(arrowTarget(3, 'Enter', 50)).toBeNull()
+  })
+
+  it('scrolls only as far as needed to show the row moved to, below the sticky header', () => {
+    const viewport = ROW_HEIGHT * 10
+    expect(scrollToShow(5, 0, viewport)).toBe(0)
+    expect(scrollToShow(8, 0, viewport)).toBe(0)
+    // Row 9 would end under the bottom edge once the header's row is counted: scroll one row.
+    expect(scrollToShow(9, 0, viewport)).toBe(ROW_HEIGHT)
+    expect(scrollToShow(4, ROW_HEIGHT * 10, viewport)).toBe(ROW_HEIGHT * 4)
+    expect(scrollToShow(12, ROW_HEIGHT * 10, viewport)).toBe(ROW_HEIGHT * 10)
   })
 })

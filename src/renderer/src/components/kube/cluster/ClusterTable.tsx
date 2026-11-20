@@ -13,6 +13,20 @@ const DEFAULT_VIEWPORT = 400
  *  to the next (the overscan covers the rest of a row), so a scroll inside one row draws nothing again. */
 export const scrollRowTop = (scrollTop: number): number => Math.floor(scrollTop / ROW_HEIGHT) * ROW_HEIGHT
 
+/** The row index an arrow key moves to from `index`, or null (another key, or already at that end). */
+export function arrowTarget(index: number, key: string, count: number): number | null {
+  const to = key === 'ArrowDown' ? index + 1 : key === 'ArrowUp' ? index - 1 : null
+  return to !== null && to >= 0 && to < count ? to : null
+}
+
+/** The scroll position that shows row `index` whole below the sticky header (one row tall), moving as little as needed. */
+export function scrollToShow(index: number, scrollTop: number, viewport: number): number {
+  const rowTop = index * ROW_HEIGHT
+  if (rowTop < scrollTop) return rowTop
+  const rowBottom = ROW_HEIGHT + rowTop + ROW_HEIGHT // from the top of the content, which starts with the header
+  return rowBottom > scrollTop + viewport ? rowBottom - viewport : scrollTop
+}
+
 export interface ClusterTableProps {
   columns: Column[]
   rows: Row[]
@@ -58,6 +72,36 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
   const first = Math.max(0, Math.floor(top / ROW_HEIGHT) - OVERSCAN)
   const last = Math.min(p.rows.length, Math.ceil((top + height) / ROW_HEIGHT) + OVERSCAN)
   const visible = p.rows.slice(first, last)
+  // One tab stop (a roving tabindex): the selected row, else the first drawn one, which also stands in while the
+  // selected row is scrolled out of the drawn window.
+  const tabStop = visible.some((r) => r.uid === p.selected) ? p.selected : (visible[0]?.uid ?? null)
+
+  /** The row an arrow key moved to, to focus once it is drawn. */
+  const focusNext = useRef<string | null>(null)
+  const focusRow = (uid: string): boolean => {
+    const row = [...(box.current?.querySelectorAll<HTMLElement>('tr[data-uid]') ?? [])].find((el) => el.dataset.uid === uid)
+    row?.focus({ preventScroll: true })
+    return row !== undefined
+  }
+  useEffect(() => {
+    if (focusNext.current !== null && focusRow(focusNext.current)) focusNext.current = null
+  })
+  // Selects row `index` and keeps it in view, moving the drawn window with the scroll at once so the row is drawn to take
+  // the focus.
+  const moveTo = (index: number): void => {
+    const el = box.current
+    const row = p.rows[index]
+    if (el === null || row === undefined) return
+    const next = scrollToShow(index, el.scrollTop, el.clientHeight)
+    if (next !== el.scrollTop) {
+      el.scrollTop = next
+      // Read back: the box may clamp it.
+      const now = scrollRowTop(el.scrollTop)
+      setMeasured((m) => (m.top === now ? m : { ...m, top: now }))
+    }
+    p.onSelect(row.uid)
+    if (!focusRow(row.uid)) focusNext.current = row.uid
+  }
   const spacer = (rows: number): React.ReactNode =>
     rows > 0 ? (
       <tr className="kube-cluster-spacer" aria-hidden="true" style={{ height: rows * ROW_HEIGHT }}>
@@ -93,12 +137,13 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
         </thead>
         <tbody>
           {spacer(first)}
-          {visible.map((r) => (
+          {visible.map((r, j) => (
             <tr
               key={r.uid}
               className={'kube-cluster-row' + (r.uid === p.selected ? ' selected' : '')}
               style={{ height: ROW_HEIGHT }}
-              tabIndex={0}
+              data-uid={r.uid}
+              tabIndex={r.uid === tabStop ? 0 : -1}
               aria-selected={r.uid === p.selected}
               onClick={() => p.onSelect(r.uid)}
               onDoubleClick={() => p.onRowOpen(r.uid)}
@@ -111,6 +156,10 @@ export function ClusterTable(p: ClusterTableProps): React.JSX.Element {
                 else if (e.key === ' ') {
                   e.preventDefault()
                   p.onSelect(r.uid)
+                } else {
+                  const to = arrowTarget(first + j, e.key, p.rows.length)
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') e.preventDefault()
+                  if (to !== null) moveTo(to)
                 }
               }}
             >
