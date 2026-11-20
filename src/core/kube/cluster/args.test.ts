@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, namespacesArgs, podsArgs } from './args'
+import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, logsArgs, namespacesArgs, podsArgs } from './args'
 
 describe('cluster kubectl arguments', () => {
   it('builds a namespaced watch', () => {
@@ -29,5 +29,10 @@ describe('cluster kubectl arguments', () => {
   })
   it('reads events of a cluster-scoped object across namespaces', () => {
     expect(eventsArgs({ context: 'c', namespace: null, resource: 'nodes', kind: 'Node', name: 'n1' }, 'u9')).toEqual(['get', 'events', '--all-namespaces', '--field-selector', 'involvedObject.uid=u9', '-o', 'json', '--context', 'c'])
+  })
+  it('builds kubectl logs arguments', () => {
+    const ref = { context: 'c', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
+    expect(logsArgs(ref, { container: 'worker', previous: false, follow: true })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '-f', '--context', 'c'])
+    expect(logsArgs(ref, { container: 'worker', previous: true, follow: true })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--tail=1000', '--previous', '--context', 'c'])
   })
 })

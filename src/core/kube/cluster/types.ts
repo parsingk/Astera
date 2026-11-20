@@ -34,3 +34,5 @@ export const KUBECTL_MISSING = 'kubectl was not found'
 export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidden?: true }
 /** `text` null: the value is not UTF-8 text. */
 export interface SecretValue { key: string; text: string | null; base64: string }
+/** Options of one `kubectl logs` read; main, the renderer and the IPC types share them. */
+export interface LogOptions { container: string; previous: boolean; follow: boolean }
