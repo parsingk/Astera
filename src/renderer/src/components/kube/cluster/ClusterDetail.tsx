@@ -125,7 +125,8 @@ export function ClusterDetail({
   onMenu
 }: {
   model: ClusterViewModel
-  /** Task 14's editor tab; without it the header button and the menu item are not drawn. */
+  /** Opens the object in its read-only editor tab (spec 4.6); without it the header button and the menu item are not
+   *  drawn. */
   onOpenInEditor?: (ref: ObjectRef) => void
   /** Where the more button opens the menu; without it the detail opens the menu itself. */
   onMenu?: (x: number, y: number) => void

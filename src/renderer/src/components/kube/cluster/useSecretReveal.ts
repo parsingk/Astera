@@ -46,7 +46,8 @@ export function createRevealGate(
 
 /** A Secret's "show values" (spec D6), for the detail's YAML tab and the editor tab: `KubeYamlView`'s `reveal`, or null
  *  for any other kind. The values live in this state and nowhere else, tied to the object (`uid`) and the version they
- *  were read for; never logged. Another object, a new version, a hide or unmount drops them. */
+ *  were read for; never logged. Another object, a new version or a hide drops them; unmount (a closed tab) discards
+ *  them with the state, and an answer coming after it is set on nothing. */
 export function useSecretReveal(ref: ObjectRef | null, uid: string | null, version: string): YamlReveal | null {
   const [revealed, setRevealed] = useState<Revealed>(null)
   const [failure, setFailure] = useState<RevealFailure>(null)
@@ -57,8 +58,6 @@ export function useSecretReveal(ref: ObjectRef | null, uid: string | null, versi
   useEffect(() => {
     gate.current?.drop()
   }, [uid, version])
-  // Dropped on unmount: a closed tab keeps no plaintext.
-  useEffect(() => () => gate.current?.drop(), [])
 
   if (ref === null || uid === null || ref.kind !== 'Secret') return null
   // Checked here too, so the render before the drop above does not show values read for another version.
