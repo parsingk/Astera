@@ -84,7 +84,7 @@ export function KubeLogView({
   initial,
   visible
 }: {
-  /** The Pod as the opener knew it: its containers, and the exit code once the stream ends. */
+  /** The Pod as the opener knew it, if it did: shown until the view's own read of it answers. */
   pod: K8sObject | null
   target: ObjectRef
   /** `filter`: for tests, since a static render cannot type into the field. */
