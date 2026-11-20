@@ -17,6 +17,12 @@ const pod = { context: 'arn:aws:eks:ap-northeast-2:1:cluster/live', namespace: '
 const render = (target: typeof pod | { context: string; namespace: null; resource: string; kind: string; name: string }): string =>
   renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true }))
 
+
+/** A tag's attributes, to follow the ids that tie a tab to its panel. */
+const attrs = (tag: string): Record<string, string> => Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]))
+const tabsIn = (html: string): Array<Record<string, string>> => [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => attrs(m[0]))
+const panelIn = (html: string): Record<string, string> => attrs(html.match(/<div[^>]*role="tabpanel"[^>]*>/)?.[0] ?? '')
+
 // Spec 4.6 and board B: where the object lives, a read-only chip, and the views; P1 has no edit, apply or compare.
 describe('KubeObjectTab', () => {
   it('draws where the object lives, the read-only chip and the view switch', () => {
@@ -25,6 +31,17 @@ describe('KubeObjectTab', () => {
     expect(html).toContain('kube.cluster.readOnly')
     for (const v of ['yaml', 'describe', 'events']) expect(html).toContain(`kube.cluster.tab.${v}`)
     expect(html).toContain('kube.cluster.loading') // nothing read yet
+  })
+
+  // Task 12 minor, as in the detail: the view switch's tabs control the tab's body, with one tab stop.
+  it('ties the shown view to the body, with one tab stop', () => {
+    const html = render(pod)
+    const tabs = tabsIn(html)
+    const panel = panelIn(html)
+    expect(tabs.map((tb) => tb['aria-selected'])).toEqual(['true', 'false', 'false'])
+    expect(tabs[0]['aria-controls']).toBe(panel.id)
+    expect(panel['aria-labelledby']).toBe(tabs[0].id)
+    expect(tabs.map((tb) => tb.tabindex)).toEqual(['0', '-1', '-1'])
   })
 
   it('names only the context for a cluster-scoped object', () => {

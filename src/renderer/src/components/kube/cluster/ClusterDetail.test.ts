@@ -39,6 +39,12 @@ function model(kind: string, resource: string, object: K8sObject, extra: Partial
 const render = (m: ClusterViewModel, props: Record<string, unknown> = {}): string =>
   renderToStaticMarkup(React.createElement(ClusterDetail, { model: m, ...props }))
 
+
+/** A tag's attributes, to follow the ids that tie a tab to its panel. */
+const attrs = (tag: string): Record<string, string> => Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]))
+const tabsIn = (html: string): Array<Record<string, string>> => [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => attrs(m[0]))
+const panelIn = (html: string): Record<string, string> => attrs(html.match(/<div[^>]*role="tabpanel"[^>]*>/)?.[0] ?? '')
+
 describe('ClusterDetail', () => {
   it('shows a Pods tab only for kinds with a selector', () => {
     const deployment: K8sObject = {
@@ -84,6 +90,22 @@ describe('ClusterDetail', () => {
     expect(html).toContain('configmaps &quot;cfg&quot; is forbidden')
     expect(html).toContain('aria-label="kube.cluster.retry"')
     expect(render(model('ConfigMap', 'configmaps', cm, { detailError: null }))).not.toContain('kube-detail-watch-error')
+  })
+
+  // Task 12 minor: the tabs had no panel, no aria-controls and no arrow keys. The shown tab controls the one panel, which
+  // is labelled by it, and only the shown tab is a tab stop (the arrows move between them).
+  it('ties the shown tab to its panel, with one tab stop', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    const html = render(model('ConfigMap', 'configmaps', cm, { view: { ...model('ConfigMap', 'configmaps', cm).view, detailTab: 'yaml' } }))
+    const tabs = tabsIn(html)
+    const panel = panelIn(html)
+    const shown = tabs.filter((tb) => tb['aria-selected'] === 'true')
+    expect(shown).toHaveLength(1)
+    expect(panel.id).toBeTruthy()
+    expect(shown[0]['aria-controls']).toBe(panel.id)
+    expect(panel['aria-labelledby']).toBe(shown[0].id)
+    expect(tabs.map((tb) => tb.tabindex)).toEqual(tabs.map((tb) => (tb === shown[0] ? '0' : '-1')))
+    expect(new Set(tabs.map((tb) => tb.id)).size).toBe(tabs.length)
   })
 
   it('draws nothing without a selection', () => {

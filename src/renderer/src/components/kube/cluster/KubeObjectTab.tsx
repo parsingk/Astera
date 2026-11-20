@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Lock, RefreshCw, RotateCcw } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
@@ -8,6 +8,7 @@ import { displayContextName } from '../../../../../core/kube/contextName'
 import { follow, useFollowingRead, useRereadTick, useWatchClient, type WatchState } from '../../../hooks/useClusterView'
 import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
+import { arrowStep } from '../../../lib/arrowStep'
 import { FileIcon } from '../../FileIcon'
 import { EventsList, ReadView } from './ClusterDetail'
 import { liveErrorText } from './ClusterView'
@@ -40,6 +41,9 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
   const client = useWatchClient()
   const key = JSON.stringify(target)
   const [view, setView] = useState<TabView>('yaml')
+  const ids = useId()
+  const tabId = (v: TabView): string => `${ids}-tab-${v}`
+  const panelId = `${ids}-panel`
   /** The object as last read or watched, and when; `deleted`: the cluster says it is gone, and `object` is its last
    *  content (null when it was never there). */
   const [shown, setShown] = useState<{ object: K8sObject | null; deleted: boolean; at: number } | null>(null)
@@ -152,11 +156,22 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
           {VIEWS.map((v) => (
             <button
               key={v}
+              id={tabId(v)}
               type="button"
               role="tab"
               aria-selected={view === v}
+              aria-controls={panelId}
+              // One tab stop, the shown view; the arrows move between them (ARIA's tabs pattern).
+              tabIndex={view === v ? 0 : -1}
               className={view === v ? 'kube-segment on' : 'kube-segment'}
               onClick={() => setView(v)}
+              onKeyDown={(e) => {
+                const to = arrowStep(VIEWS, view, e.key)
+                if (to === null) return
+                e.preventDefault()
+                setView(to)
+                document.getElementById(tabId(to))?.focus()
+              }}
             >
               {t(`kube.cluster.tab.${v}` as MessageKey)}
             </button>
@@ -167,7 +182,7 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
         </button>
       </div>
       {gone && <div className="kube-detail-deleted">{t(object !== null ? 'kube.cluster.deleted' : 'kube.cluster.notFound')}</div>}
-      <div className="kube-tab-body">
+      <div className="kube-tab-body" role="tabpanel" id={panelId} aria-labelledby={tabId(view)}>
         {object === null ? (
           gone ? null : failed !== null ? (
             <div className="kube-cluster-empty kube-detail-error">{failed}</div>

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useId, useState } from 'react'
 import { Ellipsis, ExternalLink, RotateCcw } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
@@ -8,6 +8,7 @@ import type { DetailTab } from '../../../../../core/kube/cluster/viewState'
 import { ageText } from '../../../../../core/kube/cluster/status'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import { useI18n } from '../../../i18n/I18nProvider'
+import { arrowStep } from '../../../lib/arrowStep'
 import { ContextMenu } from '../../ContextMenu'
 import { clusterMenuItems } from './clusterMenu'
 import { liveErrorText } from './ClusterView'
@@ -138,6 +139,9 @@ export function ClusterDetail({
   const reveal = useSecretReveal(selectedRef, uid, str(selected?.metadata.resourceVersion))
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   useEffect(() => setMenu(null), [uid])
+  const ids = useId()
+  const tabId = (id: DetailTab): string => `${ids}-tab-${id}`
+  const panelId = `${ids}-panel`
 
   if (selected === null || selectedRef === null || model.kind === null || uid === null) return null
   const kind = model.kind.kind
@@ -202,18 +206,29 @@ export function ClusterDetail({
         {tabs.map((id) => (
           <button
             key={id}
+            id={tabId(id)}
             type="button"
             role="tab"
             aria-selected={id === tab}
+            aria-controls={panelId}
+            // One tab stop, the shown tab; the arrows move between them (ARIA's tabs pattern).
+            tabIndex={id === tab ? 0 : -1}
             className={'kube-detail-tab' + (id === tab ? ' active' : '')}
             onClick={() => model.setDetailTab(id)}
+            onKeyDown={(e) => {
+              const to = arrowStep(tabs, tab, e.key)
+              if (to === null) return
+              e.preventDefault()
+              model.setDetailTab(to)
+              document.getElementById(tabId(to))?.focus()
+            }}
           >
             {t(`kube.cluster.tab.${id}` as MessageKey)}
             {id === 'events' && model.events?.ok === true && <span className="kube-detail-count">{model.events.events.length}</span>}
           </button>
         ))}
       </div>
-      <div className="kube-detail-body">
+      <div className="kube-detail-body" role="tabpanel" id={panelId} aria-labelledby={tabId(tab)}>
         {tab === 'summary' && <SummaryTab model={model} object={selected} kind={kind} context={selectedRef.context} />}
         {tab === 'yaml' && <KubeYamlView object={selected} kind={kind} reveal={reveal} />}
         {tab === 'events' && <ReadView read={model.events} render={(r) => <EventsList events={r.events} />} />}

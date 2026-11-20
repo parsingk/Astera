@@ -81,13 +81,25 @@ describe('BottomPanel Kubernetes tab', () => {
 
   // Spec 4.2: one row, the switch first; the Cluster segment's body places it at the head of its toolbar.
   it('hands the switch to the Cluster segment to lead its toolbar', () => {
-    expect(render({ kubeSegment: 'cluster' })).toContain('<div class="cluster-marker"><div class="kube-segment-switch" role="tablist">')
+    expect(render({ kubeSegment: 'cluster' })).toContain('<div class="cluster-marker"><div class="kube-segment-switch" role="radiogroup"')
   })
 
   it('heads the log with the switch in the same place, a row above it', () => {
     expect(render({ kubeLog: [entry()], kubeSegment: 'log' })).toMatch(
-      /<div class="kube-segment-bar"><div class="kube-segment-switch" role="tablist">.*?<\/div><\/div><div class="kube-log">/
+      /<div class="kube-segment-bar"><div class="kube-segment-switch" role="radiogroup"[^>]*>.*?<\/div><\/div><div class="kube-log">/
     )
+  })
+
+  // Task 13 minor: the switch sat in the bottom panel's own tablist as a nested tablist. It is a radio group: the
+  // segment shown is checked and is the one tab stop of each copy of the switch (one per segment body).
+  it('draws the switch as a radio group, the shown segment checked', () => {
+    const html = render({ kubeSegment: 'log', kubeLog: [entry()] })
+    expect(html).not.toContain('role="tablist"><button')
+    expect(html).toContain('role="radiogroup" aria-label="kube.log.tab"')
+    const radios = [...html.matchAll(/<button[^>]*role="radio"[^>]*>/g)].map((m) => m[0])
+    expect(radios).toHaveLength(4)
+    expect(radios.filter((r) => r.includes('aria-checked="true"') && r.includes('tabindex="0"') && r.includes('data-segment="log"'))).toHaveLength(2)
+    expect(radios.filter((r) => r.includes('aria-checked="false"') && r.includes('tabindex="-1"') && r.includes('data-segment="cluster"'))).toHaveLength(2)
   })
 
   it('shows the operation log in its segment', () => {
