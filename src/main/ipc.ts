@@ -301,7 +301,12 @@ import { createGithubPrs } from './githubPrs'
 import { registerHiggsfieldIpc } from './higgsfield'
 import { registerKubeIpc } from './kube/ipc'
 import { createKubeService } from './kube/service'
-import { createRealKubeDeps, kubectlDisplayPath } from './kube/runtime'
+import { createRealKubeDeps, kubeEnv, kubectlDisplayPath } from './kube/runtime'
+import { createClusterReads } from './kube/cluster'
+import { createWatchRegistry } from './kube/clusterWatch'
+import { kubectlBin } from '../core/kube/kubectl'
+import { streamKubectl } from '../core/kube/stream'
+import { redactKubectlStderr } from '../core/kube/redact'
 import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { fillFromCommits } from '../core/github/fill'
@@ -4554,13 +4559,34 @@ export function registerIpc(
   // Kubernetes manifests: classification, contexts and targets. The watcher batch below calls kubeService.invalidate.
   const kubeDeps = createRealKubeDeps(core.appSettings, core.kubeTargets)
   const kubeService = createKubeService(kubeDeps)
+  const kubeCluster = createClusterReads({ run: kubeService.kubectl })
+  const kubeWatches = createWatchRegistry({
+    // Bin and env are read per spawn, as createRealKubeDeps does, so a settings change applies to the next watch.
+    stream: (args, h) =>
+      streamKubectl(args, {
+        bin: kubectlBin(core.appSettings.getKubectlPath()),
+        env: kubeEnv(core.appSettings.getKubeconfigFiles(), process.env, os.homedir()),
+        ...h
+      }),
+    redact: redactKubectlStderr,
+    emit: (m) => send('kube:watch', m),
+    later: (fn, ms) => {
+      const t = setTimeout(fn, ms)
+      return { cancel: () => clearTimeout(t) }
+    }
+  })
   registerKubeIpc(ipcMain, {
     service: kubeService,
     assertAllowedPath,
     settings: core.appSettings,
     run: kubeDeps.run,
-    binPath: () => kubectlDisplayPath(core.appSettings.getKubectlPath(), process.env)
+    binPath: () => kubectlDisplayPath(core.appSettings.getKubectlPath(), process.env),
+    cluster: kubeCluster,
+    watches: kubeWatches
   })
+  // Watch processes die with the document that asked for them and with the app.
+  onNewDocument.push(() => kubeWatches.stopAll())
+  app.once('will-quit', () => kubeWatches.stopAll())
 
   /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
    *  — 그 아래 전부가 아니다.

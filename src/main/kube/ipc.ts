@@ -3,6 +3,9 @@ import type { FirstRef, KubeRequest, KubeVerb, Remembered } from '../../core/kub
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { AppSettingsStore } from '../appSettingsStore'
 import type { KubeService } from './service'
+import type { createClusterReads } from './cluster'
+import type { createWatchRegistry } from './clusterWatch'
+import type { KindDef, ObjectRef, WatchSpec } from '../../core/kube/cluster/types'
 
 export interface KubeIpcDeps {
   service: KubeService
@@ -12,6 +15,8 @@ export interface KubeIpcDeps {
   run(args: string[], opts?: { timeoutMs?: number }): Promise<KubectlResult>
   /** The binary `run` uses, as a path where PATH can say it. */
   binPath(): string
+  cluster: ReturnType<typeof createClusterReads>
+  watches: ReturnType<typeof createWatchRegistry>
 }
 
 /** `kubectl version --client` only reads its own build info; it never needs the cluster deadline. */
@@ -68,6 +73,45 @@ function request(v: unknown): KubeRequest {
     ...(r.override === true ? { override: true as const } : {}),
     ...(r.first !== undefined ? { first: firstOf(r.first) } : {})
   }
+}
+
+function nsOrNull(v: unknown, what: string): string | null {
+  return v === null ? null : str(v, what)
+}
+
+function objectRef(v: unknown): ObjectRef {
+  const r = v as { context?: unknown; namespace?: unknown; resource?: unknown; kind?: unknown; name?: unknown } | null | undefined
+  if (!r || typeof r !== 'object') throw new Error('kube: ref must be { context, namespace, resource, kind, name }')
+  return {
+    context: str(r.context, 'ref context'),
+    namespace: nsOrNull(r.namespace, 'ref namespace'),
+    resource: str(r.resource, 'ref resource'),
+    kind: str(r.kind, 'ref kind'),
+    name: str(r.name, 'ref name')
+  }
+}
+
+function watchSpec(v: unknown): WatchSpec {
+  const r = v as { context?: unknown; namespace?: unknown; namespaced?: unknown; resource?: unknown; name?: unknown } | null | undefined
+  if (!r || typeof r !== 'object' || typeof r.namespaced !== 'boolean') {
+    throw new Error('kube: watch spec must be { context, namespace, namespaced, resource, name? }')
+  }
+  return {
+    context: str(r.context, 'watch context'),
+    namespace: nsOrNull(r.namespace, 'watch namespace'),
+    namespaced: r.namespaced,
+    resource: str(r.resource, 'watch resource'),
+    ...(r.name !== undefined ? { name: str(r.name, 'watch name') } : {})
+  }
+}
+
+function kindDefs(v: unknown): KindDef[] {
+  if (!Array.isArray(v)) throw new Error('kube: kinds must be an array of { kind, resource, namespaced }')
+  return v.map((x) => {
+    const k = x as { kind?: unknown; resource?: unknown; namespaced?: unknown } | null
+    if (!k || typeof k.namespaced !== 'boolean') throw new Error('kube: kinds must be an array of { kind, resource, namespaced }')
+    return { kind: str(k.kind, 'kind'), resource: str(k.resource, 'kind resource'), namespaced: k.namespaced }
+  })
 }
 
 function previewOpts(v: unknown): { keepServerFields: boolean } {
@@ -183,4 +227,21 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     await assertAllowedPath(root)
     return service.status(file, root, ctx)
   })
+
+  // Read-only views of a cluster; the one channel that returns Secret values is `reveal`, called by an explicit click.
+  const { cluster, watches } = deps
+  ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(str(context, 'context')))
+  ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(str(context, 'context')))
+  ipcMain.handle('kube.cluster.counts', async (_e, context, namespace, kinds) =>
+    cluster.counts(str(context, 'context'), nsOrNull(namespace, 'namespace'), kindDefs(kinds))
+  )
+  ipcMain.handle('kube.cluster.get', async (_e, ref) => cluster.get(objectRef(ref)))
+  ipcMain.handle('kube.cluster.describe', async (_e, ref) => cluster.describe(objectRef(ref)))
+  ipcMain.handle('kube.cluster.events', async (_e, ref, uid) => cluster.events(objectRef(ref), str(uid, 'uid')))
+  ipcMain.handle('kube.cluster.pods', async (_e, context, namespace, selector) =>
+    cluster.pods(str(context, 'context'), str(namespace, 'namespace'), str(selector, 'selector'))
+  )
+  ipcMain.handle('kube.cluster.reveal', async (_e, ref) => cluster.reveal(objectRef(ref)))
+  ipcMain.handle('kube.cluster.watch', async (_e, id, spec) => watches.watch(str(id, 'watchId'), watchSpec(spec)))
+  ipcMain.handle('kube.cluster.unwatch', async (_e, id) => watches.unwatch(str(id, 'watchId')))
 }

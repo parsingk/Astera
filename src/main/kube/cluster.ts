@@ -6,9 +6,9 @@ import { needsAttention } from '../../core/kube/cluster/status'
 import { crdKinds } from '../../core/kube/cluster/kinds'
 import { secretValuesOf } from '../../core/kube/cluster/secret'
 import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, namespacesArgs, podsArgs } from '../../core/kube/cluster/args'
-import type { CountInfo, KindDef, ObjectRef, SecretValue } from '../../core/kube/cluster/types'
+import type { CountInfo, KindDef, ObjectRef, Read, SecretValue } from '../../core/kube/cluster/types'
 
-export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidden?: true }
+export type { Read }
 
 type Run = KubeServiceDeps['run']
 type Result = Awaited<ReturnType<Run>>

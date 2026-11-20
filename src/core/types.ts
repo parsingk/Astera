@@ -12,6 +12,8 @@ import type {
   KubeVerb,
   Remembered
 } from './kube/types'
+import type { K8sObject } from './kube/objects'
+import type { CountInfo, KindDef, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -936,6 +938,7 @@ export interface RuntimeView {
 }
 
 export interface CoreEvents {
+  'kube:watch': WatchMessage
   'session:data': { sessionId: string; data: string }
   /** A remote session tab's checkpoint (Phase 9b, main/remote/remoteStreams.ts): the view resets, writes `state`, then
    *  `pending`. `sessionId` is the tab's key, `<runtimeId>:<sessionId>`. */
@@ -1440,6 +1443,20 @@ export interface CoreApi {
     render(overlayDir: string): Promise<KubeRenderResult>
     /** `context`: one chosen for the editor without remembering it (R11), which must be listed in kubeconfig. */
     status(filePath: string, projectRoot: string, context?: string): Promise<KubeStatus>
+    /** Read-only cluster view. Secret objects arrive masked; only `reveal` returns values. */
+    cluster: {
+      namespaces(context: string): Promise<Read<{ names: string[] }>>
+      crds(context: string): Promise<Read<{ kinds: KindDef[]; crds: K8sObject[] }>>
+      counts(context: string, namespace: string | null, kinds: KindDef[]): Promise<Record<string, CountInfo>>
+      get(ref: ObjectRef): Promise<Read<{ object: K8sObject | null }>>
+      describe(ref: ObjectRef): Promise<Read<{ text: string }>>
+      events(ref: ObjectRef, uid: string): Promise<Read<{ events: K8sObject[] }>>
+      pods(context: string, namespace: string, selector: string): Promise<Read<{ objects: K8sObject[] }>>
+      reveal(ref: ObjectRef): Promise<Read<{ values: SecretValue[] }>>
+      /** Events arrive on `'kube:watch'`. `limit`: MAX_WATCHES processes already run. */
+      watch(watchId: string, spec: WatchSpec): Promise<{ ok: true } | { ok: false; reason: 'limit' }>
+      unwatch(watchId: string): Promise<void>
+    }
   }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */
