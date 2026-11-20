@@ -534,11 +534,14 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   // Counted when the view opens, again for another namespace, on refresh, and on a slow interval while seen (§4.3). One
   // request at a time, the next only an interval after the last answered, so a slow cluster is never asked twice at
-  // once; nothing while the window is hidden. Not while the list's watch fails either: the cluster is not answering, and
+  // once, also when this effect restarts (the CRDs answering adds custom kinds) while a round is in flight: the new poll
+  // waits for that round (`round`) before its first; nothing while the window is hidden. Not while the list's watch fails either: the cluster is not answering, and
   // retry starts the counts again; a Forbidden list is not that, and the counts are what greys such kinds in the tree.
   // Custom kinds are counted only while their group is open (customCountsKey): a cluster can serve hundreds.
   const customKey = customCountsKey(view.expanded.includes('custom'), crds !== null && crds.key === context, customKinds)
   const listWatchFailed = listFailure(listWatch) !== null
+  /** The counts round in flight, kept past its effect's cleanup so the next effect can wait for it. */
+  const round = useRef<Promise<unknown> | null>(null)
   useEffect(() => {
     if (!visible || context === null || listWatchFailed) return
     const namespace = view.namespace
@@ -551,12 +554,21 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
         // Ages move on with each round of counts, also while nothing else changes.
         if (!first) setTick((t) => t + 1)
         first = false
-        const value = await api.counts(context, namespace, kinds)
+        const asked = api.counts(context, namespace, kinds)
+        const mine = asked.then(
+          () => {},
+          () => {}
+        )
+        round.current = mine
+        void mine.then(() => {
+          if (round.current === mine) round.current = null
+        })
+        const value = await asked
         // A kind this round could not count keeps the last count, greyed (I1).
         if (alive) setCounts((prev) => ({ key, value: mergeCounts(prev?.key === key ? prev.value : null, value) }))
       },
       COUNTS_INTERVAL_MS,
-      { paused: () => document.hidden }
+      { paused: () => document.hidden, after: round.current ?? undefined }
     )
     return () => {
       alive = false

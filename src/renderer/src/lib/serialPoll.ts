@@ -1,7 +1,8 @@
 // A poll with one request in flight at most (remote runtime design Phase 6, review C1). The next request starts only
 // after the last one answered, plus the interval: a Runtime that takes longer than the interval to answer (a dropped
 // route waits out the connect timeout) still has its answer drawn, since no newer request overtook it.
-export function startSerialPoll(ask: () => Promise<unknown>, intervalMs: number, o: { paused?: () => boolean } = {}): () => void {
+// `after`: a request of the poll this one replaces that may still be in flight; the first request waits for it to settle.
+export function startSerialPoll(ask: () => Promise<unknown>, intervalMs: number, o: { paused?: () => boolean; after?: Promise<unknown> } = {}): () => void {
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
   const run = (): void => {
@@ -17,7 +18,8 @@ export function startSerialPoll(ask: () => Promise<unknown>, intervalMs: number,
         if (!stopped) timer = setTimeout(run, intervalMs)
       })
   }
-  run()
+  if (o.after) void o.after.catch(() => {}).then(run)
+  else run()
   return () => {
     stopped = true
     if (timer !== null) clearTimeout(timer)

@@ -60,3 +60,29 @@ describe('startSerialPoll paused', () => {
     stop()
   })
 })
+
+// A poll that replaces another (its inputs changed) starts only after the old one's request in flight has settled, so the
+// two never overlap.
+describe('startSerialPoll after', () => {
+  it('holds its first request until the given one settled, and not at all once stopped', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    let settle!: () => void
+    const old = new Promise<void>((r) => (settle = r))
+    const stop = startSerialPoll(async () => void calls++, 1_000, { after: old })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls).toBe(0)
+    settle()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toBe(1)
+    stop()
+    let later = 0
+    let fail!: () => void
+    const failing = new Promise<void>((_, rej) => (fail = () => rej(new Error('x'))))
+    const stopped = startSerialPoll(async () => void later++, 1_000, { after: failing })
+    stopped()
+    fail()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(later).toBe(0)
+  })
+})
