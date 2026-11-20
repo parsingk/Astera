@@ -137,7 +137,7 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, view, key, gen, uid, reread])
 
-  // Dropped with the tab (unmount) and when the name comes back as another object (a new uid).
+  // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))
 
   const gone = shown !== null && shown.deleted
