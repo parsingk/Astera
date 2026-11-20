@@ -326,6 +326,20 @@ export function useRereadTick(uid: string | null, version: string): number {
   return tick
 }
 
+/** How long a selection must stay before the detail's one-shot reads for it start (describe, events, Pods, the owner):
+ *  rows passed over with quick clicks start none of their kubectl calls, which cannot be cancelled once asked. */
+export const SELECTION_READ_DELAY_MS = 150
+
+/** `value` once it has stayed the same for `ms`; until then the value that last did. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(timer)
+  }, [value, ms])
+  return settled
+}
+
 /** The list watch's failure, which fails the view; not a Forbidden refusal, which is the picked kind's answer (§4.3). */
 export function listFailure(list: WatchState): { error: string } | null {
   return typeof list === 'object' && !list.forbidden ? list : null
@@ -619,9 +633,12 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, selectedKey, view.selected, gen, client])
 
+  // The detail's reads wait for the selection to settle; the object's own read and watch above start at once.
+  const settled = useSettled(view.selected, SELECTION_READ_DELAY_MS) === view.selected
+
   useEffect(() => {
     const first = latest.current.owner
-    if (!visible || first === null || ownerKey === null) return
+    if (!visible || !settled || first === null || ownerKey === null) return
     let alive = true
     api.get(first).then(
       (r) => {
@@ -633,7 +650,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, ownerKey, gen])
+  }, [visible, settled, ownerKey, gen])
 
   // --- The detail's reads, for the tab that shows (the Summary needs the events too) ---
 
@@ -645,7 +662,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const objectUid = selected?.object.metadata.uid
   const eventsShown = view.detailTab === 'summary' || view.detailTab === 'events'
   useFollowingRead(
-    visible && eventsShown && selectedRef !== null && pickedUid !== null && typeof objectUid === 'string'
+    visible && settled && eventsShown && selectedRef !== null && pickedUid !== null && typeof objectUid === 'string'
       ? { key: JSON.stringify([selectedKey, pickedUid, gen]), read: () => api.events(selectedRef, objectUid), apply: (value) => setEvents({ key: pickedUid, value }) }
       : null,
     reread
@@ -653,7 +670,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   const describeShown = view.detailTab === 'describe'
   useFollowingRead(
-    visible && describeShown && selectedRef !== null && pickedUid !== null
+    visible && settled && describeShown && selectedRef !== null && pickedUid !== null
       ? { key: JSON.stringify([selectedKey, pickedUid, gen]), read: () => api.describe(selectedRef), apply: (value) => setDescribe({ key: pickedUid, value }) }
       : null,
     reread
@@ -662,7 +679,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const podsShown = view.detailTab === 'pods' && selector !== null
   const podsNamespace = selectedRef?.namespace ?? null
   useFollowingRead(
-    visible && podsShown && selector !== null && selectedRef !== null && podsNamespace !== null && pickedUid !== null
+    visible && settled && podsShown && selector !== null && selectedRef !== null && podsNamespace !== null && pickedUid !== null
       ? {
           key: JSON.stringify([selectedKey, pickedUid, selector, gen]),
           read: () => api.pods(selectedRef.context, podsNamespace, selector),
