@@ -95,10 +95,19 @@ describe('log logic', () => {
     expect(compareStamps('2026-11-20T01:12:04Z', '2026-11-20T01:12:03.999Z')).toBeGreaterThan(0)
     expect(compareStamps('2026-11-20T10:12:03+09:00', '2026-11-20T01:12:03.5Z')).toBeLessThan(0)
   })
-  // --since-time counts whole seconds: read on from a line, that second's lines come again.
-  it('keeps the lines stamped after a time, and those without a stamp', () => {
-    const lines = ['2026-11-20T01:12:03.1Z a', '2026-11-20T01:12:03.2Z b', 'no stamp', '2026-11-20T01:12:03.25Z c']
-    expect(linesAfter(lines, '2026-11-20T01:12:03.2Z')).toEqual(['no stamp', '2026-11-20T01:12:03.25Z c'])
+  // --since-time counts whole seconds: read on from a line, that second's lines come again. Final review M4: with
+  // --timestamps kubectl stamps every line, so a line without one is a piece of a line main cut at LOG_LINE_MAX_CHARS,
+  // and goes or stays with its head. Pieces before any stamp belong to a line whose head went already.
+  it('keeps the lines stamped after a time, each with the pieces cut from it', () => {
+    const lines = [
+      'piece of an earlier line',
+      '2026-11-20T01:12:03.1Z a',
+      '2026-11-20T01:12:03.2Z b',
+      'piece of b',
+      '2026-11-20T01:12:03.25Z c',
+      'piece of c'
+    ]
+    expect(linesAfter(lines, '2026-11-20T01:12:03.2Z')).toEqual(['2026-11-20T01:12:03.25Z c', 'piece of c'])
   })
   // Task 5 review (ruled in): the closing line names the day too when the container did not finish today.
   it('says when a container finished, with the date when not today', () => {

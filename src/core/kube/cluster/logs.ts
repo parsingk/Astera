@@ -43,11 +43,15 @@ export function compareStamps(a: string, b: string): number {
 }
 
 /** The lines stamped after `since`: kubectl's --since-time counts whole seconds, so a stream read on from a line sends
- *  that second's lines again. A line without a stamp stays. */
+ *  that second's lines again. kubectl stamps every line, so a line without a stamp is a piece main cut from a long one:
+ *  it goes or stays with the stamped line before it. Pieces before any stamp go, since this runs only while nothing
+ *  after `since` has been kept: their head went already. */
 export function linesAfter(raw: readonly string[], since: string): string[] {
+  let keep = false
   return raw.filter((r) => {
     const ts = splitTimestamp(r).ts
-    return ts === null || compareStamps(ts, since) > 0
+    if (ts !== null) keep = compareStamps(ts, since) > 0
+    return keep
   })
 }
 
