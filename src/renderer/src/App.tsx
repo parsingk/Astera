@@ -169,6 +169,7 @@ import type { ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
 import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, type KubeLogTab } from './lib/kubeLogTabs'
+import { shownBottomTab } from './lib/bottomTab'
 import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
@@ -3761,17 +3762,10 @@ export default function App(): React.JSX.Element {
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
-  // The Kubernetes tab is there while kubectl is found or its log has entries; without either it falls back like a closed
-  // terminal. A logs tab belongs to no project either: it shows at home too, until its ✕ (closeLogs).
+  // The Kubernetes tab is there while kubectl is found or its log has entries; shownBottomTab says where the panel falls
+  // back when the tab asked for is not there (lib/bottomTab.ts).
   const kubeAvailable = kubectlFound || kubeOps.log.length > 0
-  const kubeTabGone = bottomTab === 'kube' && !kubeAvailable
-  const bottomTabWanted = kubeTabGone ? 'run' : bottomTab
-  const bottomTabShown =
-    bottomTabWanted === 'kube' || isLogTabId(bottomTabWanted)
-      ? bottomTabWanted
-      : runAvailable
-        ? bottomTabWanted
-        : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
+  const bottomTabShown = shownBottomTab({ wanted: bottomTab, runAvailable, kubeAvailable, terminalIds: terminals.map((x) => x.id) })
   const windowShown = useDocumentShown()
   /** The cluster view follows the cluster only while it is seen (K4). */
   const clusterVisible = clusterSeen({
