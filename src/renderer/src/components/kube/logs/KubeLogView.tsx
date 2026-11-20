@@ -9,6 +9,7 @@ import {
   filterLines,
   logFileName,
   previousByDefault,
+  restartCountOf,
   stampText,
   visibleText,
   type LogLine,
@@ -28,6 +29,8 @@ const OVERSCAN = 10
 const DEFAULT_VIEWPORT = 400
 /** This close to the end still counts as the bottom: a zoomed page scrolls in fractions of a pixel. */
 const BOTTOM_SLACK = 4
+/** The waits between Pod reads after a stream ends, until the exit shows. */
+const EXIT_RETRY_MS = [1000, 2000, 4000]
 
 /** The lines to draw, from `first` up to `last`: the end of the list while the view keeps to the bottom, else the
  *  lines around the scroll position, counted at LINE_HEIGHT a line. Wrapped lines are taller than that count, so near
@@ -79,26 +82,70 @@ export function KubeLogView({
   const [filter, setFilter] = useState(initial.filter ?? '')
   const [timestamps, setTimestamps] = useState(true)
   const [wrap, setWrap] = useState(false)
-  /** The Pod read again when the stream ended: a container that just exited says how only in a fresh read. */
-  const [reread, setReread] = useState<K8sObject | null>(null)
-  const podNow = reread ?? pod
+  /** The Pod as last read: its containers, and once the stream ends its exit. The tab knows only where the Pod lives,
+   *  so the view reads it; `pod` shows until the first read answers. */
+  const [fresh, setFresh] = useState<K8sObject | null>(null)
+  const podNow = fresh ?? pod
   const stream = useKubeLogStream(target, { container, previous, follow })
   const { buffer, state } = stream
 
-  useEffect(() => {
-    if (state !== 'ended') return
-    let alive = true
-    window.api.kube.cluster.get(JSON.parse(targetKey) as ObjectRef).then(
+  /** Reads asked, and the last one applied: an answer older than one already applied is dropped, so a slow read cannot
+   *  put an older Pod back. */
+  const reads = useRef({ asked: 0, applied: 0 })
+  const readPod = (alive: () => boolean): Promise<K8sObject | null> => {
+    const seq = ++reads.current.asked
+    return window.api.kube.cluster.get(JSON.parse(targetKey) as ObjectRef).then(
       (r) => {
-        if (alive && r.ok && r.object !== null) setReread(r.object)
+        if (!alive() || !r.ok || r.object === null || seq < reads.current.applied) return null
+        reads.current.applied = seq
+        setFresh(r.object)
+        return r.object
       },
-      // Without a fresh read the closing line says only that the stream ended.
-      () => {}
+      // Unread, the picker keeps what it has and the closing line says only that the stream ended.
+      () => null
     )
+  }
+
+  useEffect(() => {
+    let alive = true
+    setFresh(null)
+    void readPod(() => alive)
     return () => {
       alive = false
     }
-  }, [state, targetKey])
+    // `readPod` is this render's, for this `targetKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey])
+
+  /** The container's restart count when its stream started (see exitLine); null while no Pod is known. */
+  const streamKey = JSON.stringify([targetKey, container, previous, follow])
+  const startRestarts = useRef<{ key: string; count: number | null }>({ key: '', count: null })
+  useEffect(() => {
+    const count = podNow !== null ? restartCountOf(podNow, container) : null
+    if (startRestarts.current.key !== streamKey) startRestarts.current = { key: streamKey, count }
+    // The first read can answer after the stream started; until the stream ends, its count is still the start's.
+    else if (startRestarts.current.count === null && state !== 'ended') startRestarts.current.count = count
+  }, [streamKey, podNow, state])
+
+  // kubectl ends before the kubelet writes the exit: read the Pod now, then after 1, 2 and 4 s until the exit shows.
+  // Previous logs are of a container that ended long ago: one read.
+  useEffect(() => {
+    if (state !== 'ended') return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const attempt = (k: number): void => {
+      void readPod(() => alive).then((p) => {
+        if (!alive || previous || k >= EXIT_RETRY_MS.length) return
+        if (p !== null && exitLine(p, container, false, startRestarts.current.count) !== null) return
+        timer = setTimeout(() => attempt(k + 1), EXIT_RETRY_MS[k])
+      })
+    }
+    attempt(0)
+    return () => {
+      alive = false
+      clearTimeout(timer)
+    }
+  }, [state, previous, container, targetKey])
 
   const rows = useMemo(() => (filter === '' ? buffer.lines : filterLines(buffer.lines, filter)), [buffer.lines, filter])
 
@@ -142,7 +189,7 @@ export function KubeLogView({
   })
 
   const { first, last } = lineWindow(rows.length, scroll.top, scroll.height, scroll.pinned)
-  const exit = state === 'ended' && podNow !== null ? exitLine(podNow, container, previous) : null
+  const exit = state === 'ended' && podNow !== null ? exitLine(podNow, container, previous, startRestarts.current.count) : null
   const choices = podNow !== null ? containersOf(podNow) : []
   if (!choices.some((c) => c.name === container)) choices.unshift({ name: container, init: false })
   const where = target.namespace !== null ? ` / ${target.namespace}` : ''

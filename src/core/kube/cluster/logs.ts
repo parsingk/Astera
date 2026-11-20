@@ -140,6 +140,7 @@ export interface ContainerChoice { name: string; init: boolean }
 interface NamedSpec { name?: string }
 interface ContainerStatus {
   name?: string
+  restartCount?: number
   state?: { waiting?: { reason?: string }; terminated?: { exitCode?: number; finishedAt?: string } }
   lastState?: { terminated?: { exitCode?: number; finishedAt?: string } }
 }
@@ -172,9 +173,25 @@ export function previousByDefault(pod: K8sObject, container: string): boolean {
   return statusOf(pod, container)?.state?.waiting?.reason === 'CrashLoopBackOff'
 }
 
-export function exitLine(pod: K8sObject, container: string, previous: boolean): { code: number; at: string | null } | null {
+/** How often the container has been started again; 0 before it has a status. */
+export function restartCountOf(pod: K8sObject, container: string): number {
+  return statusOf(pod, container)?.restartCount ?? 0
+}
+
+/** `restartsAtStart`: the container's restart count when the followed stream started. kubectl ends before the kubelet
+ *  writes the exit, and by then a crashing container is waiting again with its exit in lastState: a count grown past
+ *  this one says that exit is the followed container's. */
+export function exitLine(
+  pod: K8sObject,
+  container: string,
+  previous: boolean,
+  restartsAtStart?: number | null
+): { code: number; at: string | null } | null {
   const s = statusOf(pod, container)
-  const t = previous ? s?.lastState?.terminated : s?.state?.terminated
+  let t = previous ? s?.lastState?.terminated : s?.state?.terminated
+  if (t === undefined && !previous && typeof restartsAtStart === 'number' && restartCountOf(pod, container) > restartsAtStart) {
+    t = s?.lastState?.terminated
+  }
   if (t === undefined || typeof t.exitCode !== 'number') return null
   return { code: t.exitCode, at: t.finishedAt ?? null }
 }

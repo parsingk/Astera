@@ -78,6 +78,9 @@ function nextFrame(fn: () => void): () => void {
   return () => clearTimeout(id)
 }
 
+/** One empty buffer, so a render between streams hands the same one each time. */
+const NO_LINES = emptyLogBuffer()
+
 let shared: LogClient | null = null
 function logClient(): LogClient {
   shared ??= createLogClient({
@@ -97,6 +100,10 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
   const dropPending = useRef<() => void>(() => {})
   const refKey = JSON.stringify(ref)
   const { container, previous, follow } = options
+  /** The stream the buffer and state belong to. Until the effect starts a new one, a render already asked for it reads
+   *  as starting with no lines, not as the last stream's end. */
+  const streamKey = JSON.stringify([refKey, container, previous, follow, gen])
+  const [owner, setOwner] = useState(streamKey)
 
   useEffect(() => {
     const spec: LogSpec = { ref: JSON.parse(refKey) as ObjectRef, options: { container, previous, follow } }
@@ -116,6 +123,7 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
     }
     setBuffer(emptyLogBuffer())
     setState('starting')
+    setOwner(streamKey)
     const stream = logClient().open(
       spec,
       (m) => {
@@ -150,5 +158,5 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
     dropPending.current()
     setBuffer(emptyLogBuffer())
   }, [])
-  return { buffer, state, restart, clear }
+  return owner === streamKey ? { buffer, state, restart, clear } : { buffer: NO_LINES, state: 'starting', restart, clear }
 }

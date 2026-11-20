@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ansiSpans, appendLines, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, logFileName, previousByDefault, splitTimestamp, visibleText } from './logs'
+import { ansiSpans, appendLines, containersOf, defaultContainer, emptyLogBuffer, exitLine, filterLines, logFileName, previousByDefault, restartCountOf, splitTimestamp, visibleText } from './logs'
 
 describe('log logic', () => {
   it('splits the kubectl time stamp', () => {
@@ -40,6 +40,21 @@ describe('log logic', () => {
     expect(previousByDefault(pod, 'worker')).toBe(true)
     expect(exitLine(pod, 'worker', true)).toEqual({ code: 1, at: '2026-11-20T01:12:11Z' })
     expect(exitLine(pod, 'worker', false)).toBeNull()
+  })
+  // Task 5 review I2: `kubectl logs -f` ends before the kubelet writes the exit, and by the time it does a crashing
+  // container is waiting again with its exit in lastState. A restart count grown past the one at the stream's start
+  // says that exit is the one of the container that was followed.
+  it('takes the exit from lastState once the container restarted since the stream started', () => {
+    const pod = {
+      apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' },
+      status: { containerStatuses: [{ name: 'worker', restartCount: 3, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 137, finishedAt: '2026-11-20T01:12:11Z' } } }] }
+    }
+    expect(restartCountOf(pod, 'worker')).toBe(3)
+    expect(restartCountOf(pod, 'sidecar')).toBe(0)
+    expect(exitLine(pod, 'worker', false, 2)).toEqual({ code: 137, at: '2026-11-20T01:12:11Z' })
+    expect(exitLine(pod, 'worker', false, 3)).toBeNull()
+    expect(exitLine(pod, 'worker', false)).toBeNull()
+    expect(exitLine(pod, 'worker', false, null)).toBeNull()
   })
   it('names the saved file', () => {
     expect(logFileName('worker-6b8f9c-x2kq7', 'worker', true)).toBe('worker-6b8f9c-x2kq7_worker_previous.log')
