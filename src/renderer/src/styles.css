@@ -3650,6 +3650,7 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-cluster-kind:hover { background: var(--elevated); }
 .kube-cluster-kind.selected { background: var(--elevated); border-left-color: var(--accent); }
 .kube-cluster-kind.forbidden { color: var(--text-faint); cursor: default; }
+.kube-cluster-kind.forbidden:hover { background: transparent; }
 .kube-cluster-kind-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kube-cluster-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .kube-cluster-attn { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); flex: none; }
@@ -3673,6 +3674,8 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-detail-kind { flex: none; padding: 1px 6px; border-radius: var(--radius); background: var(--elevated); color: var(--text-dim); font-size: 11px; }
 .kube-detail-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .kube-detail-deleted { flex: none; padding: 5px 10px; background: var(--warn-bg); color: var(--warn-ink); }
+.kube-detail-watch-error { flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 10px; color: var(--danger); font-size: 12px; }
+.kube-detail-watch-error-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kube-detail-tabs { flex: none; display: flex; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--line-soft); }
 .kube-detail-tab { padding: 6px 8px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); font-size: 12px; cursor: pointer; }
 .kube-detail-tab:hover { color: var(--text); }

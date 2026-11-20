@@ -14,6 +14,15 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 
 const noop = (): void => {}
 
+type El = { props: Record<string, unknown> }
+/** Every element under `node`, so a handler can be called without a DOM. */
+function elements(node: unknown): El[] {
+  if (Array.isArray(node)) return node.flatMap(elements)
+  if (node === null || typeof node !== 'object' || !('props' in node)) return []
+  const el = node as El
+  return [el, ...elements(el.props.children)]
+}
+
 describe('ClusterTree', () => {
   it('shows counts, a problem dot and a greyed forbidden kind', () => {
     const html = renderToStaticMarkup(
@@ -47,6 +56,25 @@ describe('ClusterTree', () => {
       })
     )
     expect(html).toContain('Widget')
+  })
+
+  // Final review M5 and spec 4.3: a Forbidden kind never fails the view, so it cannot be picked (its watch would fail
+  // and grey the whole view as if the cluster were down).
+  it('makes a Forbidden kind inert', () => {
+    const picked: string[] = []
+    const props = {
+      groups: KIND_GROUPS,
+      custom: [],
+      counts: { secrets: { count: null, attention: false, forbidden: 'secrets is forbidden' } },
+      resource: 'pods',
+      expanded: ['config' as const],
+      onSelect: (r: string) => void picked.push(r),
+      onToggle: noop
+    }
+    expect(renderToStaticMarkup(React.createElement(ClusterTree, props))).toMatch(/<button type="button" class="kube-cluster-kind forbidden" title="secrets is forbidden" aria-disabled="true">/)
+    const buttons = elements(ClusterTree(props)).filter((e) => typeof e.props.className === 'string' && e.props.className.startsWith('kube-cluster-kind'))
+    for (const b of buttons) (b.props.onClick as (() => void) | undefined)?.()
+    expect(picked).toEqual(['configmaps', 'horizontalpodautoscalers.autoscaling'])
   })
 
   // Final review I1: a count that could not be read shows no number (never a false 0), and one kept from the last read

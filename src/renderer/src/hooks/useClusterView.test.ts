@@ -1,7 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, liveOf } from './useClusterView'
 
 afterEach(() => vi.useRealTimers())
+
+// Final review M5 and spec 4.3: an object the person may not read never fails the view; its watch's failure is the
+// detail's to show, and the tree and table stay as they are.
+describe('liveOf', () => {
+  it('leaves the view live when only the selected object\'s watch fails', () => {
+    expect(liveOf('live', { error: 'Error from server (Forbidden): pods "w-1" is forbidden' })).toBe('live')
+    expect(liveOf('live', 'limit')).toBe('limit')
+    expect(liveOf('live', 'ended')).toBe('paused')
+    expect(liveOf({ error: 'Unable to connect to the server' }, 'live')).toEqual({ error: 'Unable to connect to the server' })
+  })
+})
 
 // Final review I4 and spec §11: events, describe and Pods follow the cluster while seen. They are one-shot reads, so a
 // change of the selected object reads them again, at most once every REREAD_MS (a crash-looping Pod changes often).

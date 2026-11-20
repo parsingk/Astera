@@ -34,7 +34,7 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
     const info = p.counts[k.resource]
     const forbidden = info?.forbidden
     const stale = info?.stale ? ' stale' : ''
-    const cls ='kube-cluster-kind' + (k.resource === p.resource ? ' selected' : '') + (forbidden ? ' forbidden' : '')
+    const cls = 'kube-cluster-kind' + (k.resource === p.resource ? ' selected' : '') + (forbidden ? ' forbidden' : '')
     return (
       <button
         key={k.resource}
@@ -42,7 +42,9 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
         className={cls}
         title={forbidden ?? k.resource}
         aria-current={k.resource === p.resource ? 'true' : undefined}
-        onClick={() => p.onSelect(k.resource)}
+        // Forbidden: inert, since its watch could only fail, and a kind the person may not list never fails the view (4.3).
+        aria-disabled={forbidden ? 'true' : undefined}
+        onClick={forbidden ? undefined : () => p.onSelect(k.resource)}
       >
         <span className="kube-cluster-kind-name">{plural(k.kind)}</span>
         {info?.attention && !forbidden && (

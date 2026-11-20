@@ -78,6 +78,9 @@ export interface ClusterViewModel {
   pods: Read<{ columns: Column[]; rows: Row[] }> | null
   /** Whether the table and the detail follow the cluster. */
   live: ClusterLive
+  /** The selected object's watch failed (kubectl's line): the detail says so and keeps its content, and the view stays
+   *  as it is (§4.3). */
+  detailError: string | null
   /** Picks a context: its kubeconfig namespace (else default), nothing selected; remembered for this root. */
   setContext(name: string): void
   /** Picks a namespace (null: All namespaces); remembered for this root. */
@@ -257,9 +260,10 @@ export function useRereadTick(uid: string | null, version: string): number {
   return tick
 }
 
-function liveOf(list: WatchState, pick: WatchState): ClusterLive {
+/** The view's live state from its two watches. Only the list's failure fails the view: the selected object's is the
+ *  detail's to show (`detailError`), since an object the person may not read never fails the view (§4.3). */
+export function liveOf(list: WatchState, pick: WatchState): ClusterLive {
   if (typeof list === 'object') return list
-  if (typeof pick === 'object') return pick
   if (list === 'limit' || pick === 'limit') return 'limit'
   return list === 'ended' || pick === 'ended' ? 'paused' : 'live'
 }
@@ -626,6 +630,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     describe: valueFor(describe, view.selected),
     pods: podsModel,
     live,
+    detailError: visible && selectedRef !== null && typeof pickWatch === 'object' ? pickWatch.error : null,
     setContext(name) {
       const { view: v, contexts: c } = latest.current
       if (name === v.context) return

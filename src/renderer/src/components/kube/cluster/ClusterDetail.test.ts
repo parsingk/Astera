@@ -67,6 +67,16 @@ describe('ClusterDetail', () => {
     expect(html).toContain('cfg')
   })
 
+  // Final review M5: a failed watch of the selected object shows in the detail, not as the whole view's error.
+  it('shows a failed watch of the selected object in the detail, with retry', () => {
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    const html = render(model('ConfigMap', 'configmaps', cm, { detailError: 'Error from server (Forbidden): configmaps "cfg" is forbidden' }))
+    expect(html).toContain('<div class="kube-detail-watch-error" role="status">')
+    expect(html).toContain('configmaps &quot;cfg&quot; is forbidden')
+    expect(html).toContain('aria-label="kube.cluster.retry"')
+    expect(render(model('ConfigMap', 'configmaps', cm, { detailError: null }))).not.toContain('kube-detail-watch-error')
+  })
+
   it('draws nothing without a selection', () => {
     const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg' } }
     expect(render(model('ConfigMap', 'configmaps', cm, { selected: null, selectedRef: null }))).toBe('')

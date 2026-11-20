@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
-import { Ellipsis, SquarePen } from 'lucide-react'
+import { Ellipsis, RotateCcw, SquarePen } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
@@ -10,6 +10,7 @@ import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { ContextMenu } from '../../ContextMenu'
 import { clusterMenuItems } from './clusterMenu'
+import { liveErrorText } from './ClusterView'
 import { KubeYamlView } from './KubeYamlView'
 import { useSecretReveal } from './useSecretReveal'
 
@@ -186,6 +187,16 @@ export function ClusterDetail({
       </div>
       {menu !== null && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {model.deleted && <div className="kube-detail-deleted">{t('kube.cluster.deleted')}</div>}
+      {model.detailError !== null && (
+        <div className="kube-detail-watch-error" role="status">
+          <span className="kube-detail-watch-error-text" title={model.detailError}>
+            {liveErrorText(model.detailError, t)}
+          </span>
+          <button type="button" className="kube-btn" title={t('kube.cluster.retry')} aria-label={t('kube.cluster.retry')} onClick={model.retry}>
+            <RotateCcw size={13} />
+          </button>
+        </div>
+      )}
       <div className="kube-detail-tabs" role="tablist">
         {tabs.map((id) => (
           <button
