@@ -210,12 +210,20 @@ function pathValue(o: K8sObject, jsonPath: string): string {
   return typeof cur === 'string' || typeof cur === 'number' || typeof cur === 'boolean' ? String(cur) : ''
 }
 
+/** As kubectl: NAME is implicit, AGE only stands in when the CRD declares no printer columns. */
 function crdDefs(crd: K8sObject): Def[] {
   const version = list(rec(crd.spec).versions).find((v) => v.served === true && v.storage === true)
   const printed = list(version?.additionalPrinterColumns).map(
-    (c): Def => ({ key: str(c.name), label: str(c.name), cell: (o) => ({ text: pathValue(o, str(c.jsonPath)) }) })
+    (c): Def => ({
+      key: str(c.name),
+      label: str(c.name),
+      cell: (o, ctx) => {
+        const value = pathValue(o, str(c.jsonPath))
+        return { text: c.type === 'date' ? ageText(value, ctx.nowMs) : value }
+      }
+    })
   )
-  return [name, ...printed, age]
+  return printed.length > 0 ? [name, ...printed] : [name, age]
 }
 
 function isNamespaced(kind: string, crd?: K8sObject): boolean {
