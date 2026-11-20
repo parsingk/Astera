@@ -96,7 +96,7 @@ export interface ClusterViewModel {
 }
 
 /** What one watch is doing; `ended`: it stopped without an error. */
-type WatchState = 'live' | 'limit' | 'ended' | { error: string }
+export type WatchState = 'live' | 'limit' | 'ended' | { error: string }
 /** A value kept with what it was read for (a context, a namespace, a selection), so it never shows for another. */
 type Keyed<T> = { key: string; value: T }
 
@@ -147,8 +147,9 @@ function nextFrame(fn: () => void): () => void {
 }
 
 /** A watch for the life of an effect; returns its cleanup. A subscription answering after the cleanup is stopped at
- *  once, and its messages, like any after the cleanup, go nowhere. */
-function follow(client: WatchClient, spec: WatchSpec, onEvent: (m: WatchEvent | 'resync') => void, onState: (s: WatchState) => void): () => void {
+ *  once, and its messages, like any after the cleanup, go nowhere. The editor tab of a cluster object follows its
+ *  object with it too (KubeObjectTab). */
+export function follow(client: WatchClient, spec: WatchSpec, onEvent: (m: WatchEvent | 'resync') => void, onState: (s: WatchState) => void): () => void {
   let alive = true
   let stop: (() => void) | null = null
   onState('live')
@@ -199,7 +200,7 @@ function liveOf(list: WatchState, pick: WatchState): ClusterLive {
   return list === 'ended' || pick === 'ended' ? 'paused' : 'live'
 }
 
-function useWatchClient(): WatchClient {
+export function useWatchClient(): WatchClient {
   const client = useRef<WatchClient | null>(null)
   client.current ??= createWatchClient({
     watch: (id, spec) => window.api.kube.cluster.watch(id, spec),

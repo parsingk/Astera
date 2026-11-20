@@ -146,7 +146,7 @@ import {
 import { browserTab, fileTab, isRemoteSessionKey, mediaTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
-import { mediaTabsUnder, placeMediaTab, placeTab } from '../../core/panes/place'
+import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
@@ -162,6 +162,7 @@ import type { KubeSegment } from './components/kube/KubeSegments'
 import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
 import { useClusterView } from './hooks/useClusterView'
+import type { ObjectRef } from '../../core/kube/cluster/types'
 import { kubeRailClick } from './lib/kubeRail'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
@@ -982,12 +983,13 @@ export default function App(): React.JSX.Element {
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
    *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
-   *  both belong here. Browser tabs too — closing one closes a page, not a process. */
+   *  both belong here. Browser tabs too — closing one closes a page, not a process. A cluster object's
+   *  tab too: closing it ends only its own watch, never anything in the cluster. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media'
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media' || activeTab?.kind === 'kube'
       ? activeTabId
       : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
@@ -1979,6 +1981,15 @@ export default function App(): React.JSX.Element {
     if (reopened) setMediaNonces((prev) => ({ ...prev, [reopened]: (prev[reopened] ?? 0) + 1 }))
   }
 
+  /** Opens a cluster object in its read-only editor tab, or focuses the tab already showing it (placeKubeTab; kube
+   *  cluster view spec 4.6). The tab id is the whole record, so nothing else is kept, and like every non-session tab
+   *  it is not restored after a restart. */
+  const openKubeObject = (ref: ObjectRef): void => {
+    const placed = placeKubeTab(layoutRef.current, ref, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
   /** A resolved path link (a console, a terminal, a SendUserFile row): media goes to the viewer, any
    *  other file to an ordinary file tab at the line the output named. */
   const openLinkedPath = (path: string, at?: { line?: number; col?: number }): void => {
@@ -2165,6 +2176,12 @@ export default function App(): React.JSX.Element {
       // The tab id is the whole record (tabId's mediaTab): dropping it, and its reload nonce, is the
       // whole close; the viewer's slot unmounts with it
       setMediaNonces(({ [tabId]: _n, ...rest }) => rest)
+      dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'kube') {
+      // The tab id is the whole record too: dropping it unmounts its slot, which stops its watch and drops any
+      // revealed Secret values with it (D6)
       dropTabFromTree(tabId)
       return
     }
@@ -5144,7 +5161,12 @@ export default function App(): React.JSX.Element {
                     onKubeSegment={setKubeSegment}
                     kubeCluster={(switcher) =>
                       kubectlFound ? (
-                        <ClusterView model={cluster} detail={<ClusterDetail model={cluster} />} toolbarStart={switcher} />
+                        <ClusterView
+                          model={cluster}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} />}
+                          onOpenInEditor={openKubeObject}
+                          toolbarStart={switcher}
+                        />
                       ) : (
                         // The tab is there for its log while kubectl is missing (spec 4.12): the manifests strip's
                         // notice, with its link to the setting, in the cluster view's frame and after the switch.

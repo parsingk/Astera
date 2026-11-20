@@ -3396,5 +3396,8 @@ export const ko = {
   'kube.cluster.rail': 'Kubernetes',
   'kube.cluster.segment.cluster': '클러스터',
   'kube.cluster.segment.log': '작업 기록',
-  'kube.cluster.noOperations': '아직 작업 기록이 없습니다'
+  'kube.cluster.noOperations': '아직 작업 기록이 없습니다',
+  'kube.cluster.readOnly': '읽기 전용',
+  'kube.cluster.readAgo': '{ago} 전에 읽음',
+  'kube.cluster.notFound': '클러스터에 없습니다.'
 } as const

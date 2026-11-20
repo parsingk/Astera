@@ -2719,5 +2719,8 @@ export const ja: Catalog = {
   'kube.cluster.rail': 'Kubernetes',
   'kube.cluster.segment.cluster': 'クラスター',
   'kube.cluster.segment.log': '操作ログ',
-  'kube.cluster.noOperations': 'まだ操作はありません'
+  'kube.cluster.noOperations': 'まだ操作はありません',
+  'kube.cluster.readOnly': '読み取り専用',
+  'kube.cluster.readAgo': '{ago}前に読み込み',
+  'kube.cluster.notFound': 'クラスターにありません。'
 }

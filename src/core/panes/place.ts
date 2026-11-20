@@ -26,9 +26,10 @@ import {
   type PaneLeaf,
   type PaneNode
 } from './tree'
-import { mediaTab, parseTab } from './tabId'
+import { kubeTab, mediaTab, parseTab } from './tabId'
 import { foldPathCase, runtimePlatform } from '../files/paths'
 import { isSubPath } from '../files/ops'
+import type { ObjectRef } from '../kube/cluster/types'
 
 export type PlaceResult = {
   root: PaneNode
@@ -176,6 +177,16 @@ export function placeMediaTab(
     }
   }
   return { ...placeTab(root, mediaTab(path), opts), reopened: null }
+}
+
+/** Opens the read-only editor tab of a cluster object, or focuses the one already showing it, in whichever pane it sits
+ *  (kube cluster view spec 4.6). Checked before placeTab, whose split option would otherwise move an open tab into a
+ *  new pane rather than bring it forward. */
+export function placeKubeTab(root: PaneNode | null, ref: ObjectRef, opts: PlaceOptions = {}): PlaceResult {
+  const id = kubeTab(ref)
+  const act = root && groupOfTab(root, id) ? activateTab(root, id) : null
+  if (act) return { root: act.root, paneId: act.paneId, splitFellBack: false }
+  return placeTab(root, id, opts)
 }
 
 /** The paths of the media tabs at or under `path`, in every pane: what an explorer rename, move or delete of `path`

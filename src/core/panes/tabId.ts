@@ -3,7 +3,9 @@
 // 파일 탭 id는 이 모듈이 생기기 전부터 `file:${path}` 형식이었다(FileTabs.tsx의 FileTab.id) — 새 형식을
 // 도입하는 것이 아니라 흩어져 있던 형식을 한 곳으로 모으는 것이다.
 // node: import 없음 — 렌더러가 import한다.
-export type TabKind = 'session' | 'file' | 'record' | 'browser' | 'app' | 'media'
+import type { ObjectRef } from '../kube/cluster/types'
+
+export type TabKind = 'session' | 'file' | 'record' | 'browser' | 'app' | 'media' | 'kube'
 export type TabRef = { kind: TabKind; id: string }
 
 export const sessionTab = (sessionId: string): string => `session:${sessionId}`
@@ -31,6 +33,25 @@ export const appTab = (sessionId: string): string => `app:${sessionId}`
  *  tab's, so the tab needs no record of its own: everything it draws is that path. A second open of
  *  the same file finds this one (place.ts placeMediaTab). */
 export const mediaTab = (path: string): string => `media:${path}`
+/** A cluster object's read-only editor tab (kube cluster view spec 4.6). The id is the whole record, like a media
+ *  tab's: the object is named by where it lives, so a second open of the same object finds this tab
+ *  (place.ts placeKubeTab). Each part is encoded, so an EKS context's colons and slash cannot split it. */
+export const kubeTab = (ref: ObjectRef): string =>
+  'kube:' + [ref.context, ref.namespace ?? '', ref.resource, ref.kind, ref.name].map(encodeURIComponent).join('/')
+/** The object a kube tab's id (the part after `kube:`) names; null for anything kubeTab did not make. */
+export function parseKubeTab(id: string): ObjectRef | null {
+  const parts = id.split('/')
+  if (parts.length !== 5) return null
+  let decoded: string[]
+  try {
+    decoded = parts.map(decodeURIComponent)
+  } catch {
+    return null // a broken escape
+  }
+  const [context, namespace, resource, kind, name] = decoded
+  if (context === '' || resource === '' || kind === '' || name === '') return null
+  return { context, namespace: namespace === '' ? null : namespace, resource, kind, name }
+}
 
 /** 탭 id가 아닌 문자열은 null — 던지지 않는다. 저장된 옛 상태나 다른 종류의 id를 만나도 화면이 죽지
  *  않아야 한다. Windows 경로의 드라이브 콜론 때문에 쪼개기는 첫 콜론에서만 한다. */
@@ -40,7 +61,7 @@ export function parseTab(tabId: string): TabRef | null {
   const kind = tabId.slice(0, i)
   const id = tabId.slice(i + 1)
   if (id === '') return null
-  return kind === 'session' || kind === 'file' || kind === 'record' || kind === 'browser' || kind === 'app' || kind === 'media'
+  return kind === 'session' || kind === 'file' || kind === 'record' || kind === 'browser' || kind === 'app' || kind === 'media' || kind === 'kube'
     ? { kind, id }
     : null
 }

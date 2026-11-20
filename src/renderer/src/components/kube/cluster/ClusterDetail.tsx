@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Ellipsis, SquarePen } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
-import type { ObjectRef, SecretValue } from '../../../../../core/kube/cluster/types'
+import type { ObjectRef } from '../../../../../core/kube/cluster/types'
 import type { DetailTab } from '../../../../../core/kube/cluster/viewState'
 import { ageText } from '../../../../../core/kube/cluster/status'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
@@ -11,6 +11,7 @@ import { useI18n } from '../../../i18n/I18nProvider'
 import { ContextMenu } from '../../ContextMenu'
 import { clusterMenuItems } from './clusterMenu'
 import { KubeYamlView } from './KubeYamlView'
+import { useSecretReveal } from './useSecretReveal'
 
 const TABS: DetailTab[] = ['summary', 'yaml', 'events', 'describe', 'pods']
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -18,14 +19,14 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 type ReadOf<T> = ({ ok: true } & T) | { ok: false; message: string } | null
 
 /** A one-shot read: a wait line until it arrives, its first line of stderr when it failed. */
-function ReadView<T>({ read, render }: { read: ReadOf<T>; render(r: { ok: true } & T): React.ReactNode }): React.JSX.Element {
+export function ReadView<T>({ read, render }: { read: ReadOf<T>; render(r: { ok: true } & T): React.ReactNode }): React.JSX.Element {
   const { t } = useI18n()
   if (read === null) return <div className="kube-cluster-empty">{t('kube.cluster.loading')}</div>
   if (!read.ok) return <div className="kube-cluster-empty kube-detail-error">{read.message}</div>
   return <>{render(read)}</>
 }
 
-function EventsList({ events }: { events: K8sObject[] }): React.JSX.Element {
+export function EventsList({ events }: { events: K8sObject[] }): React.JSX.Element {
   const { t } = useI18n()
   if (events.length === 0) return <div className="kube-cluster-empty">{t('kube.cluster.empty')}</div>
   const now = Date.now()
@@ -126,48 +127,15 @@ export function ClusterDetail({
   const { t } = useI18n()
   const { selected, selectedRef, view } = model
   const uid = view.selected
-  // Values live here and nowhere else, tied to the selection they were read for; never logged.
-  const [revealed, setRevealed] = useState<{ uid: string; version: string; values: SecretValue[] } | null>(null)
+  // Tied to the selection: another selection masks the values again.
+  const reveal = useSecretReveal(selectedRef, uid, str(selected?.metadata.resourceVersion))
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const uidNow = useRef(uid)
-  uidNow.current = uid
-  /** Bumped by hide and by a change of selection: an answer for an older request is dropped. */
-  const ticket = useRef(0)
-  useEffect(() => {
-    ticket.current++
-    setRevealed(null)
-    setMenu(null)
-  }, [uid])
-  // Dropped on unmount: a closed tab keeps no plaintext.
-  useEffect(() => () => setRevealed(null), [])
+  useEffect(() => setMenu(null), [uid])
 
   if (selected === null || selectedRef === null || model.kind === null || uid === null) return null
   const kind = model.kind.kind
   const tabs = TABS.filter((id) => id !== 'pods' || podSelectorOf(kind, selected) !== null)
   const tab = tabs.includes(view.detailTab) ? view.detailTab : 'summary'
-  // Same Secret but changed in the cluster (a new resourceVersion): what was revealed is older data, so it is not shown.
-  const version = str(selected.metadata.resourceVersion)
-  const values = revealed !== null && revealed.uid === uid && revealed.version === version ? revealed.values : null
-
-  const reveal =
-    kind === 'Secret'
-      ? {
-          values,
-          onReveal: () => {
-            const mine = ++ticket.current
-            window.api.kube.cluster.reveal(selectedRef).then(
-              (r) => {
-                if (r.ok && ticket.current === mine && uidNow.current === uid) setRevealed({ uid, version, values: r.values })
-              },
-              () => {}
-            )
-          },
-          onHide: () => {
-            ticket.current++
-            setRevealed(null)
-          }
-        }
-      : null
 
   const menuItems = clusterMenuItems(
     {

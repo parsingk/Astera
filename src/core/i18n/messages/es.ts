@@ -2749,5 +2749,8 @@ export const es: Catalog = {
   'kube.cluster.rail': 'Kubernetes',
   'kube.cluster.segment.cluster': 'Clúster',
   'kube.cluster.segment.log': 'Registro de operaciones',
-  'kube.cluster.noOperations': 'Aún no hay operaciones'
+  'kube.cluster.noOperations': 'Aún no hay operaciones',
+  'kube.cluster.readOnly': 'Solo lectura',
+  'kube.cluster.readAgo': 'Leído hace {ago}',
+  'kube.cluster.notFound': 'No está en el clúster.'
 }

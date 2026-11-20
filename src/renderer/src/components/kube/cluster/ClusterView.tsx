@@ -44,7 +44,7 @@ export function ClusterView({
 }: {
   model: ClusterViewModel
   detail: React.ReactNode
-  /** Task 14's editor tab; without it the row menu has no such item. */
+  /** The editor tab; without it the row menu has no such item and a double-click only selects. */
   onOpenInEditor?: (ref: ObjectRef) => void
   /** The toolbar row's first item, before the context pill: the bottom panel's segmented switch (spec 4.2). */
   toolbarStart?: React.ReactNode
@@ -155,7 +155,14 @@ export function ClusterView({
             model.select(uid)
             setRowMenu({ x, y })
           }}
-          onRowOpen={model.select}
+          // A double-click or Enter opens the row in the editor (spec 4.4); without one it selects, as a click does.
+          onRowOpen={(uid) => {
+            if (!onOpenInEditor) return model.select(uid)
+            const row = model.rows.find((r) => r.uid === uid)
+            const k = model.kind
+            if (row && k && view.context !== null)
+              onOpenInEditor({ context: view.context, namespace: k.namespaced ? row.namespace : null, resource: k.resource, kind: k.kind, name: row.name })
+          }}
         />
         {detail}
       </div>

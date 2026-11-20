@@ -3142,5 +3142,8 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.rail': 'Kubernetes',
   'kube.cluster.segment.cluster': 'Cluster',
   'kube.cluster.segment.log': 'Operation log',
-  'kube.cluster.noOperations': 'No operations yet'
+  'kube.cluster.noOperations': 'No operations yet',
+  'kube.cluster.readOnly': 'Read only',
+  'kube.cluster.readAgo': 'Read {ago} ago',
+  'kube.cluster.notFound': 'Not found in the cluster.'
 }

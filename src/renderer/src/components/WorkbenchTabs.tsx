@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SandboxKind, SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import type { KubeFileKind } from '../../../core/kube/types'
+import { displayContextName } from '../../../core/kube/contextName'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, Terminal } from 'lucide-react'
@@ -126,6 +127,14 @@ export type WorkbenchTab =
       path: string
       title: string
       video: boolean
+    }
+  | {
+      tabId: string
+      kind: 'kube'
+      /** `<Kind> <name>` (kube cluster view spec 4.6, board B). */
+      title: string
+      /** The object's kubeconfig context, whole: the tab shows its short name dimmed after the title, the tooltip all of it. */
+      context: string
     }
   | {
       tabId: string
@@ -314,10 +323,13 @@ export function WorkbenchTabs({
               ? tab.path
               : tab.kind === 'browser'
                 ? tab.url
-                : tab.kind === 'session' && tab.profileTooltip !== null
+                : tab.kind === 'kube'
                   ? `${tab.title}
+${tab.context}`
+                  : tab.kind === 'session' && tab.profileTooltip !== null
+                    ? `${tab.title}
 ${tab.profileTooltip}`
-                  : tab.title
+                    : tab.title
           }
           // 이름을 고치는 동안은 끌 수 없다 — 입력칸 안에서 글자를 끄는 것이 탭 이동이 되어 버린다
           draggable={renamingTabId !== tab.tabId}
@@ -364,6 +376,8 @@ ${tab.profileTooltip}`
             <span className="tab-glyph" aria-hidden="true">
               {tab.video ? <Film size={11} /> : <ImageIcon size={11} />}
             </span>
+          ) : tab.kind === 'kube' ? (
+            <FileIcon id="kubernetes" tone="blue" />
           ) : tab.kind === 'record' ? (
             // Same glyph as the sidebar row's .hiw-g — the same record must not wear two different
             // labels in two places. When the status is unknown, no span is left either — an empty
@@ -430,6 +444,7 @@ ${tab.profileTooltip}`
           )}
           {tab.kind === 'app' && <span className="run-tag" title={t('workspace.tab.tag')}>{t('workspace.tab.tag')}</span>}
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
+          {tab.kind === 'kube' && <span className="tab-hint">{displayContextName(tab.context).short}</span>}
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')} />
           )}
