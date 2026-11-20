@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { REREAD_MS, createRereadThrottle, createSerialRead, follow, listFailure, liveOf, objectsFor, type WatchState } from './useClusterView'
+import { REREAD_MS, createRereadThrottle, createSerialRead, customCountsKey, follow, listFailure, liveOf, objectsFor, type WatchState } from './useClusterView'
 import type { WatchClient } from '../lib/kubeWatchClient'
 import type { WatchMessage } from '../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../core/kube/objects'
@@ -185,5 +185,24 @@ describe('createSerialRead', () => {
     answers[1].resolve('after')
     await settle()
     expect(applied).toEqual(['after'])
+  })
+})
+
+// Final re-review R6: with the Custom Resources group open, a context switch showed no counts at all until the new
+// context's CRDs answered. The fixed kinds are counted at once; the custom kinds join when the CRDs are known.
+describe('customCountsKey', () => {
+  const widgets = [
+    { kind: 'Widget', resource: 'widgets.example.com', namespaced: true },
+    { kind: 'Gadget', resource: 'gadgets.example.com', namespaced: false }
+  ]
+
+  it('counts the fixed kinds at once while the CRDs of an open group are not known yet', () => {
+    expect(customCountsKey(true, false, [])).toBe('')
+  })
+
+  it('adds the custom kinds once the CRDs are known, and none while the group is closed', () => {
+    expect(customCountsKey(true, true, widgets)).toBe('widgets.example.com,gadgets.example.com')
+    expect(customCountsKey(false, true, widgets)).toBe('')
+    expect(customCountsKey(false, false, [])).toBe('')
   })
 })

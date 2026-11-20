@@ -340,6 +340,13 @@ function useSettled<T>(value: T, ms: number): T {
   return settled
 }
 
+/** The custom kinds a counts round asks for besides the fixed ones, as a key the rounds restart on: none ('') while their
+ *  group is closed or this context's CRDs are not known yet, so the fixed kinds are counted at once (a context switch
+ *  would otherwise show no counts until the CRDs answer), and the context's custom kinds once they are. */
+export function customCountsKey(open: boolean, crdsKnown: boolean, customKinds: KindDef[]): string {
+  return open && crdsKnown ? customKinds.map((k) => k.resource).join(',') : ''
+}
+
 /** The list watch's failure, which fails the view; not a Forbidden refusal, which is the picked kind's answer (§4.3). */
 export function listFailure(list: WatchState): { error: string } | null {
   return typeof list === 'object' && !list.forbidden ? list : null
@@ -496,14 +503,11 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   // request at a time, the next only an interval after the last answered, so a slow cluster is never asked twice at
   // once; nothing while the window is hidden. Not while the list's watch fails either: the cluster is not answering, and
   // retry starts the counts again; a Forbidden list is not that, and the counts are what greys such kinds in the tree.
-  // Custom kinds are counted only while their group is open, once this context's CRDs are known (`customKey` null until
-  // then): a cluster can serve hundreds.
-  const customOpen = view.expanded.includes('custom')
-  const crdsKnown = crds !== null && crds.key === context
-  const customKey = !customOpen ? '' : crdsKnown ? customKinds.map((k) => k.resource).join(',') : null
+  // Custom kinds are counted only while their group is open (customCountsKey): a cluster can serve hundreds.
+  const customKey = customCountsKey(view.expanded.includes('custom'), crds !== null && crds.key === context, customKinds)
   const listFailed = listFailure(listWatch) !== null
   useEffect(() => {
-    if (!visible || context === null || customKey === null || listFailed) return
+    if (!visible || context === null || listFailed) return
     const namespace = view.namespace
     const key = JSON.stringify([context, namespace])
     const kinds = customKey === '' ? FIXED_KINDS : [...FIXED_KINDS, ...latest.current.customKinds]
