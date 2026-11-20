@@ -145,6 +145,15 @@ describe('createClusterReads', () => {
     expect(fail).toEqual({ ok: false, message: 'Unable to connect to the server' })
   })
 
+  // Final review M1: with an aggregated API down, kubectl logs klog lines (E1120 ... memcache.go) before its own error.
+  it('skips klog lines when picking the error line, and keeps one when there is nothing else', async () => {
+    const klog = 'E1120 10:00:00.123456   12345 memcache.go:265] couldn\'t get current server API group list: metrics.k8s.io/v1beta1 unavailable'
+    const run = async (): Promise<KubectlResult> => ({ ok: false, exitCode: 1, stdout: '', stderr: [klog, 'W1120 10:00:00.2 1 warnings.go:70] x', 'Unable to connect to the server: dial tcp: i/o timeout'].join(String.fromCharCode(10)) })
+    expect(await createClusterReads({ run }).describe(secretRef)).toEqual({ ok: false, message: 'Unable to connect to the server: dial tcp: i/o timeout' })
+    const only = async (): Promise<KubectlResult> => ({ ok: false, exitCode: 1, stdout: '', stderr: klog })
+    expect(await createClusterReads({ run: only }).describe(secretRef)).toEqual({ ok: false, message: klog })
+  })
+
   it('pods and events mask a Secret item if one comes back', async () => {
     const reads = createClusterReads({ run: async () => ok(JSON.stringify({ items: [secret] })) })
     const p = await reads.pods('c', 'api', 'a=b')

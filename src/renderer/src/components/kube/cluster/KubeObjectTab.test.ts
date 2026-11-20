@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { KubeObjectTab } from './KubeObjectTab'
+import { liveErrorText } from './ClusterView'
+import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -29,6 +31,11 @@ describe('KubeObjectTab', () => {
     const html = render({ context: 'kind-dev', namespace: null, resource: 'nodes', kind: 'Node', name: 'n1' })
     expect(html).toContain('>kind-dev<')
     expect(html).not.toContain('kind-dev / ')
+  })
+
+  it('says kubectl is missing in the catalog words', () => {
+    expect(liveErrorText(KUBECTL_MISSING, (k) => `t:${k}`)).toBe('t:kube.cluster.kubectlMissing')
+    expect(liveErrorText('Unable to connect to the server', (k) => `t:${k}`)).toBe('Unable to connect to the server')
   })
 
   it('offers no control that would change the object', () => {

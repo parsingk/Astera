@@ -25,6 +25,8 @@ export type WatchMessage = { watchId: string } & (
   // its end.
   | { kind: 'ended' }
 )
+/** A watch's error when the kubectl binary is missing (ENOENT); the renderer shows the catalog's words for it. */
+export const KUBECTL_MISSING = 'kubectl was not found'
 /** A one-shot read of the cluster: the data, or a failure with a redacted first line of stderr. */
 export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidden?: true }
 /** `text` null: the value is not UTF-8 text. */

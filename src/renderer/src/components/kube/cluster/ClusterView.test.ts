@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ClusterView } from './ClusterView'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import type { ClusterTableProps } from './ClusterTable'
+import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -67,6 +68,13 @@ describe('ClusterView', () => {
   it('starts the row with the context pill without one', () => {
     const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))
     expect(html).toContain('<div class="kube-cluster-bar"><select')
+  })
+
+  // Final review M4: a watch whose binary is missing says so in the person's language, not as main's English.
+  it('says kubectl is missing in the catalog words', () => {
+    const html = renderToStaticMarkup(React.createElement(ClusterView, { model: { ...model, live: { error: KUBECTL_MISSING } }, detail: null }))
+    expect(html).toContain('kube.cluster.kubectlMissing')
+    expect(html).not.toContain(KUBECTL_MISSING)
   })
 })
 

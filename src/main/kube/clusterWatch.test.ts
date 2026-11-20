@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { MAX_WATCHES, RESTART_DELAY_MS, createWatchRegistry } from './clusterWatch'
 import { listArgs } from '../../core/kube/cluster/args'
 import type { StreamExit } from '../../core/kube/stream'
-import type { WatchMessage, WatchSpec } from '../../core/kube/cluster/types'
+import { KUBECTL_MISSING, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
 
 type Handlers = { onStdout(c: string): void; onStderr(c: string): void; onExit(e: StreamExit): void }
 const spec: WatchSpec = { context: 'c1', namespace: 'ns', namespaced: true, resource: 'pods' }
@@ -80,16 +80,30 @@ describe('createWatchRegistry', () => {
     expect(reg.size()).toBe(0)
   })
 
-  it('a failure without stderr reports the exit code, or the errorCode', () => {
+  // Final review M4: a missing binary says so in words, not as "ENOENT".
+  it('a failure without stderr reports the exit code, a missing kubectl, or the errorCode', () => {
     const { reg, spawns, emitted } = setup()
     reg.watch('a', spec)
     reg.watch('b', spec)
+    reg.watch('c', spec)
     spawns[0].h.onExit({ code: 2, stopped: false })
     spawns[1].h.onExit({ code: null, stopped: false, errorCode: 'ENOENT' })
+    spawns[2].h.onExit({ code: null, stopped: false, errorCode: 'EACCES' })
     expect(emitted).toEqual([
       { watchId: 'a', kind: 'error', message: 'kubectl exited 2' },
-      { watchId: 'b', kind: 'error', message: 'ENOENT' }
+      { watchId: 'b', kind: 'error', message: KUBECTL_MISSING },
+      { watchId: 'c', kind: 'error', message: 'EACCES' }
     ])
+  })
+
+  // Final review M1: klog lines (E1120 ... memcache.go) come before kubectl's own error when an aggregated API is down.
+  it('a failure skips klog lines for its first stderr line', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.watch('w1', spec)
+    spawns[0].h.onStderr('E1120 10:00:00.123456   12345 memcache.go:265] couldn\'t get current server API group list\n')
+    spawns[0].h.onStderr('The connection to the server 10.0.0.1:6443 was refused\n')
+    spawns[0].h.onExit({ code: 1, stopped: false })
+    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: 'The connection to the server HOST:6443 was refused' }])
   })
 
   it('refuses the seventh watch', () => {

@@ -13,9 +13,19 @@ export type { Read }
 type Run = KubeServiceDeps['run']
 type Result = Awaited<ReturnType<Run>>
 
-/** First non-empty line of stderr (already redacted by the service's wrapper), else the exit code. */
+/** A klog line (`E1120 10:00:00.123456 12345 memcache.go:265] ...`): client-go's log, which kubectl prints before its
+ *  own error when an aggregated API is down. */
+const KLOG = /^[EWI]\d{4} /
+
+/** The stderr line worth showing: the first one that is not klog's, else the first line at all. */
+export function firstStderrLine(stderr: string): string | undefined {
+  const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l)
+  return lines.find((l) => !KLOG.test(l)) ?? lines[0]
+}
+
+/** The first stderr line (already redacted by the service's wrapper), else the exit code. */
 function failure(r: Result): { ok: false; message: string; forbidden?: true } {
-  const message = r.stderr.split('\n').map((l) => l.trim()).find((l) => l) ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
+  const message = firstStderrLine(r.stderr) ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
   const forbidden = /Forbidden|cannot list/.test(r.stderr)
   return forbidden ? { ok: false, message, forbidden: true } : { ok: false, message }
 }

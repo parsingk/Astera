@@ -3399,5 +3399,6 @@ export const ko = {
   'kube.cluster.noOperations': '아직 작업 기록이 없습니다',
   'kube.cluster.readOnly': '읽기 전용',
   'kube.cluster.readAgo': '{ago} 전에 읽음',
-  'kube.cluster.notFound': '클러스터에 없습니다.'
+  'kube.cluster.notFound': '클러스터에 없습니다.',
+  'kube.cluster.kubectlMissing': 'kubectl 을 찾을 수 없습니다'
 } as const

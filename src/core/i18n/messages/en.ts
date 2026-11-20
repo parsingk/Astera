@@ -3145,5 +3145,6 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.noOperations': 'No operations yet',
   'kube.cluster.readOnly': 'Read only',
   'kube.cluster.readAgo': 'Read {ago} ago',
-  'kube.cluster.notFound': 'Not found in the cluster.'
+  'kube.cluster.notFound': 'Not found in the cluster.',
+  'kube.cluster.kubectlMissing': 'kubectl was not found'
 }

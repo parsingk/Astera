@@ -3,11 +3,16 @@ import { RefreshCw, RotateCcw, Search } from 'lucide-react'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
-import type { ObjectRef } from '../../../../../core/kube/cluster/types'
+import { KUBECTL_MISSING, type ObjectRef } from '../../../../../core/kube/cluster/types'
 import { ContextMenu } from '../../ContextMenu'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
 import { clusterMenuItems } from './clusterMenu'
+
+/** A watch's error line as shown: kubectl's own words, except a missing binary, which main names in English. */
+export function liveErrorText(message: string, t: (key: 'kube.cluster.kubectlMissing') => string): string {
+  return message === KUBECTL_MISSING ? t('kube.cluster.kubectlMissing') : message
+}
 
 /** A namespace typed by hand, where the cluster does not let us list them: applied on Enter or when the field is left. */
 function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns: string | null): void }): React.JSX.Element {
@@ -59,7 +64,7 @@ export function ClusterView({
   const nsNames = model.namespaces ?? []
   const nsOptions = view.namespace !== null && !nsNames.includes(view.namespace) ? [view.namespace, ...nsNames] : nsNames
 
-  const liveText = failed ? live.error : live === 'live' ? t('kube.cluster.live') : live === 'paused' ? t('kube.cluster.paused') : t('kube.cluster.limit')
+  const liveText = failed ? liveErrorText(live.error, t) : live === 'live' ? t('kube.cluster.live') : live === 'paused' ? t('kube.cluster.paused') : t('kube.cluster.limit')
   const liveTone = failed ? 'bad' : live === 'live' ? 'ok' : 'wait'
 
   return (

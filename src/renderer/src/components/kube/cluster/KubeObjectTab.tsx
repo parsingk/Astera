@@ -10,6 +10,7 @@ import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { FileIcon } from '../../FileIcon'
 import { EventsList, ReadView } from './ClusterDetail'
+import { liveErrorText } from './ClusterView'
 import { KubeYamlView } from './KubeYamlView'
 import { useSecretReveal } from './useSecretReveal'
 
@@ -138,7 +139,7 @@ export function KubeObjectTab({ target, visible }: { target: ObjectRef; visible:
 
   const gone = shown !== null && shown.deleted
   const state: 'live' | 'paused' | { error: string } = typeof watch === 'object' ? watch : watch === 'live' && visible ? 'live' : 'paused'
-  const liveText = typeof state === 'object' ? state.error : t(state === 'live' ? 'kube.cluster.live' : 'kube.cluster.paused')
+  const liveText = typeof state === 'object' ? liveErrorText(state.error, t) : t(state === 'live' ? 'kube.cluster.live' : 'kube.cluster.paused')
   const liveTone = typeof state === 'object' ? 'bad' : state === 'live' ? 'ok' : 'wait'
   const where = target.namespace !== null ? ` / ${target.namespace}` : ''
 

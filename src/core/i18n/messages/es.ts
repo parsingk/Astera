@@ -2752,5 +2752,6 @@ export const es: Catalog = {
   'kube.cluster.noOperations': 'Aún no hay operaciones',
   'kube.cluster.readOnly': 'Solo lectura',
   'kube.cluster.readAgo': 'Leído hace {ago}',
-  'kube.cluster.notFound': 'No está en el clúster.'
+  'kube.cluster.notFound': 'No está en el clúster.',
+  'kube.cluster.kubectlMissing': 'No se encontró kubectl'
 }
