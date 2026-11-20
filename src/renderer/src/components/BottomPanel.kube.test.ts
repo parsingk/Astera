@@ -197,7 +197,7 @@ describe('BottomPanel log tabs', () => {
 })
 
 describe('holdHost', () => {
-  type FakeNode = { parentNode: unknown; appendChild?: (n: FakeNode) => void }
+  type FakeNode = { parentNode: unknown; appendChild?: (n: FakeNode) => void; removeChild?: (n: FakeNode) => void }
   const body = (moved: FakeNode[]): FakeNode => {
     const self: FakeNode = {
       parentNode: null,
@@ -222,5 +222,21 @@ describe('holdHost', () => {
     holdHost(next as unknown as Node, host as unknown as Node)
     expect(moved).toHaveLength(2)
     expect(host.parentNode).toBe(next)
+  })
+  // Task 6 re-review: left in a body the collapse removed, the element would keep that whole panel's DOM in memory
+  // until the panel opened again.
+  it('takes the view\'s element out of a body that goes away', () => {
+    const moved: FakeNode[] = []
+    const host: FakeNode = { parentNode: null }
+    const gone = body(moved)
+    gone.removeChild = (n) => {
+      n.parentNode = null
+    }
+    holdHost(gone as unknown as Node, host as unknown as Node)
+    expect(host.parentNode).toBe(gone)
+    holdHost(null, host as unknown as Node)
+    expect(host.parentNode).toBeNull()
+    holdHost(null, host as unknown as Node)
+    expect(host.parentNode).toBeNull()
   })
 })

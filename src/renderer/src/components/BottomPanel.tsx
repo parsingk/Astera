@@ -346,16 +346,16 @@ export function BottomPanel({
 }
 
 /** Puts a logs view's element in its tab's body unless it is there already: an element moved out and back loses its
- *  scroll position, so a body drawn again must leave it where it is. */
-export function holdHost(body: Node, host: Node): void {
-  if (host.parentNode !== body) body.appendChild(host)
+ *  scroll position, so a body drawn again must leave it where it is. A body going away (null) lets go of it, or the
+ *  element would keep the removed panel's DOM in memory until the panel opened again. */
+export function holdHost(body: Node | null, host: Node): void {
+  if (body === null) host.parentNode?.removeChild(host)
+  else if (host.parentNode !== body) body.appendChild(host)
 }
 
 /** A logs tab's body. The view is not mounted here: App keeps it in `host`, so the panel's own mount and unmount (a
  *  collapse) leave its kubectl and lines alone, and the body only holds that element while it is drawn. */
 function LogBody({ host, shown }: { host: HTMLElement; shown: boolean }): React.JSX.Element {
-  const hold = useCallback((el: HTMLDivElement | null) => {
-    if (el !== null) holdHost(el, host)
-  }, [host])
+  const hold = useCallback((el: HTMLDivElement | null) => holdHost(el, host), [host])
   return <div ref={hold} className="bottom-body" style={{ display: shown ? 'flex' : 'none' }} />
 }
