@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ClusterDetail } from './ClusterDetail'
+import { ClusterDetail, PodsTable } from './ClusterDetail'
 import { KubeYamlView } from './KubeYamlView'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import type { K8sObject } from '../../../../../core/kube/objects'
@@ -199,5 +199,35 @@ describe('ClusterDetail containers', () => {
     expect(html).toContain('kube.cluster.limits')
     expect(html).not.toContain('>requests cpu')
     expect(html).not.toContain('; limits ')
+  })
+})
+
+type El = { type: unknown; props: Record<string, unknown> }
+/** Every element under `node`, so a handler can be called without a DOM (as ClusterTree.test.ts does). */
+function elements(node: unknown): El[] {
+  if (Array.isArray(node)) return node.flatMap(elements)
+  if (node === null || typeof node !== 'object' || !('props' in node)) return []
+  const el = node as El
+  return [el, ...elements(el.props.children)]
+}
+
+// Task 12 minor: the Pods rows were tab stops with a click handler and nothing for the keyboard. Enter and Space select
+// the row's Pod, as a click does.
+describe('PodsTable', () => {
+  const row = { uid: 'p1', name: 'w-1', namespace: 'dev', cells: [{ text: 'w-1' }], attention: false }
+
+  it('selects the Pod of a row with Enter or Space, and nothing with another key', () => {
+    const picked: string[] = []
+    const tree = PodsTable({ columns: [{ key: 'name', label: 'name', i18n: true }], rows: [row], onPick: (r) => void picked.push(r.name) })
+    const tr = elements(tree).find((e) => e.props.className === 'kube-detail-pod')!
+    const key = (k: string): boolean => {
+      let prevented = false
+      ;(tr.props.onKeyDown as ((e: unknown) => void) | undefined)?.({ key: k, preventDefault: () => (prevented = true) })
+      return prevented
+    }
+    expect(key('Enter')).toBe(true)
+    expect(key(' ')).toBe(true)
+    expect(key('a')).toBe(false)
+    expect(picked).toEqual(['w-1', 'w-1'])
   })
 })

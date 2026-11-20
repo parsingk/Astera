@@ -3,7 +3,7 @@ import { Ellipsis, ExternalLink, RotateCcw } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
-import type { ObjectRef } from '../../../../../core/kube/cluster/types'
+import type { Column, ObjectRef, Row } from '../../../../../core/kube/cluster/types'
 import type { DetailTab } from '../../../../../core/kube/cluster/viewState'
 import { ageText } from '../../../../../core/kube/cluster/status'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
@@ -44,6 +44,44 @@ export function EventsList({ events }: { events: K8sObject[] }): React.JSX.Eleme
         </li>
       ))}
     </ul>
+  )
+}
+
+/** The Pods tab's table (spec 4.5): the Pods the object selects, each row selecting its Pod by click, Enter or Space. */
+export function PodsTable({ columns, rows, onPick }: { columns: Column[]; rows: Row[]; onPick(row: Row): void }): React.JSX.Element {
+  const { t } = useI18n()
+  return (
+    <table className="kube-detail-pods">
+      <thead>
+        <tr>
+          {columns.map((c, i) => (
+            <th key={c.key + i}>{c.i18n ? t(`kube.cluster.col.${c.key}` as MessageKey) : c.label}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr
+            key={row.uid}
+            className="kube-detail-pod"
+            tabIndex={0}
+            onClick={() => onPick(row)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return
+              e.preventDefault()
+              onPick(row)
+            }}
+          >
+            {row.cells.map((c, i) => (
+              <td key={i} title={c.text}>
+                {c.tone && <span className={`kube-cluster-dot ${c.tone}`} aria-hidden="true" />}
+                {c.text}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
@@ -237,34 +275,13 @@ export function ClusterDetail({
           <ReadView
             read={model.pods}
             render={(r) => (
-              <table className="kube-detail-pods">
-                <thead>
-                  <tr>
-                    {r.columns.map((c, i) => (
-                      <th key={c.key + i}>{c.i18n ? t(`kube.cluster.col.${c.key}` as MessageKey) : c.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.rows.map((row) => (
-                    <tr
-                      key={row.uid}
-                      className="kube-detail-pod"
-                      tabIndex={0}
-                      onClick={() =>
-                        model.selectRef({ context: selectedRef.context, namespace: row.namespace ?? selectedRef.namespace, resource: 'pods', kind: 'Pod', name: row.name })
-                      }
-                    >
-                      {row.cells.map((c, i) => (
-                        <td key={i} title={c.text}>
-                          {c.tone && <span className={`kube-cluster-dot ${c.tone}`} aria-hidden="true" />}
-                          {c.text}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <PodsTable
+                columns={r.columns}
+                rows={r.rows}
+                onPick={(row) =>
+                  model.selectRef({ context: selectedRef.context, namespace: row.namespace ?? selectedRef.namespace, resource: 'pods', kind: 'Pod', name: row.name })
+                }
+              />
             )}
           />
         )}
