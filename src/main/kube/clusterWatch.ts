@@ -83,7 +83,9 @@ export function createWatchRegistry(deps: {
           first ?? (x.code !== null ? `kubectl exited ${x.code}` : x.errorCode === 'ENOENT' ? KUBECTL_MISSING : (x.errorCode ?? 'kubectl exited'))
         entries.delete(id)
         e.run = {}
-        deps.emit(isForbidden(stderr) ? { watchId: id, kind: 'error', message, forbidden: true } : { watchId: id, kind: 'error', message })
+        // The reported line decides: a klog line saying Forbidden may come before the line that says the cluster failed.
+        const forbidden = first !== undefined && isForbidden(first)
+        deps.emit(forbidden ? { watchId: id, kind: 'error', message, forbidden: true } : { watchId: id, kind: 'error', message })
       }
     })
   }

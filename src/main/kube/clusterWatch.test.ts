@@ -115,6 +115,16 @@ describe('createWatchRegistry', () => {
     expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: line, forbidden: true }])
   })
 
+  // A klog line saying Forbidden (an aggregated API refusing discovery) ahead of the cluster failing is not the answer.
+  it('judges a refusal by the reported line, not a klog line before it', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.watch('w1', spec)
+    spawns[0].h.onStderr('E1120 10:00:00.123456   12345 memcache.go:265] couldn\'t get resource list for metrics.k8s.io/v1beta1: Forbidden\n')
+    spawns[0].h.onStderr('The connection to the server 10.0.0.1:6443 was refused\n')
+    spawns[0].h.onExit({ code: 1, stopped: false })
+    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: 'The connection to the server HOST:6443 was refused' }])
+  })
+
   // Final review M4: a missing binary says so in words, not as "ENOENT".
   it('a failure without stderr reports the exit code, a missing kubectl, or the errorCode', () => {
     const { reg, spawns, emitted } = setup()
