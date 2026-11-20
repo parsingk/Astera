@@ -159,6 +159,7 @@ import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
 import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import type { KubeSegment } from './components/kube/KubeSegments'
+import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
 import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
 import { useClusterView } from './hooks/useClusterView'
@@ -5177,23 +5178,17 @@ export default function App(): React.JSX.Element {
                         />
                       ) : (
                         // The tab is there for its log while kubectl is missing (spec 4.12): the manifests strip's
-                        // notice, with its link to the setting, in the cluster view's frame and after the switch.
+                        // notice, with its link to the setting, after the switch in the log row's frame, so the switch
+                        // sits where it does in the log.
                         <div className="kube-cluster">
-                          <div className="kube-strip">
-                            <div className="kube-bar">
-                              {switcher}
-                              <span className="kube-notice">{t('kube.toolbar.kubectlMissing')}</span>
-                              <button
-                                type="button"
-                                className="kube-link"
-                                onClick={() => {
-                                  setSettingsTab('kubernetes')
-                                  setShowSettings(true)
-                                }}
-                              >
-                                {t('kube.toolbar.openSettings')}
-                              </button>
-                            </div>
+                          <div className="kube-segment-bar">
+                            {switcher}
+                            <KubectlMissingNotice
+                              onOpenSettings={() => {
+                                setSettingsTab('kubernetes')
+                                setShowSettings(true)
+                              }}
+                            />
                           </div>
                         </div>
                       )

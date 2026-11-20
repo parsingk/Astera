@@ -6,6 +6,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
 import { fileNamespacePill } from './fileNamespacePill'
+import { KubectlMissingNotice } from './KubectlMissingNotice'
 
 export interface KubeToolbarProps {
   kind: KubeFileKind
@@ -73,10 +74,7 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
     return (
       <div className="kube-strip">
         <div className="kube-bar">
-          <span className="kube-notice">{t('kube.toolbar.kubectlMissing')}</span>
-          <button type="button" className="kube-link" onClick={p.onOpenSettings}>
-            {t('kube.toolbar.openSettings')}
-          </button>
+          <KubectlMissingNotice onOpenSettings={p.onOpenSettings} />
         </div>
       </div>
     )
