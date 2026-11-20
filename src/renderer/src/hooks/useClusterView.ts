@@ -679,9 +679,13 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   // The detail's reads wait for the selection to settle; the object's own read and watch above start at once.
   const settled = useSettled(view.selected, SELECTION_READ_DELAY_MS) === view.selected
 
+  // Settled on the owner key, not the selection: stepping through sibling Pods of one ReplicaSet keeps the key, so it
+  // does not read the same owner again after every settle.
+  const ownerSettled = useSettled(ownerKey, SELECTION_READ_DELAY_MS) === ownerKey
+
   useEffect(() => {
     const first = latest.current.owner
-    if (!visible || !settled || first === null || ownerKey === null) return
+    if (!visible || !ownerSettled || first === null || ownerKey === null) return
     let alive = true
     api.get(first).then(
       (r) => {
@@ -693,7 +697,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, settled, ownerKey, gen])
+  }, [visible, ownerSettled, ownerKey, gen])
 
   // --- The detail's reads, for the tab that shows (the Summary needs the events too) ---
 
