@@ -2,7 +2,7 @@
 import type { K8sObject } from '../objects'
 import type { KubeContexts } from '../types'
 import { KIND_GROUPS } from './kinds'
-import type { GroupId, WatchEvent } from './types'
+import type { CountInfo, GroupId, WatchEvent } from './types'
 import { keyOf } from './watch'
 
 export type DetailTab = 'summary' | 'yaml' | 'events' | 'describe' | 'pods'
@@ -63,6 +63,19 @@ export function withKind(s: ClusterViewState, resource: string): ClusterViewStat
 export function withSort(s: ClusterViewState, by: number): ClusterViewState {
   const dir = s.sort.by === by && s.sort.dir === 'asc' ? 'desc' : 'asc'
   return { ...s, sort: { by, dir } }
+}
+
+/** A new read's counts. A kind it could not count (`count` null, no reason) keeps the count read last time for the same
+ *  context and namespace, marked stale, so a failed read never shows a false 0 or drops a problem dot; a kind never read
+ *  stays unknown. Only the kinds the read asked for are kept (custom kinds are asked only while their group is open). */
+export function mergeCounts(prev: Readonly<Record<string, CountInfo>> | null, next: Readonly<Record<string, CountInfo>>): Record<string, CountInfo> {
+  const out: Record<string, CountInfo> = {}
+  for (const [resource, info] of Object.entries(next)) {
+    const last = prev?.[resource]
+    const keep = info.count === null && info.forbidden === undefined && last !== undefined && last.count !== null
+    out[resource] = keep ? { count: last.count, attention: last.attention, stale: true } : info
+  }
+  return out
 }
 
 /** Watch events waiting for the next frame, only the last per object: what one by one would leave, and a window that

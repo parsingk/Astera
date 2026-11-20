@@ -48,4 +48,26 @@ describe('ClusterTree', () => {
     )
     expect(html).toContain('Widget')
   })
+
+  // Final review I1: a count that could not be read shows no number (never a false 0), and one kept from the last read
+  // shows greyed with its problem dot.
+  it('shows no number for an unknown count and greys a kept one', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ClusterTree, {
+        groups: KIND_GROUPS,
+        custom: [],
+        counts: {
+          pods: { count: 3, attention: true, stale: true },
+          'deployments.apps': { count: null, attention: false }
+        },
+        resource: 'pods',
+        expanded: ['workloads'],
+        onSelect: noop,
+        onToggle: noop
+      })
+    )
+    expect(html).toContain('<span class="kube-cluster-count stale">3</span>')
+    expect(html).toContain('kube-cluster-attn stale')
+    expect(html).toMatch(/Deployments<\/span><span class="kube-cluster-count"><\/span>/)
+  })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyPending, contextMissing, initialView, noPending, queueWatch, readMemory, withContext, withSort } from './viewState'
+import { applyPending, contextMissing, initialView, mergeCounts, noPending, queueWatch, readMemory, withContext, withSort } from './viewState'
 import type { K8sObject } from '../objects'
 import type { KubeContexts } from '../types'
 
@@ -74,5 +74,29 @@ describe('watch bursts', () => {
     queueWatch(p, 'resync')
     queueWatch(p, { type: 'ADDED', object: pod('3') })
     expect([...applyPending(start, p).keys()]).toEqual(['3'])
+  })
+})
+
+// Final review I1: a read that could not count a kind keeps the count last read, greyed, rather than a false 0 or a lost
+// problem dot.
+describe('counts across reads', () => {
+  it('keeps the last count, greyed, for a kind the new read could not count', () => {
+    const prev = { pods: { count: 3, attention: true }, secrets: { count: 1, attention: false } }
+    expect(mergeCounts(prev, { pods: { count: null, attention: false }, secrets: { count: 2, attention: false } })).toEqual({
+      pods: { count: 3, attention: true, stale: true },
+      secrets: { count: 2, attention: false }
+    })
+    expect(mergeCounts({ pods: { count: 3, attention: true, stale: true } }, { pods: { count: null, attention: false } })).toEqual({
+      pods: { count: 3, attention: true, stale: true }
+    })
+  })
+  it('leaves a kind never counted unknown, and a Forbidden kind forbidden', () => {
+    expect(mergeCounts(null, { pods: { count: null, attention: false } })).toEqual({ pods: { count: null, attention: false } })
+    const forbidden = { count: null, attention: false, forbidden: 'secrets is forbidden' }
+    expect(mergeCounts({ secrets: { count: 1, attention: false } }, { secrets: forbidden })).toEqual({ secrets: forbidden })
+    expect(mergeCounts({ secrets: forbidden }, { secrets: { count: null, attention: false } })).toEqual({ secrets: { count: null, attention: false } })
+  })
+  it('holds only the kinds the new read asked for', () => {
+    expect(mergeCounts({ 'widgets.a.io': { count: 2, attention: false } }, { pods: { count: 1, attention: false } })).toEqual({ pods: { count: 1, attention: false } })
   })
 })

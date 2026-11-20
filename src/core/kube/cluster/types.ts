@@ -15,7 +15,9 @@ export interface Cell { text: string; tone?: Tone; sortKey?: number }
 /** `i18n` false: the label is shown as is (CRD printer columns). */
 export interface Column { key: string; label: string; i18n: boolean }
 export interface Row { uid: string; name: string; namespace: string | null; cells: Cell[]; attention: boolean }
-export interface CountInfo { count: number; attention: boolean; forbidden?: string }
+/** `count` null: it could not be read (a timeout, an unreachable cluster), which is not 0. `forbidden`: kubectl's reason
+ *  the kind cannot be listed. `stale`: set by the renderer, which keeps the last count read when a new read fails. */
+export interface CountInfo { count: number | null; attention: boolean; forbidden?: string; stale?: true }
 export type WatchEvent = { type: 'ADDED' | 'MODIFIED' | 'DELETED'; object: K8sObject }
 export type WatchMessage = { watchId: string } & (
   | { kind: 'event'; event: WatchEvent }

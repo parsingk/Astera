@@ -13,6 +13,7 @@ import {
   contextMissing,
   initialView,
   memoryKey,
+  mergeCounts,
   noPending,
   queueWatch,
   readMemory,
@@ -49,7 +50,8 @@ export interface ClusterViewModel {
   groups: KindGroup[]
   /** The cluster's custom resource kinds, listed under the custom group. */
   customKinds: KindDef[]
-  /** Count, problem dot and Forbidden reason per resource, for the picked context and namespace; empty until read. */
+  /** Count (null: it could not be read), problem dot and Forbidden reason per resource, for the picked context and
+   *  namespace; a count a later read could not get again is the last one, marked stale. Empty until read. */
   counts: Record<string, CountInfo>
   /** The picked kind; null while a custom kind's CRD is not known (yet). */
   kind: KindDef | null
@@ -248,9 +250,9 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const listKey = listSpec && JSON.stringify(listSpec)
   const countInfo = valueFor(counts, JSON.stringify([context, view.namespace])) ?? NO_COUNTS
   const kindCount = countInfo[view.resource]
-  // A relist of an empty kind brings no event at all, so the counts are what says the old rows are gone. Not while the
-  // watch fails: a failed count reads 0 (Task 7), and the rows then stay as last seen (§4.12).
-  const saysEmpty = listWatch === 'live' && kindCount?.count === 0 && !kindCount.forbidden
+  // A relist of an empty kind brings no event at all, so the counts are what says the old rows are gone: a 0 this round
+  // read, not one kept from an earlier round. Not while the watch fails: the rows then stay as last seen (§4.12).
+  const saysEmpty = listWatch === 'live' && kindCount?.count === 0 && !kindCount.forbidden && !kindCount.stale
   const objects = fresh && saysEmpty ? NO_OBJECTS : list
   const selected = valueFor(pick, view.selected)
   const selectedRef = selected !== null && context !== null && kind !== null ? refOf(context, kind, selected.object) : null
@@ -330,17 +332,20 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     }
   }, [visible, context, gen])
 
-  // Counted once the custom kinds are known (so they are counted too), again for another namespace, and on a slow
-  // interval while seen (§4.3). One request at a time, the next only an interval after the last answered, so a slow
-  // cluster is never asked twice at once; nothing while the window is hidden. Not while the list's watch fails either:
-  // the cluster is not answering, and retry starts the counts again.
+  // Counted when the view opens, again for another namespace, on refresh, and on a slow interval while seen (§4.3). One
+  // request at a time, the next only an interval after the last answered, so a slow cluster is never asked twice at
+  // once; nothing while the window is hidden. Not while the list's watch fails either: the cluster is not answering, and
+  // retry starts the counts again. Custom kinds are counted only while their group is open, once this context's CRDs
+  // are known (`customKey` null until then): a cluster can serve hundreds.
+  const customOpen = view.expanded.includes('custom')
   const crdsKnown = crds !== null && crds.key === context
+  const customKey = !customOpen ? '' : crdsKnown ? customKinds.map((k) => k.resource).join(',') : null
   const listFailed = typeof listWatch === 'object'
   useEffect(() => {
-    if (!visible || context === null || !crdsKnown || listFailed) return
+    if (!visible || context === null || customKey === null || listFailed) return
     const namespace = view.namespace
     const key = JSON.stringify([context, namespace])
-    const kinds = [...FIXED_KINDS, ...latest.current.customKinds]
+    const kinds = customKey === '' ? FIXED_KINDS : [...FIXED_KINDS, ...latest.current.customKinds]
     let alive = true
     let first = true
     const stop = startSerialPoll(
@@ -349,7 +354,8 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
         if (!first) setTick((t) => t + 1)
         first = false
         const value = await api.counts(context, namespace, kinds)
-        if (alive) setCounts({ key, value })
+        // A kind this round could not count keeps the last count, greyed (I1).
+        if (alive) setCounts((prev) => ({ key, value: mergeCounts(prev?.key === key ? prev.value : null, value) }))
       },
       COUNTS_INTERVAL_MS,
       { paused: () => document.hidden }
@@ -358,9 +364,8 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       alive = false
       stop()
     }
-    // `crds` is a new object for every answer (a refresh too): the counts start again with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, context, crds, view.namespace, listFailed])
+  }, [visible, context, customKey, view.namespace, listFailed, gen])
 
   // --- The picked kind's list (K4: only while seen) ---
 

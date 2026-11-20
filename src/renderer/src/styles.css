@@ -3653,6 +3653,8 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-cluster-kind-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kube-cluster-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .kube-cluster-attn { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); flex: none; }
+/* A count kept from the last read because the new one failed: the .pr-badge.stale convention */
+.kube-cluster-count.stale, .kube-cluster-attn.stale { opacity: .45; }
 .kube-cluster-table { position: relative; overflow: auto; min-width: 0; font-size: 12px; }
 .kube-cluster-table table { width: 100%; border-collapse: collapse; table-layout: auto; }
 .kube-cluster-table th { position: sticky; top: 0; z-index: 1; height: 26px; padding: 0; background: var(--panel); border-bottom: 1px solid var(--line-soft); text-align: left; font-weight: 500; }

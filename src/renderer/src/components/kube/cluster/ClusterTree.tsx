@@ -33,7 +33,8 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
   const kindRow = (k: KindDef): React.JSX.Element => {
     const info = p.counts[k.resource]
     const forbidden = info?.forbidden
-    const cls = 'kube-cluster-kind' + (k.resource === p.resource ? ' selected' : '') + (forbidden ? ' forbidden' : '')
+    const stale = info?.stale ? ' stale' : ''
+    const cls ='kube-cluster-kind' + (k.resource === p.resource ? ' selected' : '') + (forbidden ? ' forbidden' : '')
     return (
       <button
         key={k.resource}
@@ -45,9 +46,15 @@ export function ClusterTree(p: ClusterTreeProps): React.JSX.Element {
       >
         <span className="kube-cluster-kind-name">{plural(k.kind)}</span>
         {info?.attention && !forbidden && (
-          <span className="kube-cluster-attn" role="img" title={t('kube.cluster.attention')} aria-label={t('kube.cluster.attention')} />
+          <span
+            className={'kube-cluster-attn' + stale}
+            role="img"
+            title={t('kube.cluster.attention')}
+            aria-label={t('kube.cluster.attention')}
+          />
         )}
-        <span className="kube-cluster-count">{info === undefined || forbidden ? '' : info.count}</span>
+        {/* No number for a count that could not be read: it is not 0. One kept from the last read is greyed. */}
+        <span className={'kube-cluster-count' + stale}>{info === undefined || forbidden || info.count === null ? '' : info.count}</span>
       </button>
     )
   }

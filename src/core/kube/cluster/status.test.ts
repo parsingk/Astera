@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ageText, needsAttention, podStatus } from './status'
+import { ATTENTION_KINDS, ageText, needsAttention, podStatus } from './status'
+import { KIND_GROUPS } from './kinds'
 
 const pod = (status: object, meta: object = {}) => ({ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p', ...meta }, status })
 
@@ -45,5 +46,12 @@ describe('cluster status', () => {
     expect(ageText(ago(3 * 86400 + 4 * 3600), now)).toBe('3d4h')
     expect(ageText(ago(12 * 86400), now)).toBe('12d')
     expect(ageText(undefined, now)).toBe('')
+  })
+  // The counts read objects only for ATTENTION_KINDS (final review I1): a rule for another kind would never be asked.
+  it('has a rule only for the kinds whose objects the counts read', () => {
+    for (const k of KIND_GROUPS.flatMap((g) => g.kinds)) {
+      if (ATTENTION_KINDS.has(k.kind)) continue
+      expect(needsAttention(k.kind, { apiVersion: 'v1', kind: k.kind, metadata: {}, spec: {}, status: {} }), k.kind).toBe(false)
+    }
   })
 })

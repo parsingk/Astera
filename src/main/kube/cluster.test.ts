@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createClusterReads } from './cluster'
 import { UNREADABLE } from './operations'
 import { listArgs } from '../../core/kube/cluster/args'
-import { crdKinds } from '../../core/kube/cluster/kinds'
+import { KIND_GROUPS, crdKinds } from '../../core/kube/cluster/kinds'
 import { columnsOf, rowsOf } from '../../core/kube/cluster/columns'
 import type { KubectlResult } from '../../core/kube/kubectl'
 
@@ -16,6 +16,8 @@ const secret = {
 const secretRef = { context: 'c', namespace: 'api', resource: 'secrets', kind: 'Secret', name: 's' }
 const podCrashing = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'a' }, status: { phase: 'Pending' } }
 const podRunning = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'b' }, status: { phase: 'Running', containerStatuses: [{ ready: true }] } }
+const outputOf = (args: string[]): string => args[args.indexOf('-o') + 1]
+const resourcesOf = (args: string[]): string[] => args[1].split(',')
 
 describe('createClusterReads', () => {
   it('get masks a Secret', async () => {
@@ -39,41 +41,6 @@ describe('createClusterReads', () => {
     expect(cm.ok).toBe(false)
   })
 
-  it('counts marks a forbidden kind and keeps the rest', async () => {
-    const run = async (): Promise<KubectlResult> => ({
-      ok: false,
-      exitCode: 1,
-      stdout: JSON.stringify({ kind: 'List', items: [podCrashing, podRunning] }),
-      stderr: 'Error from server (Forbidden): secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "api"'
-    })
-    const c = await createClusterReads({ run }).counts('c', 'api', [
-      { kind: 'Pod', resource: 'pods', namespaced: true },
-      { kind: 'Secret', resource: 'secrets', namespaced: true }
-    ])
-    expect(c.pods).toEqual({ count: 2, attention: true })
-    expect(c.secrets.count).toBe(0)
-    expect(c.secrets.forbidden).toContain('cannot list resource "secrets"')
-  })
-
-  it('counts runs one call per scope and tells CRD groups apart', async () => {
-    const calls: string[][] = []
-    const run = async (args: string[]): Promise<KubectlResult> => {
-      calls.push(args)
-      return ok(JSON.stringify({ kind: 'List', items: args.includes('-n') || args.includes('--all-namespaces')
-        ? [{ apiVersion: 'a.io/v1', kind: 'Widget', metadata: { name: 'w' } }]
-        : [{ apiVersion: 'v1', kind: 'Node', metadata: { name: 'n' }, status: {} }] }))
-    }
-    const c = await createClusterReads({ run }).counts('c', null, [
-      { kind: 'Widget', resource: 'widgets.a.io', namespaced: true },
-      { kind: 'Widget', resource: 'widgets.b.io', namespaced: true },
-      { kind: 'Node', resource: 'nodes', namespaced: false }
-    ])
-    expect(calls).toHaveLength(2)
-    expect(c['widgets.a.io'].count).toBe(1)
-    expect(c['widgets.b.io'].count).toBe(0)
-    expect(c.nodes.count).toBe(1)
-    expect(c.nodes.attention).toBe(true)
-  })
 
   it('namespaces reports forbidden', async () => {
     const run = async (): Promise<KubectlResult> => ({ ok: false, exitCode: 1, stdout: '', stderr: '\nError from server (Forbidden): namespaces is forbidden: cannot list' })
@@ -142,10 +109,10 @@ describe('createClusterReads', () => {
   })
 
   it('counts does not blame roles for a clusterroles line, nor pods for podtemplates', async () => {
-    const run = async (): Promise<KubectlResult> => ({
+    const run = async (args: string[]): Promise<KubectlResult> => ({
       ok: false,
       exitCode: 1,
-      stdout: JSON.stringify({ kind: 'List', items: [] }),
+      stdout: outputOf(args) === 'json' ? JSON.stringify({ kind: 'List', items: [] }) : '',
       stderr: [
         'Error from server (Forbidden): clusterroles.rbac.authorization.k8s.io is forbidden: cannot list',
         'Error from server (Forbidden): podtemplates is forbidden: cannot list'
@@ -192,5 +159,109 @@ describe('createClusterReads', () => {
     const e = await reads.events(secretRef, 'u')
     expect(JSON.stringify(p)).not.toContain('aHVudGVyMg==')
     expect(JSON.stringify(e)).not.toContain('aHVudGVyMg==')
+  })
+})
+
+/** `kind.group/name`, as `kubectl get -o name` prints an object. */
+function nameLine(o: Obj): string {
+  const group = o.apiVersion.includes('/') ? o.apiVersion.split('/')[0] : ''
+  return `${o.kind.toLowerCase()}${group ? `.${group}` : ''}/${o.metadata.name}`
+}
+
+type Obj = { apiVersion: string; kind: string; metadata: { name?: string } }
+
+/** A fake `kubectl get <a,b,c> -o json|name`: the objects of the served resources, an "Error from server" line for each
+ *  refused one (kubectl goes on with the others), or a whole-call failure for a call naming a resource in `fatal`. */
+function fakeGet(objects: Record<string, Obj[]>, o: { refuse?: Record<string, string>; fatal?: Record<string, string>; calls?: string[][] } = {}) {
+  return async (args: string[]): Promise<KubectlResult> => {
+    o.calls?.push(args)
+    const resources = resourcesOf(args)
+    const fatal = resources.find((r) => o.fatal?.[r] !== undefined)
+    if (fatal) return { ok: false, exitCode: 1, stdout: '', stderr: o.fatal![fatal] }
+    const refused = resources.filter((r) => o.refuse?.[r] !== undefined).map((r) => o.refuse![r])
+    const items = resources.filter((r) => o.refuse?.[r] === undefined).flatMap((r) => objects[r] ?? [])
+    const stdout =
+      outputOf(args) === 'json' ? JSON.stringify({ apiVersion: 'v1', kind: 'List', items }) : items.map((i) => nameLine(i) + NL).join('')
+    return refused.length === 0 ? ok(stdout) : { ok: false, exitCode: 1, stdout, stderr: refused.join(NL) }
+  }
+}
+
+const NL = String.fromCharCode(10)
+const FIXED = KIND_GROUPS.flatMap((g) => g.kinds)
+const OBJECTS: Record<string, Obj[]> = {
+  pods: [podCrashing, podRunning],
+  'deployments.apps': [{ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'd' } }],
+  secrets: [secret],
+  configmaps: [{ apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'c1' } }, { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'c2' } }],
+  'horizontalpodautoscalers.autoscaling': [{ apiVersion: 'autoscaling/v2', kind: 'HorizontalPodAutoscaler', metadata: { name: 'h' } }],
+  nodes: [{ apiVersion: 'v1', kind: 'Node', metadata: { name: 'n' } }]
+}
+
+// Final review I1: counts read objects only where a problem dot needs them, and a count that failed reads unknown, not 0.
+describe('createClusterReads counts', () => {
+  it('reads objects only for kinds with an attention rule, so Secret data never enters main to be counted', async () => {
+    const calls: string[][] = []
+    const c = await createClusterReads({ run: fakeGet(OBJECTS, { calls }) }).counts('c', 'api', FIXED)
+    const asJson = calls.filter((a) => outputOf(a) === 'json').flatMap(resourcesOf).sort()
+    expect(asJson).toEqual(['daemonsets.apps', 'deployments.apps', 'jobs.batch', 'nodes', 'persistentvolumeclaims', 'pods', 'statefulsets.apps'])
+    expect(calls.filter((a) => resourcesOf(a).includes('secrets')).map(outputOf)).toEqual(['name'])
+    expect(c.pods).toEqual({ count: 2, attention: true })
+    expect(c['deployments.apps']).toEqual({ count: 1, attention: true })
+    expect(c.secrets).toEqual({ count: 1, attention: false })
+    expect(c.configmaps).toEqual({ count: 2, attention: false })
+    expect(c['horizontalpodautoscalers.autoscaling']).toEqual({ count: 1, attention: false })
+    expect(c.nodes).toEqual({ count: 1, attention: true })
+    expect(c.services).toEqual({ count: 0, attention: false })
+    expect(Object.keys(c).sort()).toEqual(FIXED.map((k) => k.resource).sort())
+  })
+
+  it('reads a kind it could not count as unknown, not 0', async () => {
+    const failures: KubectlResult[] = [
+      { ok: false, timedOut: true, stdout: '', stderr: 'timed out' },
+      { ok: false, exitCode: 1, stdout: '', stderr: 'The connection to the server 10.0.0.1:6443 was refused - did you specify the right host or port?' },
+      { ok: false, errorCode: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: '', stderr: '' },
+      { ok: false, exitCode: 1, stdout: '', stderr: 'E1120 10:00:00.1 1 memcache.go:265] couldn\'t get current server API group list' }
+    ]
+    for (const f of failures) {
+      const c = await createClusterReads({ run: async () => f }).counts('c', 'api', FIXED)
+      for (const k of FIXED) expect(c[k.resource], `${f.stderr || f.errorCode} ${k.resource}`).toEqual({ count: null, attention: false })
+    }
+    const unreadable = await createClusterReads({ run: async (a) => ok(outputOf(a) === 'json' ? '{not json' : '') }).counts('c', 'api', FIXED)
+    expect(unreadable.pods).toEqual({ count: null, attention: false })
+  })
+
+  it('greys a Forbidden kind with its reason and counts the rest of its call', async () => {
+    const line = 'Error from server (Forbidden): secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "api"'
+    const c = await createClusterReads({ run: fakeGet(OBJECTS, { refuse: { secrets: line } }) }).counts('c', 'api', FIXED)
+    expect(c.secrets).toEqual({ count: null, attention: false, forbidden: line })
+    expect(c.configmaps).toEqual({ count: 2, attention: false })
+    expect(c.pods).toEqual({ count: 2, attention: true })
+  })
+
+  it('counts custom kinds 40 to a call, apart from the built-in kinds, so an unserved CRD fails only its own call', async () => {
+    const custom = Array.from({ length: 45 }, (_, i) => ({ kind: `Widget${i}`, resource: `widget${i}s.a.io`, namespaced: true }))
+    const objects: Record<string, Obj[]> = { ...OBJECTS }
+    for (const k of custom) objects[k.resource] = [{ apiVersion: 'a.io/v1', kind: k.kind, metadata: { name: 'w' } }]
+    const calls: string[][] = []
+    const unserved = 'error: the server doesn\'t have a resource type "widget3s"'
+    const c = await createClusterReads({ run: fakeGet(objects, { calls, fatal: { 'widget3s.a.io': unserved } }) }).counts('c', 'api', [...FIXED, ...custom])
+    const isCustom = (r: string): boolean => r.endsWith('.a.io')
+    const customCalls = calls.filter((a) => resourcesOf(a).some(isCustom))
+    expect(customCalls.map((a) => resourcesOf(a).length)).toEqual([40, 5])
+    expect(customCalls.every((a) => resourcesOf(a).every(isCustom) && outputOf(a) === 'name')).toBe(true)
+    expect(c['widget3s.a.io']).toEqual({ count: null, attention: false, forbidden: unserved })
+    expect(c['widget0s.a.io']).toEqual({ count: null, attention: false })
+    expect(c['widget44s.a.io']).toEqual({ count: 1, attention: false })
+    expect(c.pods).toEqual({ count: 2, attention: true })
+  })
+
+  it('tells custom kinds of the same name in two groups apart', async () => {
+    const run = fakeGet({ 'widgets.a.io': [{ apiVersion: 'a.io/v1', kind: 'Widget', metadata: { name: 'w' } }] })
+    const c = await createClusterReads({ run }).counts('c', null, [
+      { kind: 'Widget', resource: 'widgets.a.io', namespaced: true },
+      { kind: 'Widget', resource: 'widgets.b.io', namespaced: true }
+    ])
+    expect(c['widgets.a.io'].count).toBe(1)
+    expect(c['widgets.b.io'].count).toBe(0)
   })
 })

@@ -45,6 +45,9 @@ function conditionIs(o: K8sObject, type: string, value: string): boolean {
   return list(rec(o.status).conditions).some((c) => c.type === type && c.status === value)
 }
 
+/** The kinds `needsAttention` has a rule for: only their objects are read to count them (the rest by name). */
+export const ATTENTION_KINDS: ReadonlySet<string> = new Set(['Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'PersistentVolumeClaim', 'Node'])
+
 export function needsAttention(kind: string, o: K8sObject): boolean {
   const status = rec(o.status)
   const spec = rec(o.spec)

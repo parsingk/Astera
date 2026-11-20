@@ -43,6 +43,7 @@ export function crdArgs(context: string): string[] {
   return ['get', 'customresourcedefinitions.apiextensions.k8s.io', '-o', 'json', '--context', context]
 }
 
-export function countArgs(context: string, namespace: string | null, resources: string[], namespaced: boolean): string[] {
-  return ['get', resources.join(','), ...scopeArgs(namespace, namespaced), '-o', 'json', '--context', context]
+/** `name` prints one `kind.group/name` line per object: enough to count, and no object's content (a Secret's data). */
+export function countArgs(context: string, namespace: string | null, resources: string[], namespaced: boolean, output: 'json' | 'name'): string[] {
+  return ['get', resources.join(','), ...scopeArgs(namespace, namespaced), '-o', output, '--context', context]
 }
