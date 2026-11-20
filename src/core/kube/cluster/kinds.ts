@@ -60,7 +60,8 @@ export const KIND_GROUPS: KindGroup[] = [
   { id: 'custom', kinds: [] }
 ]
 
-/** Custom kinds from CustomResourceDefinition objects, sorted by kind; a CRD missing its names is dropped. */
+/** Custom kinds from CustomResourceDefinition objects, sorted by kind (ordinal, so the order is the same whatever the
+ *  machine's locale); a CRD missing its names is dropped. */
 export function crdKinds(crds: K8sObject[]): KindDef[] {
   const out: KindDef[] = []
   for (const crd of crds) {
@@ -70,7 +71,7 @@ export function crdKinds(crds: K8sObject[]): KindDef[] {
     const group = typeof spec?.group === 'string' && spec.group ? `.${spec.group}` : ''
     out.push({ kind: names.kind, resource: `${names.plural}${group}`, namespaced: spec?.scope !== 'Cluster' })
   }
-  return out.sort((a, b) => a.kind.localeCompare(b.kind))
+  return out.sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0))
 }
 
 export function kindDefOf(resource: string, custom: KindDef[]): KindDef | undefined {

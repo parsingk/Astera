@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { KIND_GROUPS, crdKinds, kindDefOf } from './kinds'
 
 describe('kind catalogue', () => {
@@ -14,6 +14,18 @@ describe('kind catalogue', () => {
       { kind: 'Cert', resource: 'certs.x.io', namespaced: false },
       { kind: 'Widget', resource: 'widgets.example.com', namespaced: true }
     ])
+  })
+  // The order must not depend on the machine's locale: ordinal, so upper case sorts before lower case.
+  it('sorts kinds by ordinal comparison, not by locale', () => {
+    const crd = (kind: string, plural: string) =>
+      ({ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: {}, spec: { group: 'x.io', scope: 'Namespaced', names: { kind, plural } } })
+    const compare = vi.spyOn(String.prototype, 'localeCompare')
+    try {
+      expect(crdKinds([crd('alpha', 'alphas'), crd('Zebra', 'zebras'), crd('Eclair', 'eclairs')]).map((k) => k.kind)).toEqual(['Eclair', 'Zebra', 'alpha'])
+      expect(compare).not.toHaveBeenCalled()
+    } finally {
+      compare.mockRestore()
+    }
   })
   it('drops a CRD without names', () => {
     expect(crdKinds([{ apiVersion: 'v1', kind: 'CustomResourceDefinition', metadata: {}, spec: {} }])).toEqual([])
