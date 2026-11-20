@@ -17,7 +17,8 @@ export function podStatus(o: K8sObject): { text: string; tone: Tone } {
   const inits = list(status.initContainerStatuses)
   for (const c of inits) {
     const reason = rec(rec(c.state).waiting).reason
-    if (typeof reason === 'string' && reason) return { text: `Init:${reason}`, tone: 'bad' }
+    // PodInitializing only says the init containers are still running, which the progress text below shows.
+    if (typeof reason === 'string' && reason && reason !== 'PodInitializing') return { text: `Init:${reason}`, tone: 'bad' }
   }
   const initDone = inits.filter((c) => {
     const t = rec(rec(c.state).terminated)

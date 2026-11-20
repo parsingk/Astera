@@ -19,6 +19,9 @@ describe('cluster status', () => {
   it('shows init progress', () => {
     expect(podStatus(pod({ phase: 'Pending', initContainerStatuses: [{ name: 'a', state: { terminated: { exitCode: 0 } } }, { name: 'b', state: { running: {} } }] })).text).toBe('Init:1/2')
   })
+  it('treats PodInitializing as init progress, as kubectl does', () => {
+    expect(podStatus(pod({ phase: 'Pending', initContainerStatuses: [{ name: 'a', state: { terminated: { exitCode: 0 } } }, { name: 'b', state: { waiting: { reason: 'PodInitializing' } } }] })).text).toBe('Init:1/2')
+  })
   it('says Evicted from status.reason', () => {
     expect(podStatus(pod({ phase: 'Failed', reason: 'Evicted' }))).toEqual({ text: 'Evicted', tone: 'bad' })
   })
