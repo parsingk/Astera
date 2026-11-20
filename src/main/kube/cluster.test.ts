@@ -263,7 +263,7 @@ describe('createClusterReads counts', () => {
     expect(c.configmaps).toEqual({ count: 2, attention: false })
   })
 
-  it('counts custom kinds 40 to a call, apart from the built-in kinds, so an unserved CRD fails only its own call', async () => {
+  it('counts custom kinds 40 to a call, apart from the built-in kinds, and asks a batch again without its unserved CRD', async () => {
     const custom = Array.from({ length: 45 }, (_, i) => ({ kind: `Widget${i}`, resource: `widget${i}s.a.io`, namespaced: true }))
     const objects: Record<string, Obj[]> = { ...OBJECTS }
     for (const k of custom) objects[k.resource] = [{ apiVersion: 'a.io/v1', kind: k.kind, metadata: { name: 'w' } }]
@@ -272,12 +272,28 @@ describe('createClusterReads counts', () => {
     const c = await createClusterReads({ run: fakeGet(objects, { calls, fatal: { 'widget3s.a.io': unserved } }) }).counts('c', 'api', [...FIXED, ...custom])
     const isCustom = (r: string): boolean => r.endsWith('.a.io')
     const customCalls = calls.filter((a) => resourcesOf(a).some(isCustom))
-    expect(customCalls.map((a) => resourcesOf(a).length)).toEqual([40, 5])
+    expect(customCalls.map((a) => resourcesOf(a).length)).toEqual([40, 39, 5])
+    expect(resourcesOf(customCalls[1])).not.toContain('widget3s.a.io')
     expect(customCalls.every((a) => resourcesOf(a).every(isCustom) && outputOf(a) === 'name')).toBe(true)
     expect(c['widget3s.a.io']).toEqual({ count: null, attention: false, forbidden: unserved })
-    expect(c['widget0s.a.io']).toEqual({ count: null, attention: false })
+    expect(c['widget0s.a.io']).toEqual({ count: 1, attention: false })
+    expect(c['widget39s.a.io']).toEqual({ count: 1, attention: false })
     expect(c['widget44s.a.io']).toEqual({ count: 1, attention: false })
     expect(c.pods).toEqual({ count: 2, attention: true })
+  })
+
+  it('asks a batch again only once', async () => {
+    const custom = Array.from({ length: 10 }, (_, i) => ({ kind: `Widget${i}`, resource: `widget${i}s.a.io`, namespaced: true }))
+    const objects: Record<string, Obj[]> = {}
+    for (const k of custom) objects[k.resource] = [{ apiVersion: 'a.io/v1', kind: k.kind, metadata: { name: 'w' } }]
+    const calls: string[][] = []
+    const unserved = (plural: string) => `error: the server doesn't have a resource type "${plural}"`
+    const fatal = { 'widget3s.a.io': unserved('widget3s'), 'widget7s.a.io': unserved('widget7s') }
+    const c = await createClusterReads({ run: fakeGet(objects, { calls, fatal }) }).counts('c', 'api', custom)
+    expect(calls.map((a) => resourcesOf(a).length)).toEqual([10, 9])
+    expect(c['widget3s.a.io']).toEqual({ count: null, attention: false, forbidden: unserved('widget3s') })
+    expect(c['widget7s.a.io']).toEqual({ count: null, attention: false, forbidden: unserved('widget7s') })
+    expect(c['widget0s.a.io']).toEqual({ count: null, attention: false })
   })
 
   it('tells custom kinds of the same name in two groups apart', async () => {

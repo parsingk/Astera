@@ -157,7 +157,7 @@ export function createClusterReads(deps: { run: Run }) {
    *  down, a type the server does not serve) and is greyed with that line; the rest are counted only when what kubectl
    *  printed is whole for them, and are unknown (`count` null) otherwise: a timeout, an unreachable cluster or a cut
    *  output says nothing about how many there are. */
-  async function countCall(context: string, namespace: string | null, c: CountCall, out: Record<string, CountInfo>): Promise<void> {
+  async function countCall(context: string, namespace: string | null, c: CountCall, out: Record<string, CountInfo>, retried = false): Promise<void> {
     if (c.kinds.length === 0) return
     const r = await run(countArgs(context, namespace, c.kinds.map((k) => k.resource), c.namespaced, c.objects ? 'json' : 'name'))
     const lines = r.ok ? [] : r.stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !KLOG.test(l) && !SERVER_WARNING.test(l))
@@ -167,6 +167,20 @@ export function createClusterReads(deps: { run: Run }) {
     // other line (its own "error: ...", a refused connection) means it stopped, and what it printed is not whole.
     const whole =
       r.ok || (!r.timedOut && !r.errorCode && lines.length > 0 && lines.every((l) => SERVER_REFUSAL.test(l) && c.kinds.some((k) => names(l, k))))
+    // A resource type the server does not serve (a CRD being removed) stops kubectl before it lists any: the call is made
+    // once more without the types it named, so one unserved CRD does not leave the rest of its batch unknown.
+    if (!whole && !retried && !r.timedOut && !r.errorCode) {
+      const unserved = new Map<KindDef, string>()
+      for (const k of c.kinds) {
+        const line = lines.find((l) => l.includes(`the server doesn't have a resource type "${pluralOf(k.resource)}"`))
+        if (line !== undefined) unserved.set(k, line)
+      }
+      if (unserved.size > 0) {
+        for (const [k, line] of unserved) out[k.resource] = { ...UNKNOWN, forbidden: line }
+        await countCall(context, namespace, { ...c, kinds: c.kinds.filter((k) => !unserved.has(k)) }, out, true)
+        return
+      }
+    }
     const counted = whole ? (c.objects ? countObjects(r.stdout, c.kinds) : countNames(r.stdout, c.kinds)) : null
     for (const k of c.kinds) {
       const reason = reasonOf(k)
@@ -187,7 +201,7 @@ export function createClusterReads(deps: { run: Run }) {
 
     /** Built-in kinds in up to four calls at once (per scope, objects for the kinds with a problem dot and names for the
      *  rest); custom kinds after them, a call at a time, CUSTOM_PER_CALL to a call, so a cluster with hundreds of CRDs
-     *  stays within the Windows command line and an unserved CRD fails only its own call. */
+     *  stays within the Windows command line and an unserved CRD touches only its own call (asked again without it). */
     async counts(context: string, namespace: string | null, kinds: KindDef[]): Promise<Record<string, CountInfo>> {
       const out: Record<string, CountInfo> = {}
       const builtIn: CountCall[] = []
