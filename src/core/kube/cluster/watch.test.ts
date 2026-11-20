@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createJsonSplitter, toWatchEvents } from './watch'
+import { createJsonSplitter, keyOf, toWatchEvents } from './watch'
 
 const cm = (name: string): Record<string, unknown> => ({ apiVersion: 'v1', kind: 'ConfigMap', metadata: { name, namespace: 'bulk' }, data: { index: name } })
 
@@ -26,6 +26,18 @@ describe('kubectl watch output', () => {
   })
   it('keeps a watch event of one object as one event', () => {
     expect(toWatchEvents({ type: 'MODIFIED', object: cm('a') })).toEqual([{ type: 'MODIFIED', object: cm('a') }])
+  })
+  it('reads each event type and nothing else', () => {
+    for (const type of ['ADDED', 'MODIFIED', 'DELETED'] as const) expect(toWatchEvents({ type, object: cm('a') })).toEqual([{ type, object: cm('a') }])
+    expect(toWatchEvents({ type: 'BOOKMARK', object: cm('a') })).toEqual([])
+    expect(toWatchEvents({ type: 'ERROR', object: { kind: 'Status' } })).toEqual([])
+    expect(toWatchEvents({ type: 'ADDED', object: 'x' })).toEqual([])
+    expect(toWatchEvents('x')).toEqual([])
+  })
+  it('keys an object by uid, else by namespace and name', () => {
+    expect(keyOf({ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'a', namespace: 'n', uid: 'u1' } })).toBe('u1')
+    expect(keyOf({ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'a', namespace: 'n' } })).toBe('n/a')
+    expect(keyOf({ apiVersion: 'v1', kind: 'Node', metadata: { name: 'n1' } })).toBe('/n1')
   })
 
   // Task 15 S1: kubectl prints each page (500 objects) of a big initial list as ONE event whose object is the page's

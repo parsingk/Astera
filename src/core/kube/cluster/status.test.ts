@@ -31,6 +31,12 @@ describe('cluster status', () => {
     expect(failed({ exitCode: 2 })).toEqual({ text: 'Init:ExitCode:2', tone: 'bad' })
     expect(failed({ exitCode: 137, signal: 9 })).toEqual({ text: 'Init:Signal:9', tone: 'bad' })
   })
+  it('says why an init container is stuck waiting', () => {
+    expect(podStatus(pod({ phase: 'Pending', initContainerStatuses: [{ name: 'a', state: { waiting: { reason: 'CrashLoopBackOff' } } }] }))).toEqual({ text: 'Init:CrashLoopBackOff', tone: 'bad' })
+  })
+  it('says Unknown for a pod with no phase', () => {
+    expect(podStatus(pod({}))).toEqual({ text: 'Unknown', tone: 'bad' })
+  })
   it('says Evicted from status.reason', () => {
     expect(podStatus(pod({ phase: 'Failed', reason: 'Evicted' }))).toEqual({ text: 'Evicted', tone: 'bad' })
   })
@@ -41,6 +47,19 @@ describe('cluster status', () => {
     expect(needsAttention('Node', { apiVersion: 'v1', kind: 'Node', metadata: {}, status: { conditions: [{ type: 'Ready', status: 'False' }] } })).toBe(true)
     expect(needsAttention('ConfigMap', { apiVersion: 'v1', kind: 'ConfigMap', metadata: {} })).toBe(false)
     expect(needsAttention('Pod', pod({ phase: 'Succeeded' }))).toBe(false)
+  })
+  it('flags a short StatefulSet or DaemonSet and a failed Job', () => {
+    const obj = (kind: string, spec: object, status: object) => ({ apiVersion: 'apps/v1', kind, metadata: {}, spec, status })
+    expect(needsAttention('StatefulSet', obj('StatefulSet', { replicas: 3 }, { readyReplicas: 2 }))).toBe(true)
+    expect(needsAttention('StatefulSet', obj('StatefulSet', { replicas: 3 }, { readyReplicas: 3 }))).toBe(false)
+    expect(needsAttention('DaemonSet', obj('DaemonSet', {}, { desiredNumberScheduled: 2, numberReady: 1 }))).toBe(true)
+    expect(needsAttention('DaemonSet', obj('DaemonSet', {}, { desiredNumberScheduled: 2, numberReady: 2 }))).toBe(false)
+    expect(needsAttention('Job', obj('Job', {}, { conditions: [{ type: 'Failed', status: 'True' }] }))).toBe(true)
+    expect(needsAttention('Job', obj('Job', {}, { conditions: [{ type: 'Complete', status: 'True' }] }))).toBe(false)
+  })
+  it('prints a time in the future as 0s', () => {
+    const now = Date.parse('2026-11-20T12:00:00Z')
+    expect(ageText('2026-11-20T12:05:00Z', now)).toBe('0s')
   })
   it('prints ages like kubectl', () => {
     const now = Date.parse('2026-11-20T12:00:00Z')

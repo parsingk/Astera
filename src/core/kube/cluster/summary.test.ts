@@ -61,6 +61,47 @@ describe('cluster summary', () => {
       ['kube.cluster.fact.available', '2'], ['kube.cluster.fact.strategy', 'RollingUpdate'], ['kube.cluster.fact.images', 'i:1']
     ])
   })
+  it('lists conditions with a reason only where there is one', () => {
+    const pod: K8sObject = { ...crashingPod, status: { ...(crashingPod.status as object), conditions: [{ type: 'Ready', status: 'False', reason: 'ContainersNotReady' }, { type: 'PodScheduled', status: 'True' }] } }
+    expect(summaryOf('Pod', pod, [], 'c', now).conditions).toEqual([
+      { type: 'Ready', status: 'False', reason: 'ContainersNotReady' },
+      { type: 'PodScheduled', status: 'True' }
+    ])
+  })
+  it('summarises a daemon set', () => {
+    const ds: K8sObject = {
+      apiVersion: 'apps/v1', kind: 'DaemonSet', metadata: { name: 'ds' },
+      spec: { template: { spec: { containers: [{ name: 'a', image: 'agent:2' }, { name: 'b', image: 'sidecar:1' }] } } },
+      status: { desiredNumberScheduled: 3, numberReady: 2, updatedNumberScheduled: 3, numberAvailable: 2 }
+    }
+    expect(summaryOf('DaemonSet', ds, [], 'c', now).facts.map((f) => [f.label, f.value])).toEqual([
+      ['kube.cluster.fact.desired', '3'], ['kube.cluster.fact.ready', '2'], ['kube.cluster.fact.upToDate', '3'],
+      ['kube.cluster.fact.available', '2'], ['kube.cluster.fact.images', 'agent:2, sidecar:1']
+    ])
+  })
+  it('gives other kinds their namespace, age, labels and owner', () => {
+    const rs: K8sObject = {
+      apiVersion: 'apps/v1', kind: 'ReplicaSet',
+      metadata: { name: 'web-1', namespace: 'api', creationTimestamp: '2026-11-20T10:00:00Z', labels: { app: 'web', tier: 'fe' }, ownerReferences: [{ kind: 'Deployment', name: 'web', controller: true }] }
+    }
+    const s = summaryOf('ReplicaSet', rs, [], 'c', now)
+    expect(s.facts.map((f) => [f.label, f.value])).toEqual([
+      ['kube.cluster.fact.namespace', 'api'], ['kube.cluster.fact.created', '120m'], ['kube.cluster.fact.labels', 'app=web, tier=fe'],
+      ['kube.cluster.fact.owner', 'Deployment web']
+    ])
+    expect(s.facts[3].refs).toEqual([{ context: 'c', namespace: 'api', resource: 'deployments.apps', kind: 'Deployment', name: 'web' }])
+    expect(summaryOf('ConfigMap', { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'bare' } }, [], 'c', now).facts).toEqual([])
+  })
+  it('lists init containers before the others, each in spec order', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' },
+      spec: { containers: [{ name: 'main', image: 'm' }, { name: 'side', image: 's' }], initContainers: [{ name: 'migrate', image: 'i1' }, { name: 'warm', image: 'i2' }] },
+      status: { initContainerStatuses: [{ name: 'warm', state: { running: {} } }, { name: 'migrate', state: { terminated: { reason: 'Completed', exitCode: 0 } } }] }
+    }
+    expect(summaryOf('Pod', pod, [], 'c', now).containers.map((c) => [c.name, c.init, c.state])).toEqual([
+      ['migrate', true, 'Terminated: Completed'], ['warm', true, 'Running'], ['main', false, 'Waiting'], ['side', false, 'Waiting']
+    ])
+  })
   it('reads selectors', () => {
     expect(podSelectorOf('Deployment', { apiVersion: 'apps/v1', kind: 'Deployment', metadata: {}, spec: { selector: { matchLabels: { app: 'worker', tier: 'bg' } } } })).toBe('app=worker,tier=bg')
     expect(podSelectorOf('Service', { apiVersion: 'v1', kind: 'Service', metadata: {}, spec: { selector: { app: 'web' } } })).toBe('app=web')

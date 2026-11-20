@@ -18,6 +18,28 @@ describe('streamKubectl', () => {
     expect(exit).toEqual({ code: 3, stopped: false })
   })
 
+  it('keeps a character whose bytes come in two chunks whole', async () => {
+    const out: string[] = []
+    const euro = String.fromCharCode(0x20ac) // E2 82 AC in UTF-8
+    await new Promise<StreamExit>((done) =>
+      streamKubectl(['-e', 'process.stdout.write(Buffer.from([0xe2, 0x82])); setTimeout(() => process.stdout.write(Buffer.from([0xac])), 100)'], {
+        bin: node,
+        onStdout: (c) => out.push(c),
+        onStderr: () => {},
+        onExit: done
+      })
+    )
+    expect(out.join('')).toBe(euro)
+  })
+
+  it('a stop right after the start, before kubectl is running, still ends it and says so', async () => {
+    const exit = await new Promise<StreamExit>((done) => {
+      const s = streamKubectl(['-e', 'setInterval(() => {}, 1000)'], { bin: node, onStdout: () => {}, onStderr: () => {}, onExit: done })
+      s.stop()
+    })
+    expect(exit.stopped).toBe(true)
+  })
+
   it('stop kills it and says so', async () => {
     let s: KubectlStream | null = null
     const exit = await new Promise<StreamExit>((done) => {
