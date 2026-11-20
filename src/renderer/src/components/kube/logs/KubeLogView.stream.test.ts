@@ -317,7 +317,7 @@ describe('KubeLogView stream', () => {
       expect(drawn(tree)[0]).toBe(60)
       // Scrolled on past the lines drawn, into those that came since: the end window moves to them.
       const spacers = elements(tree).filter((e) => e.type === 'div' && (e.props as Record<string, unknown>)['aria-hidden'] === 'true')
-      ;(spacers[spacers.length - 1].props.ref as { current: unknown }).current = { offsetTop: 1900 }
+      ;((spacers[spacers.length - 1].props as Record<string, unknown>).ref as { current: unknown }).current = { offsetTop: 1900 }
       scrollTo(tree, el, 90 * 20)
       expect(drawn(hooks.render(view()))[0]).toBe(65)
     })
