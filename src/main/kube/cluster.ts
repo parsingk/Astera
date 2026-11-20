@@ -46,6 +46,33 @@ function itemsOf(parsed: unknown): K8sObject[] {
 
 const masked = (o: K8sObject): K8sObject => maskSecretPair(o, null)[0] ?? o
 
+type Rec = Record<string, unknown>
+const rec = (v: unknown): Rec => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Rec) : {})
+
+/** What the renderer reads of a CRD (crdKinds: names, group, scope; columnsOf: each version's printer columns). The
+ *  rest, the schemas above all, can run to megabytes per CRD and would only cross IPC to be dropped. */
+function trimCrd(crd: K8sObject): K8sObject {
+  const spec = rec(crd.spec)
+  const names = rec(spec.names)
+  const versions = Array.isArray(spec.versions) ? spec.versions.map(rec) : []
+  return {
+    apiVersion: crd.apiVersion,
+    kind: crd.kind,
+    metadata: { name: crd.metadata.name },
+    spec: {
+      group: spec.group,
+      scope: spec.scope,
+      names: { kind: names.kind, plural: names.plural },
+      versions: versions.map((v) => ({
+        name: v.name,
+        served: v.served,
+        storage: v.storage,
+        ...(v.additionalPrinterColumns !== undefined ? { additionalPrinterColumns: v.additionalPrinterColumns } : {})
+      }))
+    }
+  }
+}
+
 const groupOf = (resource: string): string => (resource.includes('.') ? resource.slice(resource.indexOf('.') + 1) : '')
 const pluralOf = (resource: string): string => resource.split('.')[0]
 
@@ -111,7 +138,7 @@ export function createClusterReads(deps: { run: Run }) {
 
     async crds(context: string): Promise<Read<{ kinds: KindDef[]; crds: K8sObject[] }>> {
       const r = await list(crdArgs(context))
-      return r.ok ? { ok: true, kinds: crdKinds(r.items), crds: r.items } : r
+      return r.ok ? { ok: true, kinds: crdKinds(r.items), crds: r.items.map(trimCrd) } : r
     },
 
     async counts(context: string, namespace: string | null, kinds: KindDef[]): Promise<Record<string, CountInfo>> {

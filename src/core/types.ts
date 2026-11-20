@@ -1446,6 +1446,7 @@ export interface CoreApi {
     /** Read-only cluster view. Secret objects arrive masked; only `reveal` returns values. */
     cluster: {
       namespaces(context: string): Promise<Read<{ names: string[] }>>
+      /** `crds` carry only names, group, scope and each version's printer columns: no schemas. */
       crds(context: string): Promise<Read<{ kinds: KindDef[]; crds: K8sObject[] }>>
       counts(context: string, namespace: string | null, kinds: KindDef[]): Promise<Record<string, CountInfo>>
       get(ref: ObjectRef): Promise<Read<{ object: K8sObject | null }>>

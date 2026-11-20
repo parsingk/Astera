@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { createClusterReads } from './cluster'
 import { UNREADABLE } from './operations'
 import { listArgs } from '../../core/kube/cluster/args'
+import { crdKinds } from '../../core/kube/cluster/kinds'
+import { columnsOf, rowsOf } from '../../core/kube/cluster/columns'
 import type { KubectlResult } from '../../core/kube/kubectl'
 
 const ok = (stdout: string): KubectlResult => ({ ok: true, stdout, stderr: '' })
@@ -90,6 +92,36 @@ describe('createClusterReads', () => {
     const crd = { metadata: { name: 'widgets.a.io' }, spec: { group: 'a.io', scope: 'Namespaced', names: { kind: 'Widget', plural: 'widgets' } } }
     const r = await createClusterReads({ run: async () => ok(JSON.stringify({ items: [crd] })) }).crds('c')
     expect(r.ok && r.kinds).toEqual([{ kind: 'Widget', resource: 'widgets.a.io', namespaced: true }])
+  })
+
+  // Final review M2: a CRD's schema can run to megabytes; the view reads only its names, scope and printer columns.
+  it('crds sends each CRD without its schema, keeping what the tree and the columns read', async () => {
+    const columns = [{ name: 'Phase', jsonPath: '.status.phase' }, { name: 'Age', type: 'date', jsonPath: '.metadata.creationTimestamp' }]
+    const crd = {
+      apiVersion: 'apiextensions.k8s.io/v1',
+      kind: 'CustomResourceDefinition',
+      metadata: { name: 'widgets.a.io', annotations: { big: 'x'.repeat(1000) }, managedFields: [{ manager: 'helm' }] },
+      spec: {
+        group: 'a.io',
+        scope: 'Cluster',
+        names: { kind: 'Widget', plural: 'widgets', singular: 'widget', listKind: 'WidgetList' },
+        conversion: { strategy: 'None' },
+        versions: [
+          { name: 'v1', served: true, storage: true, additionalPrinterColumns: columns, schema: { openAPIV3Schema: { description: 'SCHEMA-TEXT' } } },
+          { name: 'v1beta1', served: false, storage: false, schema: { openAPIV3Schema: { description: 'SCHEMA-TEXT' } } }
+        ]
+      },
+      status: { acceptedNames: { kind: 'Widget' }, storedVersions: ['v1'] }
+    }
+    const r = await createClusterReads({ run: async () => ok(JSON.stringify({ items: [crd] })) }).crds('c')
+    if (!r.ok) throw new Error('read failed')
+    const sent = JSON.stringify(r.crds)
+    for (const gone of ['SCHEMA-TEXT', 'managedFields', 'xxxxxxxx', 'storedVersions', 'conversion']) expect(sent).not.toContain(gone)
+    expect(crdKinds(r.crds)).toEqual(crdKinds([crd]))
+    expect(columnsOf('Widget', { allNamespaces: true, crd: r.crds[0] })).toEqual(columnsOf('Widget', { allNamespaces: true, crd }))
+    const w = { apiVersion: 'a.io/v1', kind: 'Widget', metadata: { name: 'w', uid: 'w', creationTimestamp: '2026-11-20T10:00:00Z' }, status: { phase: 'Ready' } }
+    const now = Date.parse('2026-11-20T12:00:00Z')
+    expect(rowsOf('Widget', [w], { allNamespaces: true, nowMs: now, crd: r.crds[0] })).toEqual(rowsOf('Widget', [w], { allNamespaces: true, nowMs: now, crd }))
   })
 
   it('events come newest first', async () => {
