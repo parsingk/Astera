@@ -3608,3 +3608,44 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-log-file { background: transparent; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 /* The explorer's mark on a file whose last Kubernetes operation failed. */
 .fx-kube-failed { flex: none; display: inline-flex; align-items: center; margin-left: auto; padding-left: 6px; color: var(--warn); }
+
+/* The Kubernetes cluster view: toolbar, then the kind tree (212px), the table and the detail column. */
+.kube-cluster { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.kube-cluster-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); min-width: 0; flex-wrap: wrap; }
+.kube-cluster-bar select.kube-pill, .kube-cluster-ns-input { background: transparent; color: var(--text-dim); font-family: inherit; }
+.kube-cluster-ns-input { width: 150px; }
+.kube-cluster-filter { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 200px; min-width: 100px; padding: 2px 8px; border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--text-faint); }
+.kube-cluster-filter input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font-size: 12px; }
+.kube-cluster-filter:focus-within { box-shadow: 0 0 0 2px var(--ring); }
+.kube-cluster-live { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; font-size: 11.5px; color: var(--text-dim); }
+.kube-cluster-live-text { min-width: 0; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kube-cluster-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.kube-cluster-live .kube-cluster-dot { margin-right: 0; }
+.kube-cluster-dot.ok { background: var(--ok); }
+.kube-cluster-dot.bad { background: var(--danger); }
+.kube-cluster-dot.wait { background: var(--warn); }
+.kube-cluster-dot.done { background: var(--text-faint); }
+.kube-cluster-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 212px minmax(0, 1fr) auto; }
+.kube-cluster-tree { overflow: auto; padding: 4px 0; border-right: 1px solid var(--line-soft); font-size: 12px; }
+.kube-cluster-tree.stale, .kube-cluster-table.stale { opacity: .5; }
+.kube-cluster-group-head { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 8px; background: transparent; border: 0; color: var(--text-dim); font-size: 11px; text-align: left; cursor: pointer; }
+.kube-cluster-group-head:hover { color: var(--text); }
+.kube-cluster-kind { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 10px 3px 24px; background: transparent; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 12px; text-align: left; cursor: pointer; }
+.kube-cluster-kind:hover { background: var(--elevated); }
+.kube-cluster-kind.selected { background: var(--elevated); border-left-color: var(--accent); }
+.kube-cluster-kind.forbidden { color: var(--text-faint); cursor: default; }
+.kube-cluster-kind-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kube-cluster-count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.kube-cluster-attn { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); flex: none; }
+.kube-cluster-table { position: relative; overflow: auto; min-width: 0; font-size: 12px; }
+.kube-cluster-table table { width: 100%; border-collapse: collapse; table-layout: auto; }
+.kube-cluster-table th { position: sticky; top: 0; z-index: 1; height: 26px; padding: 0; background: var(--panel); border-bottom: 1px solid var(--line-soft); text-align: left; font-weight: 500; }
+.kube-cluster-th { display: inline-flex; align-items: center; gap: 4px; width: 100%; height: 26px; padding: 0 8px; background: transparent; border: 0; color: var(--text-dim); font-size: 11.5px; cursor: pointer; }
+.kube-cluster-th:hover { color: var(--text); }
+.kube-cluster-row { cursor: default; }
+.kube-cluster-row:hover { background: var(--elevated); }
+.kube-cluster-row.selected { background: var(--elevated); box-shadow: inset 2px 0 0 var(--accent); }
+.kube-cluster-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--ring); }
+.kube-cluster-row td { height: 26px; max-width: 320px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; }
+.kube-cluster-spacer td { padding: 0; border: 0; }
+.kube-cluster-empty { padding: 24px 12px; font-size: 12.5px; color: var(--text-dim); }
