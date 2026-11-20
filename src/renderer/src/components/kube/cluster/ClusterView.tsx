@@ -3,7 +3,7 @@ import { RefreshCw, RotateCcw, Search } from 'lucide-react'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
-import { KUBECTL_MISSING, type ObjectRef } from '../../../../../core/kube/cluster/types'
+import { KUBECTL_MISSING, type KindDef, type ObjectRef, type Row } from '../../../../../core/kube/cluster/types'
 import { ContextMenu } from '../../ContextMenu'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
@@ -12,6 +12,11 @@ import { clusterMenuItems } from './clusterMenu'
 /** A watch's error line as shown: kubectl's own words, except a missing binary, which main names in English. */
 export function liveErrorText(message: string, t: (key: 'kube.cluster.kubectlMissing') => string): string {
   return message === KUBECTL_MISSING ? t('kube.cluster.kubectlMissing') : message
+}
+
+/** Where a row of the table lives: what opening the row and its menu act on, whatever is selected by then. */
+export function rowRefOf(context: string, kind: KindDef, row: Row): ObjectRef {
+  return { context, namespace: kind.namespaced ? row.namespace : null, resource: kind.resource, kind: kind.kind, name: row.name }
 }
 
 /** A namespace typed by hand, where the cluster does not let us list them: applied on Enter or when the field is left. */
@@ -55,8 +60,13 @@ export function ClusterView({
   toolbarStart?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
-  const [rowMenu, setRowMenu] = useState<{ x: number; y: number } | null>(null)
+  /** The open row menu, with the right-clicked row's object, which its actions act on. */
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; ref: ObjectRef } | null>(null)
   const { view, live } = model
+  const refOfRow = (uid: string): ObjectRef | null => {
+    const row = model.rows.find((r) => r.uid === uid)
+    return row && model.kind && view.context !== null ? rowRefOf(view.context, model.kind, row) : null
+  }
   const failed = typeof live === 'object'
   const names = model.contexts?.contexts.map((c) => c.name) ?? []
   const contextName = view.context
@@ -176,32 +186,30 @@ export function ClusterView({
           onSelect={model.select}
           onRowMenu={(uid, x, y) => {
             model.select(uid)
-            setRowMenu({ x, y })
+            const ref = refOfRow(uid)
+            if (ref !== null) setRowMenu({ x, y, ref })
           }}
           // A double-click or Enter opens the row in the editor (spec 4.4); without one it selects, as a click does.
           onRowOpen={(uid) => {
             if (!onOpenInEditor) return model.select(uid)
-            const row = model.rows.find((r) => r.uid === uid)
-            const k = model.kind
-            if (row && k && view.context !== null)
-              onOpenInEditor({ context: view.context, namespace: k.namespaced ? row.namespace : null, resource: k.resource, kind: k.kind, name: row.name })
+            const ref = refOfRow(uid)
+            if (ref !== null) onOpenInEditor(ref)
           }}
         />
         {detail}
       </div>
-      {rowMenu !== null && model.kind !== null && (
+      {rowMenu !== null && (
         <ContextMenu
           x={rowMenu.x}
           y={rowMenu.y}
-          // Built from the model at each render: the menu opens as the row is selected, and its actions run on what is selected by then.
+          // The right-clicked row's own object: an item picked before its selection comes through still acts on it. Describe
+          // shows in the detail, which the right-click selected.
           items={clusterMenuItems(
             {
-              kind: model.kind.kind,
-              onOpenInEditor: onOpenInEditor ? () => model.selectedRef && onOpenInEditor(model.selectedRef) : undefined,
+              kind: rowMenu.ref.kind,
+              onOpenInEditor: onOpenInEditor ? () => onOpenInEditor(rowMenu.ref) : undefined,
               onDescribe: () => model.setDetailTab('describe'),
-              onCopyName: () => {
-                if (model.selectedRef) void window.api.clipboard.writeText(model.selectedRef.name)
-              }
+              onCopyName: () => void window.api.clipboard.writeText(rowMenu.ref.name)
             },
             t
           )}

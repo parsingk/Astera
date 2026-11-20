@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ClusterView } from './ClusterView'
+import { ClusterView, rowRefOf } from './ClusterView'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import type { ClusterTableProps } from './ClusterTable'
 import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
@@ -149,5 +149,31 @@ describe('ClusterView row open', () => {
     renderToStaticMarkup(React.createElement(ClusterView, { model: withRows((u) => void selected.push(u)), detail: null }))
     table!.onRowOpen('u1')
     expect(selected).toEqual(['u1'])
+  })
+})
+
+// Task 12 minor: the row menu acted on the selection, so an item picked before the right-clicked row's selection came
+// through did nothing. Its actions take the right-clicked row's own object, as opening a row does.
+describe('rowRefOf', () => {
+  const row = { uid: 'u1', name: 'w-1', namespace: 'api', cells: [], attention: false }
+
+  it('names the object of the row itself, in its namespace', () => {
+    expect(rowRefOf('kind-dev', { kind: 'Pod', resource: 'pods', namespaced: true }, row)).toEqual({
+      context: 'kind-dev',
+      namespace: 'api',
+      resource: 'pods',
+      kind: 'Pod',
+      name: 'w-1'
+    })
+  })
+
+  it('names no namespace for a cluster-scoped kind', () => {
+    expect(rowRefOf('kind-dev', { kind: 'Node', resource: 'nodes', namespaced: false }, { ...row, name: 'n1', namespace: null })).toEqual({
+      context: 'kind-dev',
+      namespace: null,
+      resource: 'nodes',
+      kind: 'Node',
+      name: 'n1'
+    })
   })
 })
