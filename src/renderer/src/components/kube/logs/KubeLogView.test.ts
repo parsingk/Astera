@@ -134,4 +134,11 @@ describe('lineWindow', () => {
     expect(lineWindow(1000, 1500 * 20, 400, false)).toEqual({ first: 960, last: 1000 })
     expect(lineWindow(1000, 975 * 20, 400, false)).toEqual({ first: 960, last: 1000 })
   })
+
+  // Task 5 review I4b: scrolled up in wrap mode, the end window must not follow the lines that keep coming in below, or
+  // each new line takes a wrapped line off the top of the view. It holds the end it had when the person scrolled up.
+  it('holds the end window the person scrolled up from', () => {
+    expect(lineWindow(1010, 1500 * 20, 400, false, 960)).toEqual({ first: 960, last: 1000 })
+    expect(lineWindow(1010, 500 * 20, 400, false, 960)).toEqual({ first: 490, last: 530 })
+  })
 })

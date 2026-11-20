@@ -261,4 +261,65 @@ describe('KubeLogView stream', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     expect(api.reads).toHaveLength(2)
   })
+
+  // Task 5 review I4: scrolled up, the lines in view stay where they are whatever comes in.
+  describe('scrolled up', () => {
+    /** A stand-in for the scrolled box: the view reads and sets these as the browser would. */
+    const attachBox = (tree: unknown): { scrollTop: number; clientHeight: number; scrollHeight: number } => {
+      const el = { scrollTop: 0, clientHeight: 400, scrollHeight: 0 }
+      ;(byRole(tree, 'log').props.ref as { current: unknown }).current = el
+      return el
+    }
+    const byRole = (tree: unknown, role: string): ReactElement<Record<string, unknown>> =>
+      elements(tree).find((e) => (e.props as Record<string, unknown>).role === role) as ReactElement<Record<string, unknown>>
+    const scrollTo = (tree: unknown, el: { scrollTop: number }, top: number): void => {
+      el.scrollTop = top
+      ;(byRole(tree, 'log').props.onScroll as (e: unknown) => void)({ currentTarget: el })
+    }
+    const drawn = (tree: unknown): number[] =>
+      elements(tree)
+        .filter((e) => (e.props as { className?: string }).className === 'kube-logs-line')
+        .map((e) => Number(e.key))
+    const lines = (from: number, count: number): string[] => Array.from({ length: count }, (_, i) => `line ${from + i}`)
+    const emit = async (l: string[]): Promise<void> => {
+      api.emit({ logId: api.started[0].id, kind: 'lines', lines: l })
+      await vi.advanceTimersByTimeAsync(20)
+    }
+
+    // At the cap the oldest lines go from the front; the box moves up by as many, so the view does not crawl.
+    it('stays on its lines when the oldest are dropped at the cap', async () => {
+      vi.useFakeTimers()
+      const el = attachBox(hooks.render(view()))
+      await emit(lines(0, 50_000))
+      let tree = hooks.render(view())
+      el.scrollHeight = 50_000 * 20
+      scrollTo(tree, el, 1000 * 20)
+      tree = hooks.render(view())
+      await emit(lines(50_000, 3))
+      hooks.render(view())
+      expect(el.scrollTop).toBe(997 * 20)
+    })
+
+    it('stays on its wrapped lines as lines come in below', async () => {
+      vi.useFakeTimers()
+      let tree = hooks.render(view())
+      const el = attachBox(tree)
+      await emit(lines(0, 100))
+      tree = hooks.render(view())
+      ;(byLabel(tree, 'kube.logs.wrap').props.onClick as () => void)()
+      tree = hooks.render(view())
+      // Wrapped two lines high: just above the bottom the scroll position counts past the end window.
+      el.scrollHeight = 100 * 40
+      scrollTo(tree, el, 90 * 20)
+      expect(drawn(hooks.render(view()))[0]).toBe(60)
+      await emit(lines(100, 5))
+      tree = hooks.render(view())
+      expect(drawn(tree)[0]).toBe(60)
+      // Scrolled on past the lines drawn, into those that came since: the end window moves to them.
+      const spacers = elements(tree).filter((e) => e.type === 'div' && (e.props as Record<string, unknown>)['aria-hidden'] === 'true')
+      ;(spacers[spacers.length - 1].props.ref as { current: unknown }).current = { offsetTop: 1900 }
+      scrollTo(tree, el, 90 * 20)
+      expect(drawn(hooks.render(view()))[0]).toBe(65)
+    })
+  })
 })

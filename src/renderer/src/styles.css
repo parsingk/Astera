@@ -3755,7 +3755,8 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-tab.deleted .kube-tab-body { opacity: .5; }
 /* A Pod's logs tab (KubeLogView, board E): the toolbar, then the lines in monospace, LINE_HEIGHT (20px) a line unless
    wrapped. The view does its own scroll keeping, so the browser's scroll anchoring stays out of it: with wrapped lines
-   it would answer the window's moves with scrolls of its own. */
+   it would answer the window's moves with scrolls of its own. The body is positioned so the end spacer's offsetTop
+   counts from the top of the list. */
 .kube-logs { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); font-size: 12px; }
 .kube-logs-bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
 .kube-logs-bar select.kube-pill { max-width: 220px; background: transparent; color: var(--text-dim); font-family: inherit; cursor: pointer; }
@@ -3763,7 +3764,7 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-logs-bar .kube-segment:disabled { opacity: .4; color: var(--text-dim); cursor: default; }
 .kube-logs-where { margin-left: auto; }
 .kube-logs-dropped { flex: none; padding: 3px 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 11.5px; }
-.kube-logs-body { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--text); }
+.kube-logs-body { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--text); }
 /* min-height: a blank line, wrapped and without its time stamp, would otherwise fold to nothing. */
 .kube-logs-line { display: flex; gap: 12px; min-height: 20px; padding: 0 12px; white-space: pre; }
 .kube-logs-body.wrap .kube-logs-line { white-space: pre-wrap; overflow-wrap: anywhere; }

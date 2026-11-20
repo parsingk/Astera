@@ -32,15 +32,31 @@ const BOTTOM_SLACK = 4
 /** The waits between Pod reads after a stream ends, until the exit shows. */
 const EXIT_RETRY_MS = [1000, 2000, 4000]
 
+/** How many lines a window draws: the viewport's, and the overscan on each side. */
+const windowSize = (height: number): number => Math.ceil(height / LINE_HEIGHT) + 2 * OVERSCAN
+
 /** The lines to draw, from `first` up to `last`: the end of the list while the view keeps to the bottom, else the
  *  lines around the scroll position, counted at LINE_HEIGHT a line. Wrapped lines are taller than that count, so near
  *  the end the window stays the end's: counted from the scroll position it would start past the lines in view, the
- *  list would shrink under the person and the box would throw them back to the bottom. */
-export function lineWindow(count: number, top: number, height: number, atEnd: boolean): { first: number; last: number } {
-  const size = Math.ceil(height / LINE_HEIGHT) + 2 * OVERSCAN
-  const endFirst = Math.max(0, count - size)
-  const first = atEnd ? endFirst : Math.max(0, Math.min(endFirst, Math.floor(top / LINE_HEIGHT) - OVERSCAN))
+ *  list would shrink under the person and the box would throw them back to the bottom. `endFirst`: the end window
+ *  as it was when the person scrolled up, so lines coming in below do not move the one in view. */
+export function lineWindow(count: number, top: number, height: number, atEnd: boolean, endFirst = Infinity): { first: number; last: number } {
+  const size = windowSize(height)
+  const liveEnd = Math.max(0, count - size)
+  const first = atEnd ? liveEnd : Math.max(0, Math.min(liveEnd, endFirst, Math.floor(top / LINE_HEIGHT) - OVERSCAN))
   return { first, last: Math.min(count, first + size) }
+}
+
+/** The first of `rows` numbered `n` or later. */
+function firstAtOrAfter(rows: readonly LogLine[], n: number): number {
+  let lo = 0
+  let hi = rows.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (rows[mid].n < n) lo = mid + 1
+    else hi = mid
+  }
+  return lo
 }
 
 function spanStyle(s: Span): React.CSSProperties | undefined {
@@ -150,11 +166,17 @@ export function KubeLogView({
   const rows = useMemo(() => (filter === '' ? buffer.lines : filterLines(buffer.lines, filter)), [buffer.lines, filter])
 
   const box = useRef<HTMLDivElement>(null)
-  /** `pinned`: the view keeps to the bottom, as new lines come; scrolling up lets go until the person comes back down. */
-  const [scroll, setScroll] = useState({ height: DEFAULT_VIEWPORT, top: 0, pinned: true })
-  /** The exact scroll position, to put back when the tab shows again: under display:none the box forgets it. */
+  /** The spacer standing in for the lines below the window: where it starts, the drawn lines end. */
+  const tail = useRef<HTMLDivElement>(null)
+  /** `pinned`: the view keeps to the bottom, as new lines come; scrolling up lets go until the person comes back down.
+   *  `end`: the end window's first line when they scrolled up (lineWindow). */
+  const [scroll, setScroll] = useState({ height: DEFAULT_VIEWPORT, top: 0, pinned: true, end: 0 })
+  /** The exact scroll position, to put back when the tab shows again (under display:none the box forgets it) and to
+   *  move from when the oldest lines go. */
   const lastTop = useRef(0)
   const wasVisible = useRef(visible)
+  /** The last render's lines, to count those the cap took from the front. */
+  const kept = useRef({ rows, filter, dropped: buffer.dropped })
   const pin = (): void => setScroll((s) => (s.pinned ? s : { ...s, pinned: true }))
 
   // The opener asks again for this tab (previous logs of the same container): the tab follows what it asks, and the
@@ -177,18 +199,31 @@ export function KubeLogView({
     return () => ro.disconnect()
   }, [])
 
-  // After every render, before it paints: kept to the bottom, the end stays in view however the lines changed; shown
-  // again after hiding, the box gets back where it was.
+  // After every render, before it paints: kept to the bottom, the end stays in view however the lines changed. Scrolled
+  // up, the lines in view stay put: at the cap the oldest go from the front, so the box moves up by as many; shown
+  // again after hiding, it gets back where it was.
   useLayoutEffect(() => {
     const el = box.current
+    const prev = kept.current
+    kept.current = { rows, filter, dropped: buffer.dropped }
     const shownAgain = visible && !wasVisible.current
     wasVisible.current = visible
-    if (el === null || !visible) return
-    if (scroll.pinned) el.scrollTop = el.scrollHeight
-    else if (shownAgain) el.scrollTop = lastTop.current
+    if (el === null) return
+    if (scroll.pinned) {
+      if (visible) el.scrollTop = el.scrollHeight
+      return
+    }
+    const gone = buffer.dropped > prev.dropped && filter === prev.filter && buffer.lines.length > 0 ? firstAtOrAfter(prev.rows, buffer.lines[0].n) : 0
+    if (gone > 0) {
+      lastTop.current = Math.max(0, lastTop.current - gone * LINE_HEIGHT)
+      const top = Math.floor(lastTop.current / LINE_HEIGHT) * LINE_HEIGHT
+      setScroll((s) => ({ ...s, top, end: Math.max(0, s.end - gone) }))
+    }
+    if (visible && (shownAgain || gone > 0)) el.scrollTop = lastTop.current
   })
 
-  const { first, last } = lineWindow(rows.length, scroll.top, scroll.height, scroll.pinned)
+  // Only wrapped lines need the end held: unwrapped, every line is LINE_HEIGHT and the arithmetic is exact.
+  const { first, last } = lineWindow(rows.length, scroll.top, scroll.height, scroll.pinned, wrap ? scroll.end : Infinity)
   const exit = state === 'ended' && podNow !== null ? exitLine(podNow, container, previous, startRestarts.current.count) : null
   const choices = podNow !== null ? containersOf(podNow) : []
   if (!choices.some((c) => c.name === container)) choices.unshift({ name: container, init: false })
@@ -306,7 +341,13 @@ export function KubeLogView({
           const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - BOTTOM_SLACK
           // The top counts whole lines, so a scroll inside one line draws nothing again.
           const top = Math.floor(el.scrollTop / LINE_HEIGHT) * LINE_HEIGHT
-          setScroll((s) => (atBottom ? (s.pinned ? s : { ...s, pinned: true }) : !s.pinned && s.top === top ? s : { ...s, top, pinned: false }))
+          // Scrolled on past the drawn lines, into those that came in since: the end window moves to the end of now.
+          const pastDrawn = el.scrollTop + el.clientHeight > (tail.current?.offsetTop ?? Infinity)
+          setScroll((s) => {
+            if (atBottom) return s.pinned ? s : { ...s, pinned: true }
+            const end = s.pinned || pastDrawn ? Math.max(0, rows.length - windowSize(s.height)) : s.end
+            return !s.pinned && s.top === top && s.end === end ? s : { ...s, top, pinned: false, end }
+          })
         }}
       >
         {first > 0 && <div aria-hidden="true" style={{ height: first * LINE_HEIGHT }} />}
@@ -322,7 +363,7 @@ export function KubeLogView({
             </span>
           </div>
         ))}
-        {rows.length > last && <div aria-hidden="true" style={{ height: (rows.length - last) * LINE_HEIGHT }} />}
+        {rows.length > last && <div ref={tail} aria-hidden="true" style={{ height: (rows.length - last) * LINE_HEIGHT }} />}
         {state === 'starting' && buffer.lines.length === 0 && <div className="kube-logs-note">{t('kube.cluster.loading')}</div>}
         {typeof state === 'object' && <div className="kube-logs-error">{liveErrorText(state.error, t)}</div>}
         {state === 'ended' && (
