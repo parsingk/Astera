@@ -30,6 +30,8 @@ export type WatchMessage = { watchId: string } & (
 )
 /** A watch's error when the kubectl binary is missing (ENOENT); the renderer shows the catalog's words for it. */
 export const KUBECTL_MISSING = 'kubectl was not found'
+/** A watch's error when one page of a list is over the splitter's cap; the renderer shows the catalog's words for it. */
+export const LIST_PAGE_TOO_LARGE = 'a list page was too large to read'
 /** A one-shot read of the cluster: the data, or a failure with a redacted first line of stderr. */
 export type Read<T> = ({ ok: true } & T) | { ok: false; message: string; forbidden?: true }
 /** `text` null: the value is not UTF-8 text. */

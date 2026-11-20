@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { MAX_WATCHES, RESTART_DELAY_MS, createWatchRegistry } from './clusterWatch'
 import { listArgs } from '../../core/kube/cluster/args'
 import type { StreamExit } from '../../core/kube/stream'
-import { KUBECTL_MISSING, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
+import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
 
 type Handlers = { onStdout(c: string): void; onStderr(c: string): void; onExit(e: StreamExit): void }
 const spec: WatchSpec = { context: 'c1', namespace: 'ns', namespaced: true, resource: 'pods' }
@@ -44,7 +44,7 @@ describe('createWatchRegistry', () => {
     const { reg, spawns, emitted } = setup(64)
     reg.watch('w1', spec)
     spawns[0].h.onStdout('{"type":"ADDED","object":{"kind":"Pod","metadata":{"name":"' + 'x'.repeat(200) + '"}}}')
-    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: 'a list page was too large to read' }])
+    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: LIST_PAGE_TOO_LARGE }])
     expect(spawns[0].stops).toBe(1)
     expect(reg.size()).toBe(0)
   })

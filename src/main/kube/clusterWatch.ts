@@ -2,7 +2,7 @@
 import { maskSecretPair } from '../../core/kube/objects'
 import { listArgs } from '../../core/kube/cluster/args'
 import { createJsonSplitter, toWatchEvents } from '../../core/kube/cluster/watch'
-import type { WatchMessage, WatchSpec } from '../../core/kube/cluster/types'
+import { LIST_PAGE_TOO_LARGE, type WatchMessage, type WatchSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
 import { firstStderrLine, isForbidden, streamFailureMessage } from './cluster'
 
@@ -64,7 +64,7 @@ export function createWatchRegistry(deps: {
             // Rows would go missing from here on without a word: end the watch as a failed one, so the view says so.
             entries.delete(id)
             halt(e)
-            deps.emit({ watchId: id, kind: 'error', message: 'a list page was too large to read' })
+            deps.emit({ watchId: id, kind: 'error', message: LIST_PAGE_TOO_LARGE })
             return
           }
           // A page of a big list is many events, each Secret of it masked like a Secret of its own event.

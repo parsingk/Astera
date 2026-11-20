@@ -4,15 +4,17 @@ import { displayContextName } from '../../../../../core/kube/contextName'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
-import { KUBECTL_MISSING, type KindDef, type ObjectRef, type Row } from '../../../../../core/kube/cluster/types'
+import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE, type KindDef, type ObjectRef, type Row } from '../../../../../core/kube/cluster/types'
 import { ContextMenu } from '../../ContextMenu'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
 import { clusterMenuItems } from './clusterMenu'
 
-/** A watch's error line as shown: kubectl's own words, except a missing binary, which main names in English. */
-export function liveErrorText(message: string, t: (key: 'kube.cluster.kubectlMissing') => string): string {
-  return message === KUBECTL_MISSING ? t('kube.cluster.kubectlMissing') : message
+/** A watch's error line as shown: kubectl's own words, except a missing binary and a list page over the cap, which main
+ *  names in English. */
+export function liveErrorText(message: string, t: (key: 'kube.cluster.kubectlMissing' | 'kube.cluster.pageTooLarge') => string): string {
+  if (message === KUBECTL_MISSING) return t('kube.cluster.kubectlMissing')
+  return message === LIST_PAGE_TOO_LARGE ? t('kube.cluster.pageTooLarge') : message
 }
 
 /** Where a row of the table lives: what opening the row and its menu act on, whatever is selected by then. */
