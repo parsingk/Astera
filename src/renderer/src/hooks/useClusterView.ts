@@ -40,7 +40,9 @@ export interface ClusterViewModel {
   view: ClusterViewState
   /** kubeconfig's contexts, the list the manifests picker shows; null until read. */
   contexts: KubeContexts | null
-  /** The picked context is not in kubeconfig: the pill shows it missing and nothing is read or watched (no fallback, C11). */
+  /** The picked context is not in kubeconfig: the pill shows it missing and nothing is read or watched (no fallback, C11).
+   *  False until kubeconfig is read, and when it could not be read: nothing is known to be missing then, and
+   *  `contextsError` says why instead. */
   contextMissing: boolean
   /** kubeconfig could not be read (kubectl's first line): shown instead of a missing cluster, and nothing is read. */
   contextsError: string | null
