@@ -3753,14 +3753,17 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-tab-bar .kube-segment-switch { margin-left: auto; }
 .kube-tab-body { flex: 1; min-height: 0; overflow: auto; }
 .kube-tab.deleted .kube-tab-body { opacity: .5; }
+/* The element App keeps a logs view in for the tab's life; its tab's body holds it while the panel is open. */
+.kube-logs-host { flex: 1; min-width: 0; min-height: 0; display: flex; }
 /* A Pod's logs tab (KubeLogView, board E): the toolbar, then the lines in monospace, LINE_HEIGHT (20px) a line unless
    wrapped. The view does its own scroll keeping, so the browser's scroll anchoring stays out of it: with wrapped lines
    it would answer the window's moves with scrolls of its own. The body is positioned so the end spacer's offsetTop
    counts from the top of the list. */
-/* The element App keeps a logs view in for the tab's life; its tab's body holds it while the panel is open. */
-.kube-logs-host { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .kube-logs { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); font-size: 12px; }
 .kube-logs-bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+/* A wrapping row places items by their basis before any shrinks: the filter's small basis lets the bar stay on one row
+   in a narrow panel, and it grows into the room there is. */
+.kube-logs-bar .kube-cluster-filter { flex: 1 1 120px; max-width: 260px; }
 .kube-logs-picker { cursor: pointer; }
 .kube-logs-picker:hover { background: var(--elevated); }
 .kube-logs-picker:focus-within { box-shadow: 0 0 0 2px var(--ring); }
