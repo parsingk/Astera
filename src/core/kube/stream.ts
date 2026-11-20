@@ -18,8 +18,9 @@ const SPAWN_TRANSIENT = new Set(['EPERM', 'EBUSY'])
 const RETRY_DELAY_MS = 50
 
 /** Runs a long-lived kubectl (a watch, later `logs -f`) with no shell and reports its output as it comes.
- *  `onExit` fires exactly once. After stop() it reports `stopped: true` as soon as kubectl itself has exited,
- *  not when the output pipes close, which a grandchild can hold open for as long as it lives. */
+ *  `onExit` fires exactly once, and no output is delivered after it. After stop() it reports `stopped: true` as soon
+ *  as kubectl itself has exited (at once if it already had), not when the output pipes close, which a grandchild can
+ *  hold open for as long as it lives. */
 export function streamKubectl(
   args: string[],
   o: {
@@ -50,8 +51,13 @@ export function streamKubectl(
     child = c
     c.stdout?.setEncoding('utf8')
     c.stderr?.setEncoding('utf8')
-    c.stdout?.on('data', (d: string) => o.onStdout(d))
-    c.stderr?.on('data', (d: string) => o.onStderr(d))
+    // Nothing after onExit: a stop answers on 'exit', and the pipes can still bring what was left in them.
+    c.stdout?.on('data', (d: string) => {
+      if (!done) o.onStdout(d)
+    })
+    c.stderr?.on('data', (d: string) => {
+      if (!done) o.onStderr(d)
+    })
     c.once('error', (err: NodeJS.ErrnoException) => {
       if (!retried && !stopped && err.code && SPAWN_TRANSIENT.has(err.code)) {
         child = null
@@ -74,7 +80,10 @@ export function streamKubectl(
     stop(): void {
       if (stopped || done) return
       stopped = true
-      if (child) killProcessTree(child)
+      if (!child) return
+      // kubectl has exited and only its pipes are open, held by a child it left: its 'exit' is past, nothing to wait for.
+      if (child.exitCode !== null || child.signalCode !== null) return finish({ code: child.exitCode })
+      killProcessTree(child)
     }
   }
 }

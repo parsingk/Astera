@@ -34,6 +34,32 @@ describe('streamKubectl', () => {
     expect(exit).toMatchObject({ code: null, errorCode: 'ENOENT', stopped: false })
   })
 
+  // A child kubectl leaves behind (an exec auth plugin) can hold the pipes long after kubectl itself has exited.
+  it('answers a stop at once when kubectl has exited but its pipes are held open, and delivers nothing after', async () => {
+    const grandchild = "process.stdout.write('g'); setTimeout(() => process.stdout.write('late'), 800); setTimeout(() => {}, 1500)"
+    // Detached, so node's job object on Windows does not end it with its parent, as kubectl's children are not ended.
+    const script = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }); process.exit(5)`
+    const out: string[] = []
+    let exit: StreamExit | null = null
+    let s: KubectlStream | null = null
+    await new Promise<void>((ready) => {
+      s = streamKubectl(['-e', script], {
+        bin: node,
+        onStdout: (c) => {
+          out.push(c)
+          if (c.includes('g')) ready()
+        },
+        onStderr: () => {},
+        onExit: (e) => void (exit = e)
+      })
+    })
+    await new Promise((r) => setTimeout(r, 200)) // kubectl's own exit reaches us
+    s!.stop()
+    expect(exit).toEqual({ code: 5, stopped: true })
+    await new Promise((r) => setTimeout(r, 1600)) // the held pipe gets 'late', then closes
+    expect(out.join('')).toBe('g')
+  }, 10_000)
+
   it('fires onExit once even when stop is called after the end', async () => {
     let calls = 0
     let s: KubectlStream | null = null
