@@ -2776,5 +2776,9 @@ export const es: Catalog = {
   'kube.logs.saved': 'Guardado en {path}',
   'kube.logs.saveFailed': 'No se pudieron guardar los registros: {detail}',
   'kube.logs.toolbar': 'Registros',
-  'kube.logs.previousContainer': 'Contenedor antes de reiniciarse'
+  'kube.logs.previousContainer': 'Contenedor antes de reiniciarse',
+  'kube.logs.tab': 'Registros {pod}',
+  'kube.logs.closeTab': 'Cerrar registros',
+  'kube.logs.open': 'Registros',
+  'kube.logs.openPrevious': 'Registros anteriores'
 }

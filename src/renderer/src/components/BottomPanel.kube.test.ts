@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { TerminalBuffer } from '../../../core/types'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
+import type { KubeLogTab } from '../lib/kubeLogTabs'
 import { BottomPanel } from './BottomPanel'
 
 vi.mock('../i18n/I18nProvider', () => ({
@@ -26,11 +28,21 @@ const entry = (over: Partial<KubeLogEntry> = {}): KubeLogEntry => ({
   ...over
 })
 
+const logTab = (id: string, name: string): KubeLogTab => ({
+  id,
+  ref: { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name },
+  container: 'worker',
+  previous: false,
+  request: 0
+})
+
 const render = ({
   kubeLog = [] as KubeLogEntry[],
   activeTab = 'kube',
   kubeAvailable = true,
-  kubeSegment = 'cluster' as 'cluster' | 'log'
+  kubeSegment = 'cluster' as 'cluster' | 'log',
+  logTabs = [] as KubeLogTab[],
+  terminals = [] as TerminalBuffer[]
 } = {}): string =>
   renderToStaticMarkup(
     React.createElement(BottomPanel, {
@@ -45,7 +57,7 @@ const render = ({
       onOpenFile: noop,
       onOpenUrl: noop,
       onOpenPreview: noop,
-      terminals: [],
+      terminals,
       terminalCwd: null,
       activeTab,
       onSelectTab: noop,
@@ -59,7 +71,10 @@ const render = ({
       kubeAvailable,
       kubeSegment,
       onKubeSegment: noop,
-      kubeCluster: (switcher: React.ReactNode) => React.createElement('div', { className: 'cluster-marker' }, switcher)
+      kubeCluster: (switcher: React.ReactNode) => React.createElement('div', { className: 'cluster-marker' }, switcher),
+      logTabs,
+      onCloseLogTab: noop,
+      renderLog: (tab: KubeLogTab, visible: boolean) => React.createElement('div', { className: 'log-marker', 'data-tab': tab.id, 'data-visible': String(visible) })
     })
   )
 
@@ -134,5 +149,40 @@ describe('BottomPanel Kubernetes tab', () => {
 
   it('keeps the panel mounted but hidden when another tab is active', () => {
     expect(render({ kubeLog: [entry()], activeTab: 'other' })).toContain('kube-body" style="display:none"')
+  })
+})
+
+// Spec 4.8 (board E): a Pod's logs are a bottom tab of their own, "Logs <pod>", closed with a ✕ as a terminal is.
+describe('BottomPanel log tabs', () => {
+  const tabs = [logTab('kubelog:1', 'worker-1'), logTab('kubelog:2', 'web-2')]
+  const tabTags = (html: string): string[] => [...html.matchAll(/<span role="tab"[^>]*>.*?<\/span>(?=<span role="tab"|<button class="bottom-tab-new")/g)].map((m) => m[0])
+
+  it('draws a log tab with its label and a close button, after the Kubernetes tab', () => {
+    const html = render({ logTabs: tabs })
+    const strip = tabTags(html)
+    expect(strip).toHaveLength(3)
+    expect(strip[0]).toContain('kube.log.tab')
+    expect(strip[1]).toContain('kube.logs.tab{&quot;pod&quot;:&quot;worker-1&quot;}')
+    expect(strip[1]).toMatch(/<button class="bottom-tab-close" aria-label="kube\.logs\.closeTab" title="kube\.logs\.closeTab">/)
+    expect(strip[2]).toContain('kube.logs.tab{&quot;pod&quot;:&quot;web-2&quot;}')
+  })
+
+  it('draws the log tabs before the terminals', () => {
+    const html = render({ logTabs: tabs.slice(0, 1), terminals: [{ id: 't1', buffer: '' }] })
+    expect(html.indexOf('kube.logs.tab')).toBeGreaterThan(html.indexOf('kube.log.tab'))
+    expect(html.indexOf('kube.logs.tab')).toBeLessThan(html.indexOf('terminal.tab.label'))
+  })
+
+  it('keeps every log body mounted, hidden unless its tab is the one shown', () => {
+    const html = render({ logTabs: tabs, activeTab: 'kubelog:2' })
+    expect(html).toContain('<div class="bottom-body" style="display:none"><div class="log-marker" data-tab="kubelog:1" data-visible="false"></div></div>')
+    expect(html).toContain('<div class="bottom-body" style="display:flex"><div class="log-marker" data-tab="kubelog:2" data-visible="true"></div></div>')
+    expect(tabTags(html)[2]).toContain('aria-selected="true"')
+    expect(html).toContain('kube-body" style="display:none"')
+  })
+
+  // The header's clear empties a terminal's xterm; the log view has its own clear in its toolbar.
+  it('offers no terminal clear in the header while a log tab shows', () => {
+    expect(render({ logTabs: tabs, activeTab: 'kubelog:1' })).not.toContain('run.panel.clear')
   })
 })

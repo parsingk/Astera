@@ -364,6 +364,25 @@ describe('KubeLogView stream', () => {
     expect(api.saves[1].text).toBe('ERROR one\nERROR three\n')
   })
 
+  // Task 5 note for Task 6: previous logs asked again of a tab where the person has since turned previous off reach the
+  // view as the same `initial` with a higher request count, and previous comes back on.
+  it('applies what the opener asks again when its request count grows, though the ask is the same', () => {
+    const asked = (request: number) => () =>
+      KubeLogView({ pod: pod as never, target, initial: { container: 'worker', previous: true, request }, visible: true })
+    const tree = hooks.render(asked(0))
+    expect(api.started[0]).toMatchObject({ container: 'worker', previous: true })
+    ;(byLabel(tree, 'kube.logs.previous').props.onClick as () => void)()
+    hooks.render(asked(0))
+    expect(api.started[1]).toMatchObject({ previous: false })
+    hooks.render(asked(0))
+    expect(api.started).toHaveLength(2)
+    hooks.render(asked(1))
+    const shown = hooks.render(asked(1))
+    expect(api.started).toHaveLength(3)
+    expect(api.started[2]).toMatchObject({ container: 'worker', previous: true })
+    expect(byLabel(shown, 'kube.logs.previous').props['aria-pressed']).toBe(true)
+  })
+
   // Time stamps are always read and only shown or hidden: no new kubectl for it.
   it('shows or hides time stamps without restarting kubectl', () => {
     const tree = hooks.render(view())

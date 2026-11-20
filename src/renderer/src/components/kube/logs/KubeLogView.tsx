@@ -87,8 +87,9 @@ export function KubeLogView({
   /** The Pod as the opener knew it, if it did: shown until the view's own read of it answers. */
   pod: K8sObject | null
   target: ObjectRef
-  /** `filter`: for tests, since a static render cannot type into the field. */
-  initial: { container: string; previous: boolean; filter?: string }
+  /** `filter`: for tests, since a static render cannot type into the field. `request`: the tab's count of the opener's
+   *  asks (KubeLogTab), so an ask the same as the last one still applies. */
+  initial: { container: string; previous: boolean; filter?: string; request?: number }
   visible: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -194,12 +195,13 @@ export function KubeLogView({
   const pin = (): void => setScroll((s) => (s.pinned ? s : { ...s, pinned: true }))
 
   // The opener asks again for this tab (previous logs of the same container): the tab follows what it asks, and the
-  // new stream starts at its end.
+  // new stream starts at its end. The request count makes an ask the same as the last one, after the person changed
+  // the view, apply again.
   useEffect(() => {
     setContainer(initial.container)
     setPrevious(initial.previous)
     pin()
-  }, [initial.container, initial.previous])
+  }, [initial.container, initial.previous, initial.request])
 
   useEffect(() => {
     const el = box.current

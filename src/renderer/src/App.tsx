@@ -162,9 +162,12 @@ import type { KubeSegment } from './components/kube/KubeSegments'
 import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
 import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
+import { KubeLogView } from './components/kube/logs/KubeLogView'
 import { useClusterView } from './hooks/useClusterView'
 import type { ObjectRef } from '../../core/kube/cluster/types'
+import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
+import { closeLogTab, isLogTabId, logRequestOf, newLogTabId, openLogTab, type KubeLogTab } from './lib/kubeLogTabs'
 import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
@@ -2681,7 +2684,9 @@ export default function App(): React.JSX.Element {
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
-  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId
+  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId | log tab id
+  /** Pods' logs tabs in the bottom panel (spec 4.8), opened from the cluster view. */
+  const [logTabs, setLogTabs] = useState<KubeLogTab[]>([])
   /** The Kubernetes tab's segment: the cluster view or the operation log (spec D4). */
   const [kubeSegment, setKubeSegment] = useState<KubeSegment>('cluster')
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
@@ -3744,13 +3749,13 @@ export default function App(): React.JSX.Element {
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
   // The Kubernetes tab is there while kubectl is found or its log has entries; without either it falls back like a closed
-  // terminal.
+  // terminal. A logs tab belongs to no project either: it shows at home too, until its ✕ (closeLogs).
   const kubeAvailable = kubectlFound || kubeOps.log.length > 0
   const kubeTabGone = bottomTab === 'kube' && !kubeAvailable
   const bottomTabWanted = kubeTabGone ? 'run' : bottomTab
   const bottomTabShown =
-    bottomTabWanted === 'kube'
-      ? 'kube'
+    bottomTabWanted === 'kube' || isLogTabId(bottomTabWanted)
+      ? bottomTabWanted
       : runAvailable
         ? bottomTabWanted
         : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
@@ -4099,8 +4104,9 @@ export default function App(): React.JSX.Element {
       (list) => {
         if (cancelled) return
         setTerminals(list)
-        // If a tab that does not belong to this project is still active, fall back to Run
-        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || list.some((x) => x.id === cur) ? cur : 'run'))
+        // If a tab that does not belong to this project is still active, fall back to Run. The Kubernetes and logs
+        // tabs belong to none.
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || isLogTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])
@@ -4491,6 +4497,21 @@ export default function App(): React.JSX.Element {
   const closeTerminal = (id: string): void => {
     void window.api.terminal.close(id).catch(() => {})
     setTerminals((prev) => prev.filter((x) => x.id !== id))
+    setBottomTab((cur) => (cur === id ? 'run' : cur))
+  }
+
+  /** A Pod's logs from the cluster view (spec 4.7): their own tab, or the one already showing that Pod and container,
+   *  is shown. `previous`: previous logs were asked. */
+  const openPodLogs = (ref: ObjectRef, pod: K8sObject, previous: boolean): void => {
+    const asked = logRequestOf(pod, previous)
+    if (asked === null) return
+    const opened = openLogTab(logTabs, ref, asked.container, asked.previous, newLogTabId)
+    setLogTabs(opened.tabs)
+    setBottomTab(opened.focus)
+  }
+  /** A logs tab's ✕: its view unmounts, which stops its kubectl; the shown tab falls back as a closed terminal does. */
+  const closeLogs = (id: string): void => {
+    setLogTabs((prev) => closeLogTab(prev, id))
     setBottomTab((cur) => (cur === id ? 'run' : cur))
   }
 
@@ -5172,8 +5193,9 @@ export default function App(): React.JSX.Element {
                       kubectlFound ? (
                         <ClusterView
                           model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} />}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={openPodLogs} />}
                           onOpenInEditor={openKubeObject}
+                          onOpenLogs={openPodLogs}
                           toolbarStart={switcher}
                         />
                       ) : (
@@ -5193,6 +5215,17 @@ export default function App(): React.JSX.Element {
                         </div>
                       )
                     }
+                    logTabs={logTabs}
+                    onCloseLogTab={closeLogs}
+                    // The view reads the Pod itself, so the tab carries only where it lives.
+                    renderLog={(tab, visible) => (
+                      <KubeLogView
+                        pod={null}
+                        target={tab.ref}
+                        initial={{ container: tab.container, previous: tab.previous, request: tab.request }}
+                        visible={visible}
+                      />
+                    )}
                   />
                 )}
               </div>

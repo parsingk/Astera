@@ -67,6 +67,18 @@ describe('ClusterDetail', () => {
     expect(render(model('ConfigMap', 'configmaps', cm), { onOpenInEditor: noop })).toContain('kube.cluster.openInEditor')
   })
 
+  // Spec 4.5 and 4.7: the header's logs button is for Pods, after open in editor and before more.
+  it('draws the logs button for a Pod when logs are handled, and for no other kind', () => {
+    const pod: K8sObject = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'worker-1', namespace: 'dev' }, spec: { containers: [{ name: 'worker' }] } }
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
+    const html = render(model('Pod', 'pods', pod), { onOpenInEditor: noop, onOpenLogs: noop })
+    expect(html).toMatch(/title="kube\.logs\.open" aria-label="kube\.logs\.open"><svg [^>]*class="lucide lucide-scroll-text"/)
+    expect(html.indexOf('kube.cluster.openInEditor')).toBeLessThan(html.indexOf('kube.logs.open'))
+    expect(html.indexOf('kube.logs.open')).toBeLessThan(html.indexOf('kube.cluster.more'))
+    expect(render(model('Pod', 'pods', pod))).not.toContain('kube.logs.open')
+    expect(render(model('ConfigMap', 'configmaps', cm), { onOpenLogs: noop })).not.toContain('kube.logs.open')
+  })
+
   // Task 15 S5: a pencil reads as "edit" in a part that only reads; boards A and B draw open-in-editor as "open elsewhere".
   it('draws the editor button with the open-elsewhere icon, not a pencil', () => {
     const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }

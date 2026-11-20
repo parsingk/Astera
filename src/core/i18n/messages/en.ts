@@ -3169,5 +3169,9 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.logs.saved': 'Saved to {path}',
   'kube.logs.saveFailed': 'Could not save the logs: {detail}',
   'kube.logs.toolbar': 'Logs',
-  'kube.logs.previousContainer': 'Container before its restart'
+  'kube.logs.previousContainer': 'Container before its restart',
+  'kube.logs.tab': 'Logs {pod}',
+  'kube.logs.closeTab': 'Close logs',
+  'kube.logs.open': 'Logs',
+  'kube.logs.openPrevious': 'Previous logs'
 }

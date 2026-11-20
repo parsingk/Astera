@@ -10,6 +10,7 @@ import { KubeLogPanel } from './kube/KubeLogPanel'
 import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
 import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
+import type { KubeLogTab } from '../lib/kubeLogTabs'
 import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 
 /**
@@ -48,7 +49,10 @@ export function BottomPanel({
   kubeAvailable,
   kubeSegment,
   onKubeSegment,
-  kubeCluster
+  kubeCluster,
+  logTabs,
+  onCloseLogTab,
+  renderLog
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -96,6 +100,10 @@ export function BottomPanel({
   /** The Cluster segment's body, given the segmented switch to put first in its toolbar row (spec 4.2). App owns the
    *  view's state, so it builds this (or the kubectl-missing notice). */
   kubeCluster: (switcher: React.ReactNode) => React.ReactNode
+  /** Pods' logs tabs, after the Kubernetes tab (spec 4.8). App owns them and builds each one's view. */
+  logTabs: KubeLogTab[]
+  onCloseLogTab: (id: string) => void
+  renderLog: (tab: KubeLogTab, visible: boolean) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -167,6 +175,30 @@ export function BottomPanel({
               )}
             </span>
           )}
+          {logTabs.map((tab) => (
+            <span
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              tabIndex={0}
+              className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
+              onClick={() => onSelectTab(tab.id)}
+              onKeyDown={tabKeyDown(tab.id)}
+            >
+              {t('kube.logs.tab', { pod: tab.ref.name })}
+              <button
+                className="bottom-tab-close"
+                aria-label={t('kube.logs.closeTab')}
+                title={t('kube.logs.closeTab')}
+                onClick={(e) => {
+                  e.stopPropagation() // keeps close from also selecting the tab it closes
+                  onCloseLogTab(tab.id)
+                }}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
           {terminals.map((term, i) => (
             <span
               key={term.id}
@@ -203,8 +235,8 @@ export function BottomPanel({
         </span>
         <span className="run-panel-actions">
           {/* On the Run tab, stop and clear live in the rail beside the console; the header keeps them
-              for terminal tabs, which have no rail. */}
-          {activeTab !== 'run' && activeTab !== 'kube' && (
+              for terminal tabs, which have no rail. A logs tab clears from its own toolbar. */}
+          {terminals.some((term) => term.id === activeTab) && (
             <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
               <Delete size={12} />
             </button>
@@ -283,6 +315,12 @@ export function BottomPanel({
             />
           </div>
         )}
+        {/* Mounted for the tab's life like a terminal, so its kubectl keeps reading while another tab shows. */}
+        {logTabs.map((tab) => (
+          <div key={tab.id} className="bottom-body" style={{ display: activeTab === tab.id ? 'flex' : 'none' }}>
+            {renderLog(tab, activeTab === tab.id)}
+          </div>
+        ))}
         {terminals.map((term) => (
           <div
             key={term.id}

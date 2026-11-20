@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ClusterView, namespaceCommit, rowRefOf } from './ClusterView'
+import { ClusterView, namespaceCommit, rowObjectOf, rowRefOf } from './ClusterView'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import type { ClusterTableProps } from './ClusterTable'
 import { KUBECTL_MISSING } from '../../../../../core/kube/cluster/types'
@@ -175,6 +175,25 @@ describe('rowRefOf', () => {
       kind: 'Node',
       name: 'n1'
     })
+  })
+})
+
+// Spec 4.7: the row menu's logs open on the Pod's default container, which only the object says. The right-click selects
+// the row, so the object is the selected one, when it is the row's.
+describe('rowObjectOf', () => {
+  const ref = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
+  const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api' } }
+
+  it('is the selected object when it is the row\'s', () => {
+    expect(rowObjectOf(pod, { ...ref }, ref)).toBe(pod)
+  })
+
+  it('is nothing while another object, or none, is selected', () => {
+    expect(rowObjectOf(pod, { ...ref, name: 'w-2' }, ref)).toBeNull()
+    expect(rowObjectOf(pod, { ...ref, namespace: 'web' }, ref)).toBeNull()
+    expect(rowObjectOf(pod, { ...ref, context: 'kind-prod' }, ref)).toBeNull()
+    expect(rowObjectOf(pod, { ...ref, resource: 'deployments.apps', kind: 'Deployment' }, ref)).toBeNull()
+    expect(rowObjectOf(null, null, ref)).toBeNull()
   })
 })
 

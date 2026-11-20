@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useState } from 'react'
-import { Ellipsis, ExternalLink, RotateCcw } from 'lucide-react'
+import { Ellipsis, ExternalLink, RotateCcw, ScrollText } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
@@ -161,12 +161,16 @@ function SummaryTab({ model, object, kind, context }: { model: ClusterViewModel;
 export function ClusterDetail({
   model,
   onOpenInEditor,
+  onOpenLogs,
   onMenu
 }: {
   model: ClusterViewModel
   /** Opens the object in its read-only editor tab (spec 4.6); without it the header button and the menu item are not
    *  drawn. */
   onOpenInEditor?: (ref: ObjectRef) => void
+  /** Opens a Pod's logs tab (spec 4.8), `previous` true for previous logs; without it, or for another kind, the header
+   *  button and the menu items are not drawn. */
+  onOpenLogs?: (ref: ObjectRef, pod: K8sObject, previous: boolean) => void
   /** Where the more button opens the menu; without it the detail opens the menu itself. */
   onMenu?: (x: number, y: number) => void
 }): React.JSX.Element | null {
@@ -191,7 +195,8 @@ export function ClusterDetail({
       kind,
       onOpenInEditor: onOpenInEditor ? () => onOpenInEditor(selectedRef) : undefined,
       onDescribe: () => model.setDetailTab('describe'),
-      onCopyName: () => void window.api.clipboard.writeText(selectedRef.name)
+      onCopyName: () => void window.api.clipboard.writeText(selectedRef.name),
+      onLogs: onOpenLogs ? (previous) => onOpenLogs(selectedRef, selected, previous) : undefined
     },
     t
   )
@@ -212,6 +217,17 @@ export function ClusterDetail({
             onClick={() => onOpenInEditor(selectedRef)}
           >
             <ExternalLink size={14} />
+          </button>
+        )}
+        {onOpenLogs && kind === 'Pod' && (
+          <button
+            type="button"
+            className="kube-btn"
+            title={t('kube.logs.open')}
+            aria-label={t('kube.logs.open')}
+            onClick={() => onOpenLogs(selectedRef, selected, false)}
+          >
+            <ScrollText size={14} />
           </button>
         )}
         <button
