@@ -11,6 +11,7 @@ import type { Column, CountInfo, GroupId, KindDef, KindGroup, ObjectRef, Read, R
 import {
   applyPending,
   contextMissing,
+  contextsFailure,
   createWatchBatcher,
   initialView,
   memoryKey,
@@ -41,6 +42,8 @@ export interface ClusterViewModel {
   contexts: KubeContexts | null
   /** The picked context is not in kubeconfig: the pill shows it missing and nothing is read or watched (no fallback, C11). */
   contextMissing: boolean
+  /** kubeconfig could not be read (kubectl's first line): shown instead of a missing cluster, and nothing is read. */
+  contextsError: string | null
   /** The cluster's namespace names for the pill, which adds "All namespaces" first itself; null until read or when the read failed. */
   namespaces: string[] | null
   /** Listing namespaces is Forbidden: the pill becomes a free-text field. */
@@ -302,8 +305,10 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
   const [pods, setPods] = useState<Keyed<Read<{ objects: K8sObject[] }>> | null>(null)
 
   const missing = contexts !== null && contextMissing(view, contexts)
-  /** The context reads and watches go to; null while contexts are unknown, none is picked, or the picked one is missing. */
-  const context = contexts !== null && !missing ? view.context : null
+  const contextsError = contexts !== null ? contextsFailure(contexts) : null
+  /** The context reads and watches go to; null while contexts are unknown or could not be read, none is picked, or the
+   *  picked one is missing. */
+  const context = contexts !== null && contextsError === null && !missing ? view.context : null
   const crdsNow = valueFor(crds, context) ?? NO_CRDS
   const customKinds = crdsNow.kinds
   const kind = kindDefOf(view.resource, customKinds) ?? null
@@ -613,6 +618,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     view,
     contexts,
     contextMissing: missing,
+    contextsError,
     namespaces: nsRead?.ok ? nsRead.names : null,
     namespacesForbidden: nsRead?.ok === false && nsRead.forbidden === true,
     groups: KIND_GROUPS,

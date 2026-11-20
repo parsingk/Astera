@@ -3147,5 +3147,6 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.readAgo': 'Read {ago} ago',
   'kube.cluster.notFound': 'Not found in the cluster.',
   'kube.cluster.kubectlMissing': 'kubectl was not found',
-  'kube.cluster.restartsAgo': '{count}, last {ago} ago'
+  'kube.cluster.restartsAgo': '{count}, last {ago} ago',
+  'kube.cluster.kubeconfigError': 'Could not read kubeconfig: {detail}'
 }

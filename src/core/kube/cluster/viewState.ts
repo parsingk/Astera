@@ -38,8 +38,18 @@ export function initialView(memory: { context: string; namespace: string | null 
   return { ...picked, resource: 'pods', selected: null, filter: '', sort: FIRST_COLUMN, expanded: ['workloads'], detailTab: 'summary' }
 }
 
+/** Not when kubeconfig could not be read: it then lists no contexts, so nothing is known to be missing, and the view
+ *  shows the read's error (`contextsFailure`) instead of calling the remembered cluster missing. */
 export function contextMissing(s: ClusterViewState, contexts: KubeContexts): boolean {
-  return s.context !== null && !contexts.contexts.some((c) => c.name === s.context)
+  return contexts.error === undefined && s.context !== null && !contexts.contexts.some((c) => c.name === s.context)
+}
+
+/** Why kubeconfig could not be read: the first line of kubectl's (redacted) stderr, else its error code; null when it
+ *  was read. */
+export function contextsFailure(contexts: KubeContexts): string | null {
+  const e = contexts.error
+  if (e === undefined) return null
+  return e.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l) ?? e.errorCode ?? ''
 }
 
 const isFixed = (resource: string): boolean => KIND_GROUPS.some((g) => g.kinds.some((k) => k.resource === resource))

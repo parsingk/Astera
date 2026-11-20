@@ -24,6 +24,7 @@ function model(kind: string, resource: string, object: K8sObject, extra: Partial
     selected: object,
     selectedRef: ref(kind, resource, object.metadata.name ?? ''),
     deleted: false,
+    detailError: null,
     owners: [],
     events: null,
     describe: null,

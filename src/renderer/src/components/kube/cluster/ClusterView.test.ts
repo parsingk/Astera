@@ -32,6 +32,7 @@ const model = {
   view: { context: 'kind-dev', namespace: null, resource: 'pods', selected: null, filter: '', sort: { by: 0, dir: 'asc' }, expanded: [], detailTab: 'summary' },
   contexts: { contexts: [{ name: 'kind-dev' }], current: 'kind-dev' },
   contextMissing: false,
+  contextsError: null,
   namespaces: [],
   namespacesForbidden: false,
   groups: [],
@@ -68,6 +69,18 @@ describe('ClusterView', () => {
   it('starts the row with the context pill without one', () => {
     const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))
     expect(html).toContain('<div class="kube-cluster-bar"><select')
+  })
+
+  // Final review T10: kubeconfig that could not be read says so, not that the remembered cluster is missing.
+  it('shows a failed kubeconfig read instead of a missing cluster', () => {
+    const detail = 'error: error loading config file "/home/u/.kube/config": yaml: line 3'
+    const html = renderToStaticMarkup(
+      React.createElement(ClusterView, { model: { ...model, contexts: { contexts: [], current: null }, contextMissing: false, contextsError: detail }, detail: null })
+    )
+    expect(html).toContain('kube.cluster.kubeconfigError')
+    expect(html).toContain('yaml: line 3')
+    expect(html).not.toContain('kube.cluster.contextMissing')
+    expect(renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))).not.toContain('kube.cluster.kubeconfigError')
   })
 
   // Final review M4: a watch whose binary is missing says so in the person's language, not as main's English.

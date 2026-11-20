@@ -4,6 +4,7 @@ import {
   RELIST_SETTLE_MS,
   applyPending,
   contextMissing,
+  contextsFailure,
   createWatchBatcher,
   initialView,
   mergeCounts,
@@ -33,6 +34,16 @@ describe('cluster view state', () => {
     expect(s.context).toBe('gone')
     expect(contextMissing(s, contexts)).toBe(true)
     expect(contextMissing(initialView(null, contexts), contexts)).toBe(false)
+  })
+  // Final review T10: kubeconfig that could not be read lists no contexts, which said "Cluster not found" for the
+  // remembered one; nothing is known to be missing then, and the read's own error is what to show.
+  it('reports no context missing when kubeconfig could not be read, and gives its error line', () => {
+    const failed: KubeContexts = { contexts: [], current: null, error: { stderr: '\nerror: error loading config file "/home/u/.kube/config": yaml: line 3\nmore' } }
+    const s = initialView({ context: 'kind-a', namespace: 'api' }, failed)
+    expect(contextMissing(s, failed)).toBe(false)
+    expect(contextsFailure(failed)).toBe('error: error loading config file "/home/u/.kube/config": yaml: line 3')
+    expect(contextsFailure({ contexts: [], current: null, error: { errorCode: 'ETIMEDOUT', stderr: '' } })).toBe('ETIMEDOUT')
+    expect(contextsFailure(contexts)).toBeNull()
   })
   it('reads memory tolerantly', () => {
     expect(readMemory('{"context":"x","namespace":null}')).toEqual({ context: 'x', namespace: null })

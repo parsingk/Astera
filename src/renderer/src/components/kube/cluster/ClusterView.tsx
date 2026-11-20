@@ -71,6 +71,11 @@ export function ClusterView({
     <div className="kube-cluster">
       <div className="kube-cluster-bar">
         {toolbarStart}
+        {model.contextsError !== null && (
+          <span className="kube-pill kube-pill-bad" title={model.contextsError}>
+            <span className="kube-pill-text">{t('kube.cluster.kubeconfigError', { detail: model.contextsError })}</span>
+          </span>
+        )}
         {model.contextMissing && contextName !== null && (
           <span className="kube-pill kube-pill-bad" title={contextName}>
             <span className="kube-pill-text">{t('kube.cluster.contextMissing', { name: displayContextName(contextName).short })}</span>

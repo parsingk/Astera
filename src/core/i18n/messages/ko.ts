@@ -3401,5 +3401,6 @@ export const ko = {
   'kube.cluster.readAgo': '{ago} 전에 읽음',
   'kube.cluster.notFound': '클러스터에 없습니다.',
   'kube.cluster.kubectlMissing': 'kubectl 을 찾을 수 없습니다',
-  'kube.cluster.restartsAgo': '{count}, 마지막 {ago} 전'
+  'kube.cluster.restartsAgo': '{count}, 마지막 {ago} 전',
+  'kube.cluster.kubeconfigError': 'kubeconfig 를 읽지 못했습니다: {detail}'
 } as const

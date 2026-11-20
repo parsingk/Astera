@@ -2754,5 +2754,6 @@ export const es: Catalog = {
   'kube.cluster.readAgo': 'Leído hace {ago}',
   'kube.cluster.notFound': 'No está en el clúster.',
   'kube.cluster.kubectlMissing': 'No se encontró kubectl',
-  'kube.cluster.restartsAgo': '{count}, la última hace {ago}'
+  'kube.cluster.restartsAgo': '{count}, la última hace {ago}',
+  'kube.cluster.kubeconfigError': 'No se pudo leer kubeconfig: {detail}'
 }

@@ -2724,5 +2724,6 @@ export const ja: Catalog = {
   'kube.cluster.readAgo': '{ago}前に読み込み',
   'kube.cluster.notFound': 'クラスターにありません。',
   'kube.cluster.kubectlMissing': 'kubectl が見つかりません',
-  'kube.cluster.restartsAgo': '{count}、最後は{ago}前'
+  'kube.cluster.restartsAgo': '{count}、最後は{ago}前',
+  'kube.cluster.kubeconfigError': 'kubeconfig を読み込めません: {detail}'
 }
