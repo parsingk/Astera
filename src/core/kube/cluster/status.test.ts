@@ -23,6 +23,14 @@ describe('cluster status', () => {
   it('treats PodInitializing as init progress, as kubectl does', () => {
     expect(podStatus(pod({ phase: 'Pending', initContainerStatuses: [{ name: 'a', state: { terminated: { exitCode: 0 } } }, { name: 'b', state: { waiting: { reason: 'PodInitializing' } } }] })).text).toBe('Init:1/2')
   })
+  // kubectl's printPod: a failed init container shows its terminated reason, else its signal, else its exit code.
+  it('says why an init container failed, as kubectl does', () => {
+    const failed = (terminated: object) =>
+      podStatus(pod({ phase: 'Pending', initContainerStatuses: [{ name: 'a', state: { terminated: { exitCode: 0 } } }, { name: 'b', state: { terminated } }, { name: 'c', state: { waiting: { reason: 'PodInitializing' } } }] }))
+    expect(failed({ exitCode: 1, reason: 'Error' })).toEqual({ text: 'Init:Error', tone: 'bad' })
+    expect(failed({ exitCode: 2 })).toEqual({ text: 'Init:ExitCode:2', tone: 'bad' })
+    expect(failed({ exitCode: 137, signal: 9 })).toEqual({ text: 'Init:Signal:9', tone: 'bad' })
+  })
   it('says Evicted from status.reason', () => {
     expect(podStatus(pod({ phase: 'Failed', reason: 'Evicted' }))).toEqual({ text: 'Evicted', tone: 'bad' })
   })

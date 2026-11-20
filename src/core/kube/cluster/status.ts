@@ -16,6 +16,13 @@ export function podStatus(o: K8sObject): { text: string; tone: Tone } {
 
   const inits = list(status.initContainerStatuses)
   for (const c of inits) {
+    // A failed init container, named as kubectl's printPod names it: its reason, else its signal, else its exit code.
+    const terminated = rec(rec(c.state).terminated)
+    if (Object.keys(terminated).length > 0 && num(terminated.exitCode, 0) !== 0) {
+      if (typeof terminated.reason === 'string' && terminated.reason) return { text: `Init:${terminated.reason}`, tone: 'bad' }
+      const signal = num(terminated.signal, 0)
+      return { text: signal !== 0 ? `Init:Signal:${signal}` : `Init:ExitCode:${num(terminated.exitCode, 0)}`, tone: 'bad' }
+    }
     const reason = rec(rec(c.state).waiting).reason
     // PodInitializing only says the init containers are still running, which the progress text below shows.
     if (typeof reason === 'string' && reason && reason !== 'PodInitializing') return { text: `Init:${reason}`, tone: 'bad' }
