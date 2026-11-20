@@ -24,7 +24,8 @@ export interface LogApi {
 }
 
 export interface LogClient {
-  open(spec: LogSpec, cb: (m: LogMessage) => void): { close(): void }
+  /** `onStarted`: main started kubectl for this still-open stream (a quiet container sends no line to say so). */
+  open(spec: LogSpec, cb: (m: LogMessage) => void, onStarted?: () => void): { close(): void }
 }
 
 /** The renderer's side of the log streams, as the watch client is for watches: the route is in place before main is
@@ -43,11 +44,16 @@ export function createLogClient(api: LogApi, newId: () => string = () => crypto.
   }
 
   return {
-    open(spec, cb) {
+    open(spec, cb, onStarted) {
       const id = newId()
       routes.set(id, cb)
       off ??= api.on((m) => routes.get(m.logId)?.(m))
-      api.start(id, spec).catch((err) => routes.get(id)?.({ logId: id, kind: 'error', message: errText(err) }))
+      api.start(id, spec).then(
+        () => {
+          if (routes.has(id)) onStarted?.()
+        },
+        (err) => routes.get(id)?.({ logId: id, kind: 'error', message: errText(err) })
+      )
       let closed = false
       return {
         close() {
@@ -105,21 +111,27 @@ export function useKubeLogStream(ref: ObjectRef, options: LogOptions): KubeLogSt
     }
     setBuffer(emptyLogBuffer())
     setState('starting')
-    const stream = logClient().open(spec, (m) => {
-      if (!alive) return
-      if (m.kind === 'lines') {
-        pending.push(...m.lines)
-        setState((s) => (s === 'starting' ? 'streaming' : s))
-        cancelFrame ??= nextFrame(() => {
-          cancelFrame = null
-          flush()
-        })
-        return
+    const stream = logClient().open(
+      spec,
+      (m) => {
+        if (!alive) return
+        if (m.kind === 'lines') {
+          pending.push(...m.lines)
+          setState((s) => (s === 'starting' ? 'streaming' : s))
+          cancelFrame ??= nextFrame(() => {
+            cancelFrame = null
+            flush()
+          })
+          return
+        }
+        // Lines already received show before the way it ended.
+        flush()
+        setState(m.kind === 'ended' ? 'ended' : { error: m.message })
+      },
+      () => {
+        if (alive) setState((s) => (s === 'starting' ? 'streaming' : s))
       }
-      // Lines already received show before the way it ended.
-      flush()
-      setState(m.kind === 'ended' ? 'ended' : { error: m.message })
-    })
+    )
     return () => {
       alive = false
       cancelFrame?.()

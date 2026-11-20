@@ -104,4 +104,36 @@ describe('createLogClient', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(got).toEqual([])
   })
+
+  it('calls onStarted once start resolves', async () => {
+    const f = fakeApi()
+    const client = createLogClient(f.api)
+    let started = 0
+    client.open(spec, () => {}, () => started++)
+    expect(started).toBe(0)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(started).toBe(1)
+  })
+
+  it('does not call onStarted after close', async () => {
+    const f = fakeApi()
+    const client = createLogClient(f.api)
+    let started = 0
+    client.open(spec, () => {}, () => started++).close()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(started).toBe(0)
+  })
+
+  it('does not call onStarted when start is rejected', async () => {
+    const f = fakeApi(async () => {
+      throw new Error('bad')
+    })
+    const client = createLogClient(f.api)
+    let started = 0
+    const got: LogMessage[] = []
+    client.open(spec, (m) => got.push(m), () => started++)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(started).toBe(0)
+    expect(got).toEqual([{ logId: f.started[0], kind: 'error', message: 'bad' }])
+  })
 })
