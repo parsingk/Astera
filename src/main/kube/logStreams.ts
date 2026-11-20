@@ -1,7 +1,7 @@
 /** The live `kubectl logs` processes of the logs tabs: stdout is cut into whole lines and sent in batches, so a chatty
  *  container costs the renderer a message every few tens of milliseconds, not one per chunk. */
 import { logsArgs } from '../../core/kube/cluster/args'
-import { KUBECTL_MISSING, type LogMessage, type LogSpec } from '../../core/kube/cluster/types'
+import type { LogMessage, LogSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
 import { streamFailureMessage } from './cluster'
 
@@ -85,7 +85,8 @@ export function createLogRegistry(deps: {
         parts[0] = carry + parts[0]
         carry = parts.pop() ?? ''
         for (const p of parts) pushLine(e, p, max)
-        while (carry.length > max) {
+        // A trailing CR is held back: it may be the first half of a CRLF whose LF comes in the next chunk.
+        while (carry.length - (carry.endsWith('\r') ? 1 : 0) > max) {
           e.pending.push(carry.slice(0, max))
           carry = carry.slice(max)
         }

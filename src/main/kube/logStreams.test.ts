@@ -171,4 +171,13 @@ describe('createLogRegistry', () => {
     flush()
     expect(emitted).toEqual([{ logId: 'l1', kind: 'lines', lines: ['abcd', 'efgh', 'ijk', 'z'] }])
   })
+
+  it('keeps a CRLF together when the line ends exactly at the cap', () => {
+    const { reg, spawns, emitted, flush } = setup(4)
+    reg.start('l1', spec)
+    spawns[0].h.onStdout('xxxx\r')
+    spawns[0].h.onStdout('\nnext\n')
+    flush()
+    expect(emitted).toEqual([{ logId: 'l1', kind: 'lines', lines: ['xxxx', 'next'] }])
+  })
 })
