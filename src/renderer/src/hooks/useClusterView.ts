@@ -68,11 +68,13 @@ export interface ClusterViewModel {
   deleted: boolean
   /** The selected object's owner chain, nearest first, up to two levels (a Pod's ReplicaSet, then its Deployment). */
   owners: ObjectRef[]
-  /** The selected object's events, newest first, read while the Summary or Events tab shows; null until read. */
+  /** The selected object's events, newest first, read while the Summary or Events tab shows and again (throttled) when the
+   *  object changes; null until read. */
   events: Read<{ events: K8sObject[] }> | null
-  /** `kubectl describe` text, read while the describe tab shows; null until read. */
+  /** `kubectl describe` text, read while the describe tab shows and again when the object changes; null until read. */
   describe: Read<{ text: string }> | null
-  /** The Pods the selected object selects, read while the Pods tab shows; null until read, or when it selects none. */
+  /** The Pods the selected object selects, read while the Pods tab shows and again when the object changes; null until
+   *  read, or when it selects none. */
   pods: Read<{ columns: Column[]; rows: Row[] }> | null
   /** Whether the table and the detail follow the cluster. */
   live: ClusterLive
@@ -193,6 +195,66 @@ function readInto<T>(read: Promise<Read<T>>, key: string, set: (v: Keyed<Read<T>
   return () => {
     alive = false
   }
+}
+
+/** At most this often the detail's one-shot reads follow a change of their object (a crash-looping Pod changes often). */
+export const REREAD_MS = 2000
+
+/** When a change of the followed object calls for its one-shot reads again: at once if the last such read is at least
+ *  `ms` old, else once at the end of that window, which reads whatever the object is by then. The window starts at
+ *  creation, since the object's reads have just run for its selection. */
+export function createRereadThrottle(o: {
+  ms: number
+  now(): number
+  later(fn: () => void, ms: number): () => void
+  reread(): void
+}): { changed(): void; stop(): void } {
+  let last = o.now()
+  let cancel: (() => void) | null = null
+  const fire = (): void => {
+    cancel = null
+    last = o.now()
+    o.reread()
+  }
+  return {
+    changed() {
+      if (cancel !== null) return
+      const wait = last + o.ms - o.now()
+      if (wait <= 0) fire()
+      else cancel = o.later(fire, wait)
+    },
+    stop() {
+      cancel?.()
+      cancel = null
+    }
+  }
+}
+
+/** A number that moves on when the object `uid` changes (a new `version`), at most once every REREAD_MS: the detail's
+ *  reads that do not follow by themselves (events, describe, Pods) take it as a dependency, so they follow the cluster
+ *  while seen (spec §11). Another object starts its own window. The editor tab of a cluster object uses it too. */
+export function useRereadTick(uid: string | null, version: string): number {
+  const [tick, setTick] = useState(0)
+  const seen = useRef<{ uid: string | null; version: string } | null>(null)
+  const throttle = useRef<ReturnType<typeof createRereadThrottle> | null>(null)
+  useEffect(() => {
+    const was = seen.current
+    seen.current = { uid, version }
+    if (was === null || was.uid !== uid) {
+      throttle.current?.stop()
+      throttle.current = createRereadThrottle({
+        ms: REREAD_MS,
+        now: Date.now,
+        later: (fn, ms) => {
+          const timer = setTimeout(fn, ms)
+          return () => clearTimeout(timer)
+        },
+        reread: () => setTick((t) => t + 1)
+      })
+    } else if (was.version !== version) throttle.current?.changed()
+  }, [uid, version])
+  useEffect(() => () => throttle.current?.stop(), [])
+  return tick
 }
 
 function liveOf(list: WatchState, pick: WatchState): ClusterLive {
@@ -488,6 +550,9 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
 
   // --- The detail's reads, for the tab that shows (the Summary needs the events too) ---
 
+  // Read again when the selected object changes in the cluster, throttled, so they follow it while seen (§11).
+  const version = selected?.object.metadata.resourceVersion
+  const reread = useRereadTick(view.selected, typeof version === 'string' ? version : '')
   const eventsShown = view.detailTab === 'summary' || view.detailTab === 'events'
   useEffect(() => {
     const ref = latest.current.selectedRef
@@ -495,7 +560,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     if (!visible || !eventsShown || ref === null || view.selected === null || typeof uid !== 'string') return
     return readInto(api.events(ref, uid), view.selected, setEvents)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, selectedKey, view.selected, eventsShown, gen])
+  }, [visible, selectedKey, view.selected, eventsShown, gen, reread])
 
   const describeShown = view.detailTab === 'describe'
   useEffect(() => {
@@ -503,7 +568,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     if (!visible || !describeShown || ref === null || view.selected === null) return
     return readInto(api.describe(ref), view.selected, setDescribe)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, selectedKey, view.selected, describeShown, gen])
+  }, [visible, selectedKey, view.selected, describeShown, gen, reread])
 
   const podsShown = view.detailTab === 'pods' && selector !== null
   useEffect(() => {
@@ -511,7 +576,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
     if (!visible || !podsShown || selector === null || ref === null || ref.namespace === null || view.selected === null) return
     return readInto(api.pods(ref.context, ref.namespace, selector), view.selected, setPods)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, selectedKey, view.selected, podsShown, selector, gen])
+  }, [visible, selectedKey, view.selected, podsShown, selector, gen, reread])
 
   // --- What the view draws ---
 
