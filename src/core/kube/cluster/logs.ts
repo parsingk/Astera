@@ -170,9 +170,9 @@ export function visibleText(text: string): string {
   return ansiSpans(text).map((s) => s.text).join('')
 }
 
-export interface ContainerChoice { name: string; init: boolean }
+export interface ContainerChoice { name: string; init: boolean; sidecar?: boolean }
 
-interface NamedSpec { name?: string }
+interface NamedSpec { name?: string; restartPolicy?: string }
 interface ContainerStatus {
   name?: string
   restartCount?: number
@@ -185,9 +185,13 @@ const specList = (pod: K8sObject, key: 'containers' | 'initContainers'): string[
   return Array.isArray(list) ? (list as NamedSpec[]).flatMap((c) => (typeof c?.name === 'string' ? [c.name] : [])) : []
 }
 
+/** A native sidecar (an init container with restartPolicy Always, Kubernetes 1.28+) keeps running beside the others, as
+ *  the Pod's status counts it (status.ts): it is no init container to the person. */
 export function containersOf(pod: K8sObject): ContainerChoice[] {
+  const inits = (pod.spec as { initContainers?: unknown } | undefined)?.initContainers
+  const sidecars = new Set(Array.isArray(inits) ? (inits as NamedSpec[]).filter((c) => c?.restartPolicy === 'Always').map((c) => c.name) : [])
   return [
-    ...specList(pod, 'initContainers').map((name) => ({ name, init: true })),
+    ...specList(pod, 'initContainers').map((name) => (sidecars.has(name) ? { name, init: false, sidecar: true } : { name, init: true })),
     ...specList(pod, 'containers').map((name) => ({ name, init: false }))
   ]
 }

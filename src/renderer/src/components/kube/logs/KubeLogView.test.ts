@@ -63,6 +63,14 @@ describe('KubeLogView', () => {
     const options = [...(select?.[1] ?? '').matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1])
     expect(options).toEqual(['kube.logs.initContainer{&quot;name&quot;:&quot;migrate&quot;}', 'worker', 'sidecar'])
     expect(select?.[1]).toContain('<option value="worker" selected="">')
+    const withSidecar = { ...pod, spec: { ...pod.spec, initContainers: [{ name: 'migrate' }, { name: 'shipper', restartPolicy: 'Always' }] } }
+    const sidecarSelect = /<select[^>]*>(.*?)<\/select>/.exec(render(streamOf([]), undefined, withSidecar))?.[1] ?? ''
+    expect([...sidecarSelect.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1])).toEqual([
+      'kube.logs.initContainer{&quot;name&quot;:&quot;migrate&quot;}',
+      'kube.logs.sidecarContainer{&quot;name&quot;:&quot;shipper&quot;}',
+      'worker',
+      'sidecar'
+    ])
 
     for (const k of ['previous', 'follow', 'timestamps', 'wrap', 'save', 'clear']) expect(button(html, `kube.logs.${k}`)).toContain('title="')
     expect(html).toMatch(/<input[^>]*aria-label="kube.logs.filter"/)

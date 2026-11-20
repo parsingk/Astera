@@ -2731,6 +2731,7 @@ export const ja: Catalog = {
   'kube.cluster.revealFailed': '値を表示できませんでした',
   'kube.logs.container': 'コンテナ',
   'kube.logs.initContainer': '{name}（初期化）',
+  'kube.logs.sidecarContainer': '{name}（サイドカー）',
   'kube.logs.previous': '再起動前',
   'kube.logs.previousTitle': '最後の再起動前のコンテナのログ',
   'kube.logs.follow': '追従',

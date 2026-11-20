@@ -283,7 +283,7 @@ export function KubeLogView({
           <select title={t('kube.logs.container')} aria-label={t('kube.logs.container')} value={container} onChange={(e) => pickContainer(e.target.value)}>
             {choices.map((c) => (
               <option key={c.name} value={c.name}>
-                {c.init ? t('kube.logs.initContainer', { name: c.name }) : c.name}
+                {c.init ? t('kube.logs.initContainer', { name: c.name }) : c.sidecar ? t('kube.logs.sidecarContainer', { name: c.name }) : c.name}
               </option>
             ))}
           </select>

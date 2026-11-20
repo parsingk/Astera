@@ -35,6 +35,13 @@ describe('log logic', () => {
     expect(containersOf(pod)).toEqual([{ name: 'init', init: true }, { name: 'side', init: false }, { name: 'app', init: false }])
     expect(defaultContainer(pod)).toBe('app')
   })
+  // Task 7 screen check: a native sidecar (an init container with restartPolicy Always) keeps running beside the others,
+  // as the Pod's status counts it (status.ts), so it is not labelled an init container.
+  it('tells a native sidecar from an init container', () => {
+    const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, spec: { initContainers: [{ name: 'setup' }, { name: 'log-shipper', restartPolicy: 'Always' }], containers: [{ name: 'app' }] } }
+    expect(containersOf(pod)).toEqual([{ name: 'setup', init: true }, { name: 'log-shipper', init: false, sidecar: true }, { name: 'app', init: false }])
+    expect(defaultContainer(pod)).toBe('app')
+  })
   it('turns previous on for a crash loop and reads the exit line', () => {
     const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p' }, status: { containerStatuses: [{ name: 'worker', state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { exitCode: 1, finishedAt: '2026-11-20T01:12:11Z' } } }] } }
     expect(previousByDefault(pod, 'worker')).toBe(true)

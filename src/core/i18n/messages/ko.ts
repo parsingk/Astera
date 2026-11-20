@@ -3408,6 +3408,7 @@ export const ko = {
   'kube.cluster.revealFailed': '값을 보여주지 못했습니다',
   'kube.logs.container': '컨테이너',
   'kube.logs.initContainer': '{name} (초기화)',
+  'kube.logs.sidecarContainer': '{name} (사이드카)',
   'kube.logs.previous': '재시작 전',
   'kube.logs.previousTitle': '마지막 재시작 전 컨테이너의 로그',
   'kube.logs.follow': '따라가기',

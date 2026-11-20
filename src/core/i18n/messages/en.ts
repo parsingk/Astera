@@ -3154,6 +3154,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.revealFailed': 'Could not show the values',
   'kube.logs.container': 'Container',
   'kube.logs.initContainer': '{name} (init)',
+  'kube.logs.sidecarContainer': '{name} (sidecar)',
   'kube.logs.previous': 'Previous',
   'kube.logs.previousTitle': 'Logs of the container before its last restart',
   'kube.logs.follow': 'Follow',

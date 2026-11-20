@@ -2761,6 +2761,7 @@ export const es: Catalog = {
   'kube.cluster.revealFailed': 'No se pudieron mostrar los valores',
   'kube.logs.container': 'Contenedor',
   'kube.logs.initContainer': '{name} (inicialización)',
+  'kube.logs.sidecarContainer': '{name} (sidecar)',
   'kube.logs.previous': 'Anterior',
   'kube.logs.previousTitle': 'Registros del contenedor antes de su último reinicio',
   'kube.logs.follow': 'Seguir',
