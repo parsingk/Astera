@@ -106,6 +106,8 @@ interface CountCall { namespaced: boolean; objects: boolean; kinds: KindDef[] }
 
 const UNKNOWN: CountInfo = { count: null, attention: false }
 const SERVER_REFUSAL = /^Error from server\b/
+/** A warning the server sent with its answer (a deprecated API version), which kubectl prints and goes on. */
+const SERVER_WARNING = /^Warning: /
 /** Custom resources per counting call: 40 of the longest plural.group names stay far below Windows' 32,767 characters. */
 const CUSTOM_PER_CALL = 40
 const FIXED_RESOURCES: ReadonlySet<string> = new Set(KIND_GROUPS.flatMap((g) => g.kinds.map((k) => k.resource)))
@@ -158,7 +160,7 @@ export function createClusterReads(deps: { run: Run }) {
   async function countCall(context: string, namespace: string | null, c: CountCall, out: Record<string, CountInfo>): Promise<void> {
     if (c.kinds.length === 0) return
     const r = await run(countArgs(context, namespace, c.kinds.map((k) => k.resource), c.namespaced, c.objects ? 'json' : 'name'))
-    const lines = r.ok ? [] : r.stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !KLOG.test(l))
+    const lines = r.ok ? [] : r.stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !KLOG.test(l) && !SERVER_WARNING.test(l))
     const names = (l: string, k: KindDef): boolean => namesResource(l, pluralOf(k.resource))
     const reasonOf = (k: KindDef): string | undefined => lines.find((l) => names(l, k))
     // kubectl answers a resource the server refused with an "Error from server" line and goes on with the others; any

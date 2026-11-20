@@ -238,6 +238,22 @@ describe('createClusterReads counts', () => {
     expect(c.pods).toEqual({ count: 2, attention: true })
   })
 
+  // Re-review R3: kubectl prints the server's warnings (a deprecated API version) on stderr; they say nothing of a failure.
+  it('counts the rest of a call whose stderr also carries a Warning line', async () => {
+    const line = 'Error from server (Forbidden): secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "api"'
+    const warning = 'Warning: autoscaling/v2beta2 HorizontalPodAutoscaler is deprecated in v1.23+, unavailable in v1.26+; use autoscaling/v2 HorizontalPodAutoscaler'
+    const get = fakeGet(OBJECTS, { refuse: { secrets: line } })
+    const run = async (args: string[]): Promise<KubectlResult> => {
+      const r = await get(args)
+      return { ...r, stderr: r.stderr ? [warning, r.stderr].join(NL) : warning }
+    }
+    const c = await createClusterReads({ run }).counts('c', 'api', FIXED)
+    expect(c.secrets).toEqual({ count: null, attention: false, forbidden: line })
+    expect(c.configmaps).toEqual({ count: 2, attention: false })
+    expect(c['horizontalpodautoscalers.autoscaling']).toEqual({ count: 1, attention: false })
+    expect(c.pods).toEqual({ count: 2, attention: true })
+  })
+
   // Re-review R4: the refusal names other words too (a user, a namespace); only the resource kubectl refused is greyed.
   it('does not grey Services for a Secrets refusal in a namespace named "services"', async () => {
     const line = 'Error from server (Forbidden): secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "services"'
