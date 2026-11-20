@@ -158,6 +158,7 @@ const api = {
       events: invoke('kube.cluster.events'),
       pods: invoke('kube.cluster.pods'),
       reveal: invoke('kube.cluster.reveal'),
+      list: invoke('kube.cluster.list'),
       watch: invoke('kube.cluster.watch'),
       unwatch: invoke('kube.cluster.unwatch')
     }

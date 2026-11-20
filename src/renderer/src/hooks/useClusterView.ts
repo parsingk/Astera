@@ -54,7 +54,7 @@ export interface ClusterViewModel {
   kind: KindDef | null
   /** The table's columns for the picked kind (Namespace first under All namespaces). */
   columns: Column[]
-  /** The table's rows: the live list, filtered by name and sorted. */
+  /** The table's rows: the live list (read once when the watch is refused at the limit), filtered by name and sorted. */
   rows: Row[]
   /** The list has not arrived yet, so empty `rows` do not mean an empty kind. */
   loading: boolean
@@ -370,6 +370,7 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
       queueWatch(pending, 'resync')
     }
     setFresh(true)
+    let alive = true
     let cancelFrame: (() => void) | null = null
     // One copy of the list per frame, not per event: a big namespace's first list is N ADDED events (Task 5 review).
     const flush = (): void => {
@@ -387,9 +388,22 @@ export function useClusterView(root: string, visible: boolean): ClusterViewModel
         if (m === 'resync') setFresh(true) // a resync alone schedules nothing: it waits for the relist's events
         else cancelFrame ??= nextFrame(flush)
       },
-      setListWatch
+      (s) => {
+        setListWatch(s)
+        if (s !== 'limit') return
+        // Refused at the limit: one read so the table is not empty, again on refresh; `live` says it does not follow.
+        api.list(spec).then(
+          (r) => {
+            if (!alive || !r.ok) return
+            setList(new Map(r.objects.map((o) => [keyOf(o), o])))
+            setFresh(false)
+          },
+          () => {}
+        )
+      }
     )
     return () => {
+      alive = false
       stop()
       cancelFrame?.()
     }

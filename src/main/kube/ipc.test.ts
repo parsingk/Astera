@@ -35,7 +35,8 @@ function setup(denied: string[] = []) {
     describe: vi.fn(async () => ({ ok: true, text: '' })),
     events: vi.fn(async () => ({ ok: true, events: [] })),
     pods: vi.fn(async () => ({ ok: true, objects: [] })),
-    reveal: vi.fn(async () => ({ ok: true, values: [] }))
+    reveal: vi.fn(async () => ({ ok: true, values: [] })),
+    list: vi.fn(async () => ({ ok: true, objects: [] }))
   }
   const watches = {
     watch: vi.fn((): { ok: true } | { ok: false; reason: 'limit' } => ({ ok: true })),
@@ -213,6 +214,14 @@ describe('cluster view IPC', () => {
     expect(t.cluster.pods).toHaveBeenCalledWith('c', 'ns', 'app=x')
     await t.call('kube.cluster.reveal', ref)
     expect(t.cluster.reveal).toHaveBeenCalledWith(ref)
+  })
+
+  it('forwards a one-shot list validated as a watch spec', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.list', spec)).toEqual({ ok: true, objects: [] })
+    expect(t.cluster.list).toHaveBeenCalledWith(spec)
+    await expect(t.call('kube.cluster.list', { context: 'c', namespace: null, resource: 'pods' })).rejects.toThrow('kube: watch spec')
+    expect(t.cluster.list).toHaveBeenCalledTimes(1)
   })
 
   it('forwards watch and unwatch, returning the registry answer', async () => {

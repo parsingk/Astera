@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createClusterReads } from './cluster'
 import { UNREADABLE } from './operations'
+import { listArgs } from '../../core/kube/cluster/args'
 import type { KubectlResult } from '../../core/kube/kubectl'
 
 const ok = (stdout: string): KubectlResult => ({ ok: true, stdout, stderr: '' })
@@ -126,6 +127,22 @@ describe('createClusterReads', () => {
     expect(c['roles.rbac.authorization.k8s.io'].forbidden).toBeUndefined()
     expect(c.pods.forbidden).toBeUndefined()
     expect(c.podtemplates.forbidden).toContain('podtemplates')
+  })
+
+  it('list reads the spec once and returns the items, a Secret masked', async () => {
+    const calls: string[][] = []
+    const run = async (args: string[]): Promise<KubectlResult> => {
+      calls.push(args)
+      return ok(JSON.stringify({ kind: 'List', items: [podRunning, secret] }))
+    }
+    const spec = { context: 'c', namespace: 'api', namespaced: true, resource: 'secrets' }
+    const r = await createClusterReads({ run }).list(spec)
+    expect(calls).toEqual([listArgs(spec, false)])
+    expect(r.ok && r.objects.map((o) => o.metadata.name)).toEqual(['b', 's'])
+    expect(JSON.stringify(r)).not.toContain('aHVudGVyMg==')
+    expect(await createClusterReads({ run: async () => ok('{not json hunter2') }).list(spec)).toEqual({ ok: false, message: UNREADABLE })
+    const fail = await createClusterReads({ run: async () => ({ ok: false, exitCode: 1, stdout: '', stderr: 'Unable to connect to the server' }) }).list(spec)
+    expect(fail).toEqual({ ok: false, message: 'Unable to connect to the server' })
   })
 
   it('pods and events mask a Secret item if one comes back', async () => {

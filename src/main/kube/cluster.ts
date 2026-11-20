@@ -5,8 +5,8 @@ import { maskSecretPair, type K8sObject } from '../../core/kube/objects'
 import { needsAttention } from '../../core/kube/cluster/status'
 import { crdKinds } from '../../core/kube/cluster/kinds'
 import { secretValuesOf } from '../../core/kube/cluster/secret'
-import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, namespacesArgs, podsArgs } from '../../core/kube/cluster/args'
-import type { CountInfo, KindDef, ObjectRef, Read, SecretValue } from '../../core/kube/cluster/types'
+import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, namespacesArgs, podsArgs } from '../../core/kube/cluster/args'
+import type { CountInfo, KindDef, ObjectRef, Read, SecretValue, WatchSpec } from '../../core/kube/cluster/types'
 
 export type { Read }
 
@@ -132,6 +132,12 @@ export function createClusterReads(deps: { run: Run }) {
 
     async pods(context: string, namespace: string, selector: string): Promise<Read<{ objects: K8sObject[] }>> {
       const r = await list(podsArgs(context, namespace, selector))
+      return r.ok ? { ok: true, objects: r.items.map(masked) } : r
+    },
+
+    /** What a watch of `spec` would list first, read once: the table's rows when the watch is refused at the limit. */
+    async list(spec: WatchSpec): Promise<Read<{ objects: K8sObject[] }>> {
+      const r = await list(listArgs(spec, false))
       return r.ok ? { ok: true, objects: r.items.map(masked) } : r
     },
 

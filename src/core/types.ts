@@ -1453,6 +1453,8 @@ export interface CoreApi {
       events(ref: ObjectRef, uid: string): Promise<Read<{ events: K8sObject[] }>>
       pods(context: string, namespace: string, selector: string): Promise<Read<{ objects: K8sObject[] }>>
       reveal(ref: ObjectRef): Promise<Read<{ values: SecretValue[] }>>
+      /** What `watch(spec)` would list first, read once: for a watch refused with `limit`. */
+      list(spec: WatchSpec): Promise<Read<{ objects: K8sObject[] }>>
       /** Events arrive on `'kube:watch'`. `limit`: MAX_WATCHES processes already run. */
       watch(watchId: string, spec: WatchSpec): Promise<{ ok: true } | { ok: false; reason: 'limit' }>
       unwatch(watchId: string): Promise<void>

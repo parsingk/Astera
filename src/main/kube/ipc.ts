@@ -242,6 +242,7 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     cluster.pods(str(context, 'context'), str(namespace, 'namespace'), str(selector, 'selector'))
   )
   ipcMain.handle('kube.cluster.reveal', async (_e, ref) => cluster.reveal(objectRef(ref)))
+  ipcMain.handle('kube.cluster.list', async (_e, spec) => cluster.list(watchSpec(spec)))
   ipcMain.handle('kube.cluster.watch', async (_e, id, spec) => watches.watch(str(id, 'watchId'), watchSpec(spec)))
   ipcMain.handle('kube.cluster.unwatch', async (_e, id) => watches.unwatch(str(id, 'watchId')))
 }
