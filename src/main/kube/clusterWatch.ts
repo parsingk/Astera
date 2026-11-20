@@ -74,7 +74,7 @@ export function createWatchRegistry(deps: {
         if (x.code === 0) {
           deps.emit({ watchId: id, kind: 'resync' })
           e.timer = deps.later(() => {
-            if (entries.get(id) === e && e.run === run) spawn(id, e)
+            if (entries.get(id) === e && e.run === run) start(id, e)
           }, RESTART_DELAY_MS)
           return
         }
@@ -90,6 +90,19 @@ export function createWatchRegistry(deps: {
     })
   }
 
+  /** The stream reads kubectl's path and environment from the settings before it starts, which can throw: the watch
+   *  then fails as a kubectl that could not start does, and gives its slot back. */
+  const start = (id: string, e: Entry): void => {
+    try {
+      spawn(id, e)
+    } catch (err) {
+      entries.delete(id)
+      e.run = {}
+      e.stream = null
+      deps.emit({ watchId: id, kind: 'error', message: deps.redact(err instanceof Error ? err.message : String(err)) })
+    }
+  }
+
   return {
     watch(id, spec) {
       const old = entries.get(id)
@@ -97,7 +110,7 @@ export function createWatchRegistry(deps: {
       if (old) halt(old)
       const e: Entry = { spec, run: {}, stream: null, timer: null }
       entries.set(id, e)
-      spawn(id, e)
+      start(id, e)
       return { ok: true }
     },
     unwatch(id) {

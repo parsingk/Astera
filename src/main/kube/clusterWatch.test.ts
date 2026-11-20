@@ -151,6 +151,36 @@ describe('createWatchRegistry', () => {
     expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: 'The connection to the server HOST:6443 was refused' }])
   })
 
+  // The stream builds kubectl's binary path and environment from the settings first, which can throw.
+  it('a stream that cannot be started reports an error and frees its slot, also on a restart', () => {
+    const emitted: WatchMessage[] = []
+    const timers: Array<() => void> = []
+    const exits: Array<(e: StreamExit) => void> = []
+    let throws = true
+    const reg = createWatchRegistry({
+      stream(_args, h) {
+        if (throws) throw new Error('cannot read settings at 10.0.0.1')
+        exits.push(h.onExit)
+        return { stop: () => {} }
+      },
+      redact: (s) => s.replace(/10\.0\.0\.1/g, 'HOST'),
+      emit: (m) => void emitted.push(m),
+      later: (fn) => (timers.push(fn), { cancel: () => {} })
+    })
+    expect(reg.watch('w1', spec)).toEqual({ ok: true })
+    expect(emitted).toEqual([{ watchId: 'w1', kind: 'error', message: 'cannot read settings at HOST' }])
+    expect(reg.size()).toBe(0)
+    throws = false
+    for (let i = 0; i < MAX_WATCHES; i++) expect(reg.watch(`w${i}`, spec)).toEqual({ ok: true })
+    // A clean exit restarts later, from a timer: a throw there must not escape, and the slot is freed the same way.
+    exits[0]({ code: 0, stopped: false })
+    emitted.length = 0
+    throws = true
+    expect(() => timers[0]()).not.toThrow()
+    expect(emitted).toEqual([{ watchId: 'w0', kind: 'error', message: 'cannot read settings at HOST' }])
+    expect(reg.size()).toBe(MAX_WATCHES - 1)
+  })
+
   it('refuses the seventh watch', () => {
     const { reg } = setup()
     for (let i = 0; i < MAX_WATCHES; i++) expect(reg.watch(`w${i}`, spec)).toEqual({ ok: true })
