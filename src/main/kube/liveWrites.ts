@@ -172,13 +172,16 @@ export function createLiveWrites(d: LiveWritesDeps) {
     }
     // A restart covers the time of the last one, so confirming twice restarts once: the second run is refused.
     const restartedAt = op.verb === 'restart' ? restartedAtOf(live) : null
+    // A scale covers the live count too, so a count changed by someone else after the preview is refused as changed.
+    const fingerprintOf: unknown =
+      op.verb === 'scale' ? [uid, (live.spec as { replicas?: unknown } | undefined)?.replicas ?? null] : restartedAt === null ? uid : [uid, restartedAt]
     const dry =
       op.verb === 'delete'
         ? deleteArgs(ref, true)
         : op.verb === 'restart'
           ? restartPreviewArgs(ref, d.now().toISOString())
           : scaleArgs(ref, op.replicas, true)
-    return { ok: true, commandLines: [command], reads, dry: { args: dry }, fingerprint: covers(restartedAt === null ? uid : [uid, restartedAt]), live }
+    return { ok: true, commandLines: [command], reads, dry: { args: dry }, fingerprint: covers(fingerprintOf), live }
   }
 
   /** The diff of what the verb does; null when the dry run's answer does not read as an object. */

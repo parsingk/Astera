@@ -97,6 +97,8 @@ describe('liveWriteReducer', () => {
     for (const text of ['', '-1', '1.5', '2147483648', 'x']) {
       const bad = liveWriteReducer(answered, { type: 'replicas', text })
       expect(bad.dialog!.stale).toBe(true)
+      // The hint shows alone, never above the diff of an older count.
+      expect(bad.dialog!.preview).toBeNull()
       const after = liveWriteReducer(bad, { type: 'scaleAsk', text })
       expect(after.dialog!.stale).toBe(true)
       expect(after.dialog!.op).toEqual({ ...scale, replicas: 5 })

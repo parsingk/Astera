@@ -99,7 +99,7 @@ export function liveWriteReducer(s: LiveWriteState, a: LiveWriteAction): LiveWri
       return d && d.opened === a.opened ? { ...s, dialog: { ...d, dependents: a.result } } : s
     // A new text makes every answer in flight an old one, and the dialog unconfirmable until its own preview is shown.
     case 'replicas':
-      return d && d.op.verb === 'scale' && d.phase !== 'running' ? asking(s, d, { replicas: a.text, stale: true }) : s
+      return d && d.op.verb === 'scale' && d.phase !== 'running' ? asking(s, d, { replicas: a.text, stale: true, ...(replicasOf(a.text) === null ? { preview: null } : {}) }) : s
     case 'scaleAsk': {
       const n = replicasOf(a.text)
       if (!d || d.op.verb !== 'scale' || d.phase !== 'previewing' || d.replicas !== a.text || n === null) return s

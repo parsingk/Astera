@@ -325,6 +325,17 @@ describe('createLiveWrites delete, restart and scale', () => {
     expect(r.outcomes).toEqual([{ ref: 'deployment.apps/web', outcome: 'configured', message: 'scaled' }])
   })
 
+  it('refuses a scale when the live count changed after the preview', async () => {
+    const c = fakeCluster([deployment()])
+    const w = writesOn(c)
+    const op: LiveOp = { verb: 'scale', ref, replicas: 0 }
+    const p = okPreview(await w.preview(op, opts))
+    c.live.set(keyOf(ref), deployment({}, { replicas: 5 }))
+    const r = await w.run('c1', op, p.fingerprint)
+    expect(r.refused).toEqual({ reason: 'changed' })
+    expect(c.writes()).toEqual([])
+  })
+
   it('refuses a run for a count that differs from the previewed one', async () => {
     const c = fakeCluster([deployment()])
     const w = writesOn(c)
