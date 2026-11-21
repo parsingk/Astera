@@ -48,6 +48,23 @@ export function applyEdit(host: KubeTabHost, target: ObjectRef, edit: { text: st
   host.startWrite({ verb: 'replace', ref: target, text: edit.text, base: edit.base }, onWritten)
 }
 
+/** Apply with the editor's current text, which differs from the start text once the person has typed. */
+export function applyCurrentEdit(host: KubeTabHost, target: ObjectRef, start: { text: string; base: EditBase }, current: string, onWritten: () => void): void {
+  applyEdit(host, target, { text: current, base: start.base }, onWritten)
+}
+
+/** The live chip's state: nothing is watched while editing (or hidden), so it is paused then. */
+export function watchChip(watch: WatchState, visible: boolean, editing: boolean): 'live' | 'paused' | { error: string } {
+  if (editing) return 'paused'
+  return typeof watch === 'object' ? watch : watch === 'live' && visible ? 'live' : 'paused'
+}
+
+/** What a bumped edit ask does: a Secret whose values are not shown stays read-only and says why. */
+export function editAskOutcome(kind: string, valuesShown: boolean, editing: boolean): 'start' | 'revealFirst' | 'ignore' {
+  if (editing) return 'ignore'
+  return kind === 'Secret' && !valuesShown ? 'revealFirst' : 'start'
+}
+
 /** The tab's object for as long as it shows (K4), apart from React so its lifecycle can be tested: read once, then
  *  followed by a watch by name. Once the watch has spoken, a read answering later is older news and is dropped; a resync
  *  reads again, since a watch filtered by name says nothing of an object deleted meanwhile. Refused at the limit, the
@@ -153,6 +170,10 @@ export function KubeObjectTab({
   const [editFailed, setEditFailed] = useState<string | null>(null)
   const [revealFirst, setRevealFirst] = useState(false)
   const asking = useRef(false)
+  // The app's host is read through a ref, so a new host object never re-runs the effects below (their cleanup would
+  // clear the dirty flag again); the flag is cleared only when the tab goes.
+  const hostRef = useRef(host)
+  hostRef.current = host
 
   useEffect(() => {
     // The watch stays off while editing: a changed object would otherwise move under the text being typed.
@@ -192,10 +213,19 @@ export function KubeObjectTab({
   const isSecret = target.kind === 'Secret'
   const canEdit = object !== null && shown?.deleted !== true && (!isSecret || (reveal !== null && reveal.values !== null))
 
+  /** Whether the Secret's values are shown right now, for an answer that arrives later (`editBase` in flight). */
+  const valuesShown = useRef(false)
+  valuesShown.current = reveal !== null && reveal.values !== null
+
   useEffect(() => {
-    host.setDirty(id, dirty)
-  }, [dirty, host, id])
-  useEffect(() => () => host.setDirty(id, false), [host, id])
+    hostRef.current.setDirty(id, dirty)
+  }, [dirty, id])
+  useEffect(() => () => hostRef.current.setDirty(id, false), [id])
+  // The note is answered once the values are shown; a failure line belongs to the object it was for.
+  useEffect(() => {
+    if (valuesShown.current) setRevealFirst(false)
+  }, [reveal?.values])
+  useEffect(() => setEditFailed(null), [uid])
 
   const startEdit = (): void => {
     if (asking.current) return
@@ -206,6 +236,8 @@ export function KubeObjectTab({
       (r) => {
         asking.current = false
         if (!r.ok) return setEditFailed(r.message)
+        // The reveal can be dropped while this was in flight (the Secret changed): values never shown never open.
+        if (isSecret && !valuesShown.current) return setRevealFirst(true)
         editText.current = r.text
         setDirty(false)
         setEdit({ text: r.text, base: r.base })
@@ -240,15 +272,15 @@ export function KubeObjectTab({
   useEffect(() => {
     if (ask <= seenAsks.current) return
     seenAsks.current = ask
-    if (editing) return
-    if (isSecret && reveal?.values == null) return setRevealFirst(true)
-    startEdit()
+    const outcome = editAskOutcome(target.kind, valuesShown.current, editing)
+    if (outcome === 'revealFirst') return setRevealFirst(true)
+    if (outcome === 'start') startEdit()
     // Only a new count asks; the rest is read when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask])
 
   const gone = shown !== null && shown.deleted
-  const state: 'live' | 'paused' | { error: string } = typeof watch === 'object' ? watch : watch === 'live' && visible ? 'live' : 'paused'
+  const state = watchChip(watch, visible, editing)
   const liveText = typeof state === 'object' ? liveErrorText(state.error, t) : t(state === 'live' ? 'kube.cluster.live' : 'kube.cluster.paused')
   const liveTone = typeof state === 'object' ? 'bad' : state === 'live' ? 'ok' : 'wait'
   const where = target.namespace !== null ? ` / ${target.namespace}` : ''
@@ -277,33 +309,31 @@ export function KubeObjectTab({
             </button>
           )}
         </span>
-        {!editing && (
-          <div className="kube-segment-switch" role="tablist">
-            {VIEWS.map((v) => (
-              <button
-                key={v}
-                id={tabId(v)}
-                type="button"
-                role="tab"
-                aria-selected={view === v}
-                aria-controls={panelId}
-                // One tab stop, the shown view; the arrows move between them (ARIA's tabs pattern).
-                tabIndex={view === v ? 0 : -1}
-                className={view === v ? 'kube-segment on' : 'kube-segment'}
-                onClick={() => setView(v)}
-                onKeyDown={(e) => {
-                  const to = arrowStep(VIEWS, view, e.key)
-                  if (to === null) return
-                  e.preventDefault()
-                  setView(to)
-                  document.getElementById(tabId(to))?.focus()
-                }}
-              >
-                {t(`kube.cluster.tab.${v}` as MessageKey)}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="kube-segment-switch" role="tablist">
+          {VIEWS.map((v) => (
+            <button
+              key={v}
+              id={tabId(v)}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              aria-controls={panelId}
+              // One tab stop, the shown view; the arrows move between them (ARIA's tabs pattern).
+              tabIndex={view === v ? 0 : -1}
+              className={view === v ? 'kube-segment on' : 'kube-segment'}
+              onClick={() => setView(v)}
+              onKeyDown={(e) => {
+                const to = arrowStep(VIEWS, view, e.key)
+                if (to === null) return
+                e.preventDefault()
+                setView(to)
+                document.getElementById(tabId(to))?.focus()
+              }}
+            >
+              {t(`kube.cluster.tab.${v}` as MessageKey)}
+            </button>
+          ))}
+        </div>
         {editing ? (
           <>
             <button
@@ -311,7 +341,7 @@ export function KubeObjectTab({
               className="kube-btn"
               title={t('kube.edit.apply')}
               aria-label={t('kube.edit.apply')}
-              onClick={() => edit !== null && applyEdit(host, target, { text: editText.current, base: edit.base }, endEdit)}
+              onClick={() => edit !== null && applyCurrentEdit(host, target, edit, editText.current, endEdit)}
             >
               <Check size={14} />
             </button>
@@ -324,7 +354,7 @@ export function KubeObjectTab({
             <button
               type="button"
               className="kube-btn"
-              title={isSecret && !canEdit ? t('kube.edit.revealFirst') : t('kube.edit.start')}
+              title={isSecret && object !== null && !gone && !canEdit ? t('kube.edit.revealFirst') : t('kube.edit.start')}
               aria-label={t('kube.edit.start')}
               disabled={!canEdit}
               onClick={startEdit}
@@ -345,15 +375,19 @@ export function KubeObjectTab({
       {revealFirst && <div className="kube-yaml-note">{t('kube.edit.revealFirst')}</div>}
       {gone && <div className="kube-detail-deleted">{t(object !== null ? 'kube.cluster.deleted' : 'kube.cluster.notFound')}</div>}
       <div className="kube-tab-body" role="tabpanel" id={panelId} aria-labelledby={tabId(view)}>
-        {edit !== null ? (
-          <KubeYamlEditor
-            initial={edit.text}
-            onChange={(text) => {
-              editText.current = text
-              setDirty(text !== edit.text)
-            }}
-          />
-        ) : object === null ? (
+        {/* Mounted while editing whichever view shows, so the text survives a look at describe or events. */}
+        {edit !== null && (
+          <div style={view === 'yaml' ? { height: '100%' } : { display: 'none' }}>
+            <KubeYamlEditor
+              initial={edit.text}
+              onChange={(text) => {
+                editText.current = text
+                setDirty(text !== edit.text)
+              }}
+            />
+          </div>
+        )}
+        {edit !== null && view === 'yaml' ? null : object === null ? (
           gone ? null : failed !== null ? (
             <div className="kube-cluster-empty kube-detail-error">{failed}</div>
           ) : (

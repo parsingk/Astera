@@ -2816,10 +2816,10 @@ export const es: Catalog = {
   'kube.write.replicasHint': 'Introduce cuántas réplicas ejecutar.',
   'kube.write.loading': 'Comprobando con el clúster…',
   'kube.edit.start': 'Editar',
-  'kube.edit.revealFirst': 'Muestre primero los valores para editar un Secret',
+  'kube.edit.revealFirst': 'Muestra primero los valores para editar un Secret',
   'kube.edit.editing': 'Editando',
   'kube.edit.apply': 'Aplicar…',
   'kube.edit.discard': 'Descartar la edición y leer el clúster de nuevo',
   'kube.edit.discardTitle': '¿Descartar la edición?',
-  'kube.edit.discardBody': 'Su edición de {name} no se ha aplicado.'
+  'kube.edit.discardBody': 'Tu edición de {name} no se ha aplicado.'
 }

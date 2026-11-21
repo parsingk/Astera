@@ -2985,14 +2985,20 @@ export default function App(): React.JSX.Element {
   /** Edit asks per kube tab id (the cluster view's menu bumps one), and the kube tabs whose edit holds unapplied text. */
   const [kubeEditAsks, setKubeEditAsks] = useState<Record<string, number>>({})
   const dirtyKubeTabs = useRef(new Set<string>())
-  const kubeHost: KubeTabHost = {
-    startWrite: (op, onWritten) => liveWrites.start(op, onWritten),
-    setDirty: (tabId, dirty) => {
-      if (dirty) dirtyKubeTabs.current.add(tabId)
-      else dirtyKubeTabs.current.delete(tabId)
-    },
-    editAsks: kubeEditAsks
-  }
+  // The write starter is new at every render, so the host reads it through a ref and changes only with the asks.
+  const liveWritesRef = useRef(liveWrites)
+  liveWritesRef.current = liveWrites
+  const kubeHost = useMemo<KubeTabHost>(
+    () => ({
+      startWrite: (op, onWritten) => liveWritesRef.current.start(op, onWritten),
+      setDirty: (tabId, dirty) => {
+        if (dirty) dirtyKubeTabs.current.add(tabId)
+        else dirtyKubeTabs.current.delete(tabId)
+      },
+      editAsks: kubeEditAsks
+    }),
+    [kubeEditAsks]
+  )
   const writeKubeObject = (ask: WriteAsk): void => {
     // Editing starts in the object's editor tab, which the bumped count tells to begin (a tab opened now reads it on mount).
     if (ask.verb === 'edit') {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab, followTabObject, applyEdit, type KubeTabHost } from './KubeObjectTab'
+import { KubeObjectTab, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
 
@@ -27,7 +27,7 @@ const attrs = (tag: string): Record<string, string> => Object.fromEntries([...ta
 const tabsIn = (html: string): Array<Record<string, string>> => [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => attrs(m[0]))
 const panelIn = (html: string): Record<string, string> => attrs(html.match(/<div[^>]*role="tabpanel"[^>]*>/)?.[0] ?? '')
 
-// Spec 4.6 and board B: where the object lives, a read-only chip, and the views; P1 has no edit, apply or compare.
+// Spec 4.6 and board B: where the object lives, a read-only chip, and the views; compare comes later.
 describe('KubeObjectTab', () => {
   it('draws where the object lives, the read-only chip and the view switch', () => {
     const html = render(pod)
@@ -64,9 +64,9 @@ describe('KubeObjectTab', () => {
     expect(liveErrorText(LIST_PAGE_TOO_LARGE, (k) => `t:${k}`)).toBe('t:kube.cluster.pageTooLarge')
   })
 
-  // Task 14 minor: this rendered only the loading state. Loaded (the YAML drawn), the tab still offers only reads: refresh,
-  // and a Secret's show values; edit, apply and compare come with P3.
-  it('offers no control that would change the object, once it is loaded', () => {
+  // Task 14 minor: this rendered only the loading state. Loaded (the YAML drawn), the tab offers Edit and the reads: refresh,
+  // and a Secret's show values; apply and discard appear only in edit mode, and compare comes later.
+  it('offers only Edit and the reads, with no apply or compare, once it is loaded', () => {
     const object = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api', uid: 'u1', resourceVersion: '7' }, spec: { containers: [{ name: 'app', image: 'x:1' }] } }
     const html = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object, tabId: 'kube:p', host: stubHost() }))
     expect(html).not.toContain('kube.cluster.loading')
@@ -109,6 +109,42 @@ describe('KubeObjectTab edit mode', () => {
     expect(labels(html)).toContain('kube.edit.discard')
     expect(labels(html)).not.toContain('kube.edit.start')
     expect(html).not.toContain('kube.cluster.serverFields')
+    // Nothing is watched while editing, so the chip must not say live.
+    expect(html).toContain('kube.cluster.paused')
+    expect(html).not.toContain('kube.cluster.live')
+    // The views stay, tied to the body; the YAML view shows the editor.
+    const tabs = tabsIn(html)
+    expect(tabs).toHaveLength(3)
+    expect(panelIn(html)['aria-labelledby']).toBe(tabs[0].id)
+  })
+
+  it('says why Edit is off for an object that is not loaded or is deleted, not to show values', () => {
+    const html = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: secretTarget, visible: true, tabId: 'kube:s', host: stubHost() }))
+    expect(html).toContain('title="kube.edit.start"')
+    expect(html).not.toContain('kube.edit.revealFirst')
+  })
+
+  it('draws the live chip as paused while editing, whatever the watch said', () => {
+    expect(watchChip('live', true, false)).toBe('live')
+    expect(watchChip('live', true, true)).toBe('paused')
+    expect(watchChip('live', false, false)).toBe('paused')
+    expect(watchChip({ error: 'x' }, true, true)).toBe('paused')
+    expect(watchChip({ error: 'x' }, true, false)).toEqual({ error: 'x' })
+  })
+
+  it('starts editing for any kind, but keeps a Secret that is not shown read-only with the note', () => {
+    expect(editAskOutcome('Pod', false, false)).toBe('start')
+    expect(editAskOutcome('Secret', true, false)).toBe('start')
+    expect(editAskOutcome('Secret', false, false)).toBe('revealFirst')
+    expect(editAskOutcome('Secret', true, true)).toBe('ignore')
+    expect(editAskOutcome('Pod', false, true)).toBe('ignore')
+  })
+
+  it('hands Apply the editor text, not the start text', () => {
+    const host = stubHost()
+    const base = { resourceVersion: '7', hash: 'h' }
+    applyCurrentEdit(host, pod, { text: 'a: 1', base }, 'a: 2', () => undefined)
+    expect(host.writes).toEqual([{ verb: 'replace', ref: pod, text: 'a: 2', base }])
   })
 
   it('starts the replace dialog with the edit text and base', () => {
