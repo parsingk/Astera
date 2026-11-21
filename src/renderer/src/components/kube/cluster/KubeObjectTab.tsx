@@ -32,13 +32,7 @@ function ReadAgo({ at, visible }: { at: number; visible: boolean }): React.JSX.E
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [visible])
-  return (
-    <span className="kube-tab-read">
-      {t('kube.cluster.readAgo', {
-        ago: ageText(new Date(at).toISOString(), Math.max(now, at))
-      })}
-    </span>
-  )
+  return <span className="kube-tab-read">{t('kube.cluster.readAgo', { ago: ageText(new Date(at).toISOString(), Math.max(now, at)) })}</span>
 }
 
 /** What the app gives every kube tab: the confirmation dialog for a write, the dirty flag the tab's close asks about, and
@@ -87,13 +81,7 @@ export function followTabObject(o: {
   read()
   const stop = follow(
     o.client,
-    {
-      context: target.context,
-      namespace: target.namespace,
-      namespaced: target.namespace !== null,
-      resource: target.resource,
-      name: target.name
-    },
+    { context: target.context, namespace: target.namespace, namespaced: target.namespace !== null, resource: target.resource, name: target.name },
     (m) => {
       if (m === 'resync') {
         watched = false
@@ -145,11 +133,9 @@ export function KubeObjectTab({
   const panelId = `${ids}-panel`
   /** The object as last read or watched, and when; `deleted`: the cluster says it is gone, and `object` is its last
    *  content (null when it was never there). */
-  const [shown, setShown] = useState<{
-    object: K8sObject | null
-    deleted: boolean
-    at: number
-  } | null>(() => (initial !== undefined ? { object: initial, deleted: false, at: Date.now() } : null))
+  const [shown, setShown] = useState<{ object: K8sObject | null; deleted: boolean; at: number } | null>(() =>
+    initial !== undefined ? { object: initial, deleted: false, at: Date.now() } : null
+  )
   /** The read's first line of stderr, until something better arrives. */
   const [failed, setFailed] = useState<string | null>(null)
   const [watch, setWatch] = useState<WatchState>('live')
@@ -175,12 +161,7 @@ export function KubeObjectTab({
       client,
       get: (ref) => window.api.kube.cluster.get(ref),
       target,
-      take: (object) =>
-        setShown((prev) => ({
-          object: object ?? prev?.object ?? null,
-          deleted: object === null,
-          at: Date.now()
-        })),
+      take: (object) => setShown((prev) => ({ object: object ?? prev?.object ?? null, deleted: object === null, at: Date.now() })),
       fail: setFailed,
       state: setWatch
     })
@@ -194,23 +175,13 @@ export function KubeObjectTab({
   const reread = useRereadTick(uid, str(object?.metadata.resourceVersion))
 
   useFollowingRead(
-    visible && view === 'describe'
-      ? {
-          key: JSON.stringify([key, gen]),
-          read: () => window.api.kube.cluster.describe(target),
-          apply: setDescribe
-        }
-      : null,
+    visible && view === 'describe' ? { key: JSON.stringify([key, gen]), read: () => window.api.kube.cluster.describe(target), apply: setDescribe } : null,
     reread
   )
 
   useFollowingRead(
     visible && view === 'events' && uid !== null
-      ? {
-          key: JSON.stringify([key, gen, uid]),
-          read: () => window.api.kube.cluster.events(target, uid),
-          apply: setEvents
-        }
+      ? { key: JSON.stringify([key, gen, uid]), read: () => window.api.kube.cluster.events(target, uid), apply: setEvents }
       : null,
     reread
   )
