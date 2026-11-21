@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab, askCompare, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
+import { KubeObjectTab, askCompare, compareAskKey, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
 import type { ManifestMatch } from '../../../../../core/kube/cluster/types'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
@@ -268,8 +268,14 @@ describe('KubeObjectTab compare', () => {
     expect(other).toContain('kube.edit.compareElsewhere')
     expect(other).toContain('k8s/a.yaml')
     expect(other).toContain('kind-dev / dev')
-    const arn = 'arn:aws:eks:ap-northeast-2:1:cluster/live'
-    expect(html({ state: 'other', file: 'a.yaml', context: arn, namespace: null })).toContain(arn)
+    const arn = 'arn:aws:eks:eu-west-1:2:cluster/other'
+    expect(html({ state: 'other', file: 'a.yaml', context: arn, namespace: null })).toContain(`&quot;target&quot;:&quot;${arn}`)
+  })
+
+  it('asks again when the object, the target or the project changes', () => {
+    expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u2', 'k', '/p'))
+    expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u1', 'k2', '/p'))
+    expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u1', 'k', '/q'))
   })
 
   it('asks the host again when the object changes and drops an answer that came late', async () => {

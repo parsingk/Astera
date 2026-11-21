@@ -48,6 +48,11 @@ export interface KubeTabHost {
   compareKey: string
 }
 
+/** What a compare answer is for: the object (its uid), the target and the project. A change asks again. */
+export function compareAskKey(uid: string | null, targetKey: string, project: string): string {
+  return JSON.stringify([uid, targetKey, project])
+}
+
 /** Asks which project file declares the object. A failed ask counts as none, and an answer arriving after the returned
  *  stop is dropped (the tab moved on to another object or went). */
 export function askCompare(o: { ask(): Promise<ManifestMatch>; apply(m: ManifestMatch): void }): () => void {
@@ -237,7 +242,7 @@ export function KubeObjectTab({
     () => askCompare({ ask: () => hostRef.current.compareTarget(target), apply: setMatch }),
     // `key` stands for `target`, as above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [uid, key, host.compareKey]
+    [compareAskKey(uid, key, host.compareKey)]
   )
 
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))
