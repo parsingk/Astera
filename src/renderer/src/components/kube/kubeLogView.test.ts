@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { KubeRequest, KubeRunResult } from '../../../../core/kube/types'
 import { normKubePath, type KubeLogEntry } from '../../hooks/useKubeOps'
-import { defaultExpandedId, failedFiles, kubeBadge, kubeFailureCount, kubeToastOf, nextFailedPaths } from './kubeLogView'
+import { defaultExpandedId, failedFiles, kubeBadge, kubeFailureCount, kubeRerunnable, kubeToastOf, nextFailedPaths } from './kubeLogView'
 import { en } from '../../../../core/i18n/messages/en'
 import { ko } from '../../../../core/i18n/messages/ko'
 
@@ -124,5 +124,42 @@ describe('kubeToastOf', () => {
     expect(kubeToastOf(result({ ok: false, refused: { ok: false, reason: 'mixed-contexts', folders: [] } }), t as never)?.message).toContain('refused')
     expect(kubeToastOf(result({ ok: false, refused: { reason: 'changed' } }), t as never)).toBeNull()
     expect(kubeToastOf(result({ ok: false, verb: 'reload' }), t as never)).toBeNull()
+  })
+})
+
+describe('live writes in the log', () => {
+  const LIVE = { ref: { context: 'c', namespace: 'dev', resource: 'deployments.apps', kind: 'Deployment', name: 'web' }, rerun: null }
+  it('toasts a live write by its target', () => {
+    const target = 'Deployment/dev/web'
+    for (const verb of ['replace', 'delete', 'restart', 'scale'] as const) {
+      expect(kubeToastOf(result({ verb, target }), t as never)).toEqual({
+        kind: 'success',
+        message: `kube.toast.live.${verb}{"target":"${target}","context":"c"}`,
+        showLog: true
+      })
+    }
+    expect(kubeToastOf(result({ verb: 'scale', target, ok: false, stderr: 'boom' }), t as never)).toEqual({
+      kind: 'error',
+      message: `kube.toast.liveFailed{"target":"${target}","context":"c"}`,
+      showLog: true
+    })
+    expect(kubeToastOf(result({ verb: 'restart', target, ok: false, cancelled: true }), t as never)?.message).toBe('kube.toast.cancelled{"context":"c"}')
+    expect(kubeToastOf(result({ verb: 'restart', target, ok: false, ran: 0, refused: { reason: 'changed' } }), t as never)).toBeNull()
+    for (const key of ['replace', 'delete', 'restart', 'scale'] as const) {
+      expect(en[`kube.toast.live.${key}` as const]).toContain('{target}')
+      expect(ko[`kube.toast.live.${key}` as const]).toContain('{target}')
+    }
+    expect(LIVE.ref.name).toBe('web')
+  })
+
+  it('reruns live deletes, restarts and scales, never an edit', () => {
+    const op = (verb: 'delete' | 'restart') => ({ verb, ref: LIVE.ref })
+    const live = (rerun: KubeLogEntry['live'] extends infer L ? (L extends { rerun: infer R } ? R : never) : never) =>
+      entry({ req: undefined, live: { ref: LIVE.ref, rerun } })
+    expect(kubeRerunnable(live(op('delete')))).toBe(true)
+    expect(kubeRerunnable(live(op('restart')))).toBe(true)
+    expect(kubeRerunnable(live({ verb: 'scale', ref: LIVE.ref, replicas: 2 }))).toBe(true)
+    expect(kubeRerunnable(live(null))).toBe(false)
+    expect(kubeRerunnable(entry())).toBe(true)
   })
 })

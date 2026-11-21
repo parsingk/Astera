@@ -155,9 +155,12 @@ import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
 import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
+import { replicasOf, useLiveWrites } from './hooks/useLiveWrites'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
+import { KubeWriteDialog } from './components/kube/KubeWriteDialog'
+import type { WriteAsk } from './components/kube/cluster/clusterMenu'
 import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import type { KubeSegment } from './components/kube/KubeSegments'
 import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
@@ -2965,6 +2968,19 @@ export default function App(): React.JSX.Element {
   const allFilePaths = useMemo(() => fileTabs.map((t) => t.path), [fileTabs])
   const kubeEditor = useKubeEditor(kubeTabs, allFilePaths, kubeOps)
   onFileSavedRef.current = kubeEditor.onSaved
+  /** Writes to objects already in the cluster, from the cluster view's menus (hooks/useLiveWrites.ts). */
+  const liveWrites = useLiveWrites(kubeOps)
+  const writeKubeObject = (ask: WriteAsk): void => {
+    // Editing starts in the object's editor tab; the edit itself comes with the editor's own ask.
+    if (ask.verb === 'edit') return openKubeObject(ask.ref)
+    const { ref, object } = ask
+    if (ask.verb === 'delete') return liveWrites.start({ verb: 'delete', ref })
+    if (ask.verb === 'restart') return liveWrites.start({ verb: 'restart', ref })
+    // The field starts at the count the object has; with none known nothing is previewed until one is typed.
+    const known = object?.spec && typeof object.spec === 'object' ? (object.spec as { replicas?: unknown }).replicas : undefined
+    const count = typeof known === 'number' && replicasOf(String(known)) !== null ? known : null
+    liveWrites.start({ verb: 'scale', ref, replicas: count ?? 0 }, undefined, count === null ? '' : String(count))
+  }
 
   /** Files whose last Kubernetes operation failed (the explorer's warning mark), and the finished entries already
    *  accounted for, so a log that re-renders never toasts or marks twice. */
@@ -2975,7 +2991,8 @@ export default function App(): React.JSX.Element {
       if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
       kubeSeenRef.current.add(e.id)
       const result = e.result
-      if (result.verb !== 'reload') {
+      // A live write has no files: nothing to mark or refresh.
+      if (result.verb !== 'reload' && e.req) {
         setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
         kubeEditor.refreshAfterRun(e.req, result.commandLines)
       }
@@ -3003,6 +3020,11 @@ export default function App(): React.JSX.Element {
   const kubeRerun = (id: string): void => {
     const e = kubeOps.log.find((x) => x.id === id)
     if (!e) return
+    // A live write reopens its own dialog (an edit has none); never a run without a preview.
+    if (!e.req) {
+      if (e.live?.rerun) liveWrites.start(e.live.rerun)
+      return
+    }
     if (e.verb === 'reload') kubeOps.startReload(e.req.selection[0], e.req.context, e.req.pill)
     else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel, e.involved)
     else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel, e.involved)
@@ -3254,7 +3276,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -5199,9 +5221,10 @@ export default function App(): React.JSX.Element {
                       kubectlFound ? (
                         <ClusterView
                           model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} />}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onWrite={writeKubeObject} />}
                           onOpenInEditor={openKubeObject}
                           onOpenLogs={showPodLogs}
+                          onWrite={writeKubeObject}
                           toolbarStart={switcher}
                         />
                       ) : (
@@ -5403,6 +5426,27 @@ export default function App(): React.JSX.Element {
           cancelling={kubeOps.dialog.cancelling}
           onAbort={kubeOps.abort}
           onApplyFirst={kubeOps.applyFirst}
+        />
+      )}
+      {liveWrites.dialog && (
+        <KubeWriteDialog
+          op={liveWrites.dialog.op}
+          preview={liveWrites.dialog.preview}
+          dependents={liveWrites.dialog.dependents}
+          keepServerFields={liveWrites.dialog.keepServerFields}
+          onToggleServerFields={liveWrites.toggleServerFields}
+          showValues={liveWrites.dialog.showValues}
+          onToggleValues={liveWrites.toggleValues}
+          replicas={liveWrites.dialog.replicas}
+          onReplicas={liveWrites.setReplicas}
+          typed={liveWrites.dialog.typed}
+          onTyped={liveWrites.setTyped}
+          stale={liveWrites.dialog.stale}
+          running={liveWrites.dialog.phase === 'running'}
+          cancelling={liveWrites.dialog.cancelling}
+          onConfirm={liveWrites.confirm}
+          onCancel={liveWrites.close}
+          onAbort={liveWrites.abort}
         />
       )}
       {showSettings && (

@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, Copy, Eraser, RotateCw, Square } from 'lucid
 import type { KubePreview, KubeRunResult, ResourceOutcome } from '../../../../core/kube/types'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { KubeLogEntry } from '../../hooks/useKubeOps'
-import { defaultExpandedId, clockText, kubeBadge, kubeCommandText } from './kubeLogView'
+import { defaultExpandedId, clockText, kubeBadge, kubeCommandText, kubeRerunnable } from './kubeLogView'
 
 const platform = (): string => (typeof window === 'undefined' ? 'linux' : window.api.platform)
 
@@ -119,7 +119,7 @@ export function KubeLogPanel({
   return (
     <div className="kube-log">
       <div className="run-rail" role="toolbar" aria-orientation="vertical" aria-label={t('kube.log.rail')}>
-        {rail('kube.log.rerun', <RotateCw size={14} />, () => selected && onRerun(selected.id), !selected || running)}
+        {rail('kube.log.rerun', <RotateCw size={14} />, () => selected && onRerun(selected.id), !selected || running || !kubeRerunnable(selected))}
         {running && rail('kube.log.cancel', <Square size={12} fill="currentColor" strokeWidth={0} />, () => onCancel(selected.id), false)}
         {rail('kube.log.copy', <Copy size={14} />, () => selected && onCopy(selected.id), !selected || selected.commandLines.length === 0)}
         <span className="run-rail-sep" />

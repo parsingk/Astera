@@ -57,6 +57,10 @@ export function nextFailedPaths(prev: ReadonlySet<string>, result: KubeRunResult
   return next
 }
 
+/** Whether the log's rerun can do something: an edit's entry cannot (its text is never kept); the others reopen their
+ *  dialog. */
+export const kubeRerunnable = (e: KubeLogEntry): boolean => !e.live || e.live.rerun !== null
+
 type T = (key: never, params?: Record<string, string | number>) => string
 
 /** The toast a finished apply, delete or reload gets, or null when none is due (compare, or a run whose preview
@@ -68,6 +72,15 @@ export function kubeToastOf(
 ): { kind: 'success' | 'error'; message: string; showLog: boolean } | null {
   if (result.refused?.reason === 'changed') return null
   const context = result.context
+  if (result.target !== undefined && (result.verb === 'replace' || result.verb === 'restart' || result.verb === 'scale' || result.verb === 'delete')) {
+    const live = { target: result.target, context }
+    if (result.ok) return { kind: 'success', message: t(`kube.toast.live.${result.verb}` as never, live), showLog: true }
+    const fail = (message: string): { kind: 'error'; message: string; showLog: boolean } => ({ kind: 'error', message, showLog: true })
+    if (result.refused) return fail(t('kube.toast.refused' as never, { context }))
+    if (result.cancelled) return fail(t('kube.toast.cancelled' as never, { context }))
+    if (result.timedOut) return fail(t('kube.toast.timedOut' as never, { context }))
+    return fail(t('kube.toast.liveFailed' as never, live))
+  }
   if (result.ok && result.verb === 'reload') return { kind: 'success', message: t('kube.toast.reloaded' as never, { context }), showLog: false }
   if (result.ok) {
     // A warning line names no resource of its own.

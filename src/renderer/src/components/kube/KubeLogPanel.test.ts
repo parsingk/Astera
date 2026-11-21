@@ -160,3 +160,16 @@ describe('KubeLogPanel', () => {
     for (const k of ['rerun', 'copy', 'clear']) expect(html).toContain(`title="kube.log.${k}" aria-label="kube.log.${k}"`)
   })
 })
+
+describe('KubeLogPanel live entries', () => {
+  const liveRef = { context: 'kind-dev', namespace: 'dev', resource: 'configmaps', kind: 'ConfigMap', name: 'cfg' }
+  const rerunButton = (html: string): string => html.match(/<button[^>]*aria-label="kube.log.rerun"[^>]*>/)?.[0] ?? ''
+
+  it('disables rerun for an edit', () => {
+    const edit = entry({ verb: 'replace', req: undefined, live: { ref: liveRef, rerun: null }, result: result({ verb: 'replace' }) })
+    expect(rerunButton(render([edit]))).toContain('disabled')
+    const restart = entry({ verb: 'restart', req: undefined, live: { ref: liveRef, rerun: { verb: 'restart', ref: liveRef } }, result: result({ verb: 'restart' }) })
+    expect(rerunButton(render([restart]))).not.toContain('disabled')
+    expect(render([restart])).toContain('kube.log.verb.restart')
+  })
+})

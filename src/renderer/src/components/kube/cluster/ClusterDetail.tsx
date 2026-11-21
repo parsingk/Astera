@@ -10,7 +10,7 @@ import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { arrowStep } from '../../../lib/arrowStep'
 import { ContextMenu } from '../../ContextMenu'
-import { clusterMenuItems } from './clusterMenu'
+import { clusterMenuItems, writeMenuHandlers, type WriteAsk } from './clusterMenu'
 import { liveErrorText } from './ClusterView'
 import { KubeYamlView } from './KubeYamlView'
 import { useSecretReveal } from './useSecretReveal'
@@ -162,6 +162,7 @@ export function ClusterDetail({
   model,
   onOpenInEditor,
   onOpenLogs,
+  onWrite,
   onMenu
 }: {
   model: ClusterViewModel
@@ -171,6 +172,8 @@ export function ClusterDetail({
   /** Opens a Pod's logs tab (spec 4.8), `previous` true for previous logs; without it, or for another kind, the header
    *  button and the menu items are not drawn. */
   onOpenLogs?: (ref: ObjectRef, pod: K8sObject, previous: boolean) => void
+  /** The menu's edit, delete, restart and scale items; without it the menu has none. */
+  onWrite?: (ask: WriteAsk) => void
   /** Where the more button opens the menu; without it the detail opens the menu itself. */
   onMenu?: (x: number, y: number) => void
 }): React.JSX.Element | null {
@@ -196,7 +199,8 @@ export function ClusterDetail({
       onOpenInEditor: onOpenInEditor ? () => onOpenInEditor(selectedRef) : undefined,
       onDescribe: () => model.setDetailTab('describe'),
       onCopyName: () => void window.api.clipboard.writeText(selectedRef.name),
-      onLogs: onOpenLogs ? (previous) => onOpenLogs(selectedRef, selected, previous) : undefined
+      onLogs: onOpenLogs ? (previous) => onOpenLogs(selectedRef, selected, previous) : undefined,
+      ...writeMenuHandlers(onWrite, selectedRef, selected)
     },
     t
   )

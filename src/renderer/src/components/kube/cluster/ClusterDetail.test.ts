@@ -14,6 +14,19 @@ vi.mock('../../../i18n/I18nProvider', () => ({
   })
 }))
 
+// The menu arguments each render built, to see what the more button's menu would hold.
+const menus = vi.hoisted(() => [] as Array<Record<string, unknown>>)
+vi.mock('./clusterMenu', async (original) => {
+  const real = await original<typeof import('./clusterMenu')>()
+  return {
+    ...real,
+    clusterMenuItems: (o: Record<string, unknown>, t: never) => {
+      menus.push(o)
+      return real.clusterMenuItems(o as never, t)
+    }
+  }
+})
+
 const noop = (): void => {}
 const ref = (kind: string, resource: string, name: string) => ({ context: 'c', namespace: 'dev', resource, kind, name })
 
@@ -241,5 +254,23 @@ describe('PodsTable', () => {
     expect(key(' ')).toBe(true)
     expect(key('a')).toBe(false)
     expect(picked).toEqual(['w-1', 'w-1'])
+  })
+})
+
+describe('ClusterDetail writes', () => {
+  const deployment: K8sObject = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', namespace: 'dev' }, spec: { replicas: 2 } }
+
+  it('builds the menu with the write items for the selected object, and none without onWrite', () => {
+    menus.length = 0
+    render(model('Deployment', 'deployments.apps', deployment))
+    expect(menus[0].onEdit).toBeUndefined()
+    const asked: unknown[] = []
+    menus.length = 0
+    render(model('Deployment', 'deployments.apps', deployment), { onWrite: (a: unknown) => void asked.push(a) })
+    const m = menus[0] as Record<string, () => void>
+    for (const key of ['onEdit', 'onRestart', 'onScale', 'onDelete']) m[key]()
+    expect(asked).toEqual(
+      ['edit', 'restart', 'scale', 'delete'].map((verb) => ({ verb, ref: ref('Deployment', 'deployments.apps', 'web'), object: deployment }))
+    )
   })
 })
