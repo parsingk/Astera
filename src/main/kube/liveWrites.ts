@@ -2,7 +2,7 @@
  *  `run` here sends the only writes this feature makes to a live cluster, and only when what it prepares now has the
  *  fingerprint the person confirmed. Everything before it is a read or a server dry run. */
 import { createHash } from 'node:crypto'
-import { stringify } from 'yaml'
+import { objectsYaml } from '../../core/kube/createFirst'
 import { objectsFromYaml, pairObjects, type K8sObject } from '../../core/kube/objects'
 import { parseKubectlOutput } from '../../core/kube/output'
 import { crdArgs, getArgs, nodePodsArgs, ownedArgs, pvcArgs } from '../../core/kube/cluster/args'
@@ -19,6 +19,7 @@ import {
   parseEdit,
   replaceArgs,
   replaceBody,
+  RESTARTED_AT,
   restartArgs,
   restartPreviewArgs,
   revealedDiff,
@@ -39,7 +40,7 @@ import type {
 } from '../../core/kube/cluster/types'
 import type { KubectlResult } from '../../core/kube/kubectl'
 import type { KubeRunResult, ResourceDiff, ResourceOutcome } from '../../core/kube/types'
-import { firstStderrLine, isForbidden } from './cluster'
+import { failure, firstStderrLine, parse as parseJson } from './cluster'
 import { UNREADABLE } from './operations'
 
 export interface LiveWritesDeps {
@@ -71,15 +72,6 @@ const CONFLICT = /the object has been modified|Operation cannot be fulfilled/
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
 
-/** Parsed JSON, or null when it is not JSON. The parse error is dropped: it may quote a Secret value. */
-function parseJson(stdout: string): unknown {
-  try {
-    return JSON.parse(stdout)
-  } catch {
-    return null
-  }
-}
-
 const isObject = (v: unknown): v is K8sObject => !!v && typeof v === 'object' && !Array.isArray(v)
 
 /** objectsFromYaml throws on what it cannot read; the error is dropped, never shown or logged. */
@@ -93,6 +85,12 @@ function readObjects(text: string): K8sObject[] | null {
 
 const ordinal = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 const hashOf = (live: K8sObject): string => sha256(canonicalJson(churnFree(live)))
+/** The restartedAt annotation of the pod template, null when there is none. */
+function restartedAtOf(o: K8sObject): string | null {
+  const spec = o.spec as { template?: { metadata?: { annotations?: Record<string, unknown> } } } | undefined
+  const at = spec?.template?.metadata?.annotations?.[RESTARTED_AT]
+  return typeof at === 'string' ? at : null
+}
 const versionOf = (o: K8sObject): string => String(o.metadata.resourceVersion ?? '')
 
 /** The command each verb runs once confirmed. */
@@ -118,16 +116,7 @@ export function createLiveWrites(d: LiveWritesDeps) {
     signal?: AbortSignal
   ): Promise<{ ok: true; object: K8sObject | null } | { ok: false; message: string; forbidden?: true; timedOut?: true }> {
     const r = await d.run(getArgs(ref), { signal })
-    if (!r.ok) {
-      const first = firstStderrLine(r.stderr)
-      const message = first ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
-      return {
-        ok: false,
-        message,
-        ...(first !== undefined && isForbidden(first) ? { forbidden: true as const } : {}),
-        ...(r.timedOut ? { timedOut: true as const } : {})
-      }
-    }
+    if (!r.ok) return { ...failure(r), ...(r.timedOut ? { timedOut: true as const } : {}) }
     if (!r.stdout.trim()) return { ok: true, object: null }
     const parsed = parseJson(r.stdout)
     return isObject(parsed) ? { ok: true, object: parsed } : { ok: false, message: UNREADABLE }
@@ -154,7 +143,7 @@ export function createLiveWrites(d: LiveWritesDeps) {
     }
     const live = got.object
     if (!live) return { ok: false, reason: 'gone' }
-    const covers = (covered: string): string => sha256(JSON.stringify([op.verb, ref.context, [command], covered]))
+    const covers = (covered: unknown): string => sha256(JSON.stringify([op.verb, ref.context, [command], covered]))
 
     if (op.verb === 'replace') {
       const parsed = parseEdit(op.text, ref)
@@ -163,7 +152,8 @@ export function createLiveWrites(d: LiveWritesDeps) {
       if (!edited.ok) return { ok: false, reason: 'edit', problem: edited.problem, detail: edited.detail }
       // K11: only the server's own churn (status, versions) since editing began is not a change of the person's.
       const clean = versionOf(live) === op.base.resourceVersion || hashOf(live) === op.base.hash
-      const body = stringify(replaceBody(live, edited.object, versionOf(live)))
+      // YAML 1.1, which kubectl reads: `on` or `yes` as a string stays quoted.
+      const body = objectsYaml([replaceBody(live, edited.object, versionOf(live))])
       return {
         ok: true,
         commandLines: [command],
@@ -176,13 +166,19 @@ export function createLiveWrites(d: LiveWritesDeps) {
       }
     }
     const uid = String(live.metadata.uid ?? '')
+    // `rollout restart` refuses a paused Deployment on the client, which its patch dry run would not notice.
+    if (op.verb === 'restart' && ref.kind === 'Deployment' && (live.spec as { paused?: unknown } | undefined)?.paused === true) {
+      return { ok: false, reason: 'paused' }
+    }
+    // A restart covers the time of the last one, so confirming twice restarts once: the second run is refused.
+    const restartedAt = op.verb === 'restart' ? restartedAtOf(live) : null
     const dry =
       op.verb === 'delete'
         ? deleteArgs(ref, true)
         : op.verb === 'restart'
           ? restartPreviewArgs(ref, d.now().toISOString())
           : scaleArgs(ref, op.replicas, true)
-    return { ok: true, commandLines: [command], reads, dry: { args: dry }, fingerprint: covers(uid), live }
+    return { ok: true, commandLines: [command], reads, dry: { args: dry }, fingerprint: covers(restartedAt === null ? uid : [uid, restartedAt]), live }
   }
 
   /** The diff of what the verb does; null when the dry run's answer does not read as an object. */
@@ -196,7 +192,7 @@ export function createLiveWrites(d: LiveWritesDeps) {
     return pairObjects([live], [after], 'apply', opts)[0]
   }
 
-  async function preview(op: LiveOp, opts: { keepServerFields: boolean; showValues: boolean }): Promise<LivePreview> {
+  async function previewOf(op: LiveOp, opts: { keepServerFields: boolean; showValues: boolean }): Promise<LivePreview> {
     const p = await prepare(op)
     if (!p.ok) return p
     const checkCommandLines = [...p.reads, p.dry.args]
@@ -254,13 +250,15 @@ export function createLiveWrites(d: LiveWritesDeps) {
       // A read that failed is not a change; the same text cannot newly fail `edit` or `kind`, so any other refusal
       // means the object is not what was previewed.
       if (!p.ok) {
+        if (p.reason === 'paused') return result({ stderr: 'the Deployment is paused; resume it before restarting' })
         return p.reason === 'kubectl'
           ? result({ commandLines: p.commandLines, stderr: p.stderr, ...(p.timedOut ? { timedOut: true } : {}) })
           : changed()
       }
       if (p.fingerprint !== fingerprint) return changed()
       const last = await d.run(p.commandLines[0], { signal: ctrl.signal, ...(p.input === undefined ? {} : { input: p.input }) })
-      const cancelled = last.cancelled === true || ctrl.signal.aborted
+      // One command: an abort after kubectl exited changes nothing, so only its own flag counts.
+      const cancelled = last.cancelled === true
       if (op.verb === 'replace' && !last.ok && !cancelled && CONFLICT.test(firstStderrLine(last.stderr) ?? '')) return changed()
       // A killed kubectl's output is gone; its flag says what happened.
       const outcomes: ResourceOutcome[] = last.timedOut || last.cancelled ? [] : parseKubectlOutput(last.stdout, last.stderr, last.ok)
@@ -282,7 +280,7 @@ export function createLiveWrites(d: LiveWritesDeps) {
     running.get(id)?.abort()
   }
 
-  async function editBase(ref: ObjectRef): Promise<Read<{ text: string; base: EditBase }>> {
+  async function editBaseOf(ref: ObjectRef): Promise<Read<{ text: string; base: EditBase }>> {
     const got = await readLive(ref)
     if (!got.ok) return got
     if (!got.object) return { ok: false, message: 'not found' }
@@ -311,7 +309,7 @@ export function createLiveWrites(d: LiveWritesDeps) {
     return { groups, incomplete }
   }
 
-  async function dependents(ref: ObjectRef): Promise<Read<{ dependents: Dependents }>> {
+  async function dependentsOf(ref: ObjectRef): Promise<Read<{ dependents: Dependents }>> {
     const got = await readLive(ref)
     if (!got.ok) return got
     const object = got.object
@@ -366,6 +364,31 @@ export function createLiveWrites(d: LiveWritesDeps) {
       }
     }
     return { ok: true, dependents: out }
+  }
+
+  // A thrown read is an answer, never a rejection; nothing is said of the error, which could quote what was read.
+  async function preview(op: LiveOp, opts: { keepServerFields: boolean; showValues: boolean }): Promise<LivePreview> {
+    try {
+      return await previewOf(op, opts)
+    } catch {
+      return { ok: false, reason: 'kubectl', commandLines: [commandOf(op)], checkCommandLines: [], stderr: 'previewing the write failed' }
+    }
+  }
+
+  async function editBase(ref: ObjectRef): Promise<Read<{ text: string; base: EditBase }>> {
+    try {
+      return await editBaseOf(ref)
+    } catch {
+      return { ok: false, message: 'reading the object failed' }
+    }
+  }
+
+  async function dependents(ref: ObjectRef): Promise<Read<{ dependents: Dependents }>> {
+    try {
+      return await dependentsOf(ref)
+    } catch {
+      return { ok: false, message: 'reading the dependents failed' }
+    }
   }
 
   return { editBase, dependents, preview, run, cancel }

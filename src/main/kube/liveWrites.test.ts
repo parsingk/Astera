@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { stringify } from 'yaml'
 import { createLiveWrites } from './liveWrites'
 import { deleteArgs, replaceArgs, restartArgs, restartPreviewArgs, scaleArgs } from '../../core/kube/cluster/write'
@@ -173,6 +173,30 @@ describe('createLiveWrites replace', () => {
     expect(write.input).toBe(dryCall(c).input)
   })
 
+  it('sends strings that YAML 1.1 reads as booleans quoted', async () => {
+    const cmRef: ObjectRef = { context: 'c', namespace: 'api', resource: 'configmaps', kind: 'ConfigMap', name: 'cm' }
+    const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cm', namespace: 'api', uid: 'u3', resourceVersion: '2' }, data: { a: 'on' } }
+    const c = fakeCluster([cm], cmRef)
+    const w = writesOn(c)
+    const same = await edit(w, cmRef, (t) => t)
+    okPreview(await w.preview(same, opts))
+    expect(dryCall(c).input).toContain('a: "on"')
+    const op = await edit(w, cmRef, (t) => t.replace('a: on', 'a: yes'))
+    okPreview(await w.preview(op, opts))
+    expect(c.calls.filter((x) => x.args.includes('--dry-run=server')).at(-1)?.input).toContain('a: "yes"')
+  })
+
+  it('refuses a run for an object that is gone', async () => {
+    const c = fakeCluster([deployment()])
+    const w = writesOn(c)
+    const op: LiveOp = { verb: 'delete', ref }
+    const p = okPreview(await w.preview(op, opts))
+    c.live.delete(keyOf(ref))
+    const r = await w.run('g1', op, p.fingerprint)
+    expect(r).toMatchObject({ ran: 0, ok: false, refused: { reason: 'changed' } })
+    expect(c.writes()).toEqual([])
+  })
+
   it('reads a conflict at run time as changed', async () => {
     const c = fakeCluster([deployment()])
     const w = writesOn(c)
@@ -187,6 +211,7 @@ describe('createLiveWrites replace', () => {
     expect(r.refused).toEqual({ reason: 'changed' })
     expect(r.ran).toBe(0)
     expect(r.ok).toBe(false)
+    expect(c.writes()).toHaveLength(1)
   })
 
   it('says a failed read, not refused', async () => {
@@ -262,6 +287,31 @@ describe('createLiveWrites delete, restart and scale', () => {
     expect(r.outcomes).toEqual([{ ref: 'deployment.apps/web', outcome: 'configured', message: 'restarted' }])
   })
 
+  it('refuses a second run of the same restart', async () => {
+    const c = fakeCluster([deployment()])
+    const w = writesOn(c)
+    const op: LiveOp = { verb: 'restart', ref }
+    const p = okPreview(await w.preview(op, opts))
+    expect((await w.run('s1', op, p.fingerprint)).ok).toBe(true)
+    const restarted = { replicas: 2, template: { metadata: { annotations: { 'kubectl.kubernetes.io/restartedAt': '2026-11-21T10:01:00Z' } } } }
+    c.live.set(keyOf(ref), deployment({}, restarted))
+    const again = await w.run('s2', op, p.fingerprint)
+    expect(again.refused).toEqual({ reason: 'changed' })
+    expect(c.writes()).toHaveLength(1)
+  })
+
+  it('refuses to restart a paused Deployment', async () => {
+    const c = fakeCluster([deployment({}, { replicas: 2, paused: true })])
+    const w = writesOn(c)
+    const op: LiveOp = { verb: 'restart', ref }
+    expect(await w.preview(op, opts)).toEqual({ ok: false, reason: 'paused' })
+    const r = await w.run('s1', op, 'x')
+    expect(r).toMatchObject({ ran: 0, ok: false })
+    expect(r.stderr).toContain('paused')
+    expect(c.writes()).toEqual([])
+    expect(c.calls.some((x) => x.args.includes('--dry-run=server'))).toBe(false)
+  })
+
   it('scales with a local diff', async () => {
     const c = fakeCluster([deployment()])
     const w = writesOn(c)
@@ -293,17 +343,65 @@ describe('createLiveWrites delete, restart and scale', () => {
     expect(c.calls).toEqual([])
   })
 
-  it('reports a cancelled write', async () => {
+  it('reports a cancelled write and aborts the signal the call got', async () => {
     const c = fakeCluster([deployment()])
-    const w = writesOn(c)
+    let signal: AbortSignal | undefined
+    const w = createLiveWrites({
+      now: () => NOW,
+      counts: noCounts,
+      run: (args, o) => {
+        if (args[0] === 'delete' && !args.includes('--dry-run=server')) {
+          signal = o?.signal
+          return new Promise<KubectlResult>((resolve) => {
+            o?.signal?.addEventListener('abort', () => resolve({ ok: false, stdout: '', stderr: '', cancelled: true }))
+          })
+        }
+        return c.run(args, o)
+      }
+    })
     const op: LiveOp = { verb: 'delete', ref }
     const p = okPreview(await w.preview(op, opts))
-    c.setAnswer((x) =>
-      x.args[0] === 'delete' && !x.args.includes('--dry-run=server') ? { ok: false, stdout: '', stderr: '', cancelled: true } : undefined
-    )
-    const r = await w.run('k1', op, p.fingerprint)
-    expect(r).toMatchObject({ ok: false, cancelled: true, outcomes: [] })
+    const pending = w.run('k1', op, p.fingerprint)
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    w.cancel('k1')
+    expect(signal?.aborted).toBe(true)
+    expect(await pending).toMatchObject({ ok: false, cancelled: true, outcomes: [] })
     expect(() => w.cancel('nothing running')).not.toThrow()
+  })
+
+  it('keeps a write that finished before the cancel landed', async () => {
+    const c = fakeCluster([deployment()])
+    const w = createLiveWrites({
+      now: () => NOW,
+      counts: noCounts,
+      run: async (args, o) => {
+        const r = await c.run(args, o)
+        if (args[0] === 'delete' && !args.includes('--dry-run=server')) w.cancel('k2')
+        return r
+      }
+    })
+    const op: LiveOp = { verb: 'delete', ref }
+    const p = okPreview(await w.preview(op, opts))
+    const r = await w.run('k2', op, p.fingerprint)
+    expect(r.ok).toBe(true)
+    expect(r.cancelled).toBeUndefined()
+  })
+
+  it('answers with a failure, not a rejection, when a call throws', async () => {
+    const w = createLiveWrites({
+      now: () => NOW,
+      counts: noCounts,
+      run: async () => {
+        throw new Error('secret value')
+      }
+    })
+    const op: LiveOp = { verb: 'delete', ref }
+    const answers = [await w.preview(op, opts), await w.editBase(ref), await w.dependents(ref), await w.run('t1', op, 'x')]
+    expect(answers[0]).toMatchObject({ ok: false, reason: 'kubectl' })
+    expect(answers[1]).toMatchObject({ ok: false })
+    expect(answers[2]).toMatchObject({ ok: false })
+    expect(answers[3]).toMatchObject({ ran: 0, ok: false })
+    expect(JSON.stringify(answers)).not.toContain('secret value')
   })
 })
 
@@ -360,6 +458,23 @@ describe('createLiveWrites dependents', () => {
     })
   })
 
+  it("lists a StatefulSet's claims as going with it when its policy deletes them", async () => {
+    const sts: K8sObject = {
+      apiVersion: 'apps/v1',
+      kind: 'StatefulSet',
+      metadata: { name: 'db', namespace: 'api', uid: 'u9' },
+      spec: { volumeClaimTemplates: [{ metadata: { name: 'data' } }], persistentVolumeClaimRetentionPolicy: { whenDeleted: 'Delete' } }
+    }
+    const stsRef: ObjectRef = { context: 'c', namespace: 'api', resource: 'statefulsets.apps', kind: 'StatefulSet', name: 'db' }
+    const pvc: K8sObject = { apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata: { name: 'data-db-0', namespace: 'api' } }
+    const c = fakeCluster([sts], stsRef, (x) => (is(x, ownedArgs('c', 'api')) ? list() : is(x, pvcArgs('c', 'api')) ? list(pvc) : undefined))
+    const r = await writesOn(c).dependents(stsRef)
+    expect(r).toMatchObject({
+      ok: true,
+      dependents: { goes: [{ kind: 'PersistentVolumeClaim', count: 1, names: ['api/data-db-0'] }], kept: [] }
+    })
+  })
+
   it("marks a namespace's dependents incomplete", async () => {
     const nsRef: ObjectRef = { context: 'c', namespace: null, resource: 'namespaces', kind: 'Namespace', name: 'api' }
     const nsObj: K8sObject = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'api', uid: 'n1' } }
@@ -394,8 +509,12 @@ describe('createLiveWrites dependents', () => {
     const nsRef: ObjectRef = { context: 'c', namespace: null, resource: 'namespaces', kind: 'Namespace', name: 'api' }
     const nsObj: K8sObject = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'api', uid: 'n1' } }
     const c = fakeCluster([nsObj], nsRef, (x) => (is(x, crdArgs('c')) ? fail('crds forbidden') : undefined))
-    const r = await writesOn(c, async () => ({})).dependents(nsRef)
+    const full = async (_c: string, _n: string | null, kinds: KindDef[]): Promise<Record<string, CountInfo>> =>
+      Object.fromEntries(kinds.map((k) => [k.resource, { count: 0, attention: false }]))
+    const r = await writesOn(c, full).dependents(nsRef)
     expect(r).toMatchObject({ ok: true, dependents: { goes: [], incomplete: true } })
+    const readable = fakeCluster([nsObj], nsRef, (x) => (is(x, crdArgs('c')) ? list() : undefined))
+    expect(await writesOn(readable, full).dependents(nsRef)).toMatchObject({ ok: true, dependents: { incomplete: false } })
   })
 
   it("names a Node's Pods and a PV's claim as affected", async () => {

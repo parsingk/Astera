@@ -81,5 +81,7 @@ export type LivePreview =
     }
   | { ok: false; reason: 'gone' }
   | { ok: false; reason: 'kind' }
+  /** A paused Deployment: `rollout restart` refuses it, so no restart is offered. */
+  | { ok: false; reason: 'paused' }
   | { ok: false; reason: 'edit'; problem: EditProblem; detail: string }
   | { ok: false; reason: 'kubectl'; commandLines: string[][]; checkCommandLines: string[][]; stderr: string; timedOut?: true }
