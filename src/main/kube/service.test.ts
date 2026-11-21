@@ -2066,6 +2066,19 @@ describe('manifestFor', () => {
     expect((await svc.manifestFor(root, ref())).state).toBe('none')
   })
 
+  it('drops the index for a changed file spelled with the other separator', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    const copy = p('k8s', 'copy.yaml')
+    const other = path.sep === '/' ? copy.split('/').join(String.fromCharCode(92)) : copy.split(path.sep).join('/')
+    h.files.set(copy, { text: MANIFEST, mtimeMs: 1 })
+    // A watcher on Windows may report either spelling; on POSIX a backslash path is not under the root and changes nothing.
+    svc.invalidate([{ path: other, kind: 'add' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe(path.sep === '/' ? 'same' : 'none')
+  })
+
   it('does not keep a failed index build until the TTL', async () => {
     const h = harness({ [a]: MANIFEST })
     const read = h.deps.readText

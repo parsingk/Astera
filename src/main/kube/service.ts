@@ -65,6 +65,9 @@ const MANIFEST_READS = 8
 /** `config view` reads local files only; it never needs the long deadline of a cluster call. */
 const CONFIG_VIEW_TIMEOUT_MS = 15_000
 
+/** A path with `/` separators, no trailing slash and folded case, so either spelling of a root and a file compares. */
+const slashed = (p: string): string => foldPathCase(p.split(String.fromCharCode(92)).join('/').replace(/\/+$/, ''))
+
 export function createKubeService(deps: KubeServiceDeps) {
   const kinds = new Map<string, { mtimeMs: number; kind: KubeFileKind }>()
   let contextsCache: { at: number; value: KubeContexts } | null = null
@@ -315,8 +318,8 @@ export function createKubeService(deps: KubeServiceDeps) {
       }
       if (isYamlName(name)) {
         // The index holds document text: a YAML file changing drops the index of the project it is under, not the graph.
-        const at = foldPathCase(f)
-        for (const k of manifests.keys()) if (at.startsWith(k + path.sep) || at.startsWith(k + '/')) manifests.delete(k)
+        const at = slashed(f)
+        for (const k of manifests.keys()) if (at.startsWith(slashed(k) + '/')) manifests.delete(k)
       }
       if (name === 'Chart.yaml' || kind === 'unlinkDir') {
         // A chart appearing or going changes which files are templates; a folder going takes its files.
