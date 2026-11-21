@@ -1,18 +1,20 @@
-import { useEffect, useId, useState } from 'react'
-import { Lock, RefreshCw, RotateCcw } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { Check, Lock, Pencil, RefreshCw, RotateCcw, Undo2 } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
-import type { ObjectRef, Read } from '../../../../../core/kube/cluster/types'
+import type { EditBase, LiveOp, ObjectRef, Read } from '../../../../../core/kube/cluster/types'
 import { ageText } from '../../../../../core/kube/cluster/status'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { follow, useFollowingRead, useRereadTick, useWatchClient, type WatchState } from '../../../hooks/useClusterView'
 import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { arrowStep } from '../../../lib/arrowStep'
+import { confirmModal } from '../../../lib/confirm'
 import type { WatchClient } from '../../../lib/kubeWatchClient'
 import { FileIcon } from '../../FileIcon'
 import { EventsList, ReadView } from './ClusterDetail'
 import { liveErrorText } from './ClusterView'
+import { KubeYamlEditor } from './KubeYamlEditor'
 import { KubeYamlView } from './KubeYamlView'
 import { useSecretReveal } from './useSecretReveal'
 
@@ -30,7 +32,26 @@ function ReadAgo({ at, visible }: { at: number; visible: boolean }): React.JSX.E
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [visible])
-  return <span className="kube-tab-read">{t('kube.cluster.readAgo', { ago: ageText(new Date(at).toISOString(), Math.max(now, at)) })}</span>
+  return (
+    <span className="kube-tab-read">
+      {t('kube.cluster.readAgo', {
+        ago: ageText(new Date(at).toISOString(), Math.max(now, at))
+      })}
+    </span>
+  )
+}
+
+/** What the app gives every kube tab: the confirmation dialog for a write, the dirty flag the tab's close asks about, and
+ *  the count of edit asks per tab id (the cluster view's menu bumps it after it opens the tab). */
+export interface KubeTabHost {
+  startWrite(op: LiveOp, onWritten: () => void): void
+  setDirty(tabId: string, dirty: boolean): void
+  editAsks: Record<string, number>
+}
+
+/** Apply: opens the replace dialog with the edit's text and the base it started from. `onWritten` ends edit mode. */
+export function applyEdit(host: KubeTabHost, target: ObjectRef, edit: { text: string; base: EditBase }, onWritten: () => void): void {
+  host.startWrite({ verb: 'replace', ref: target, text: edit.text, base: edit.base }, onWritten)
 }
 
 /** The tab's object for as long as it shows (K4), apart from React so its lifecycle can be tested: read once, then
@@ -66,7 +87,13 @@ export function followTabObject(o: {
   read()
   const stop = follow(
     o.client,
-    { context: target.context, namespace: target.namespace, namespaced: target.namespace !== null, resource: target.resource, name: target.name },
+    {
+      context: target.context,
+      namespace: target.namespace,
+      namespaced: target.namespace !== null,
+      resource: target.resource,
+      name: target.name
+    },
     (m) => {
       if (m === 'resync') {
         watched = false
@@ -86,19 +113,28 @@ export function followTabObject(o: {
   }
 }
 
-/** A cluster object in an editor tab, read-only in P1 (spec 4.6, board B): its YAML, describe or events under a toolbar
- *  that says where it lives, that it is read-only, when it was read and whether it is live. Mounted for the tab's life
- *  (PaneGrid's kube slots); it reads the object, then follows it through a watch only while the tab shows (K4), and
- *  reads afresh when it shows again. Edit, apply and compare come with P3 and are absent until then. */
+/** A cluster object in an editor tab (spec 4.6, board B): its YAML, describe or events under a toolbar that says where it
+ *  lives, that it is read-only, when it was read and whether it is live. Mounted for the tab's life (PaneGrid's kube
+ *  slots); it reads the object, then follows it through a watch only while the tab shows (K4), and reads afresh when it
+ *  shows again. Edit (P3) swaps the YAML for an editor on the text `editBase` answered: the watch stops meanwhile, the
+ *  text is dirty while it differs from that start text, and apply goes through the write dialog. Compare comes later. */
 export function KubeObjectTab({
   target,
   visible,
-  initial
+  tabId: id,
+  host,
+  initial,
+  initialEdit
 }: {
   target: ObjectRef
   visible: boolean
+  /** This tab's id, the key of `host.editAsks` and of the dirty flag. */
+  tabId: string
+  host: KubeTabHost
   /** Content shown before the first read answers: for tests, since a static render runs no effect to read it. */
   initial?: K8sObject
+  /** Edit mode on entry: for tests, as `initial` is. */
+  initialEdit?: { text: string; base: EditBase }
 }): React.JSX.Element {
   const { t } = useI18n()
   const client = useWatchClient()
@@ -109,9 +145,11 @@ export function KubeObjectTab({
   const panelId = `${ids}-panel`
   /** The object as last read or watched, and when; `deleted`: the cluster says it is gone, and `object` is its last
    *  content (null when it was never there). */
-  const [shown, setShown] = useState<{ object: K8sObject | null; deleted: boolean; at: number } | null>(() =>
-    initial !== undefined ? { object: initial, deleted: false, at: Date.now() } : null
-  )
+  const [shown, setShown] = useState<{
+    object: K8sObject | null
+    deleted: boolean
+    at: number
+  } | null>(() => (initial !== undefined ? { object: initial, deleted: false, at: Date.now() } : null))
   /** The read's first line of stderr, until something better arrives. */
   const [failed, setFailed] = useState<string | null>(null)
   const [watch, setWatch] = useState<WatchState>('live')
@@ -120,19 +158,35 @@ export function KubeObjectTab({
   const [describe, setDescribe] = useState<Read<{ text: string }> | null>(null)
   const [events, setEvents] = useState<Read<{ events: K8sObject[] }> | null>(null)
 
+  /** The edit in progress: what `editBase` answered, which is also the baseline its dirtiness is measured from. */
+  const [edit, setEdit] = useState<{ text: string; base: EditBase } | null>(initialEdit ?? null)
+  const editing = edit !== null
+  /** The editor's current text; the editor keeps the text itself, so a keystroke renders only when dirtiness flips. */
+  const editText = useRef(initialEdit?.text ?? '')
+  const [dirty, setDirty] = useState(false)
+  const [editFailed, setEditFailed] = useState<string | null>(null)
+  const [revealFirst, setRevealFirst] = useState(false)
+  const asking = useRef(false)
+
   useEffect(() => {
-    if (!visible) return
+    // The watch stays off while editing: a changed object would otherwise move under the text being typed.
+    if (!visible || editing) return
     return followTabObject({
       client,
       get: (ref) => window.api.kube.cluster.get(ref),
       target,
-      take: (object) => setShown((prev) => ({ object: object ?? prev?.object ?? null, deleted: object === null, at: Date.now() })),
+      take: (object) =>
+        setShown((prev) => ({
+          object: object ?? prev?.object ?? null,
+          deleted: object === null,
+          at: Date.now()
+        })),
       fail: setFailed,
       state: setWatch
     })
     // `key` stands for `target`, which is a new object at every render of the grid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, key, gen, client])
+  }, [visible, key, gen, client, editing])
 
   const object = shown?.object ?? null
   const uid = str(object?.metadata.uid) || null
@@ -140,19 +194,87 @@ export function KubeObjectTab({
   const reread = useRereadTick(uid, str(object?.metadata.resourceVersion))
 
   useFollowingRead(
-    visible && view === 'describe' ? { key: JSON.stringify([key, gen]), read: () => window.api.kube.cluster.describe(target), apply: setDescribe } : null,
+    visible && view === 'describe'
+      ? {
+          key: JSON.stringify([key, gen]),
+          read: () => window.api.kube.cluster.describe(target),
+          apply: setDescribe
+        }
+      : null,
     reread
   )
 
   useFollowingRead(
     visible && view === 'events' && uid !== null
-      ? { key: JSON.stringify([key, gen, uid]), read: () => window.api.kube.cluster.events(target, uid), apply: setEvents }
+      ? {
+          key: JSON.stringify([key, gen, uid]),
+          read: () => window.api.kube.cluster.events(target, uid),
+          apply: setEvents
+        }
       : null,
     reread
   )
 
   // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))
+
+  const isSecret = target.kind === 'Secret'
+  const canEdit = object !== null && shown?.deleted !== true && (!isSecret || (reveal !== null && reveal.values !== null))
+
+  useEffect(() => {
+    host.setDirty(id, dirty)
+  }, [dirty, host, id])
+  useEffect(() => () => host.setDirty(id, false), [host, id])
+
+  const startEdit = (): void => {
+    if (asking.current) return
+    asking.current = true
+    setEditFailed(null)
+    setRevealFirst(false)
+    window.api.kube.cluster.editBase(target).then(
+      (r) => {
+        asking.current = false
+        if (!r.ok) return setEditFailed(r.message)
+        editText.current = r.text
+        setDirty(false)
+        setEdit({ text: r.text, base: r.base })
+      },
+      (err) => {
+        asking.current = false
+        setEditFailed(errText(err))
+      }
+    )
+  }
+  /** Ends edit mode: the watch starts again and reads afresh. */
+  const endEdit = (): void => {
+    setEdit(null)
+    setDirty(false)
+    setGen((g) => g + 1)
+  }
+  const discard = async (): Promise<void> => {
+    if (edit !== null && editText.current !== edit.text) {
+      const ok = await confirmModal({
+        title: t('kube.edit.discardTitle'),
+        body: t('kube.edit.discardBody', { name: target.name }),
+        confirmLabel: t('common.confirm')
+      })
+      if (!ok) return
+    }
+    endEdit()
+  }
+
+  // The menu's edit: a count bumped after the tab opened. A Secret that is not shown stays read-only and says why.
+  const seenAsks = useRef(0)
+  const ask = host.editAsks[id] ?? 0
+  useEffect(() => {
+    if (ask <= seenAsks.current) return
+    seenAsks.current = ask
+    if (editing) return
+    if (isSecret && reveal?.values == null) return setRevealFirst(true)
+    startEdit()
+    // Only a new count asks; the rest is read when it does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask])
 
   const gone = shown !== null && shown.deleted
   const state: 'live' | 'paused' | { error: string } = typeof watch === 'object' ? watch : watch === 'live' && visible ? 'live' : 'paused'
@@ -168,8 +290,8 @@ export function KubeObjectTab({
           <span className="kube-pill-text">{displayContextName(target.context).short + where}</span>
         </span>
         <span className="kube-pill">
-          <Lock size={11} aria-hidden="true" />
-          {t('kube.cluster.readOnly')}
+          {editing ? <Pencil size={11} aria-hidden="true" /> : <Lock size={11} aria-hidden="true" />}
+          {t(editing ? 'kube.edit.editing' : 'kube.cluster.readOnly')}
         </span>
         {shown !== null && <ReadAgo at={shown.at} visible={visible} />}
         <span className="kube-cluster-live" role="status">
@@ -184,38 +306,83 @@ export function KubeObjectTab({
             </button>
           )}
         </span>
-        <div className="kube-segment-switch" role="tablist">
-          {VIEWS.map((v) => (
+        {!editing && (
+          <div className="kube-segment-switch" role="tablist">
+            {VIEWS.map((v) => (
+              <button
+                key={v}
+                id={tabId(v)}
+                type="button"
+                role="tab"
+                aria-selected={view === v}
+                aria-controls={panelId}
+                // One tab stop, the shown view; the arrows move between them (ARIA's tabs pattern).
+                tabIndex={view === v ? 0 : -1}
+                className={view === v ? 'kube-segment on' : 'kube-segment'}
+                onClick={() => setView(v)}
+                onKeyDown={(e) => {
+                  const to = arrowStep(VIEWS, view, e.key)
+                  if (to === null) return
+                  e.preventDefault()
+                  setView(to)
+                  document.getElementById(tabId(to))?.focus()
+                }}
+              >
+                {t(`kube.cluster.tab.${v}` as MessageKey)}
+              </button>
+            ))}
+          </div>
+        )}
+        {editing ? (
+          <>
             <button
-              key={v}
-              id={tabId(v)}
               type="button"
-              role="tab"
-              aria-selected={view === v}
-              aria-controls={panelId}
-              // One tab stop, the shown view; the arrows move between them (ARIA's tabs pattern).
-              tabIndex={view === v ? 0 : -1}
-              className={view === v ? 'kube-segment on' : 'kube-segment'}
-              onClick={() => setView(v)}
-              onKeyDown={(e) => {
-                const to = arrowStep(VIEWS, view, e.key)
-                if (to === null) return
-                e.preventDefault()
-                setView(to)
-                document.getElementById(tabId(to))?.focus()
-              }}
+              className="kube-btn"
+              title={t('kube.edit.apply')}
+              aria-label={t('kube.edit.apply')}
+              onClick={() => edit !== null && applyEdit(host, target, { text: editText.current, base: edit.base }, endEdit)}
             >
-              {t(`kube.cluster.tab.${v}` as MessageKey)}
+              <Check size={14} />
             </button>
-          ))}
-        </div>
-        <button type="button" className="kube-btn" title={t('kube.cluster.refresh')} aria-label={t('kube.cluster.refresh')} onClick={() => setGen((g) => g + 1)}>
-          <RefreshCw size={14} />
-        </button>
+            <button type="button" className="kube-btn" title={t('kube.edit.discard')} aria-label={t('kube.edit.discard')} onClick={() => void discard()}>
+              <Undo2 size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="kube-btn"
+              title={isSecret && !canEdit ? t('kube.edit.revealFirst') : t('kube.edit.start')}
+              aria-label={t('kube.edit.start')}
+              disabled={!canEdit}
+              onClick={startEdit}
+            >
+              <Pencil size={14} />
+            </button>
+            <button type="button" className="kube-btn" title={t('kube.cluster.refresh')} aria-label={t('kube.cluster.refresh')} onClick={() => setGen((g) => g + 1)}>
+              <RefreshCw size={14} />
+            </button>
+          </>
+        )}
       </div>
+      {editFailed !== null && (
+        <div className="kube-yaml-note kube-yaml-error" role="alert">
+          {editFailed}
+        </div>
+      )}
+      {revealFirst && <div className="kube-yaml-note">{t('kube.edit.revealFirst')}</div>}
       {gone && <div className="kube-detail-deleted">{t(object !== null ? 'kube.cluster.deleted' : 'kube.cluster.notFound')}</div>}
       <div className="kube-tab-body" role="tabpanel" id={panelId} aria-labelledby={tabId(view)}>
-        {object === null ? (
+        {edit !== null ? (
+          <KubeYamlEditor
+            initial={edit.text}
+            onChange={(text) => {
+              editText.current = text
+              setDirty(text !== edit.text)
+            }}
+          />
+        ) : object === null ? (
           gone ? null : failed !== null ? (
             <div className="kube-cluster-empty kube-detail-error">{failed}</div>
           ) : (

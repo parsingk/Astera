@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab, followTabObject } from './KubeObjectTab'
+import { KubeObjectTab, followTabObject, applyEdit, type KubeTabHost } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
 
@@ -14,8 +14,12 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 }))
 
 const pod = { context: 'arn:aws:eks:ap-northeast-2:1:cluster/live', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
+const stubHost = (): KubeTabHost & { writes: unknown[] } => {
+  const writes: unknown[] = []
+  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {} }
+}
 const render = (target: typeof pod | { context: string; namespace: null; resource: string; kind: string; name: string }): string =>
-  renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true }))
+  renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, tabId: 'kube:t', host: stubHost() }))
 
 
 /** A tag's attributes, to follow the ids that tie a tab to its panel. */
@@ -64,16 +68,55 @@ describe('KubeObjectTab', () => {
   // and a Secret's show values; edit, apply and compare come with P3.
   it('offers no control that would change the object, once it is loaded', () => {
     const object = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api', uid: 'u1', resourceVersion: '7' }, spec: { containers: [{ name: 'app', image: 'x:1' }] } }
-    const html = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object }))
+    const html = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object, tabId: 'kube:p', host: stubHost() }))
     expect(html).not.toContain('kube.cluster.loading')
     expect(html).toContain('name: w-1')
-    expect([...html.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.cluster.refresh'])
+    expect([...html.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.edit.start', 'kube.cluster.refresh'])
     expect(html).not.toMatch(/contenteditable|<textarea|kube\.toolbar\.(apply|compare|edit)|kube\.cluster\.(edit|apply|compare)/)
 
     const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 's', namespace: 'api', uid: 'u2', resourceVersion: '3' }, data: { p: '***' } }
     const target = { ...pod, resource: 'secrets', kind: 'Secret', name: 's' }
-    const shown = renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, initial: secret }))
-    expect([...shown.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.cluster.refresh', 'kube.cluster.showValues'])
+    const shown = renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, initial: secret, tabId: 'kube:s', host: stubHost() }))
+    expect([...shown.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])).toEqual(['kube.edit.start', 'kube.cluster.refresh', 'kube.cluster.showValues'])
+  })
+})
+
+describe('KubeObjectTab edit mode', () => {
+  const object = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api', uid: 'u1', resourceVersion: '7' }, spec: {} }
+  const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 's', namespace: 'api', uid: 'u2', resourceVersion: '3' }, data: { p: '***' } }
+  const secretTarget = { ...pod, resource: 'secrets', kind: 'Secret', name: 's' }
+  const labels = (html: string): string[] => [...html.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])
+
+  it('offers Edit for a Secret only while its values are shown', () => {
+    const host = stubHost()
+    const html = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: secretTarget, visible: true, initial: secret, tabId: 'kube:s', host }))
+    expect(html).toMatch(/<button[^>]*aria-label="kube\.edit\.start"[^>]*disabled/)
+    expect(html).toContain('title="kube.edit.revealFirst"')
+    const plain = renderToStaticMarkup(React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object, tabId: 'kube:p', host }))
+    expect(plain).not.toMatch(/<button[^>]*aria-label="kube\.edit\.start"[^>]*disabled/)
+    expect(labels(plain)).toContain('kube.edit.start')
+  })
+
+  it('shows the edit buttons and the editing chip in edit mode', () => {
+    const initialEdit = { text: 'kind: Pod', base: { resourceVersion: '7', hash: 'h' } }
+    const html = renderToStaticMarkup(
+      React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object, tabId: 'kube:p', host: stubHost(), initialEdit })
+    )
+    expect(html).toContain('kube.edit.editing')
+    expect(html).not.toContain('kube.cluster.readOnly')
+    expect(html).toContain('kind: Pod')
+    expect(labels(html)).toContain('kube.edit.apply')
+    expect(labels(html)).toContain('kube.edit.discard')
+    expect(labels(html)).not.toContain('kube.edit.start')
+    expect(html).not.toContain('kube.cluster.serverFields')
+  })
+
+  it('starts the replace dialog with the edit text and base', () => {
+    const host = stubHost()
+    const base = { resourceVersion: '7', hash: 'h' }
+    const done = (): void => undefined
+    applyEdit(host, pod, { text: 'a: 1', base }, done)
+    expect(host.writes).toEqual([{ verb: 'replace', ref: pod, text: 'a: 1', base }])
   })
 })
 

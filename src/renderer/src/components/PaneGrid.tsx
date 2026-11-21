@@ -18,7 +18,7 @@ import { parseKubeTab, parseTab, sessionTab } from '../../../core/panes/tabId'
 import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
-import { KubeObjectTab } from './kube/cluster/KubeObjectTab'
+import { KubeObjectTab, type KubeTabHost } from './kube/cluster/KubeObjectTab'
 import { useDocumentShown } from '../hooks/useDocumentShown'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
@@ -66,6 +66,7 @@ export function PaneGrid({
   fileTabs,
   dirtyFileIds,
   kubeKinds,
+  kubeHost,
   recordTabs,
   recordStatuses,
   browserTabs,
@@ -119,6 +120,8 @@ export function PaneGrid({
   dirtyFileIds: Set<string>
   /** Kubernetes kind per open file path (App's one useKubeKinds); a path with no entry is not a manifest */
   kubeKinds?: Record<string, KubeFileKind>
+  /** What every cluster object tab asks of the app: its write dialog, its dirty flag and the edit asks. */
+  kubeHost: KubeTabHost
   /** Every open record tab, whichever pane holds it — same place, same reason as fileTabs. The title
    *  and the project come from this record, so a record tab from another project keeps its name and
    *  its × too. */
@@ -579,7 +582,7 @@ export function PaneGrid({
             }
             onMouseDown={() => onFocusPane(pane.id)}
           >
-            <KubeObjectTab target={target} visible={visible && windowShown} />
+            <KubeObjectTab target={target} visible={visible && windowShown} tabId={tabId} host={kubeHost} />
           </div>
         )
       })}

@@ -144,7 +144,7 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { browserTab, fileTab, isRemoteSessionKey, mediaTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
@@ -172,6 +172,8 @@ import { useClusterView } from './hooks/useClusterView'
 import type { ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
+import { kubeTabCloseNeedsAsk } from './lib/kubeEditTabs'
+import type { KubeTabHost } from './components/kube/cluster/KubeObjectTab'
 import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, setLogTabContainer, type KubeLogTab } from './lib/kubeLogTabs'
 import { shownBottomTab } from './lib/bottomTab'
 import { useDocumentShown } from './hooks/useDocumentShown'
@@ -2192,8 +2194,17 @@ export default function App(): React.JSX.Element {
     }
     if (ref.kind === 'kube') {
       // The tab id is the whole record too: dropping it unmounts its slot, which stops its watch and drops any
-      // revealed Secret values with it (D6)
-      dropTabFromTree(tabId)
+      // revealed Secret values with it (D6). An edit not applied is asked about first.
+      void (async () => {
+        if (kubeTabCloseNeedsAsk(dirtyKubeTabs.current, tabId)) {
+          const name = parseKubeTab(ref.id)?.name ?? ''
+          const ok = await confirmModal({ title: t('kube.edit.discardTitle'), body: t('kube.edit.discardBody', { name }), confirmLabel: t('common.close') })
+          if (!ok) return
+        }
+        dirtyKubeTabs.current.delete(tabId)
+        setKubeEditAsks(({ [tabId]: _n, ...rest }) => rest)
+        dropTabFromTree(tabId)
+      })()
       return
     }
     if (ref.kind === 'app') {
@@ -2971,9 +2982,25 @@ export default function App(): React.JSX.Element {
   onFileSavedRef.current = kubeEditor.onSaved
   /** Writes to objects already in the cluster, from the cluster view's menus (hooks/useLiveWrites.ts). */
   const liveWrites = useLiveWrites(kubeOps)
+  /** Edit asks per kube tab id (the cluster view's menu bumps one), and the kube tabs whose edit holds unapplied text. */
+  const [kubeEditAsks, setKubeEditAsks] = useState<Record<string, number>>({})
+  const dirtyKubeTabs = useRef(new Set<string>())
+  const kubeHost: KubeTabHost = {
+    startWrite: (op, onWritten) => liveWrites.start(op, onWritten),
+    setDirty: (tabId, dirty) => {
+      if (dirty) dirtyKubeTabs.current.add(tabId)
+      else dirtyKubeTabs.current.delete(tabId)
+    },
+    editAsks: kubeEditAsks
+  }
   const writeKubeObject = (ask: WriteAsk): void => {
-    // Editing starts in the object's editor tab; the edit itself comes with the editor's own ask.
-    if (ask.verb === 'edit') return openKubeObject(ask.ref)
+    // Editing starts in the object's editor tab, which the bumped count tells to begin (a tab opened now reads it on mount).
+    if (ask.verb === 'edit') {
+      openKubeObject(ask.ref)
+      const id = kubeTab(ask.ref)
+      setKubeEditAsks((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+      return
+    }
     const { ref, object } = ask
     if (ask.verb === 'delete') return liveWrites.start({ verb: 'delete', ref })
     if (ask.verb === 'restart') return liveWrites.start({ verb: 'restart', ref })
@@ -5086,6 +5113,7 @@ export default function App(): React.JSX.Element {
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
                 kubeKinds={kubeKinds}
+                kubeHost={kubeHost}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
