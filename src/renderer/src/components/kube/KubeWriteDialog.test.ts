@@ -223,5 +223,6 @@ describe('KubeWriteDialog', () => {
   it('stays up with a stop button while running', () => {
     const html = render(opOf.restart(), okPreview(), { running: true })
     expect(html).toContain('kube.confirm.abort')
+    expect(html).toMatch(/<button[^>]*primary[^>]*disabled[^>]*>(<span[^>]*><\/span>)?kube.write.restartIn/)
   })
 })

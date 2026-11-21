@@ -252,7 +252,7 @@ export function KubeWriteDialog({
                   aria-label={t(showValues ? 'kube.cluster.hideValues' : 'kube.cluster.showValues')}
                   onClick={onToggleValues}
                 >
-                  {showValues ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showValues ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
                 </button>
               )}
               <label className="check-small">
