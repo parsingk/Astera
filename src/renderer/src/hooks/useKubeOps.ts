@@ -331,6 +331,13 @@ export function displayTarget(view: KubeTargetView, override: KubeOverride | und
 /** A path as compared across the Kubernetes code: slashes unified, no trailing slash, case folded where the platform does. */
 export const normKubePath = (p: string, platform: string = runtimePlatform()): string => foldPathCase(p.split('\\').join('/').replace(/\/+$/, ''), platform)
 
+/** The file's path under the root with `/` separators, whatever either was spelled with; null when it is not under it. */
+export function relativeToRoot(root: string, file: string, platform: string = runtimePlatform()): string | null {
+  const r = normKubePath(root, platform)
+  if (!normKubePath(file, platform).startsWith(r + '/')) return null
+  return file.split(String.fromCharCode(92)).join('/').slice(r.length + 1)
+}
+
 /** Whether a changed path is a selected file or lies under a selected folder. */
 export function touchesSelection(changed: string, selection: readonly string[], platform: string = runtimePlatform()): boolean {
   const c = normKubePath(changed, platform)

@@ -19,6 +19,7 @@ import {
   rememberedNamespaceFor,
   reloadRefusal,
   settlePendingReloads,
+  relativeToRoot,
   touchesSelection,
   type KubeLogEntry,
   type KubeOpsAction,
@@ -617,5 +618,17 @@ describe('kubeOpsReducer: live writes', () => {
     expect(done.log[0]).toMatchObject({ id: 'live1', state: 'done', live: { ref } })
     expect(done.log[0].req).toBeUndefined()
     expect(done.dialog).toEqual(open().dialog)
+  })
+})
+
+describe('relativeToRoot', () => {
+  it('gives the path under the root whatever the separators, and null outside it', () => {
+    expect(relativeToRoot('/p', '/p/k8s/a.yaml', 'linux')).toBe('k8s/a.yaml')
+    expect(relativeToRoot('/p/', '/p/k8s/a.yaml', 'linux')).toBe('k8s/a.yaml')
+    const win = (s: string): string => s.split('/').join(String.fromCharCode(92))
+    expect(relativeToRoot('C:/p', win('C:/p/k8s/a.yaml'), 'win32')).toBe('k8s/a.yaml')
+    expect(relativeToRoot(win('C:/P'), 'c:/p/k8s/a.yaml', 'win32')).toBe('k8s/a.yaml')
+    expect(relativeToRoot('/p', '/pp/a.yaml', 'linux')).toBeNull()
+    expect(relativeToRoot('/p', '/q/a.yaml', 'linux')).toBeNull()
   })
 })

@@ -17,7 +17,7 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 const pod = { context: 'arn:aws:eks:ap-northeast-2:1:cluster/live', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
 const stubHost = (): KubeTabHost & { writes: unknown[] } => {
   const writes: unknown[] = []
-  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {}, compareTarget: async () => ({ state: 'none' }), startCompare: () => undefined }
+  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {}, compareTarget: async () => ({ state: 'none' }), startCompare: () => undefined, compareKey: '/p' }
 }
 const render = (target: typeof pod | { context: string; namespace: null; resource: string; kind: string; name: string }): string =>
   renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, tabId: 'kube:t', host: stubHost() }))
@@ -268,6 +268,8 @@ describe('KubeObjectTab compare', () => {
     expect(other).toContain('kube.edit.compareElsewhere')
     expect(other).toContain('k8s/a.yaml')
     expect(other).toContain('kind-dev / dev')
+    const arn = 'arn:aws:eks:ap-northeast-2:1:cluster/live'
+    expect(html({ state: 'other', file: 'a.yaml', context: arn, namespace: null })).toContain(arn)
   })
 
   it('asks the host again when the object changes and drops an answer that came late', async () => {
@@ -275,6 +277,9 @@ describe('KubeObjectTab compare', () => {
     const ask = (): Promise<ManifestMatch> => new Promise((r) => void answers.push(r))
     const seen: ManifestMatch[] = []
     const stop = askCompare({ ask, apply: (m) => seen.push(m) })
+    // A new ask clears the icon of the last answer at once.
+    expect(seen).toEqual([{ state: 'none' }])
+    seen.length = 0
     answers[0]({ state: 'same', file: 'a' })
     await Promise.resolve()
     await Promise.resolve()

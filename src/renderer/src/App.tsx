@@ -153,7 +153,7 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
-import { kubeRequestOf, settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { kubeRequestOf, relativeToRoot, settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
 import { namespaceLabelOf } from './components/kube/fileNamespacePill'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
 import { useLiveWrites } from './hooks/useLiveWrites'
@@ -3002,15 +3002,13 @@ export default function App(): React.JSX.Element {
         else dirtyKubeTabs.current.delete(tabId)
       },
       editAsks: kubeEditAsks,
+      compareKey: currentProject ?? '',
       compareTarget: async (ref) => {
         const root = currentProjectRef.current
         if (!root) return { state: 'none' }
         const m = await window.api.kube.cluster.manifestFor(root, ref)
         // The tooltip names the file by its path in the project.
-        if (m.state === 'other' && m.file.startsWith(root) && ['/', String.fromCharCode(92)].includes(m.file.charAt(root.length))) {
-          return { ...m, file: m.file.slice(root.length + 1) }
-        }
-        return m
+        return m.state === 'other' ? { ...m, file: relativeToRoot(root, m.file) ?? m.file } : m
       },
       startCompare: (file) => {
         const root = currentProjectRef.current
@@ -3022,7 +3020,7 @@ export default function App(): React.JSX.Element {
         }, (err: unknown) => void toast.error(errText(err)))
       }
     }),
-    [kubeEditAsks]
+    [kubeEditAsks, currentProject]
   )
   const writeKubeObject = (ask: WriteAsk): void => {
     // Editing starts in the object's editor tab, which the bumped count tells to begin (a tab opened now reads it on mount).

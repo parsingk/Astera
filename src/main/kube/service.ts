@@ -60,6 +60,8 @@ const CONTEXTS_TTL_MS = 5_000
 /** A project the explorer is not watching changes unseen (a pull in another window): its graph is rebuilt this often.
  *  A run whose plan changed meanwhile is refused by the fingerprint all the same. */
 const GRAPH_TTL_MS = 30_000
+/** Manifest texts read at once when the manifest index is built. */
+const MANIFEST_READS = 8
 /** `config view` reads local files only; it never needs the long deadline of a cluster call. */
 const CONFIG_VIEW_TIMEOUT_MS = 15_000
 
@@ -311,6 +313,11 @@ export function createKubeService(deps: KubeServiceDeps) {
         graphs.clear()
         manifests.clear()
       }
+      if (isYamlName(name)) {
+        // The index holds document text: a YAML file changing drops the index of the project it is under, not the graph.
+        const at = foldPathCase(f)
+        for (const k of manifests.keys()) if (at.startsWith(k + path.sep) || at.startsWith(k + '/')) manifests.delete(k)
+      }
       if (name === 'Chart.yaml' || kind === 'unlinkDir') {
         // A chart appearing or going changes which files are templates; a folder going takes its files.
         const prefix = (kind === 'unlinkDir' ? f : path.dirname(f)) + path.sep
@@ -336,16 +343,17 @@ export function createKubeService(deps: KubeServiceDeps) {
     await walk(projectRoot)
     const kindsOf = await classify(files)
     const out: ManifestEntry[] = []
-    await Promise.all(
-      files
-        .filter((f) => kindsOf[f] === 'manifest')
-        .map(async (file) => {
-          const text = await deps.readText(file).catch(() => '')
-          for (const d of parseManifestDocs(text)) {
-            if (d.name !== null) out.push({ file, kind: d.kind, group: groupOf(d.apiVersion), name: d.name, namespace: d.namespace })
-          }
-        })
-    )
+    // A few reads at a time: a large project would otherwise open every file at once.
+    const queue = files.filter((f) => kindsOf[f] === 'manifest')
+    const worker = async (): Promise<void> => {
+      for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+        const text = await deps.readText(file).catch(() => '')
+        for (const d of parseManifestDocs(text)) {
+          if (d.name !== null) out.push({ file, kind: d.kind, group: groupOf(d.apiVersion), name: d.name, namespace: d.namespace })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: MANIFEST_READS }, worker))
     return out.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
   }
 
@@ -354,8 +362,13 @@ export function createKubeService(deps: KubeServiceDeps) {
     const key = foldPathCase(projectRoot)
     let m = manifests.get(key)
     if (!m || Date.now() - m.at >= GRAPH_TTL_MS) {
-      m = { at: Date.now(), index: buildManifestIndex(projectRoot) }
+      const index = buildManifestIndex(projectRoot)
+      m = { at: Date.now(), index }
       manifests.set(key, m)
+      // A build that failed is not kept until the TTL: the next ask builds again.
+      index.catch(() => {
+        if (manifests.get(key)?.index === index) manifests.delete(key)
+      })
     }
     return m.index
   }

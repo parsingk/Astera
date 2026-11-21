@@ -44,12 +44,16 @@ export interface KubeTabHost {
   editAsks: Record<string, number>
   compareTarget(ref: ObjectRef): Promise<ManifestMatch>
   startCompare(file: string): void
+  /** Changes with the project the compare is asked against, so a tab asks again when the project does. */
+  compareKey: string
 }
 
 /** Asks which project file declares the object. A failed ask counts as none, and an answer arriving after the returned
  *  stop is dropped (the tab moved on to another object or went). */
 export function askCompare(o: { ask(): Promise<ManifestMatch>; apply(m: ManifestMatch): void }): () => void {
   let alive = true
+  // The last answer belongs to what was asked before: no icon until this one arrives.
+  o.apply({ state: 'none' })
   o.ask().then(
     (m) => alive && o.apply(m),
     () => alive && o.apply({ state: 'none' })
@@ -233,7 +237,7 @@ export function KubeObjectTab({
     () => askCompare({ ask: () => hostRef.current.compareTarget(target), apply: setMatch }),
     // `key` stands for `target`, as above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [uid, key]
+    [uid, key, host.compareKey]
   )
 
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))
@@ -316,7 +320,7 @@ export function KubeObjectTab({
     match.state === 'other'
       ? t('kube.edit.compareElsewhere', {
           file: match.file,
-          target: displayContextName(match.context).short + (match.namespace !== null ? ` / ${match.namespace}` : '')
+          target: match.context + (match.namespace !== null ? ` / ${match.namespace}` : '')
         })
       : ''
   const compare =

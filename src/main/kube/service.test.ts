@@ -2045,6 +2045,62 @@ describe('manifestFor', () => {
     })
   })
 
+  it('drops the index of the project a changed YAML file is under, not the graph', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    const copy = p('k8s', 'copy.yaml')
+    h.files.set(copy, { text: MANIFEST, mtimeMs: 1 })
+    svc.invalidate([{ path: copy, kind: 'add' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
+    h.files.delete(copy)
+    svc.invalidate([{ path: copy, kind: 'unlink' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    h.files.set(a, { text: yamlDocs(cm('renamed', {})), mtimeMs: 2 })
+    svc.invalidate([{ path: a, kind: 'change' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
+    // Another project's change leaves this one's index alone.
+    h.files.set(a, { text: MANIFEST, mtimeMs: 3 })
+    svc.invalidate([{ path: path.resolve('/elsewhere/x.yaml'), kind: 'change' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
+  })
+
+  it('does not keep a failed index build until the TTL', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const read = h.deps.readText
+    let fail = true
+    h.deps.readText = (f) => {
+      if (fail) throw new Error('EMFILE')
+      return read(f)
+    }
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    await expect(svc.manifestFor(root, ref())).rejects.toThrow('EMFILE')
+    fail = false
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+  })
+
+  it('reads manifest texts a few at a time', async () => {
+    const files: Record<string, string> = {}
+    for (let i = 0; i < 40; i++) files[p('k8s', `f${i}.yaml`)] = yamlDocs(cm(`c${i}`, {}))
+    const h = harness(files)
+    const read = h.deps.readText
+    let open = 0
+    let most = 0
+    h.deps.readText = async (f) => {
+      open++
+      most = Math.max(most, open)
+      await new Promise((r) => setTimeout(r, 1))
+      open--
+      return read(f)
+    }
+    const svc = createKubeService(h.deps)
+    await svc.manifestFor(root, ref())
+    expect(most).toBeGreaterThan(1)
+    expect(most).toBeLessThanOrEqual(8)
+  })
+
   it('reads the project again once the graph is dropped', async () => {
     const h = harness({ [a]: MANIFEST })
     const svc = createKubeService(h.deps)
