@@ -54,6 +54,7 @@ describe('write logic', () => {
     expect(replaceArgs(dep, true)).toEqual(['replace', '-f', '-', '-n', 'api', '--dry-run=server', '-o', 'yaml', '--context', 'kind-dev'])
     expect(replaceArgs(dep, false)).toEqual(['replace', '-f', '-', '-n', 'api', '--context', 'kind-dev'])
     expect(deleteArgs(dep, true)).toEqual(['delete', 'deployments.apps', 'web', '-n', 'api', '--dry-run=server', '--context', 'kind-dev'])
+    expect(deleteArgs(dep, false)).toEqual(['delete', 'deployments.apps', 'web', '-n', 'api', '--wait=false', '--context', 'kind-dev'])
     expect(deleteArgs(ns, false)).toEqual(['delete', 'namespaces', 'api', '--wait=false', '--context', 'kind-dev'])
     expect(restartArgs(dep)).toEqual(['rollout', 'restart', 'deployments.apps/web', '-n', 'api', '--context', 'kind-dev'])
     expect(restartPreviewArgs(dep, '2026-11-21T00:00:00Z')).toEqual([
@@ -107,6 +108,14 @@ describe('write logic', () => {
     expect(secretFromEdit(withStringData({ bin: '/w==' }), secret)).toMatchObject({ ok: true, object: { data: { bin: '/w==' } } })
     expect(secretFromEdit(withStringData({ bin: 'AAE=' }), secret)).toMatchObject({ ok: true, object: { data: { bin: 'AAE=' } } })
     expect(secretFromEdit(withStringData({ bin: 'not base64!' }), secret)).toEqual({ ok: false, problem: 'base64', detail: 'bin' })
+  })
+
+  it('leaves data out when a Secret has none and the edit adds none', () => {
+    const empty: K8sObject = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 's', namespace: 'api' } }
+    const r = secretFromEdit(empty, empty)
+    expect(r.ok && r.object).not.toHaveProperty('data')
+    expect(secretFromEdit(withStringData({}), empty)).toMatchObject({ ok: true })
+    expect((secretFromEdit(withStringData({}), empty) as { object: K8sObject }).object).not.toHaveProperty('data')
   })
 
   it('tells a status-only change from a real one', () => {

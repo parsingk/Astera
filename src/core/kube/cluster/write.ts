@@ -73,6 +73,8 @@ export function parseEdit(
   try {
     objects = objectsFromYaml(text)
   } catch (e) {
+    // Safe to forward only because objectsFromYaml's messages carry an error code and a line, never source text (a
+    // Secret's value). Keep that true there, or stop forwarding it here.
     return { ok: false, problem: 'yaml', detail: e instanceof Error ? e.message : 'error' }
   }
   if (objects.length !== 1) return { ok: false, problem: 'not-one', detail: String(objects.length) }
@@ -107,6 +109,7 @@ export function secretFromEdit(
   if (edited.kind !== 'Secret') return { ok: true, object: edited }
   const { stringData, ...rest } = edited
   const data: Record<string, unknown> = isRecord(rest.data) ? { ...rest.data } : {}
+  const hadData = isRecord(rest.data)
   const liveData = isRecord(live.data) ? live.data : {}
   if (isRecord(stringData)) {
     for (const [key, value] of Object.entries(stringData)) {
@@ -121,7 +124,7 @@ export function secretFromEdit(
       }
     }
   }
-  return { ok: true, object: { ...rest, data } as K8sObject }
+  return { ok: true, object: (hadData || Object.keys(data).length > 0 ? { ...rest, data } : rest) as K8sObject }
 }
 
 /** The body `replace` sends: the edit plus the live object's hidden fields, so a later `kubectl apply` keeps its record. */
@@ -173,11 +176,11 @@ export function replaceArgs(ref: ObjectRef, dry: boolean): string[] {
   return ['replace', '-f', '-', ...nsArgs(ref.namespace), ...(dry ? ['--dry-run=server', '-o', 'yaml'] : []), '--context', ref.context]
 }
 
-/** A cluster-scoped object (a Namespace, a CRD) can take long to finish going; the run does not wait for it. */
+/** A real delete never waits for the object to be gone (a Namespace or a CRD can take long); a dry run has no such flag. */
 export function deleteArgs(ref: ObjectRef, dry: boolean): string[] {
   return [
     'delete', ref.resource, ref.name, ...nsArgs(ref.namespace),
-    ...(dry ? ['--dry-run=server'] : ref.namespace === null ? ['--wait=false'] : []),
+    ...(dry ? ['--dry-run=server'] : ['--wait=false']),
     '--context', ref.context
   ]
 }
