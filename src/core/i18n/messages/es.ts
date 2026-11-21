@@ -2813,5 +2813,6 @@ export const es: Catalog = {
   'kube.write.edit.identity': 'La edición debe conservar el kind, el nombre y el namespace del objeto.',
   'kube.write.edit.base64': 'El valor de {detail} no es texto y debe seguir en base64.',
   'kube.write.replicas': 'Réplicas',
+  'kube.write.replicasHint': 'Introduce cuántas réplicas ejecutar.',
   'kube.write.loading': 'Comprobando con el clúster…'
 }

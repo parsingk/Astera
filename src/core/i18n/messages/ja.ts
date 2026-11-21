@@ -2783,5 +2783,6 @@ export const ja: Catalog = {
   'kube.write.edit.identity': '編集内容では、オブジェクトの kind、名前、namespace を変えないでください。',
   'kube.write.edit.base64': '{detail} の値はテキストではないため、base64 のまま残す必要があります。',
   'kube.write.replicas': 'レプリカ数',
+  'kube.write.replicasHint': '実行するレプリカ数を入力してください。',
   'kube.write.loading': 'クラスターで確認しています…'
 }

@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import type { Dependents, LiveOp, LivePreview, ObjectRef } from '../../../core/kube/cluster/types'
 import type { KubeRunResult } from '../../../core/kube/types'
+import type { KubeLogEntry } from './useKubeOps'
 import { writeConfirmable } from '../components/kube/KubeWriteDialog'
-import { finishRun, initialLiveWrites, liveWriteReducer, type LiveWriteAction, type LiveWriteState } from './useLiveWrites'
+import { createLiveWrites, finishRun, initialLiveWrites, liveWriteReducer, type LiveWriteAction, type LiveWriteState } from './useLiveWrites'
 
 const ref = (kind: string, name: string, namespace: string | null = 'dev'): ObjectRef => ({
   context: 'kind-dev',
@@ -129,5 +130,137 @@ describe('liveWriteReducer', () => {
     // Dependents of an earlier dialog never land in a later one.
     const later = run([{ type: 'close' }, { type: 'open', op: del, replicas: '' }], withDeps)
     expect(liveWriteReducer(later, { type: 'dependents', opened: withDeps.dialog!.opened, result: { ok: true, dependents: deps } })).toBe(later)
+  })
+})
+
+describe('liveWriteReducer: reopening and refusals of a delete', () => {
+  const del: LiveOp = { verb: 'delete', ref: ref('Deployment', 'web') }
+
+  it('re-reads dependents after a refused delete', () => {
+    const base = shown(opened(del))
+    const withDeps = liveWriteReducer(base, { type: 'dependents', opened: base.dialog!.opened, result: { ok: true, dependents: deps } })
+    const running = liveWriteReducer(withDeps, { type: 'confirm', id: 'run1' })
+    const again = liveWriteReducer(running, { type: 'ran', result: result({ verb: 'delete', ok: false, ran: 0, refused: { reason: 'changed' } }) })
+    expect(again.dialog!.dependents).toBeNull()
+    expect(again.dialog!.opened).not.toBe(withDeps.dialog!.opened)
+    // The answer for the old ask is dropped, the new one lands.
+    expect(liveWriteReducer(again, { type: 'dependents', opened: withDeps.dialog!.opened, result: { ok: true, dependents: deps } })).toBe(again)
+    const fresh = liveWriteReducer(again, { type: 'dependents', opened: again.dialog!.opened, result: { ok: true, dependents: deps } })
+    expect(fresh.dialog!.dependents).toEqual({ ok: true, dependents: deps })
+  })
+
+  it('ignores open while a run is going', () => {
+    const running = run([{ type: 'confirm', id: 'run1' }], shown(opened()))
+    expect(liveWriteReducer(running, { type: 'open', op: del, replicas: '' })).toBe(running)
+  })
+})
+
+describe('createLiveWrites: the IPC behind the dialog', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const harness = (over: { run?: (id: string) => Promise<KubeRunResult> } = {}) => {
+    let state = initialLiveWrites
+    const logged: KubeLogEntry[] = []
+    const finished: KubeRunResult[] = []
+    const api = {
+      write: {
+        preview: vi.fn(async (..._a: unknown[]) => okPreview()),
+        run: vi.fn((id: string, ..._a: unknown[]) => (over.run ?? (async (rid: string) => result({ id: rid })))(id)),
+        cancel: vi.fn(async (..._a: unknown[]) => {})
+      },
+      cluster: { dependents: vi.fn(async (..._a: unknown[]) => ({ ok: true, dependents: deps })) }
+    }
+    const driver = createLiveWrites({
+      state: () => state,
+      commit: (f) => void (state = f(state)),
+      api: () => api as never,
+      log: () => ({ logLive: (e) => void logged.push(e), finishLive: (r) => void finished.push(r) })
+    })
+    return { driver, api, logged, finished, state: () => state }
+  }
+  const flush = async (): Promise<void> => void (await vi.advanceTimersByTimeAsync(0))
+
+  it('asks the dependents of a delete beside its preview, and again after a refused run', async () => {
+    vi.useFakeTimers()
+    const refused = result({ verb: 'delete', ok: false, ran: 0, refused: { reason: 'changed' } })
+    const h = harness({ run: async (id) => ({ ...refused, id }) })
+    h.driver.start({ verb: 'delete', ref: ref('Deployment', 'web') })
+    await flush()
+    expect(h.api.cluster.dependents).toHaveBeenCalledTimes(1)
+    expect(h.api.write.preview).toHaveBeenCalledTimes(1)
+    expect(h.state().dialog!.dependents).not.toBeNull()
+    h.driver.confirm()
+    await flush()
+    expect(h.logged).toHaveLength(1)
+    expect(h.logged[0]).toMatchObject({ verb: 'delete', scope: 'Deployment/dev/web', live: { rerun: { verb: 'delete' } } })
+    expect(h.finished).toHaveLength(1)
+    expect(h.api.cluster.dependents).toHaveBeenCalledTimes(2)
+    expect(h.api.write.preview).toHaveBeenCalledTimes(2)
+    expect(h.state().dialog!.phase).toBe('confirming')
+    expect(h.state().dialog!.dependents).not.toBeNull()
+  })
+
+  it('previews again after a refused edit and keeps its text out of the log', async () => {
+    vi.useFakeTimers()
+    const edit: LiveOp = { verb: 'replace', ref: ref('ConfigMap', 'cfg'), text: 'secret: hunter2', base: { resourceVersion: '1', hash: 'h' } }
+    const h = harness({ run: async (id) => result({ id, verb: 'replace', ok: false, ran: 0, refused: { reason: 'changed' } }) })
+    h.driver.start(edit)
+    await flush()
+    h.driver.confirm()
+    await flush()
+    expect(h.api.write.preview).toHaveBeenCalledTimes(2)
+    expect(h.api.write.preview.mock.calls[1][0]).toEqual(edit)
+    expect(h.logged[0].live!.rerun).toBeNull()
+    expect(JSON.stringify(h.logged)).not.toContain('hunter2')
+  })
+
+  it('waits for the scale field to rest, then previews the latest count, and stops waiting on close', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    h.driver.start({ verb: 'scale', ref: ref('Deployment', 'web'), replicas: 3 })
+    await flush()
+    h.api.write.preview.mockClear()
+    h.driver.setReplicas('4')
+    await vi.advanceTimersByTimeAsync(300)
+    h.driver.setReplicas('5')
+    await vi.advanceTimersByTimeAsync(399)
+    expect(h.api.write.preview).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(h.api.write.preview).toHaveBeenCalledTimes(1)
+    expect(h.api.write.preview.mock.calls[0][0]).toMatchObject({ replicas: 5 })
+    h.driver.setReplicas('6')
+    h.driver.close()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(h.api.write.preview).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops waiting when the host goes away, and asks nothing for an unknown count', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    h.driver.start({ verb: 'scale', ref: ref('Deployment', 'web'), replicas: 0 }, undefined, '')
+    await flush()
+    expect(h.api.write.preview).not.toHaveBeenCalled()
+    h.driver.setReplicas('2')
+    h.driver.dispose()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(h.api.write.preview).not.toHaveBeenCalled()
+  })
+
+  it('routes the stop of the log to the run of the dialog, or to the run alone', async () => {
+    vi.useFakeTimers()
+    let release: (r: KubeRunResult) => void = () => {}
+    const h = harness({ run: () => new Promise<KubeRunResult>((res) => (release = res)) })
+    h.driver.start(restart)
+    await flush()
+    h.driver.confirm()
+    const id = h.logged[0].id
+    h.driver.cancelRun(id)
+    expect(h.state().dialog!.cancelling).toBe(true)
+    expect(h.api.write.cancel).toHaveBeenCalledWith(id)
+    release(result({ id, ok: false, cancelled: true }))
+    await flush()
+    expect(h.state().dialog).toBeNull()
+    h.driver.cancelRun('earlier')
+    expect(h.api.write.cancel).toHaveBeenLastCalledWith('earlier')
   })
 })

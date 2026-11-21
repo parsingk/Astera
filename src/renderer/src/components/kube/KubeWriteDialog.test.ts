@@ -226,3 +226,17 @@ describe('KubeWriteDialog', () => {
     expect(html).toMatch(/<button[^>]*primary[^>]*disabled[^>]*>(<span[^>]*><\/span>)?kube.write.restartIn/)
   })
 })
+
+describe('KubeWriteDialog scale hint', () => {
+  it('hints at the field instead of loading while the count is not a valid integer', () => {
+    for (const replicas of ['', '-1', '1.5', '2147483648']) {
+      const html = render(opOf.scale(), null, { replicas })
+      expect(html).toContain('kube.write.replicasHint')
+      expect(html).not.toContain('kube.write.loading')
+    }
+    const loading = render(opOf.scale(), null, { replicas: '3' })
+    expect(loading).toContain('kube.write.loading')
+    expect(loading).not.toContain('kube.write.replicasHint')
+    expect(render(opOf.restart(), null)).not.toContain('kube.write.replicasHint')
+  })
+})

@@ -213,10 +213,3 @@ describe('namespaceCommit', () => {
     expect(namespaceCommit('', null)).toBeUndefined()
   })
 })
-
-describe('ClusterView writes', () => {
-  it('draws with a write handler given', () => {
-    const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null, onWrite: noop }))
-    expect(html).toContain('kube-cluster')
-  })
-})

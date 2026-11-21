@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import type { DependentGroup, Dependents, LiveOp, LivePreview, Read } from '../../../../core/kube/cluster/types'
-import { liveRef, needsTypedName } from '../../../../core/kube/cluster/write'
+import { liveRef, needsTypedName, replicasOf } from '../../../../core/kube/cluster/write'
 import { useI18n } from '../../i18n/I18nProvider'
 import { backdropProps } from '../../lib/backdrop'
 import { FileIcon } from '../FileIcon'
@@ -217,7 +217,8 @@ export function KubeWriteDialog({
             {t('kube.write.changedSinceEdit')}
           </div>
         )}
-        {preview === null && (
+        {verb === 'scale' && replicasOf(replicas) === null && <p className="kube-dependents-note">{t('kube.write.replicasHint')}</p>}
+        {preview === null && !(verb === 'scale' && replicasOf(replicas) === null) && (
           <div className="kube-loading">
             <span className="loading-spinner" aria-hidden="true" />
             {t('kube.write.loading')}

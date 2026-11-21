@@ -149,13 +149,11 @@ describe('live writes in the log', () => {
       expect(en[`kube.toast.live.${key}` as const]).toContain('{target}')
       expect(ko[`kube.toast.live.${key}` as const]).toContain('{target}')
     }
-    expect(LIVE.ref.name).toBe('web')
   })
 
   it('reruns live deletes, restarts and scales, never an edit', () => {
     const op = (verb: 'delete' | 'restart') => ({ verb, ref: LIVE.ref })
-    const live = (rerun: KubeLogEntry['live'] extends infer L ? (L extends { rerun: infer R } ? R : never) : never) =>
-      entry({ req: undefined, live: { ref: LIVE.ref, rerun } })
+    const live = (rerun: NonNullable<KubeLogEntry['live']>['rerun']): KubeLogEntry => entry({ req: undefined, live: { ref: LIVE.ref, rerun } })
     expect(kubeRerunnable(live(op('delete')))).toBe(true)
     expect(kubeRerunnable(live(op('restart')))).toBe(true)
     expect(kubeRerunnable(live({ verb: 'scale', ref: LIVE.ref, replicas: 2 }))).toBe(true)

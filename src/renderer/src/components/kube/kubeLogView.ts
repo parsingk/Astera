@@ -63,7 +63,7 @@ export const kubeRerunnable = (e: KubeLogEntry): boolean => !e.live || e.live.re
 
 type T = (key: never, params?: Record<string, string | number>) => string
 
-/** The toast a finished apply, delete or reload gets, or null when none is due (compare, or a run whose preview
+/** The toast a finished apply, delete, reload or live write (edit, delete, restart, scale of a cluster object) gets, or null when none is due (compare, or a run whose preview
  *  asked again because the files changed: the dialog says so itself). An apply or delete names its target and counts
  *  (spec 4.8) and offers the log (`showLog`); a reload's success keeps its own words. */
 export function kubeToastOf(

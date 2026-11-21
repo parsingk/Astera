@@ -11,6 +11,12 @@ export const RESTARTED_AT = 'kubectl.kubernetes.io/restartedAt'
 const LAST_APPLIED = 'kubectl.kubernetes.io/last-applied-configuration'
 const HIDDEN_METADATA = ['uid', 'creationTimestamp', 'generation', 'managedFields'] as const
 
+/** The scale field's text as a count the API takes (an integer 0..2147483647), else null. */
+export function replicasOf(text: string): number | null {
+  if (!/^\d+$/.test(text.trim())) return null
+  const n = Number(text)
+  return n <= 2147483647 ? n : null
+}
 export const canRestart = (kind: string): boolean => ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
 export const canScale = (kind: string): boolean => ['Deployment', 'StatefulSet'].includes(kind)
 /** Deletes whose consequences reach past one object: the name has to be typed to confirm. */

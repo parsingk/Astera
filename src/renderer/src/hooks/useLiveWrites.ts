@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Dependents, LiveOp, LivePreview, Read } from '../../../core/kube/cluster/types'
-import { liveRef } from '../../../core/kube/cluster/write'
+import { liveRef, replicasOf } from '../../../core/kube/cluster/write'
 import type { KubeRunResult } from '../../../core/kube/types'
 import { writeConfirmable } from '../components/kube/KubeWriteDialog'
 import { writeThrough } from '../lib/writeThrough'
@@ -9,14 +9,6 @@ import type { KubeLogEntry } from './useKubeOps'
 
 /** How long the scale field must rest before its count is previewed. */
 const SCALE_WAIT_MS = 400
-const MAX_REPLICAS = 2147483647
-
-/** The scale field's text as a count the API takes (an integer 0..2147483647), else null. */
-export function replicasOf(text: string): number | null {
-  if (!/^\d+$/.test(text.trim())) return null
-  const n = Number(text)
-  return n <= MAX_REPLICAS ? n : null
-}
 
 /** The confirmation of one live write (cluster view). `phase` is `previewing` while the answer to ask `seq` is awaited
  *  (the earlier diff stays shown, stale), `confirming` once it is shown, `running` from confirm until the run `runId`
@@ -78,6 +70,8 @@ export function liveWriteReducer(s: LiveWriteState, a: LiveWriteAction): LiveWri
   const d = s.dialog
   switch (a.type) {
     case 'open': {
+      // A run in progress is never replaced from under its own answer.
+      if (d?.phase === 'running') return s
       const n = a.op.verb === 'scale' ? replicasOf(a.replicas) : null
       const op = a.op.verb === 'scale' && n !== null ? { ...a.op, replicas: n } : a.op
       const dialog: LiveDialog = {
@@ -128,7 +122,12 @@ export function liveWriteReducer(s: LiveWriteState, a: LiveWriteAction): LiveWri
       if (!d || d.phase !== 'running' || d.runId !== a.result.id) return s
       // Nothing was written: the same dialog previews again, the op (and an edit's text) kept, so the person confirms what
       // the object is now.
-      if (a.result.refused?.reason === 'changed') return asking(s, { ...d, runId: null, cancelling: false }, { stale: true })
+      // A delete's dependents are read again: the object may be another one made under the same name (owners go by uid),
+      // and `opened` moves so a late answer for the old ask is dropped.
+      if (a.result.refused?.reason === 'changed') {
+        const dependents = d.op.verb === 'delete' ? null : d.dependents
+        return asking(s, { ...d, runId: null, cancelling: false }, { stale: true, dependents, opened: s.seq + 1 })
+      }
       return { ...s, dialog: null }
     }
     case 'close':
@@ -154,45 +153,60 @@ const failedPreview = (err: unknown): LivePreview => ({
 /** The op a log entry reopens: the command line never holds an edit's text, so an edit has none. */
 const rerunOf = (op: LiveOp): Exclude<LiveOp, { verb: 'replace' }> | null => (op.verb === 'replace' ? null : op)
 
-/** Writes to objects already in the cluster, from the cluster view (board D): previews each in a confirmation, runs it on
- *  confirm, and keeps its entry in the operation log. */
-export function useLiveWrites(log: { logLive(e: KubeLogEntry): void; finishLive(r: KubeRunResult): void }) {
-  const stateRef = useRef(initialLiveWrites)
-  const [state, setState] = useState(initialLiveWrites)
-  const commit = writeThrough(stateRef, setState)
-  const dispatch = (a: LiveWriteAction): void => commit((cur) => liveWriteReducer(cur, a))
-  const logRef = useRef(log)
-  logRef.current = log
-  const onWrittenRef = useRef<(() => void) | undefined>(undefined)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+export interface LiveWriteApi {
+  write: Pick<typeof window.api.kube.write, 'preview' | 'run' | 'cancel'>
+  cluster: Pick<typeof window.api.kube.cluster, 'dependents'>
+}
+
+/** What the driver needs of its host: the state it drives (`commit` takes the next state of the current one, once), the
+ *  IPC, and the operation log. */
+export interface LiveWriteEnv {
+  state(): LiveWriteState
+  commit(next: (cur: LiveWriteState) => LiveWriteState): void
+  api(): LiveWriteApi
+  log(): { logLive(e: KubeLogEntry): void; finishLive(r: KubeRunResult): void }
+}
+
+/** The IPC and timing behind the reducer, without React: previews, dependents, the scale wait, runs and the log. */
+export function createLiveWrites(env: LiveWriteEnv) {
+  let onWritten: (() => void) | undefined
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const dispatch = (a: LiveWriteAction): void => env.commit((cur) => liveWriteReducer(cur, a))
   const clearTimer = (): void => {
-    if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = null
+    if (timer !== null) clearTimeout(timer)
+    timer = null
   }
-  useEffect(() => clearTimer, [])
 
   /** Asks for the preview the dialog now waits for. */
   const ask = (): void => {
-    const d = stateRef.current.dialog
+    const d = env.state().dialog
     if (!d || !askable(d)) return
     const { seq } = d
-    window.api.kube.write
-      .preview(d.op, { keepServerFields: d.keepServerFields, showValues: d.showValues })
+    env
+      .api()
+      .write.preview(d.op, { keepServerFields: d.keepServerFields, showValues: d.showValues })
       .catch(failedPreview)
       .then((preview) => dispatch({ type: 'previewed', seq, preview }))
   }
 
-  const start = (op: LiveOp, onWritten?: () => void, replicas?: string): void => {
+  /** A delete's dependents, while the dialog has none: when it opens and again after a refused run. */
+  const askDependents = (): void => {
+    const d = env.state().dialog
+    if (!d || d.op.verb !== 'delete' || d.dependents !== null) return
+    const { opened } = d
+    env
+      .api()
+      .cluster.dependents(d.op.ref)
+      .catch((err: unknown): Read<{ dependents: Dependents }> => ({ ok: false, message: errText(err) }))
+      .then((result) => dispatch({ type: 'dependents', opened, result }))
+  }
+
+  const start = (op: LiveOp, written?: () => void, replicas?: string): void => {
+    if (env.state().dialog?.phase === 'running') return
     clearTimer()
-    onWrittenRef.current = onWritten
+    onWritten = written
     dispatch({ type: 'open', op, replicas: replicas ?? (op.verb === 'scale' ? String(op.replicas) : '') })
-    const opened = stateRef.current.dialog?.opened ?? 0
-    if (op.verb === 'delete') {
-      window.api.kube.cluster
-        .dependents(op.ref)
-        .catch((err: unknown): Read<{ dependents: Dependents }> => ({ ok: false, message: errText(err) }))
-        .then((result) => dispatch({ type: 'dependents', opened, result }))
-    }
+    askDependents()
     ask()
   }
 
@@ -200,24 +214,22 @@ export function useLiveWrites(log: { logLive(e: KubeLogEntry): void; finishLive(
     dispatch({ type: 'replicas', text })
     clearTimer()
     if (replicasOf(text) === null) return
-    timer.current = setTimeout(() => {
-      timer.current = null
+    timer = setTimeout(() => {
+      timer = null
       dispatch({ type: 'scaleAsk', text })
       ask()
     }, SCALE_WAIT_MS)
   }
 
   const confirm = (): void => {
-    const before = stateRef.current.dialog
-    if (!before) return
     const id = crypto.randomUUID()
     dispatch({ type: 'confirm', id })
-    const d = stateRef.current.dialog
+    const d = env.state().dialog
     if (!d || d.runId !== id || !d.preview?.ok) return
     const { op } = d
     const target = liveRef(op.ref)
     const startedAt = Date.now()
-    logRef.current.logLive({
+    env.log().logLive({
       id,
       verb: op.verb,
       context: op.ref.context,
@@ -228,8 +240,9 @@ export function useLiveWrites(log: { logLive(e: KubeLogEntry): void; finishLive(
       namespaceLabel: op.ref.namespace ?? '',
       live: { ref: op.ref, rerun: rerunOf(op) }
     })
-    window.api.kube.write
-      .run(id, op, d.preview.fingerprint)
+    env
+      .api()
+      .write.run(id, op, d.preview.fingerprint)
       .catch(
         (err: unknown): KubeRunResult => ({
           id,
@@ -246,38 +259,68 @@ export function useLiveWrites(log: { logLive(e: KubeLogEntry): void; finishLive(
         })
       )
       .then((result) => {
-        logRef.current.finishLive(result)
-        commit((cur) => finishRun(cur, result, onWrittenRef.current))
-        // A run refused as changed previews the same op again.
+        env.log().finishLive(result)
+        env.commit((cur) => finishRun(cur, result, onWritten))
+        // A run refused as changed previews the same op again, and a delete reads its dependents again.
         ask()
+        askDependents()
       })
   }
 
+  /** The dialog's stop button. */
   const abort = (): void => {
-    const runId = stateRef.current.dialog?.runId
+    const runId = env.state().dialog?.runId
     if (!runId) return
     dispatch({ type: 'cancel' })
-    void window.api.kube.write.cancel(runId).catch(() => {})
+    void env.api().write.cancel(runId).catch(() => {})
   }
 
   return {
-    dialog: state.dialog,
     start,
     confirm,
     abort,
-    close: () => {
+    /** The log's stop button: the dialog's own stop while it is that run's, else the run alone (its dialog is gone). */
+    cancelRun: (id: string): void => {
+      if (env.state().dialog?.runId === id) abort()
+      else void env.api().write.cancel(id).catch(() => {})
+    },
+    close: (): void => {
       clearTimer()
       dispatch({ type: 'close' })
     },
-    toggleServerFields: () => {
+    toggleServerFields: (): void => {
       dispatch({ type: 'toggleServerFields' })
       ask()
     },
-    toggleValues: () => {
+    toggleValues: (): void => {
       dispatch({ type: 'toggleValues' })
       ask()
     },
     setReplicas,
-    setTyped: (text: string) => dispatch({ type: 'typed', text })
+    setTyped: (text: string): void => dispatch({ type: 'typed', text }),
+    /** The host went away: no preview is asked after the scale wait. */
+    dispose: clearTimer
   }
+}
+
+/** Writes to objects already in the cluster, from the cluster view (board D): previews each in a confirmation, runs it on
+ *  confirm, and keeps its entry in the operation log. */
+export function useLiveWrites(log: { logLive(e: KubeLogEntry): void; finishLive(r: KubeRunResult): void }) {
+  const stateRef = useRef(initialLiveWrites)
+  const [state, setState] = useState(initialLiveWrites)
+  const logRef = useRef(log)
+  logRef.current = log
+  const driver = useRef<ReturnType<typeof createLiveWrites> | null>(null)
+  if (driver.current === null) {
+    const commit = writeThrough(stateRef, setState)
+    driver.current = createLiveWrites({
+      state: () => stateRef.current,
+      commit,
+      api: () => window.api.kube,
+      log: () => logRef.current
+    })
+  }
+  const d = driver.current
+  useEffect(() => () => d.dispose(), [d])
+  return { dialog: state.dialog, ...d }
 }

@@ -18,10 +18,10 @@ const BADGE_KEY = {
 } as const
 
 /** Why a refused run wrote nothing, in words. */
-function refusalText(refused: NonNullable<KubeRunResult['refused']>, t: T): string {
+function refusalText(refused: NonNullable<KubeRunResult['refused']>, t: T, live: boolean): string {
   switch (refused.reason) {
     case 'changed':
-      return t('kube.log.refusedChanged')
+      return t(live ? 'kube.log.refusedChangedLive' : 'kube.log.refusedChanged')
     case 'mixed-contexts':
       return t('kube.confirm.mixedContexts')
     case 'namespace':
@@ -81,7 +81,7 @@ function EntryBody({ e, onOpenFile }: { e: KubeLogEntry; onOpenFile: (path: stri
       )}
       {r?.outcomes.map((o, i) => <OutcomeLine key={i} o={o} onOpenFile={onOpenFile} />)}
       {r && !r.ok && !r.refused && !explained && r.stderr && <div className="kube-log-line error">{r.stderr}</div>}
-      {r?.refused && <div className="kube-log-line error">{refusalText(r.refused, t)}</div>}
+      {r?.refused && <div className="kube-log-line error">{refusalText(r.refused, t, !!e.live)}</div>}
     </div>
   )
 }

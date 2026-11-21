@@ -155,7 +155,8 @@ import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
 import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
-import { replicasOf, useLiveWrites } from './hooks/useLiveWrites'
+import { useLiveWrites } from './hooks/useLiveWrites'
+import { replicasOf } from '../../core/kube/cluster/write'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
@@ -5212,7 +5213,7 @@ export default function App(): React.JSX.Element {
                     onCollapse={() => setRunPanelOpen(false)}
                     kubeLog={kubeOps.log}
                     onKubeRerun={kubeRerun}
-                    onKubeCancel={kubeOps.cancel}
+                    onKubeCancel={(id) => (kubeOps.log.find((x) => x.id === id)?.live ? liveWrites.cancelRun(id) : kubeOps.cancel(id))}
                     onKubeClear={kubeOps.clear}
                     kubeAvailable={kubeAvailable}
                     kubeSegment={kubeSegment}

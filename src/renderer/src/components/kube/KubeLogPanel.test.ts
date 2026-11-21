@@ -172,4 +172,12 @@ describe('KubeLogPanel live entries', () => {
     expect(rerunButton(render([restart]))).not.toContain('disabled')
     expect(render([restart])).toContain('kube.log.verb.restart')
   })
+
+  it('says the object changed, not the files, when a live write was refused as changed', () => {
+    const refused = result({ verb: 'restart', ok: false, ran: 0, refused: { reason: 'changed' } })
+    const live = entry({ verb: 'restart', req: undefined, live: { ref: liveRef, rerun: null }, result: refused })
+    expect(render([live])).toContain('kube.log.refusedChangedLive')
+    expect(render([live])).not.toContain('kube.log.refusedChanged<')
+    expect(render([entry({ result: result({ ok: false, ran: 0, refused: { reason: 'changed' } }) })])).toContain('kube.log.refusedChanged<')
+  })
 })
