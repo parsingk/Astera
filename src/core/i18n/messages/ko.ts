@@ -3428,6 +3428,7 @@ export const ko = {
   'kube.logs.toolbar': '로그',
   'kube.logs.previousContainer': '재시작 전 컨테이너',
   'kube.logs.tab': '로그 {pod}',
+  'kube.logs.tabContainer': '로그 {pod} · {container}',
   'kube.logs.closeTab': '로그 닫기',
   'kube.logs.open': '로그',
   'kube.logs.openPrevious': '재시작 전 로그'

@@ -16,8 +16,9 @@ export const newLogTabId = (): string => PREFIX + crypto.randomUUID()
 /** A log tab's id, as against the panel's 'run', 'kube' and terminal ids. */
 export const isLogTabId = (id: string): boolean => id.startsWith(PREFIX)
 
-const sameLogs = (tab: KubeLogTab, ref: ObjectRef, container: string): boolean =>
-  tab.ref.context === ref.context && tab.ref.namespace === ref.namespace && tab.ref.name === ref.name && tab.container === container
+const samePod = (a: ObjectRef, b: ObjectRef): boolean => a.context === b.context && a.namespace === b.namespace && a.name === b.name
+
+const sameLogs = (tab: KubeLogTab, ref: ObjectRef, container: string): boolean => samePod(tab.ref, ref) && tab.container === container
 
 /** Opens a Pod's logs: the tab already showing that Pod and container gets the focus, and turns previous on when
  *  previous logs were asked (`previous.asked`); a plain open leaves it as the person left it. Else a new tab goes at the
@@ -38,6 +39,11 @@ export function openLogTab(
   if (!previous.asked) return { tabs: [...tabs], focus: tab.id }
   return { tabs: tabs.map((x, i) => (i === at ? { ...x, previous: true, request: x.request + 1 } : x)), focus: tab.id }
 }
+
+/** Whether a tab's title names its container: while another tab shows the same Pod (another container), both would
+ *  read "Logs <pod>" otherwise. */
+export const logTabShowsContainer = (tabs: readonly KubeLogTab[], tab: KubeLogTab): boolean =>
+  tabs.some((x) => x.id !== tab.id && samePod(x.ref, tab.ref))
 
 export function closeLogTab(tabs: readonly KubeLogTab[], id: string): KubeLogTab[] {
   return tabs.filter((tab) => tab.id !== id)

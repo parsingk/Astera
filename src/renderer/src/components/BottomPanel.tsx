@@ -10,7 +10,7 @@ import { KubeLogPanel } from './kube/KubeLogPanel'
 import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
 import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
-import type { KubeLogTab } from '../lib/kubeLogTabs'
+import { logTabShowsContainer, type KubeLogTab } from '../lib/kubeLogTabs'
 import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 
 /**
@@ -189,7 +189,9 @@ export function BottomPanel({
               onClick={() => onSelectTab(tab.id)}
               onKeyDown={tabKeyDown(tab.id)}
             >
-              {t('kube.logs.tab', { pod: tab.ref.name })}
+              {logTabShowsContainer(logTabs, tab)
+                ? t('kube.logs.tabContainer', { pod: tab.ref.name, container: tab.container })
+                : t('kube.logs.tab', { pod: tab.ref.name })}
               <button
                 className="bottom-tab-close"
                 aria-label={t('kube.logs.closeTab')}

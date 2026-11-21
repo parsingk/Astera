@@ -174,6 +174,13 @@ describe('BottomPanel log tabs', () => {
     expect(strip[1]).toMatch(/^<span role="tab"[^>]* title="kind-dev \/ api · kube\.logs\.container worker"/)
   })
 
+  it('names the container in the titles of two tabs of one Pod', () => {
+    const strip = tabTags(render({ logTabs: [tabs[0], { ...logTab('kubelog:3', 'worker-1'), container: 'sidecar' }, tabs[1]] }))
+    expect(strip[1]).toContain('kube.logs.tabContainer{&quot;pod&quot;:&quot;worker-1&quot;,&quot;container&quot;:&quot;worker&quot;}')
+    expect(strip[2]).toContain('kube.logs.tabContainer{&quot;pod&quot;:&quot;worker-1&quot;,&quot;container&quot;:&quot;sidecar&quot;}')
+    expect(strip[3]).toContain('kube.logs.tab{&quot;pod&quot;:&quot;web-2&quot;}')
+  })
+
   it('draws the log tabs before the terminals', () => {
     const html = render({ logTabs: tabs.slice(0, 1), terminals: [{ id: 't1', buffer: '' }] })
     expect(html.indexOf('kube.logs.tab')).toBeGreaterThan(html.indexOf('kube.log.tab'))

@@ -2781,6 +2781,7 @@ export const es: Catalog = {
   'kube.logs.toolbar': 'Registros',
   'kube.logs.previousContainer': 'Contenedor antes de reiniciarse',
   'kube.logs.tab': 'Registros {pod}',
+  'kube.logs.tabContainer': 'Registros {pod} · {container}',
   'kube.logs.closeTab': 'Cerrar registros',
   'kube.logs.open': 'Registros',
   'kube.logs.openPrevious': 'Registros anteriores'

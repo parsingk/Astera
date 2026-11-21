@@ -2751,6 +2751,7 @@ export const ja: Catalog = {
   'kube.logs.toolbar': 'ログ',
   'kube.logs.previousContainer': '再起動前のコンテナ',
   'kube.logs.tab': 'ログ {pod}',
+  'kube.logs.tabContainer': 'ログ {pod} · {container}',
   'kube.logs.closeTab': 'ログを閉じる',
   'kube.logs.open': 'ログ',
   'kube.logs.openPrevious': '再起動前のログ'
