@@ -2960,7 +2960,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.write.boundClaim': 'Bound to this claim',
   'kube.write.incomplete': 'May be incomplete: some kinds could not be listed',
   'kube.write.recreatedBy': '{kind} {name} owns it and will make it again',
-  'kube.write.ownedBy': '{kind} {name} owns it.',
+  'kube.write.ownedBy': '{kind} {name} owns it',
   'kube.write.nothingElse': 'Nothing else goes with it',
   'kube.write.dependentsFailed': 'Could not read what goes with it: {detail}',
   'kube.write.gone': 'The object no longer exists in the cluster.',

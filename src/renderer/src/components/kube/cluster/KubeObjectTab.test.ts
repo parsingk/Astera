@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab, askCompare, compareAskKey, compareAtClick, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
+import { KubeObjectTab, askCompare, compareAskKey, compareAtClick, applyIfCurrent, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
 import type { ManifestMatch } from '../../../../../core/kube/cluster/types'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
@@ -277,6 +277,14 @@ describe('KubeObjectTab compare', () => {
     expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u1', 'k2', '/p'))
     expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u1', 'k', '/q'))
     expect(compareAskKey('u1', 'k', '/p', true)).not.toBe(compareAskKey('u1', 'k', '/p', false))
+  })
+
+  it('drops a click-time answer when the ask key moved on while it was in flight', () => {
+    const seen: ManifestMatch[] = []
+    const m: ManifestMatch = { state: 'none' }
+    applyIfCurrent('k1', () => 'k1', (x) => seen.push(x), m)
+    applyIfCurrent('k1', () => 'k2', (x) => seen.push(x), m)
+    expect(seen).toHaveLength(1)
   })
 
   it('opens the compare at click time only while the fresh answer is still the same file', () => {

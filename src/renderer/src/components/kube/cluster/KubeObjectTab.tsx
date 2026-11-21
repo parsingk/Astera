@@ -55,6 +55,11 @@ export function compareAskKey(uid: string | null, targetKey: string, project: st
   return JSON.stringify([uid, targetKey, project, visible])
 }
 
+/** Applies a click-time answer only while the ask key is still the one the click was made under. */
+export function applyIfCurrent(keyAtClick: string, currentKey: () => string, apply: (m: ManifestMatch) => void, m: ManifestMatch): void {
+  if (currentKey() === keyAtClick) apply(m)
+}
+
 /** The click-time rule: the compare opens only when the fresh answer is still `same` for the file the button was drawn for. */
 export function compareAtClick(fresh: ManifestMatch, file: string): { open: boolean; match: ManifestMatch } {
   return { open: fresh.state === 'same' && fresh.file === file, match: fresh }
@@ -245,11 +250,14 @@ export function KubeObjectTab({
   // The project file that declares this object, asked on mount, when the name comes back as another object, when the
   // project changes and when the tab shows again (the folder's target may have changed meanwhile).
   const [match, setMatch] = useState<ManifestMatch>(initialMatch ?? { state: 'none' })
+  const askKey = compareAskKey(uid, key, host.compareKey, visible)
+  const askKeyRef = useRef(askKey)
+  askKeyRef.current = askKey
   useEffect(
     () => (visible ? askCompare({ ask: () => hostRef.current.compareTarget(target), apply: setMatch }) : undefined),
     // `key` stands for `target`, as above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [compareAskKey(uid, key, host.compareKey, visible)]
+    [askKey]
   )
 
   // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
@@ -338,7 +346,10 @@ export function KubeObjectTab({
       : ''
   const compare =
     match.state === 'same' ? (
-      <button type="button" className="kube-btn" title={t('kube.edit.compare')} aria-label={t('kube.edit.compare')} onClick={() => void host.startCompare(target, match.file).then(setMatch, () => undefined)}>
+      <button type="button" className="kube-btn" title={t('kube.edit.compare')} aria-label={t('kube.edit.compare')} onClick={() => {
+          const keyAtClick = askKeyRef.current
+          void host.startCompare(target, match.file).then((m) => applyIfCurrent(keyAtClick, () => askKeyRef.current, setMatch, m), () => undefined)
+        }}>
         <GitCompare size={14} />
       </button>
     ) : match.state === 'other' ? (
