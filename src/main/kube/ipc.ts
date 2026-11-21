@@ -304,7 +304,8 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     return service.status(file, root, ctx)
   })
 
-  // Read-only views of a cluster; the one channel that returns Secret values is `reveal`, called by an explicit click.
+  // Read-only views of a cluster. Secret values leave only through `reveal` (an explicit click) and through `editBase` and
+  // `kube.write.preview` with `showValues`, which the renderer's "show values" switch gates (D6).
   const { cluster, watches, logs, writes } = deps
   ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(arg(context, 'context')))
   ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(arg(context, 'context')))

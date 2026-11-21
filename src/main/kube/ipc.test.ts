@@ -383,6 +383,9 @@ describe('live writes over IPC', () => {
       { verb: 'scale', ref, replicas: 2147483648 },
       { verb: 'scale', ref, replicas: '3' },
       { verb: 'scale', ref },
+      { verb: 'delete', ref: null },
+      { verb: 'replace', ref, text: 'a', base: [] },
+      { verb: 'replace', ref, text: 'a', base: 'x' },
       null
     ]
     for (const op of bad) await expect(t.call('kube.write.preview', op, OPTS)).rejects.toThrow()
@@ -420,7 +423,7 @@ describe('live writes over IPC', () => {
     await expect(t.call('kube.write.run', 'r1', { verb: 'nope', ref }, 'fp')).rejects.toThrow()
     await t.call('kube.write.cancel', 'r1')
     expect(t.writes.cancel).toHaveBeenCalledWith('r1')
-    expect(() => t.call('kube.write.cancel', '')).toThrow()
+    await expect((async () => t.call('kube.write.cancel', ''))()).rejects.toThrow()
   })
 
   it('reads the edit base and dependents of a validated ref', async () => {
