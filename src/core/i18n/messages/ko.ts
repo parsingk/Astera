@@ -3214,6 +3214,7 @@ export const ko = {
   'kube.write.boundClaim': '이 볼륨에 연결된 클레임',
   'kube.write.incomplete': '목록이 불완전할 수 있습니다. 일부 종류는 조회하지 못했습니다',
   'kube.write.recreatedBy': '{kind} {name} 에서 관리하므로 다시 만들어집니다',
+  'kube.write.ownedBy': '{kind} {name} 에서 관리합니다.',
   'kube.write.nothingElse': '함께 삭제되는 것이 없습니다',
   'kube.write.dependentsFailed': '함께 삭제되는 것을 읽지 못했습니다: {detail}',
   'kube.write.gone': '이 오브젝트는 더 이상 클러스터에 없습니다.',

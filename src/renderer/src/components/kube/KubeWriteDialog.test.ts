@@ -101,7 +101,7 @@ describe('KubeWriteDialog', () => {
       dependents: deps({
         goes: [{ kind: 'Pod', count: 3, names: ['shop/db-0', 'shop/db-1'] }],
         kept: [{ kind: 'PersistentVolumeClaim', count: 2, names: ['shop/data-0', 'shop/data-1'] }],
-        recreatedBy: { kind: 'Deployment', name: 'web' }
+        recreatedBy: { kind: 'ReplicaSet', name: 'web-7d' }
       })
     })
     expect(html).toContain('kube.write.goes')
@@ -110,8 +110,14 @@ describe('KubeWriteDialog', () => {
     expect(html).toContain('…')
     expect(html).toContain('kube.write.kept')
     expect(html).toContain('shop/data-1')
-    expect(html).toContain('kube.write.recreatedBy{"kind":"Deployment","name":"web"}')
+    expect(html).toContain('kube.write.recreatedBy{"kind":"ReplicaSet","name":"web-7d"}')
     expect(html).not.toContain('kube.write.nothingElse')
+  })
+
+  it('says only that an owner owns it when that owner does not make it again', () => {
+    const html = render(opOf.delete('Job'), okPreview(), { dependents: deps({ recreatedBy: { kind: 'CronJob', name: 'nightly' } }) })
+    expect(html).toContain('kube.write.ownedBy{"kind":"CronJob","name":"nightly"}')
+    expect(html).not.toContain('kube.write.recreatedBy')
   })
 
   it('says nothing else goes when all are empty, and uses the node and claim wording', () => {

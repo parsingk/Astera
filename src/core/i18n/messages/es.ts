@@ -2803,6 +2803,7 @@ export const es: Catalog = {
   'kube.write.boundClaim': 'Vinculado a esta reclamación',
   'kube.write.incomplete': 'Puede estar incompleto: no se pudieron listar algunos tipos',
   'kube.write.recreatedBy': '{kind} {name} es su propietario y lo volverá a crear',
+  'kube.write.ownedBy': '{kind} {name} es su propietario',
   'kube.write.nothingElse': 'No se elimina nada más con él',
   'kube.write.dependentsFailed': 'No se pudo leer lo que se elimina con él: {detail}',
   'kube.write.gone': 'El objeto ya no existe en el clúster.',

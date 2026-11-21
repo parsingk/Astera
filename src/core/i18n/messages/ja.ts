@@ -2773,6 +2773,7 @@ export const ja: Catalog = {
   'kube.write.boundClaim': 'このボリュームに紐づくクレーム',
   'kube.write.incomplete': '一覧が不完全な可能性があります。一部の種類は取得できませんでした',
   'kube.write.recreatedBy': '{kind} {name} が所有しているため、再作成されます',
+  'kube.write.ownedBy': '{kind} {name} が所有しています',
   'kube.write.nothingElse': '一緒に削除されるものはありません',
   'kube.write.dependentsFailed': '一緒に削除されるものを読み取れませんでした: {detail}',
   'kube.write.gone': 'このオブジェクトはクラスターに存在しません。',

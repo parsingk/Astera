@@ -26,6 +26,9 @@ export const writeConfirmable = (p: {
   (p.op.verb !== 'delete' || p.dependents !== null) &&
   (p.op.verb !== 'delete' || !needsTypedName(p.op.ref.kind) || p.typed === p.op.ref.name)
 
+/** The controllers that make a deleted object again; any other owner (a CronJob's Job, a finished Job's Pod) only owns it. */
+const RECREATING_OWNERS = new Set(['ReplicaSet', 'StatefulSet', 'DaemonSet', 'ReplicationController', 'Job', 'Deployment'])
+
 function Group({ g }: { g: DependentGroup }): React.JSX.Element {
   return (
     <li>
@@ -170,7 +173,7 @@ export function KubeWriteDialog({
         )}
         {d.incomplete && <p className="kube-dependents-note">{t('kube.write.incomplete')}</p>}
         {d.recreatedBy !== null && (
-          <p className="kube-dependents-note">{t('kube.write.recreatedBy', d.recreatedBy)}</p>
+          <p className="kube-dependents-note">{t(RECREATING_OWNERS.has(d.recreatedBy.kind) ? 'kube.write.recreatedBy' : 'kube.write.ownedBy', d.recreatedBy)}</p>
         )}
         {empty && <p className="kube-dependents-note">{t('kube.write.nothingElse')}</p>}
       </div>
