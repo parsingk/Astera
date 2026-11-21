@@ -13,7 +13,7 @@ import type {
   Remembered
 } from './kube/types'
 import type { K8sObject } from './kube/objects'
-import type { CountInfo, KindDef, LogMessage, LogSpec, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
+import type { CountInfo, Dependents, EditBase, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -1460,6 +1460,18 @@ export interface CoreApi {
       /** Events arrive on `'kube:watch'`. `limit`: MAX_WATCHES processes already run. */
       watch(watchId: string, spec: WatchSpec): Promise<{ ok: true } | { ok: false; reason: 'limit' }>
       unwatch(watchId: string): Promise<void>
+      /** The object's text for editing (Secrets unmasked) and what it was read at, for `write.preview` of a replace. */
+      editBase(ref: ObjectRef): Promise<Read<{ text: string; base: EditBase }>>
+      /** What deleting the object would take with it. */
+      dependents(ref: ObjectRef): Promise<Read<{ dependents: Dependents }>>
+    }
+    /** Writes to objects already in the cluster. */
+    write: {
+      /** A server dry run; never writes. */
+      preview(op: LiveOp, opts: { keepServerFields: boolean; showValues: boolean }): Promise<LivePreview>
+      /** The second write channel: refuses unless the op still matches the confirmed preview's `fingerprint`. Cancellable by `id`. */
+      run(id: string, op: LiveOp, fingerprint: string): Promise<KubeRunResult>
+      cancel(id: string): Promise<void>
     }
     /** Pod logs: lines arrive on `'kube:log'`, tagged with the logId. */
     logs: {

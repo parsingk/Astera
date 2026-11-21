@@ -303,6 +303,7 @@ import { registerKubeIpc } from './kube/ipc'
 import { createKubeService } from './kube/service'
 import { createRealKubeDeps, kubeEnv, kubectlDisplayPath } from './kube/runtime'
 import { createClusterReads } from './kube/cluster'
+import { createLiveWrites } from './kube/liveWrites'
 import { createWatchRegistry } from './kube/clusterWatch'
 import { createLogRegistry } from './kube/logStreams'
 import { kubectlBin } from '../core/kube/kubectl'
@@ -4590,6 +4591,7 @@ export function registerIpc(
       return { cancel: () => clearTimeout(t) }
     }
   })
+  const kubeWrites = createLiveWrites({ run: kubeService.kubectl, counts: kubeCluster.counts, now: () => new Date() })
   registerKubeIpc(ipcMain, {
     service: kubeService,
     assertAllowedPath,
@@ -4599,6 +4601,7 @@ export function registerIpc(
     cluster: kubeCluster,
     watches: kubeWatches,
     logs: kubeLogs,
+    writes: kubeWrites,
     downloadsDir: () => app.getPath('downloads'),
     saveDialog: async (defaultPath) => {
       const r = await dialog.showSaveDialog(win, { defaultPath })

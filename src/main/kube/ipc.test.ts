@@ -45,10 +45,11 @@ function setup(denied: string[] = []) {
     size: vi.fn(() => 0)
   }
   const logs = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const writes = { editBase: vi.fn(async () => ({ ok: true })), dependents: vi.fn(async () => ({ ok: true })), preview: vi.fn(async () => ({ ok: true })), run: vi.fn(async () => ({})), cancel: vi.fn() }
   const saveDialog = vi.fn(async (_defaultPath: string): Promise<string | null> => '/out/p.log')
   const writeFile = vi.fn(async (_p: string, _text: string) => {})
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, saveDialog, writeFile }
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, writes, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, writes, saveDialog, writeFile }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -358,5 +359,75 @@ describe('Pod logs over IPC', () => {
     const t = setup()
     t.writeFile.mockRejectedValueOnce(new Error('disk full'))
     expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: false, error: 'disk full' })
+  })
+})
+
+describe('live writes over IPC', () => {
+  const ref = { context: 'c', namespace: 'n', resource: 'deployments', kind: 'Deployment', name: 'web' }
+  const OPTS = { keepServerFields: false, showValues: false }
+
+  it('validates a live op', async () => {
+    const t = setup()
+    const bad: unknown[] = [
+      { verb: 'apply', ref },
+      { verb: 'delete', ref: { ...ref, name: '-x' } },
+      { verb: 'delete', ref: { ...ref, resource: '-x' } },
+      { verb: 'replace', ref, base: { resourceVersion: '1', hash: 'h' } },
+      { verb: 'replace', ref, text: 5, base: { resourceVersion: '1', hash: 'h' } },
+      { verb: 'replace', ref, text: 'a' },
+      { verb: 'replace', ref, text: 'a', base: { resourceVersion: '', hash: 'h' } },
+      { verb: 'replace', ref, text: 'a', base: { resourceVersion: '1', hash: 2 } },
+      { verb: 'scale', ref, replicas: 1.5 },
+      { verb: 'scale', ref, replicas: -1 },
+      { verb: 'scale', ref, replicas: 2147483648 },
+      { verb: 'scale', ref, replicas: '3' },
+      { verb: 'scale', ref },
+      null
+    ]
+    for (const op of bad) await expect(t.call('kube.write.preview', op, OPTS)).rejects.toThrow()
+    expect(t.writes.preview).not.toHaveBeenCalled()
+    const good = [
+      { verb: 'replace', ref, text: '', base: { resourceVersion: '1', hash: 'h' } },
+      { verb: 'delete', ref },
+      { verb: 'restart', ref },
+      { verb: 'scale', ref, replicas: 0 },
+      { verb: 'scale', ref, replicas: 2147483647 }
+    ]
+    for (const op of good) {
+      await t.call('kube.write.preview', { ...op, extra: 1 }, OPTS)
+      expect(t.writes.preview).toHaveBeenLastCalledWith(op, OPTS)
+    }
+  })
+
+  it('passes preview options', async () => {
+    const t = setup()
+    const op = { verb: 'delete', ref }
+    await t.call('kube.write.preview', op, { keepServerFields: true, showValues: true, x: 1 })
+    expect(t.writes.preview).toHaveBeenLastCalledWith(op, { keepServerFields: true, showValues: true })
+    for (const o of [undefined, {}, { keepServerFields: true }, { showValues: true }, { keepServerFields: 1, showValues: true }]) {
+      await expect(t.call('kube.write.preview', op, o)).rejects.toThrow()
+    }
+  })
+
+  it('routes run and cancel with their ids', async () => {
+    const t = setup()
+    const op = { verb: 'restart', ref }
+    await t.call('kube.write.run', 'r1', op, 'fp')
+    expect(t.writes.run).toHaveBeenCalledWith('r1', op, 'fp')
+    await expect(t.call('kube.write.run', '', op, 'fp')).rejects.toThrow()
+    await expect(t.call('kube.write.run', 'r1', op, '')).rejects.toThrow()
+    await expect(t.call('kube.write.run', 'r1', { verb: 'nope', ref }, 'fp')).rejects.toThrow()
+    await t.call('kube.write.cancel', 'r1')
+    expect(t.writes.cancel).toHaveBeenCalledWith('r1')
+    expect(() => t.call('kube.write.cancel', '')).toThrow()
+  })
+
+  it('reads the edit base and dependents of a validated ref', async () => {
+    const t = setup()
+    await t.call('kube.cluster.editBase', ref)
+    expect(t.writes.editBase).toHaveBeenCalledWith(ref)
+    await t.call('kube.cluster.dependents', ref)
+    expect(t.writes.dependents).toHaveBeenCalledWith(ref)
+    await expect(t.call('kube.cluster.editBase', { ...ref, name: '-x' })).rejects.toThrow()
   })
 })
