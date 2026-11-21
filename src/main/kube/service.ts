@@ -22,6 +22,8 @@ import { parseManifestDocs } from '../../core/kube/docs'
 import { isClusterScoped } from '../../core/kube/namespace'
 import { redactKubectlStderr } from '../../core/kube/redact'
 import { maskSecretPair, normalizeObject, objectsFromYaml, type K8sObject } from '../../core/kube/objects'
+import { groupOf, resourceGroup } from '../../core/kube/cluster/write'
+import type { ManifestMatch, ObjectRef } from '../../core/kube/cluster/types'
 import { foldPathCase } from '../../core/files/paths'
 import type { FileChange } from '../../core/files/changeBatch'
 import type { KubectlResult } from '../../core/kube/kubectl'
@@ -49,19 +51,28 @@ export interface KubeServiceDeps {
 
 export type { KubeTargetView }
 
+/** One resource of a plain manifest of the project: where it is and what it declares. */
+interface ManifestEntry { file: string; kind: string; group: string; name: string; namespace: string | null }
+
 export type KubeService = ReturnType<typeof createKubeService>
 
 const CONTEXTS_TTL_MS = 5_000
 /** A project the explorer is not watching changes unseen (a pull in another window): its graph is rebuilt this often.
  *  A run whose plan changed meanwhile is refused by the fingerprint all the same. */
 const GRAPH_TTL_MS = 30_000
+/** Manifest texts read at once when the manifest index is built. */
+const MANIFEST_READS = 8
 /** `config view` reads local files only; it never needs the long deadline of a cluster call. */
 const CONFIG_VIEW_TIMEOUT_MS = 15_000
+
+/** A path with `/` separators, no trailing slash and folded case, so either spelling of a root and a file compares. */
+const slashed = (p: string): string => foldPathCase(p.split(String.fromCharCode(92)).join('/').replace(/\/+$/, ''))
 
 export function createKubeService(deps: KubeServiceDeps) {
   const kinds = new Map<string, { mtimeMs: number; kind: KubeFileKind }>()
   let contextsCache: { at: number; value: KubeContexts } | null = null
   const graphs = new Map<string, { at: number; graph: Promise<KustomizeGraph> }>()
+  const manifests = new Map<string, { at: number; index: Promise<ManifestEntry[]> }>()
 
   /** Every kubectl call of the feature: stderr is redacted here, before any result, outcome or reason is built from it,
    *  so a Secret's values in a patch error never leave the main process (C22). */
@@ -287,6 +298,7 @@ export function createKubeService(deps: KubeServiceDeps) {
   /** Drops a root's graph, e.g. when the explorer starts watching it: what changed while nobody watched is read again. */
   function forgetGraph(projectRoot: string): void {
     graphs.delete(foldPathCase(projectRoot))
+    manifests.delete(foldPathCase(projectRoot))
   }
 
   /** Drops what the changes may have made stale. A folder moved, copied or deleted can carry overlays, and
@@ -302,6 +314,12 @@ export function createKubeService(deps: KubeServiceDeps) {
         ((kind === 'add' || kind === 'unlink') && !isYamlName(name))
       ) {
         graphs.clear()
+        manifests.clear()
+      }
+      if (isYamlName(name)) {
+        // The index holds document text: a YAML file changing drops the index of the project it is under, not the graph.
+        const at = slashed(f)
+        for (const k of manifests.keys()) if (at.startsWith(slashed(k) + '/')) manifests.delete(k)
       }
       if (name === 'Chart.yaml' || kind === 'unlinkDir') {
         // A chart appearing or going changes which files are templates; a folder going takes its files.
@@ -309,6 +327,82 @@ export function createKubeService(deps: KubeServiceDeps) {
         for (const k of kinds.keys()) if (k.startsWith(prefix)) kinds.delete(k)
       }
     }
+  }
+
+  /** Every resource of the project's plain manifests, walked as the graph is (isSkippedDir folders left out). */
+  async function buildManifestIndex(projectRoot: string): Promise<ManifestEntry[]> {
+    const files: string[] = []
+    const walk = async (dir: string): Promise<void> => {
+      const entries = await deps.listDir(dir).catch(() => [])
+      await Promise.all(
+        entries.map(async (e) => {
+          const full = path.join(dir, e.name)
+          if (e.isDir) {
+            if (!isSkippedDir(e.name)) await walk(full)
+          } else if (isYamlName(e.name)) files.push(full)
+        })
+      )
+    }
+    await walk(projectRoot)
+    const kindsOf = await classify(files)
+    const out: ManifestEntry[] = []
+    // A few reads at a time: a large project would otherwise open every file at once.
+    const queue = files.filter((f) => kindsOf[f] === 'manifest')
+    const worker = async (): Promise<void> => {
+      for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+        const text = await deps.readText(file).catch(() => '')
+        for (const d of parseManifestDocs(text)) {
+          if (d.name !== null) out.push({ file, kind: d.kind, group: groupOf(d.apiVersion), name: d.name, namespace: d.namespace })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: MANIFEST_READS }, worker))
+    return out.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+  }
+
+  /** The project's manifest index, cached per root for as long as the graph is. */
+  function manifestIndex(projectRoot: string): Promise<ManifestEntry[]> {
+    const key = foldPathCase(projectRoot)
+    let m = manifests.get(key)
+    if (!m || Date.now() - m.at >= GRAPH_TTL_MS) {
+      const index = buildManifestIndex(projectRoot)
+      m = { at: Date.now(), index }
+      manifests.set(key, m)
+      // A build that failed is not kept until the TTL: the next ask builds again.
+      index.catch(() => {
+        if (manifests.get(key)?.index === index) manifests.delete(key)
+      })
+    }
+    return m.index
+  }
+
+  /** The one plain manifest that declares the object (K13). A Kustomize member, an unlisted file or one below a
+   *  kustomization that does not parse never counts; neither does a file that is not the only one declaring it. */
+  async function manifestFor(projectRoot: string, ref: ObjectRef): Promise<ManifestMatch> {
+    const none: ManifestMatch = { state: 'none' }
+    const group = resourceGroup(ref.resource)
+    const hits = (await manifestIndex(projectRoot)).filter(
+      (e) =>
+        e.kind === ref.kind &&
+        e.group === group &&
+        e.name === ref.name &&
+        (e.namespace === null || isClusterScoped(e.kind) || e.namespace === ref.namespace)
+    )
+    const views = await Promise.all(
+      [...new Set(hits.map((h) => h.file))].map(async (file) => ({ file, view: await target(file, projectRoot) }))
+    )
+    const plain = views.filter(({ view: v }) => v.overlays.length === 0 && !v.unlisted && v.brokenKustomization === null)
+    if (plain.length !== 1) return none
+    const { file, view } = plain[0]
+    // A file holding the object twice is not one declaration.
+    if (hits.filter((h) => h.file === file).length !== 1) return none
+    if (view.state.state !== 'remembered' && view.state.state !== 'current') return none
+    const context = view.state.context
+    const doc = hits.find((h) => h.file === file)!
+    const namespace = isClusterScoped(ref.kind) || ref.namespace === null
+      ? null
+      : (doc.namespace ?? view.state.namespace ?? (await contexts()).contexts.find((c) => c.name === context)?.namespace ?? 'default')
+    return context === ref.context && namespace === ref.namespace ? { state: 'same', file } : { state: 'other', file, context, namespace }
   }
 
   /** The live object of a file holding exactly one nameable resource, as text for the editor buffer. */
@@ -386,6 +480,7 @@ export function createKubeService(deps: KubeServiceDeps) {
     cancel,
     reload,
     render,
+    manifestFor,
     status
   }
 }

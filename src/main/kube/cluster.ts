@@ -41,14 +41,14 @@ export const isForbidden = (stderr: string): boolean => /Forbidden|cannot list/.
 
 /** The first stderr line (already redacted by the service's wrapper), else the exit code. Forbidden is judged by that
  *  line, as the watches judge theirs: a klog or Warning line ahead of it may mention Forbidden about something else. */
-function failure(r: Result): { ok: false; message: string; forbidden?: true } {
+export function failure(r: Result): { ok: false; message: string; forbidden?: true } {
   const first = firstStderrLine(r.stderr)
   const message = first ?? `kubectl exited ${r.exitCode ?? 'abnormally'}`
   return first !== undefined && isForbidden(first) ? { ok: false, message, forbidden: true } : { ok: false, message }
 }
 
 /** Parsed stdout, or null when it is not JSON. The parse error is dropped: it may quote a Secret value. */
-function parse(stdout: string): unknown {
+export function parse(stdout: string): unknown {
   try {
     return JSON.parse(stdout)
   } catch {

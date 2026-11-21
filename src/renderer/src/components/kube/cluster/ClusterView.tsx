@@ -8,7 +8,7 @@ import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE, type KindDef, type ObjectRef, typ
 import { ContextMenu } from '../../ContextMenu'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
-import { clusterMenuItems } from './clusterMenu'
+import { clusterMenuItems, writeMenuHandlers, type WriteAsk } from './clusterMenu'
 
 /** A watch's error line as shown: kubectl's own words, except a missing binary and a list page over the cap, which main
  *  names in English. */
@@ -78,6 +78,7 @@ export function ClusterView({
   detail,
   onOpenInEditor,
   onOpenLogs,
+  onWrite,
   toolbarStart
 }: {
   model: ClusterViewModel
@@ -86,6 +87,8 @@ export function ClusterView({
   onOpenInEditor?: (ref: ObjectRef) => void
   /** A Pod's logs tab (spec 4.8), `previous` true for previous logs; without it the row menu has no logs items. */
   onOpenLogs?: (ref: ObjectRef, pod: K8sObject, previous: boolean) => void
+  /** The row menu's edit, delete, restart and scale items act on the right-clicked row's object; without it the menu has none. */
+  onWrite?: (ask: WriteAsk) => void
   /** The toolbar row's first item, before the context pill: the bottom panel's segmented switch (spec 4.2). */
   toolbarStart?: React.ReactNode
 }): React.JSX.Element {
@@ -242,7 +245,8 @@ export function ClusterView({
               onOpenInEditor: onOpenInEditor ? () => onOpenInEditor(rowMenu.ref) : undefined,
               onDescribe: () => model.setDetailTab('describe'),
               onCopyName: () => void window.api.clipboard.writeText(rowMenu.ref.name),
-              onLogs: onOpenLogs && rowPod !== null ? (previous) => onOpenLogs(rowMenu.ref, rowPod, previous) : undefined
+              onLogs: onOpenLogs && rowPod !== null ? (previous) => onOpenLogs(rowMenu.ref, rowPod, previous) : undefined,
+              ...writeMenuHandlers(onWrite, rowMenu.ref, rowPod)
             },
             t
           )}

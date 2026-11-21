@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, logsArgs, namespacesArgs, podsArgs } from './args'
+import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, logsArgs, namespacesArgs, nodePodsArgs, ownedArgs, podsArgs, pvcArgs } from './args'
 
 describe('cluster kubectl arguments', () => {
   it('builds a namespaced watch', () => {
@@ -41,5 +41,10 @@ describe('cluster kubectl arguments', () => {
   it('reads on from a time stamp, as many lines as the view keeps', () => {
     const ref = { context: 'c', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
     expect(logsArgs(ref, { container: 'worker', previous: false, follow: true, sinceTime: '2026-11-20T01:12:03.114539874Z' })).toEqual(['logs', 'w-1', '-n', 'api', '-c', 'worker', '--timestamps', '--since-time=2026-11-20T01:12:03.114539874Z', '--tail=50000', '-f', '--context', 'c'])
+  })
+  it('lists what a delete may take with it', () => {
+    expect(ownedArgs('c', 'api')).toEqual(['get', 'replicasets.apps,jobs.batch,pods,endpointslices.discovery.k8s.io,controllerrevisions.apps', '-n', 'api', '-o', 'json', '--context', 'c'])
+    expect(nodePodsArgs('c', 'n1')).toEqual(['get', 'pods', '--all-namespaces', '--field-selector', 'spec.nodeName=n1', '-o', 'json', '--context', 'c'])
+    expect(pvcArgs('c', 'api')).toEqual(['get', 'persistentvolumeclaims', '-n', 'api', '-o', 'json', '--context', 'c'])
   })
 })

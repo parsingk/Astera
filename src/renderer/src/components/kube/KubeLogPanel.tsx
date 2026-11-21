@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, Copy, Eraser, RotateCw, Square } from 'lucid
 import type { KubePreview, KubeRunResult, ResourceOutcome } from '../../../../core/kube/types'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { KubeLogEntry } from '../../hooks/useKubeOps'
-import { defaultExpandedId, clockText, kubeBadge, kubeCommandText } from './kubeLogView'
+import { defaultExpandedId, clockText, kubeBadge, kubeCommandText, kubeRerunnable } from './kubeLogView'
 
 const platform = (): string => (typeof window === 'undefined' ? 'linux' : window.api.platform)
 
@@ -18,10 +18,10 @@ const BADGE_KEY = {
 } as const
 
 /** Why a refused run wrote nothing, in words. */
-function refusalText(refused: NonNullable<KubeRunResult['refused']>, t: T): string {
+function refusalText(refused: NonNullable<KubeRunResult['refused']>, t: T, live: boolean): string {
   switch (refused.reason) {
     case 'changed':
-      return t('kube.log.refusedChanged')
+      return t(live ? 'kube.log.refusedChangedLive' : 'kube.log.refusedChanged')
     case 'mixed-contexts':
       return t('kube.confirm.mixedContexts')
     case 'namespace':
@@ -57,7 +57,7 @@ function OutcomeLine({ o, onOpenFile }: { o: ResourceOutcome; onOpenFile: (path:
   }
   return (
     <div className="kube-log-line ok">
-      ✓ {o.ref} {o.outcome}
+      ✓ {o.ref} {o.message ?? o.outcome}
     </div>
   )
 }
@@ -81,7 +81,7 @@ function EntryBody({ e, onOpenFile }: { e: KubeLogEntry; onOpenFile: (path: stri
       )}
       {r?.outcomes.map((o, i) => <OutcomeLine key={i} o={o} onOpenFile={onOpenFile} />)}
       {r && !r.ok && !r.refused && !explained && r.stderr && <div className="kube-log-line error">{r.stderr}</div>}
-      {r?.refused && <div className="kube-log-line error">{refusalText(r.refused, t)}</div>}
+      {r?.refused && <div className="kube-log-line error">{refusalText(r.refused, t, !!e.live)}</div>}
     </div>
   )
 }
@@ -119,7 +119,7 @@ export function KubeLogPanel({
   return (
     <div className="kube-log">
       <div className="run-rail" role="toolbar" aria-orientation="vertical" aria-label={t('kube.log.rail')}>
-        {rail('kube.log.rerun', <RotateCw size={14} />, () => selected && onRerun(selected.id), !selected || running)}
+        {rail('kube.log.rerun', <RotateCw size={14} />, () => selected && onRerun(selected.id), !selected || running || !kubeRerunnable(selected))}
         {running && rail('kube.log.cancel', <Square size={12} fill="currentColor" strokeWidth={0} />, () => onCancel(selected.id), false)}
         {rail('kube.log.copy', <Copy size={14} />, () => selected && onCopy(selected.id), !selected || selected.commandLines.length === 0)}
         <span className="run-rail-sep" />

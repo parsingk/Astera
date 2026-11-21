@@ -55,7 +55,12 @@ export const KIND_GROUPS: KindGroup[] = [
   },
   {
     id: 'cluster',
-    kinds: [cluster('Node', 'nodes'), cluster('Namespace', 'namespaces'), ns('Event', 'events')]
+    kinds: [
+      cluster('Node', 'nodes'),
+      cluster('Namespace', 'namespaces'),
+      cluster('CustomResourceDefinition', 'customresourcedefinitions.apiextensions.k8s.io'),
+      ns('Event', 'events')
+    ]
   },
   { id: 'custom', kinds: [] }
 ]

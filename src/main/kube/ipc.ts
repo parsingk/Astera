@@ -7,7 +7,8 @@ import type { KubeService } from './service'
 import type { createClusterReads } from './cluster'
 import type { createWatchRegistry } from './clusterWatch'
 import type { createLogRegistry } from './logStreams'
-import type { KindDef, LogSpec, ObjectRef, WatchSpec } from '../../core/kube/cluster/types'
+import type { createLiveWrites } from './liveWrites'
+import type { KindDef, LiveOp, LogSpec, ObjectRef, WatchSpec } from '../../core/kube/cluster/types'
 
 export interface KubeIpcDeps {
   service: KubeService
@@ -20,6 +21,7 @@ export interface KubeIpcDeps {
   cluster: ReturnType<typeof createClusterReads>
   watches: ReturnType<typeof createWatchRegistry>
   logs: ReturnType<typeof createLogRegistry>
+  writes: ReturnType<typeof createLiveWrites>
   /** The folder the save dialog opens in. */
   downloadsDir(): string
   /** Asks where to save, starting at defaultPath; null when the person cancels. */
@@ -161,6 +163,39 @@ function previewOpts(v: unknown): { keepServerFields: boolean } {
   return { keepServerFields: o.keepServerFields }
 }
 
+/** An edit's text may be empty or hold anything; only the base must name the version it was read at. */
+function liveOp(v: unknown): LiveOp {
+  const r = v as { verb?: unknown; ref?: unknown; text?: unknown; base?: unknown; replicas?: unknown } | null | undefined
+  if (!r || typeof r !== 'object') throw new Error('kube: op must be { verb, ref, ... }')
+  const ref = objectRef(r.ref)
+  switch (r.verb) {
+    case 'delete':
+    case 'restart':
+      return { verb: r.verb, ref }
+    case 'replace': {
+      const b = r.base as { resourceVersion?: unknown; hash?: unknown } | null | undefined
+      if (typeof r.text !== 'string') throw new Error('kube: replace needs a text string')
+      if (!b || typeof b !== 'object') throw new Error('kube: replace needs a base { resourceVersion, hash }')
+      return { verb: 'replace', ref, text: r.text, base: { resourceVersion: str(b.resourceVersion, 'base resourceVersion'), hash: str(b.hash, 'base hash') } }
+    }
+    case 'scale':
+      if (typeof r.replicas !== 'number' || !Number.isInteger(r.replicas) || r.replicas < 0 || r.replicas > 2147483647) {
+        throw new Error('kube: replicas must be an integer from 0 to 2147483647')
+      }
+      return { verb: 'scale', ref, replicas: r.replicas }
+    default:
+      throw new Error('kube: verb must be replace, delete, restart or scale')
+  }
+}
+
+function liveOpts(v: unknown): { keepServerFields: boolean; showValues: boolean } {
+  const o = v as { keepServerFields?: unknown; showValues?: unknown } | null | undefined
+  if (!o || typeof o.keepServerFields !== 'boolean' || typeof o.showValues !== 'boolean') {
+    throw new Error('kube: opts must be { keepServerFields, showValues }')
+  }
+  return { keepServerFields: o.keepServerFields, showValues: o.showValues }
+}
+
 export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps): void {
   const { service, assertAllowedPath } = deps
 
@@ -236,7 +271,7 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     return service.preview(op, await allowedRequest(req), o)
   })
 
-  // The only channel that writes to a cluster; the renderer reaches it from the confirmation (spec 4.6).
+  // One of two channels that write to a cluster (the other is kube.write.run); the renderer reaches it from the confirmation (spec 4.6).
   ipcMain.handle('kube.run', async (_e, id, v, req, fingerprint) => {
     const runId = str(id, 'id')
     const op = verb(v)
@@ -269,8 +304,9 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     return service.status(file, root, ctx)
   })
 
-  // Read-only views of a cluster; the one channel that returns Secret values is `reveal`, called by an explicit click.
-  const { cluster, watches, logs } = deps
+  // Read-only views of a cluster. Secret values leave only through `reveal` (an explicit click) and through `editBase` and
+  // `kube.write.preview` with `showValues`, which the renderer's "show values" switch gates (D6).
+  const { cluster, watches, logs, writes } = deps
   ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(arg(context, 'context')))
   ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(arg(context, 'context')))
   ipcMain.handle('kube.cluster.counts', async (_e, context, namespace, kinds) =>
@@ -287,10 +323,26 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
     if (selector === '') return { ok: false, message: 'No label selector to list Pods by' }
     return cluster.pods(ctx, ns, selector)
   })
+  ipcMain.handle('kube.cluster.editBase', async (_e, ref) => writes.editBase(objectRef(ref)))
+  ipcMain.handle('kube.cluster.dependents', async (_e, ref) => writes.dependents(objectRef(ref)))
+  ipcMain.handle('kube.cluster.manifestFor', async (_e, projectRoot, ref) => {
+    const root = str(projectRoot, 'projectRoot')
+    await assertAllowedPath(root)
+    return service.manifestFor(root, objectRef(ref))
+  })
   ipcMain.handle('kube.cluster.reveal', async (_e, ref) => cluster.reveal(objectRef(ref)))
   ipcMain.handle('kube.cluster.list', async (_e, spec) => cluster.list(watchSpec(spec)))
   ipcMain.handle('kube.cluster.watch', async (_e, id, spec) => watches.watch(str(id, 'watchId'), watchSpec(spec)))
   ipcMain.handle('kube.cluster.unwatch', async (_e, id) => watches.unwatch(str(id, 'watchId')))
+
+  ipcMain.handle('kube.write.preview', async (_e, op, opts) => writes.preview(liveOp(op), liveOpts(opts)))
+  // The second channel that writes to a cluster, for objects already live; the renderer reaches it from the confirmation.
+  ipcMain.handle('kube.write.run', async (_e, id, op, fingerprint) => {
+    const runId = str(id, 'id')
+    const o = liveOp(op)
+    return writes.run(runId, o, str(fingerprint, 'fingerprint'))
+  })
+  ipcMain.handle('kube.write.cancel', (_e, id) => writes.cancel(str(id, 'id')))
 
   ipcMain.handle('kube.logs.start', async (_e, id, spec) => logs.start(str(id, 'logId'), logSpec(spec)))
   ipcMain.handle('kube.logs.stop', async (_e, id) => logs.stop(str(id, 'logId')))

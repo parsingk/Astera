@@ -19,7 +19,9 @@ import {
   rememberedNamespaceFor,
   reloadRefusal,
   settlePendingReloads,
+  relativeToRoot,
   touchesSelection,
+  type KubeLogEntry,
   type KubeOpsAction,
   type KubeOpsState
 } from './useKubeOps'
@@ -591,5 +593,42 @@ describe('settlePendingReloads: a reload for a file that is still opening', () =
 
   it('nothing pending settles to nothing', () => {
     expect(settlePendingReloads({}, tabs, buffers)).toEqual({ apply: [], drop: [], keep: {} })
+  })
+})
+
+describe('kubeOpsReducer: live writes', () => {
+  it('logs a live write and finishes it', () => {
+    const ref = { context: 'kind-dev', namespace: 'dev', resource: 'deployments.apps', kind: 'Deployment', name: 'web' }
+    const entry: KubeLogEntry = {
+      id: 'live1',
+      verb: 'restart',
+      context: 'kind-dev',
+      scope: 'Deployment/dev/web',
+      commandLines: [['rollout', 'restart', 'deployment/web']],
+      startedAt: 1,
+      state: 'running',
+      namespaceLabel: 'dev',
+      live: { ref, rerun: { verb: 'restart', ref } }
+    }
+    const s = step(open(), { type: 'liveStart', entry })
+    expect(s.log[0]).toBe(entry)
+    // The file dialog is untouched: the live run's id never matches its runId.
+    expect(s.dialog).toEqual(open().dialog)
+    const done = step(s, { type: 'ran', result: runResult({ id: 'live1', verb: 'restart', target: 'Deployment/dev/web' }) })
+    expect(done.log[0]).toMatchObject({ id: 'live1', state: 'done', live: { ref } })
+    expect(done.log[0].req).toBeUndefined()
+    expect(done.dialog).toEqual(open().dialog)
+  })
+})
+
+describe('relativeToRoot', () => {
+  it('gives the path under the root whatever the separators, and null outside it', () => {
+    expect(relativeToRoot('/p', '/p/k8s/a.yaml', 'linux')).toBe('k8s/a.yaml')
+    expect(relativeToRoot('/p/', '/p/k8s/a.yaml', 'linux')).toBe('k8s/a.yaml')
+    const win = (s: string): string => s.split('/').join(String.fromCharCode(92))
+    expect(relativeToRoot('C:/p', win('C:/p/k8s/a.yaml'), 'win32')).toBe('k8s/a.yaml')
+    expect(relativeToRoot(win('C:/P'), 'c:/p/k8s/a.yaml', 'win32')).toBe('k8s/a.yaml')
+    expect(relativeToRoot('/p', '/pp/a.yaml', 'linux')).toBeNull()
+    expect(relativeToRoot('/p', '/q/a.yaml', 'linux')).toBeNull()
   })
 })

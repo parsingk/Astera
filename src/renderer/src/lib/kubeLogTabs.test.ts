@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { K8sObject } from '../../../core/kube/objects'
-import { closeLogTab, isLogTabId, openLogTab, openPodLogs, setLogTabContainer, type KubeLogTab } from './kubeLogTabs'
+import { closeLogTab, isLogTabId, logTabShowsContainer, openLogTab, openPodLogs, setLogTabContainer, type KubeLogTab } from './kubeLogTabs'
 
 const ref = (name: string, over: Partial<{ context: string; namespace: string | null }> = {}) => ({
   context: 'kind-dev',
@@ -95,6 +95,24 @@ describe('setLogTabContainer', () => {
     expect(again.tabs).toHaveLength(3)
     expect(again.focus).toBe('kubelog:3')
     expect(openLogTab(picked, ref('worker-1'), 'sidecar', plain, newId).focus).toBe('kubelog:1')
+  })
+})
+
+// Two tabs of one Pod both read "Logs <pod>": each names its container then, as an editor names the folders of two files
+// with one name. A tab alone on its Pod keeps the short title.
+describe('logTabShowsContainer', () => {
+  it('names the container only while another tab shows the same Pod', () => {
+    const newId = ids()
+    const one = openLogTab([], ref('worker-1'), 'worker', plain, newId).tabs
+    expect(logTabShowsContainer(one, one[0])).toBe(false)
+    const two = openLogTab(one, ref('worker-1'), 'sidecar', plain, newId).tabs
+    const other = openLogTab(two, ref('worker-2'), 'worker', plain, newId).tabs
+    expect(other.map((tab) => logTabShowsContainer(other, tab))).toEqual([true, true, false])
+    // The same name in another namespace or context is another Pod; the tooltip says where each reads from.
+    const elsewhere = openLogTab(one, ref('worker-1', { namespace: 'web' }), 'sidecar', plain, newId).tabs
+    expect(elsewhere.map((tab) => logTabShowsContainer(elsewhere, tab))).toEqual([false, false])
+    // Closing the other tab gives the short title back.
+    expect(logTabShowsContainer(closeLogTab(other, 'kubelog:2'), other[0])).toBe(false)
   })
 })
 

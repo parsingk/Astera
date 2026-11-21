@@ -57,9 +57,13 @@ export function nextFailedPaths(prev: ReadonlySet<string>, result: KubeRunResult
   return next
 }
 
+/** Whether the log's rerun can do something: an edit's entry cannot (its text is never kept); the others reopen their
+ *  dialog. */
+export const kubeRerunnable = (e: KubeLogEntry): boolean => !e.live || e.live.rerun !== null
+
 type T = (key: never, params?: Record<string, string | number>) => string
 
-/** The toast a finished apply, delete or reload gets, or null when none is due (compare, or a run whose preview
+/** The toast a finished apply, delete, reload or live write (edit, delete, restart, scale of a cluster object) gets, or null when none is due (compare, or a run whose preview
  *  asked again because the files changed: the dialog says so itself). An apply or delete names its target and counts
  *  (spec 4.8) and offers the log (`showLog`); a reload's success keeps its own words. */
 export function kubeToastOf(
@@ -68,6 +72,15 @@ export function kubeToastOf(
 ): { kind: 'success' | 'error'; message: string; showLog: boolean } | null {
   if (result.refused?.reason === 'changed') return null
   const context = result.context
+  if (result.target !== undefined && (result.verb === 'replace' || result.verb === 'restart' || result.verb === 'scale' || result.verb === 'delete')) {
+    const live = { target: result.target, context }
+    if (result.ok) return { kind: 'success', message: t(`kube.toast.live.${result.verb}` as never, live), showLog: true }
+    const fail = (message: string): { kind: 'error'; message: string; showLog: boolean } => ({ kind: 'error', message, showLog: true })
+    if (result.refused) return fail(t('kube.toast.refused' as never, { context }))
+    if (result.cancelled) return fail(t('kube.toast.cancelled' as never, { context }))
+    if (result.timedOut) return fail(t('kube.toast.timedOut' as never, { context }))
+    return fail(t('kube.toast.liveFailed' as never, live))
+  }
   if (result.ok && result.verb === 'reload') return { kind: 'success', message: t('kube.toast.reloaded' as never, { context }), showLog: false }
   if (result.ok) {
     // A warning line names no resource of its own.
@@ -97,3 +110,26 @@ export function clockText(ms: number): string {
 /** One command as the person would type it. Same quoting the confirmation shows. */
 export const kubeCommandText = (args: string[], platform: string): string =>
   `kubectl ${args.map((a) => shellQuote(a, platform)).join(' ')}`
+
+/** Keeps one Kubernetes result toast on screen: a new one dismisses the one before it, and `clear` drops the one
+ *  still showing (when a confirmation dialog opens, so the toast does not cover its buttons). */
+export function createKubeToastSlot<A extends unknown[]>(
+  show: (...args: A) => number,
+  dismiss: (id: number) => void
+): { show: (...args: A) => number; clear: () => void } {
+  let current: number | null = null
+  const clear = (): void => {
+    if (current === null) return
+    const id = current
+    current = null
+    dismiss(id)
+  }
+  return {
+    show: (...args: A): number => {
+      clear()
+      current = show(...args)
+      return current
+    },
+    clear
+  }
+}

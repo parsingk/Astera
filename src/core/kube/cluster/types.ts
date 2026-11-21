@@ -1,5 +1,6 @@
 /** Shared shapes of the cluster view: main and renderer both import them, so nothing here may touch `node:`. */
 import type { K8sObject } from '../objects'
+import type { ResourceDiff } from '../types'
 
 export type GroupId = 'workloads' | 'network' | 'config' | 'storage' | 'access' | 'cluster' | 'custom'
 /** `resource` is the plural, with `.group` appended unless the resource is in the core group. */
@@ -47,3 +48,46 @@ export type LogMessage = { logId: string } & (
   | { kind: 'ended' }
   | { kind: 'error'; message: string }
 )
+/** The one plain manifest in the project that declares an object: `same` when it targets the object's own context and
+ *  namespace, `other` (with that target) when it targets elsewhere. `file` is an absolute path. */
+export type ManifestMatch =
+  | { state: 'none' }
+  | { state: 'same'; file: string }
+  | { state: 'other'; file: string; context: string; namespace: string | null }
+export type LiveVerb = 'replace' | 'delete' | 'restart' | 'scale'
+/** What the tab read when editing started: the version, and a hash of the object without what only the server changes. */
+export interface EditBase { resourceVersion: string; hash: string }
+export type LiveOp =
+  | { verb: 'replace'; ref: ObjectRef; text: string; base: EditBase }
+  | { verb: 'delete'; ref: ObjectRef }
+  | { verb: 'restart'; ref: ObjectRef }
+  | { verb: 'scale'; ref: ObjectRef; replicas: number }
+/** Why an edit's text cannot be sent: not YAML, not exactly one object, another object, a value that is not base64. */
+export type EditProblem = 'yaml' | 'not-one' | 'identity' | 'base64'
+/** `names`: up to DEPENDENT_NAMES of them, `ns/name` for namespaced objects. Groups built from objects (groupObjects) always carry names; a producer that only counts (a Namespace's or a CRD's contents) leaves them empty. */
+export interface DependentGroup { kind: string; count: number; names: string[] }
+export interface Dependents {
+  goes: DependentGroup[] // deleted with it
+  kept: DependentGroup[] // a StatefulSet's PVCs it leaves
+  affected: DependentGroup[] // a Node's Pods, a PV's bound claim: named, not deleted
+  incomplete: boolean // some kind could not be listed or counted
+  recreatedBy: { kind: string; name: string } | null // its controller owner
+}
+/** What a live write would do, from a server dry run. `fingerprint` covers the exact arguments (and an edit's exact
+ *  body); a run with another one is refused. */
+export type LivePreview =
+  | {
+      ok: true
+      commandLines: string[][]
+      checkCommandLines: string[][]
+      diff: ResourceDiff
+      fingerprint: string
+      /** K11: changed beyond status since editing began; the diff is against the new object. */
+      changedSinceEdit?: true
+    }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'kind' }
+  /** A paused Deployment: `rollout restart` refuses it, so no restart is offered. */
+  | { ok: false; reason: 'paused' }
+  | { ok: false; reason: 'edit'; problem: EditProblem; detail: string }
+  | { ok: false; reason: 'kubectl'; commandLines: string[][]; checkCommandLines: string[][]; stderr: string; timedOut?: true }

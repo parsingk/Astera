@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { LiveOp, ObjectRef } from '../../../core/kube/cluster/types'
 import { foldPathCase, runtimePlatform } from '../../../core/files/paths'
 import type {
   KubeContexts,
@@ -20,7 +21,8 @@ import { errText } from './useFileOps'
 /** One operation of the session's Kubernetes log (spec 4.8). `scope` is "3 files" or the overlay path. */
 export interface KubeLogEntry {
   id: string
-  verb: 'compare' | 'apply' | 'delete' | 'reload'
+  /** `replace`, `restart` and `scale` are live writes of the cluster view; a live delete is `delete` with `live` set. */
+  verb: 'compare' | 'apply' | 'delete' | 'reload' | 'replace' | 'restart' | 'scale'
   context: string
   scope: string
   commandLines: string[][]
@@ -30,10 +32,13 @@ export interface KubeLogEntry {
   compare?: { changed: number; unchanged: number; created: number }
   /** What the entry was started with, so the log can open the same operation's preview again. A reload's request
    *  names the file alone (`projectRoot` is empty). */
-  req: KubeRequest
+  req?: KubeRequest
   namespaceLabel: NamespaceLabel
   /** The paths whose disk change made the dialog stale, so a rerun watches the same files. */
   involved?: string[]
+  /** A write to an object already in the cluster (no `req`). `rerun` is the op its dialog opens again with: none for an
+   *  edit, whose text the log never keeps. */
+  live?: { ref: ObjectRef; rerun: Exclude<LiveOp, { verb: 'replace' }> | null }
 }
 
 /** The confirmation dialog (spec 4.6). `preview: null` while the first answer loads. `phase` is `previewing` while
@@ -93,6 +98,8 @@ export type KubeOpsAction =
   | { type: 'toggleServerFields' }
   | { type: 'confirm'; id: string; at: number; scope: string }
   | { type: 'cancel' }
+  /** A live write started: its entry runs until `ran` finishes it. */
+  | { type: 'liveStart'; entry: KubeLogEntry }
   /** `reopen` names the dialog `then` opens as, when the run succeeded. */
   | { type: 'ran'; result: KubeRunResult; reopen?: { id: string; at: number } }
   | { type: 'reload'; id: string; context: string; scope: string; at: number; pill?: string | null }
@@ -229,6 +236,8 @@ export function kubeOpsReducer(s: KubeOpsState, a: KubeOpsAction): KubeOpsState 
     }
     case 'close':
       return d && d.phase !== 'running' ? { ...s, dialog: null } : s
+    case 'liveStart':
+      return { ...s, log: [a.entry, ...s.log] }
     case 'clear':
       return { ...s, log: [] }
   }
@@ -321,6 +330,13 @@ export function displayTarget(view: KubeTargetView, override: KubeOverride | und
 
 /** A path as compared across the Kubernetes code: slashes unified, no trailing slash, case folded where the platform does. */
 export const normKubePath = (p: string, platform: string = runtimePlatform()): string => foldPathCase(p.split('\\').join('/').replace(/\/+$/, ''), platform)
+
+/** The file's path under the root with `/` separators, whatever either was spelled with; null when it is not under it. */
+export function relativeToRoot(root: string, file: string, platform: string = runtimePlatform()): string | null {
+  const r = normKubePath(root, platform)
+  if (!normKubePath(file, platform).startsWith(r + '/')) return null
+  return file.split(String.fromCharCode(92)).join('/').slice(r.length + 1)
+}
 
 /** Whether a changed path is a selected file or lies under a selected folder. */
 export function touchesSelection(changed: string, selection: readonly string[], platform: string = runtimePlatform()): boolean {
@@ -498,6 +514,9 @@ export function useKubeOps(deps: KubeOpsDeps) {
       dispatch({ type: 'toggleServerFields' })
       ask()
     },
+    /** A live write of the cluster view (hooks/useLiveWrites.ts) starts and ends in this log. */
+    logLive: (entry: KubeLogEntry) => dispatch({ type: 'liveStart', entry }),
+    finishLive: (result: KubeRunResult) => dispatch({ type: 'ran', result }),
     /** Something is running, so the toolbar's actions wait. */
     busy: state.log.some((e) => e.state === 'running')
   }

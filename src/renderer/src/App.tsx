@@ -144,7 +144,7 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { browserTab, fileTab, isRemoteSessionKey, mediaTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
@@ -153,21 +153,28 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
-import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { kubeRequestOf, relativeToRoot, settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { namespaceLabelOf } from './components/kube/fileNamespacePill'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
+import { useLiveWrites } from './hooks/useLiveWrites'
+import { replicasOf } from '../../core/kube/cluster/write'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
-import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
+import { KubeWriteDialog } from './components/kube/KubeWriteDialog'
+import type { WriteAsk } from './components/kube/cluster/clusterMenu'
+import { createKubeToastSlot, kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import type { KubeSegment } from './components/kube/KubeSegments'
 import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
 import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
 import { KubeLogView } from './components/kube/logs/KubeLogView'
 import { useClusterView } from './hooks/useClusterView'
-import type { ObjectRef } from '../../core/kube/cluster/types'
+import type { ManifestMatch, ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
+import { kubeTabCloseNeedsAsk } from './lib/kubeEditTabs'
+import { compareAtClick, type KubeTabHost } from './components/kube/cluster/KubeObjectTab'
 import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, setLogTabContainer, type KubeLogTab } from './lib/kubeLogTabs'
 import { shownBottomTab } from './lib/bottomTab'
 import { useDocumentShown } from './hooks/useDocumentShown'
@@ -2188,8 +2195,17 @@ export default function App(): React.JSX.Element {
     }
     if (ref.kind === 'kube') {
       // The tab id is the whole record too: dropping it unmounts its slot, which stops its watch and drops any
-      // revealed Secret values with it (D6)
-      dropTabFromTree(tabId)
+      // revealed Secret values with it (D6). An edit not applied is asked about first.
+      void (async () => {
+        if (kubeTabCloseNeedsAsk(dirtyKubeTabs.current, tabId)) {
+          const name = parseKubeTab(ref.id)?.name ?? ''
+          const ok = await confirmModal({ title: t('kube.edit.discardTitle'), body: t('kube.edit.discardBody', { name }), confirmLabel: t('common.close') })
+          if (!ok) return
+        }
+        dirtyKubeTabs.current.delete(tabId)
+        setKubeEditAsks(({ [tabId]: _n, ...rest }) => rest)
+        dropTabFromTree(tabId)
+      })()
       return
     }
     if (ref.kind === 'app') {
@@ -2965,26 +2981,99 @@ export default function App(): React.JSX.Element {
   const allFilePaths = useMemo(() => fileTabs.map((t) => t.path), [fileTabs])
   const kubeEditor = useKubeEditor(kubeTabs, allFilePaths, kubeOps)
   onFileSavedRef.current = kubeEditor.onSaved
+  /** Writes to objects already in the cluster, from the cluster view's menus (hooks/useLiveWrites.ts). */
+  const liveWrites = useLiveWrites(kubeOps)
+  /** Edit asks per kube tab id (the cluster view's menu bumps one), and the kube tabs whose edit holds unapplied text. */
+  const [kubeEditAsks, setKubeEditAsks] = useState<Record<string, number>>({})
+  const dirtyKubeTabs = useRef(new Set<string>())
+  // The write starter is new at every render, so the host reads it through a ref and changes only with the asks.
+  const liveWritesRef = useRef(liveWrites)
+  liveWritesRef.current = liveWrites
+  // The contexts the editor listed, read when a compare starts (the host never changes for them).
+  const kubeEditorRef = useRef(kubeEditor)
+  kubeEditorRef.current = kubeEditor
+  const kubeOpsRef = useRef(kubeOps)
+  kubeOpsRef.current = kubeOps
+  const kubeHost = useMemo<KubeTabHost>(
+    () => ({
+      startWrite: (op, onWritten) => liveWritesRef.current.start(op, onWritten),
+      setDirty: (tabId, dirty) => {
+        if (dirty) dirtyKubeTabs.current.add(tabId)
+        else dirtyKubeTabs.current.delete(tabId)
+      },
+      editAsks: kubeEditAsks,
+      compareKey: currentProject ?? '',
+      compareTarget: async (ref) => {
+        const root = currentProjectRef.current
+        if (!root) return { state: 'none' }
+        const m = await window.api.kube.cluster.manifestFor(root, ref)
+        // The tooltip names the file by its path in the project.
+        return m.state === 'other' ? { ...m, file: relativeToRoot(root, m.file) ?? m.file } : m
+      },
+      startCompare: async (ref, file) => {
+        const root = currentProjectRef.current
+        if (!root) return { state: 'none' }
+        // The folder's target may have changed since the button was drawn: ask again, open only for the same file.
+        const fresh = await window.api.kube.cluster.manifestFor(root, ref)
+        const shownFresh: ManifestMatch = fresh.state === 'other' ? { ...fresh, file: relativeToRoot(root, fresh.file) ?? fresh.file } : fresh
+        if (!compareAtClick(fresh, file).open) return shownFresh
+        void window.api.kube.target(file, root).then((view) => {
+          const req = kubeRequestOf([file], root, view, undefined, kubeEditorRef.current.contexts)
+          if (!req) return void toast.info(tRef.current('kube.ops.chooseCluster'))
+          kubeOpsRef.current.startCompare(req, namespaceLabelOf(view, req.pill))
+        }, (err: unknown) => void toast.error(errText(err)))
+        return shownFresh
+      }
+    }),
+    [kubeEditAsks, currentProject]
+  )
+  const writeKubeObject = (ask: WriteAsk): void => {
+    // Editing starts in the object's editor tab, which the bumped count tells to begin (a tab opened now reads it on mount).
+    if (ask.verb === 'edit') {
+      openKubeObject(ask.ref)
+      const id = kubeTab(ask.ref)
+      setKubeEditAsks((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+      return
+    }
+    const { ref, object } = ask
+    if (ask.verb === 'delete') return liveWrites.start({ verb: 'delete', ref })
+    if (ask.verb === 'restart') return liveWrites.start({ verb: 'restart', ref })
+    // The field starts at the count the object has; with none known nothing is previewed until one is typed.
+    const known = object?.spec && typeof object.spec === 'object' ? (object.spec as { replicas?: unknown }).replicas : undefined
+    const count = typeof known === 'number' && replicasOf(String(known)) !== null ? known : null
+    liveWrites.start({ verb: 'scale', ref, replicas: count ?? 0 }, undefined, count === null ? '' : String(count))
+  }
 
   /** Files whose last Kubernetes operation failed (the explorer's warning mark), and the finished entries already
    *  accounted for, so a log that re-renders never toasts or marks twice. */
   const [failedKubePaths, setFailedKubePaths] = useState<ReadonlySet<string>>(() => new Set())
   const kubeSeenRef = useRef(new Set<string>())
+  /** Only the newest Kubernetes result toast stays, and opening a confirmation dialog drops it. */
+  const kubeToastSlot = useRef(
+    createKubeToastSlot(
+      (kind: 'success' | 'error', message: string, options?: Parameters<typeof toast.success>[1]) =>
+        (kind === 'success' ? toast.success : toast.error)(message, options),
+      dismiss
+    )
+  ).current
+  useEffect(() => {
+    if (kubeOps.dialog || liveWrites.dialog) kubeToastSlot.clear()
+  }, [!!kubeOps.dialog, !!liveWrites.dialog])
   useEffect(() => {
     for (const e of kubeOps.log) {
       if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
       kubeSeenRef.current.add(e.id)
       const result = e.result
-      if (result.verb !== 'reload') {
+      // A live write has no files: nothing to mark or refresh.
+      if (result.verb !== 'reload' && e.req) {
         setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
         kubeEditor.refreshAfterRun(e.req, result.commandLines)
       }
       const note = kubeToastOf(result, t as never)
       if (!note) continue
-      const show = note.kind === 'success' ? toast.success : toast.error
-      if (!note.showLog) show(note.message)
+      if (!note.showLog) kubeToastSlot.show(note.kind, note.message)
       else {
-        const id = show(note.message, {
+        const id = kubeToastSlot.show(note.kind, note.message, {
           action: {
             label: t('kube.toast.showLog'),
             onClick: () => {
@@ -3003,6 +3092,11 @@ export default function App(): React.JSX.Element {
   const kubeRerun = (id: string): void => {
     const e = kubeOps.log.find((x) => x.id === id)
     if (!e) return
+    // A live write reopens its own dialog (an edit has none); never a run without a preview.
+    if (!e.req) {
+      if (e.live?.rerun) liveWrites.start(e.live.rerun)
+      return
+    }
     if (e.verb === 'reload') kubeOps.startReload(e.req.selection[0], e.req.context, e.req.pill)
     else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel, e.involved)
     else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel, e.involved)
@@ -3254,7 +3348,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -5063,6 +5157,7 @@ export default function App(): React.JSX.Element {
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
                 kubeKinds={kubeKinds}
+                kubeHost={kubeHost}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
@@ -5190,7 +5285,7 @@ export default function App(): React.JSX.Element {
                     onCollapse={() => setRunPanelOpen(false)}
                     kubeLog={kubeOps.log}
                     onKubeRerun={kubeRerun}
-                    onKubeCancel={kubeOps.cancel}
+                    onKubeCancel={(id) => (kubeOps.log.find((x) => x.id === id)?.live ? liveWrites.cancelRun(id) : kubeOps.cancel(id))}
                     onKubeClear={kubeOps.clear}
                     kubeAvailable={kubeAvailable}
                     kubeSegment={kubeSegment}
@@ -5199,9 +5294,10 @@ export default function App(): React.JSX.Element {
                       kubectlFound ? (
                         <ClusterView
                           model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} />}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onWrite={writeKubeObject} />}
                           onOpenInEditor={openKubeObject}
                           onOpenLogs={showPodLogs}
+                          onWrite={writeKubeObject}
                           toolbarStart={switcher}
                         />
                       ) : (
@@ -5403,6 +5499,27 @@ export default function App(): React.JSX.Element {
           cancelling={kubeOps.dialog.cancelling}
           onAbort={kubeOps.abort}
           onApplyFirst={kubeOps.applyFirst}
+        />
+      )}
+      {liveWrites.dialog && (
+        <KubeWriteDialog
+          op={liveWrites.dialog.op}
+          preview={liveWrites.dialog.preview}
+          dependents={liveWrites.dialog.dependents}
+          keepServerFields={liveWrites.dialog.keepServerFields}
+          onToggleServerFields={liveWrites.toggleServerFields}
+          showValues={liveWrites.dialog.showValues}
+          onToggleValues={liveWrites.toggleValues}
+          replicas={liveWrites.dialog.replicas}
+          onReplicas={liveWrites.setReplicas}
+          typed={liveWrites.dialog.typed}
+          onTyped={liveWrites.setTyped}
+          stale={liveWrites.dialog.stale}
+          running={liveWrites.dialog.phase === 'running'}
+          cancelling={liveWrites.dialog.cancelling}
+          onConfirm={liveWrites.confirm}
+          onCancel={liveWrites.close}
+          onAbort={liveWrites.abort}
         />
       )}
       {showSettings && (

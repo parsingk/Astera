@@ -50,6 +50,12 @@ const render = (log: KubeLogEntry[]): string =>
   )
 
 describe('KubeLogPanel', () => {
+  it("shows kubectl's own word for a success line when the parser kept one", () => {
+    const html = render([entry({ result: result({ outcomes: [{ ref: 'deployment/web', outcome: 'configured', message: 'scaled' }] }) })])
+    expect(html).toContain(`${CHECK} deployment/web scaled`)
+    expect(html).not.toContain('deployment/web configured')
+  })
+
   it('shows the commands, one line per outcome and an error with its file as a link button', () => {
     const html = render([
       entry({
@@ -158,5 +164,26 @@ describe('KubeLogPanel', () => {
   it('every rail button is an icon with title equal to aria-label', () => {
     const html = render([entry({ result: result() })])
     for (const k of ['rerun', 'copy', 'clear']) expect(html).toContain(`title="kube.log.${k}" aria-label="kube.log.${k}"`)
+  })
+})
+
+describe('KubeLogPanel live entries', () => {
+  const liveRef = { context: 'kind-dev', namespace: 'dev', resource: 'configmaps', kind: 'ConfigMap', name: 'cfg' }
+  const rerunButton = (html: string): string => html.match(/<button[^>]*aria-label="kube.log.rerun"[^>]*>/)?.[0] ?? ''
+
+  it('disables rerun for an edit', () => {
+    const edit = entry({ verb: 'replace', req: undefined, live: { ref: liveRef, rerun: null }, result: result({ verb: 'replace' }) })
+    expect(rerunButton(render([edit]))).toContain('disabled')
+    const restart = entry({ verb: 'restart', req: undefined, live: { ref: liveRef, rerun: { verb: 'restart', ref: liveRef } }, result: result({ verb: 'restart' }) })
+    expect(rerunButton(render([restart]))).not.toContain('disabled')
+    expect(render([restart])).toContain('kube.log.verb.restart')
+  })
+
+  it('says the object changed, not the files, when a live write was refused as changed', () => {
+    const refused = result({ verb: 'restart', ok: false, ran: 0, refused: { reason: 'changed' } })
+    const live = entry({ verb: 'restart', req: undefined, live: { ref: liveRef, rerun: null }, result: refused })
+    expect(render([live])).toContain('kube.log.refusedChangedLive')
+    expect(render([live])).not.toContain('kube.log.refusedChanged<')
+    expect(render([entry({ result: result({ ok: false, ran: 0, refused: { reason: 'changed' } }) })])).toContain('kube.log.refusedChanged<')
   })
 })

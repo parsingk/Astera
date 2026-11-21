@@ -161,7 +161,15 @@ const api = {
       reveal: invoke('kube.cluster.reveal'),
       list: invoke('kube.cluster.list'),
       watch: invoke('kube.cluster.watch'),
-      unwatch: invoke('kube.cluster.unwatch')
+      unwatch: invoke('kube.cluster.unwatch'),
+      editBase: invoke('kube.cluster.editBase'),
+      dependents: invoke('kube.cluster.dependents'),
+      manifestFor: invoke('kube.cluster.manifestFor')
+    },
+    write: {
+      preview: invoke('kube.write.preview'),
+      run: invoke('kube.write.run'),
+      cancel: invoke('kube.write.cancel')
     },
     logs: {
       start: invoke('kube.logs.start'),

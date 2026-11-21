@@ -16,7 +16,10 @@ const VERBS: Record<string, { outcome: Outcome; message?: string }> = {
   deleted: { outcome: 'deleted' },
   'serverside-applied': { outcome: 'configured', message: 'serverside-applied' },
   patched: { outcome: 'configured', message: 'patched' },
-  pruned: { outcome: 'deleted', message: 'pruned' }
+  pruned: { outcome: 'deleted', message: 'pruned' },
+  replaced: { outcome: 'configured', message: 'replaced' },
+  restarted: { outcome: 'configured', message: 'restarted' },
+  scaled: { outcome: 'configured', message: 'scaled' }
 }
 
 function success(ref: string, verb: string): ResourceOutcome | null {
