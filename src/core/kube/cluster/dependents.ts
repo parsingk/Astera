@@ -13,13 +13,16 @@ const list = (v: unknown): Rec[] => (Array.isArray(v) ? v.map(rec) : [])
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const ordinal = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
-/** Every object owned by `uid`, through any number of levels, each once. */
+/** Every object owned by `uid`, through any number of levels, each once; `uid` itself never, even in an owner cycle. */
 export function ownedBy(uid: string, objects: K8sObject[]): K8sObject[] {
   const byOwner = new Map<string, K8sObject[]>()
   for (const o of objects) {
     for (const ref of list(o.metadata.ownerReferences)) {
       const owner = str(ref.uid)
-      if (owner) byOwner.set(owner, [...(byOwner.get(owner) ?? []), o])
+      if (!owner) continue
+      const owned = byOwner.get(owner)
+      if (owned) owned.push(o)
+      else byOwner.set(owner, [o])
     }
   }
   const seen = new Set<K8sObject>()
@@ -27,7 +30,7 @@ export function ownedBy(uid: string, objects: K8sObject[]): K8sObject[] {
   const visitedOwners = new Set([uid])
   while (queue.length > 0) {
     for (const o of byOwner.get(queue.shift() as string) ?? []) {
-      if (seen.has(o)) continue
+      if (seen.has(o) || str(o.metadata.uid) === uid) continue
       seen.add(o)
       const own = str(o.metadata.uid)
       if (own && !visitedOwners.has(own)) {

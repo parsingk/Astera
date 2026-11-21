@@ -28,7 +28,7 @@ describe('dependents', () => {
   it('stops on an owner cycle', () => {
     const a = obj('Pod', 'a', 'a', [{ uid: 'b' }])
     const b = obj('Pod', 'b', 'b', [{ uid: 'a' }])
-    expect(ownedBy('a', [a, b]).map((o) => o.metadata.name).sort()).toEqual(['a', 'b'])
+    expect(ownedBy('a', [a, b]).map((o) => o.metadata.name).sort()).toEqual(['b'])
   })
   it("finds a StatefulSet's claims by template and ordinal", () => {
     const sts = (extra: object = {}): K8sObject => obj('StatefulSet', 'db', 's', [], { spec: { volumeClaimTemplates: [{ metadata: { name: 'data' } }, { metadata: { name: 'logs' } }], ...extra } })

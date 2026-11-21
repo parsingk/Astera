@@ -57,7 +57,7 @@ export type LiveOp =
   | { verb: 'scale'; ref: ObjectRef; replicas: number }
 /** Why an edit's text cannot be sent: not YAML, not exactly one object, another object, a value that is not base64. */
 export type EditProblem = 'yaml' | 'not-one' | 'identity' | 'base64'
-/** `names`: up to DEPENDENT_NAMES of them, `ns/name` for namespaced objects; empty when only counted. */
+/** `names`: up to DEPENDENT_NAMES of them, `ns/name` for namespaced objects. Groups built from objects (groupObjects) always carry names; a producer that only counts (a Namespace's or a CRD's contents) leaves them empty. */
 export interface DependentGroup { kind: string; count: number; names: string[] }
 export interface Dependents {
   goes: DependentGroup[] // deleted with it

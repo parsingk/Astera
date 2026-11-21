@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countArgs, nodePodsArgs, ownedArgs, pvcArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, logsArgs, namespacesArgs, podsArgs } from './args'
+import { countArgs, crdArgs, describeArgs, eventsArgs, getArgs, listArgs, logsArgs, namespacesArgs, nodePodsArgs, ownedArgs, podsArgs, pvcArgs } from './args'
 
 describe('cluster kubectl arguments', () => {
   it('builds a namespaced watch', () => {
