@@ -47,3 +47,13 @@ export type LogMessage = { logId: string } & (
   | { kind: 'ended' }
   | { kind: 'error'; message: string }
 )
+export type LiveVerb = 'replace' | 'delete' | 'restart' | 'scale'
+/** What the tab read when editing started: the version, and a hash of the object without what only the server changes. */
+export interface EditBase { resourceVersion: string; hash: string }
+export type LiveOp =
+  | { verb: 'replace'; ref: ObjectRef; text: string; base: EditBase }
+  | { verb: 'delete'; ref: ObjectRef }
+  | { verb: 'restart'; ref: ObjectRef }
+  | { verb: 'scale'; ref: ObjectRef; replicas: number }
+/** Why an edit's text cannot be sent: not YAML, not exactly one object, another object, a value that is not base64. */
+export type EditProblem = 'yaml' | 'not-one' | 'identity' | 'base64'
