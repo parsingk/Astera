@@ -250,7 +250,6 @@ export function createLiveWrites(d: LiveWritesDeps) {
       // A read that failed is not a change; the same text cannot newly fail `edit` or `kind`, so any other refusal
       // means the object is not what was previewed.
       if (!p.ok) {
-        if (p.reason === 'paused') return result({ stderr: 'the Deployment is paused; resume it before restarting' })
         return p.reason === 'kubectl'
           ? result({ commandLines: p.commandLines, stderr: p.stderr, ...(p.timedOut ? { timedOut: true } : {}) })
           : changed()

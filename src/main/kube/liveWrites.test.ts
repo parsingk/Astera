@@ -306,8 +306,8 @@ describe('createLiveWrites delete, restart and scale', () => {
     const op: LiveOp = { verb: 'restart', ref }
     expect(await w.preview(op, opts)).toEqual({ ok: false, reason: 'paused' })
     const r = await w.run('s1', op, 'x')
-    expect(r).toMatchObject({ ran: 0, ok: false })
-    expect(r.stderr).toContain('paused')
+    // It was not paused when previewed (the preview refuses), so at run time it has changed.
+    expect(r).toMatchObject({ ran: 0, ok: false, refused: { reason: 'changed' } })
     expect(c.writes()).toEqual([])
     expect(c.calls.some((x) => x.args.includes('--dry-run=server'))).toBe(false)
   })
