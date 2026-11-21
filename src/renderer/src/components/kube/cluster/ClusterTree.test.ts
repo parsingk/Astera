@@ -142,7 +142,7 @@ describe('kindPlural', () => {
       'ConfigMaps', 'Secrets', 'HorizontalPodAutoscalers',
       'PersistentVolumeClaims', 'PersistentVolumes', 'StorageClasses',
       'ServiceAccounts', 'Roles', 'RoleBindings', 'ClusterRoles', 'ClusterRoleBindings',
-      'Nodes', 'Namespaces', 'Events'
+      'Nodes', 'Namespaces', 'CustomResourceDefinitions', 'Events'
     ])
   })
 

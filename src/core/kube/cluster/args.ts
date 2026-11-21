@@ -1,4 +1,5 @@
 /** kubectl argument lists of the cluster view. Arrays only, never a command string; every list ends with `--context`. */
+import { OWNED_RESOURCES } from './dependents'
 import { LOG_MAX_LINES, LOG_TAIL_LINES } from './logs'
 import type { LogOptions, ObjectRef, WatchSpec } from './types'
 
@@ -42,6 +43,19 @@ export function namespacesArgs(context: string): string[] {
 
 export function crdArgs(context: string): string[] {
   return ['get', 'customresourcedefinitions.apiextensions.k8s.io', '-o', 'json', '--context', context]
+}
+
+/** What a delete may take with it: the kinds that can be owned, in one call. */
+export function ownedArgs(context: string, namespace: string): string[] {
+  return ['get', OWNED_RESOURCES.join(','), '-n', namespace, '-o', 'json', '--context', context]
+}
+
+export function nodePodsArgs(context: string, node: string): string[] {
+  return ['get', 'pods', '--all-namespaces', '--field-selector', `spec.nodeName=${node}`, '-o', 'json', '--context', context]
+}
+
+export function pvcArgs(context: string, namespace: string): string[] {
+  return ['get', 'persistentvolumeclaims', '-n', namespace, '-o', 'json', '--context', context]
 }
 
 /** `name` prints one `kind.group/name` line per object: enough to count, and no object's content (a Secret's data). */

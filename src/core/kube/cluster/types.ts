@@ -57,3 +57,12 @@ export type LiveOp =
   | { verb: 'scale'; ref: ObjectRef; replicas: number }
 /** Why an edit's text cannot be sent: not YAML, not exactly one object, another object, a value that is not base64. */
 export type EditProblem = 'yaml' | 'not-one' | 'identity' | 'base64'
+/** `names`: up to DEPENDENT_NAMES of them, `ns/name` for namespaced objects; empty when only counted. */
+export interface DependentGroup { kind: string; count: number; names: string[] }
+export interface Dependents {
+  goes: DependentGroup[] // deleted with it
+  kept: DependentGroup[] // a StatefulSet's PVCs it leaves
+  affected: DependentGroup[] // a Node's Pods, a PV's bound claim: named, not deleted
+  incomplete: boolean // some kind could not be listed or counted
+  recreatedBy: { kind: string; name: string } | null // its controller owner
+}

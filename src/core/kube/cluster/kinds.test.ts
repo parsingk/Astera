@@ -5,6 +5,8 @@ describe('kind catalogue', () => {
   it('lists the fixed groups in order', () => {
     expect(KIND_GROUPS.map((g) => g.id)).toEqual(['workloads', 'network', 'config', 'storage', 'access', 'cluster', 'custom'])
     expect(KIND_GROUPS[0].kinds.map((k) => k.kind)).toEqual(['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'Pod'])
+    expect(KIND_GROUPS[5].kinds.map((k) => k.kind)).toEqual(['Node', 'Namespace', 'CustomResourceDefinition', 'Event'])
+    expect(KIND_GROUPS[5].kinds[2]).toEqual({ kind: 'CustomResourceDefinition', resource: 'customresourcedefinitions.apiextensions.k8s.io', namespaced: false })
     expect(KIND_GROUPS[3].kinds.find((k) => k.kind === 'PersistentVolume')).toEqual({ kind: 'PersistentVolume', resource: 'persistentvolumes', namespaced: false })
   })
   it('turns CRDs into kinds sorted by kind', () => {
