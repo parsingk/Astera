@@ -163,7 +163,7 @@ import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
 import { KubeWriteDialog } from './components/kube/KubeWriteDialog'
 import type { WriteAsk } from './components/kube/cluster/clusterMenu'
-import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
+import { createKubeToastSlot, kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import type { KubeSegment } from './components/kube/KubeSegments'
 import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
 import { ClusterView } from './components/kube/cluster/ClusterView'
@@ -3043,6 +3043,17 @@ export default function App(): React.JSX.Element {
    *  accounted for, so a log that re-renders never toasts or marks twice. */
   const [failedKubePaths, setFailedKubePaths] = useState<ReadonlySet<string>>(() => new Set())
   const kubeSeenRef = useRef(new Set<string>())
+  /** Only the newest Kubernetes result toast stays, and opening a confirmation dialog drops it. */
+  const kubeToastSlot = useRef(
+    createKubeToastSlot(
+      (kind: 'success' | 'error', message: string, options?: Parameters<typeof toast.success>[1]) =>
+        (kind === 'success' ? toast.success : toast.error)(message, options),
+      dismiss
+    )
+  ).current
+  useEffect(() => {
+    if (kubeOps.dialog || liveWrites.dialog) kubeToastSlot.clear()
+  }, [!!kubeOps.dialog, !!liveWrites.dialog])
   useEffect(() => {
     for (const e of kubeOps.log) {
       if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
@@ -3055,10 +3066,9 @@ export default function App(): React.JSX.Element {
       }
       const note = kubeToastOf(result, t as never)
       if (!note) continue
-      const show = note.kind === 'success' ? toast.success : toast.error
-      if (!note.showLog) show(note.message)
+      if (!note.showLog) kubeToastSlot.show(note.kind, note.message)
       else {
-        const id = show(note.message, {
+        const id = kubeToastSlot.show(note.kind, note.message, {
           action: {
             label: t('kube.toast.showLog'),
             onClick: () => {

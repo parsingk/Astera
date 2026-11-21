@@ -110,3 +110,26 @@ export function clockText(ms: number): string {
 /** One command as the person would type it. Same quoting the confirmation shows. */
 export const kubeCommandText = (args: string[], platform: string): string =>
   `kubectl ${args.map((a) => shellQuote(a, platform)).join(' ')}`
+
+/** Keeps one Kubernetes result toast on screen: a new one dismisses the one before it, and `clear` drops the one
+ *  still showing (when a confirmation dialog opens, so the toast does not cover its buttons). */
+export function createKubeToastSlot<A extends unknown[]>(
+  show: (...args: A) => number,
+  dismiss: (id: number) => void
+): { show: (...args: A) => number; clear: () => void } {
+  let current: number | null = null
+  const clear = (): void => {
+    if (current === null) return
+    const id = current
+    current = null
+    dismiss(id)
+  }
+  return {
+    show: (...args: A): number => {
+      clear()
+      current = show(...args)
+      return current
+    },
+    clear
+  }
+}

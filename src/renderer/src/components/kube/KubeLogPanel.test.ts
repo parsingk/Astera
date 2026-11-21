@@ -50,6 +50,12 @@ const render = (log: KubeLogEntry[]): string =>
   )
 
 describe('KubeLogPanel', () => {
+  it("shows kubectl's own word for a success line when the parser kept one", () => {
+    const html = render([entry({ result: result({ outcomes: [{ ref: 'deployment/web', outcome: 'configured', message: 'scaled' }] }) })])
+    expect(html).toContain(`${CHECK} deployment/web scaled`)
+    expect(html).not.toContain('deployment/web configured')
+  })
+
   it('shows the commands, one line per outcome and an error with its file as a link button', () => {
     const html = render([
       entry({

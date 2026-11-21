@@ -57,7 +57,7 @@ function OutcomeLine({ o, onOpenFile }: { o: ResourceOutcome; onOpenFile: (path:
   }
   return (
     <div className="kube-log-line ok">
-      ✓ {o.ref} {o.outcome}
+      ✓ {o.ref} {o.message ?? o.outcome}
     </div>
   )
 }

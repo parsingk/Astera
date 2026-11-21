@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { KubeRequest, KubeRunResult } from '../../../../core/kube/types'
 import { normKubePath, type KubeLogEntry } from '../../hooks/useKubeOps'
-import { defaultExpandedId, failedFiles, kubeBadge, kubeFailureCount, kubeRerunnable, kubeToastOf, nextFailedPaths } from './kubeLogView'
+import { defaultExpandedId, failedFiles, kubeBadge, kubeFailureCount, createKubeToastSlot, kubeRerunnable, kubeToastOf, nextFailedPaths } from './kubeLogView'
 import { en } from '../../../../core/i18n/messages/en'
 import { ko } from '../../../../core/i18n/messages/ko'
 
@@ -159,5 +159,22 @@ describe('live writes in the log', () => {
     expect(kubeRerunnable(live({ verb: 'scale', ref: LIVE.ref, replicas: 2 }))).toBe(true)
     expect(kubeRerunnable(live(null))).toBe(false)
     expect(kubeRerunnable(entry())).toBe(true)
+  })
+})
+
+describe('createKubeToastSlot', () => {
+  it('dismisses the previous toast before showing a new one, and clear drops the current one once', () => {
+    let seq = 0
+    const show = vi.fn(() => ++seq)
+    const dismiss = vi.fn()
+    const slot = createKubeToastSlot(show, dismiss)
+    slot.show()
+    expect(dismiss).not.toHaveBeenCalled()
+    slot.show()
+    expect(dismiss).toHaveBeenLastCalledWith(1)
+    slot.clear()
+    expect(dismiss).toHaveBeenLastCalledWith(2)
+    slot.clear()
+    expect(dismiss).toHaveBeenCalledTimes(2)
   })
 })
