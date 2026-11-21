@@ -43,14 +43,21 @@ export interface KubeTabHost {
   setDirty(tabId: string, dirty: boolean): void
   editAsks: Record<string, number>
   compareTarget(ref: ObjectRef): Promise<ManifestMatch>
-  startCompare(file: string): void
+  /** Asks again at click time and opens the compare only while the file still declares this object for the tab's own
+   *  target; answers the fresh match either way so the tab shows it. */
+  startCompare(ref: ObjectRef, file: string): Promise<ManifestMatch>
   /** Changes with the project the compare is asked against, so a tab asks again when the project does. */
   compareKey: string
 }
 
 /** What a compare answer is for: the object (its uid), the target and the project. A change asks again. */
-export function compareAskKey(uid: string | null, targetKey: string, project: string): string {
-  return JSON.stringify([uid, targetKey, project])
+export function compareAskKey(uid: string | null, targetKey: string, project: string, visible = true): string {
+  return JSON.stringify([uid, targetKey, project, visible])
+}
+
+/** The click-time rule: the compare opens only when the fresh answer is still `same` for the file the button was drawn for. */
+export function compareAtClick(fresh: ManifestMatch, file: string): { open: boolean; match: ManifestMatch } {
+  return { open: fresh.state === 'same' && fresh.file === file, match: fresh }
 }
 
 /** Asks which project file declares the object. A failed ask counts as none, and an answer arriving after the returned
@@ -147,7 +154,7 @@ export function followTabObject(o: {
  *  lives, that it is read-only, when it was read and whether it is live. Mounted for the tab's life (PaneGrid's kube
  *  slots); it reads the object, then follows it through a watch only while the tab shows (K4), and reads afresh when it
  *  shows again. Edit (P3) swaps the YAML for an editor on the text `editBase` answered: the watch stops meanwhile, the
- *  text is dirty while it differs from that start text, and apply goes through the write dialog. Compare comes later. */
+ *  text is dirty while it differs from that start text, and apply goes through the write dialog. Compare asks which project file declares the object and diffs it. */
 export function KubeObjectTab({
   target,
   visible,
@@ -235,16 +242,17 @@ export function KubeObjectTab({
     reread
   )
 
-  // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
-  // The project file that declares this object, asked on mount and again when the name comes back as another object.
+  // The project file that declares this object, asked on mount, when the name comes back as another object, when the
+  // project changes and when the tab shows again (the folder's target may have changed meanwhile).
   const [match, setMatch] = useState<ManifestMatch>(initialMatch ?? { state: 'none' })
   useEffect(
-    () => askCompare({ ask: () => hostRef.current.compareTarget(target), apply: setMatch }),
+    () => (visible ? askCompare({ ask: () => hostRef.current.compareTarget(target), apply: setMatch }) : undefined),
     // `key` stands for `target`, as above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [compareAskKey(uid, key, host.compareKey)]
+    [compareAskKey(uid, key, host.compareKey, visible)]
   )
 
+  // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))
 
   const isSecret = target.kind === 'Secret'
@@ -330,7 +338,7 @@ export function KubeObjectTab({
       : ''
   const compare =
     match.state === 'same' ? (
-      <button type="button" className="kube-btn" title={t('kube.edit.compare')} aria-label={t('kube.edit.compare')} onClick={() => host.startCompare(match.file)}>
+      <button type="button" className="kube-btn" title={t('kube.edit.compare')} aria-label={t('kube.edit.compare')} onClick={() => void host.startCompare(target, match.file).then(setMatch, () => undefined)}>
         <GitCompare size={14} />
       </button>
     ) : match.state === 'other' ? (

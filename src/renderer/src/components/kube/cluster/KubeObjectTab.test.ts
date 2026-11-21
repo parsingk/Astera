@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab, askCompare, compareAskKey, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
+import { KubeObjectTab, askCompare, compareAskKey, compareAtClick, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
 import type { ManifestMatch } from '../../../../../core/kube/cluster/types'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
@@ -17,7 +17,7 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 const pod = { context: 'arn:aws:eks:ap-northeast-2:1:cluster/live', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
 const stubHost = (): KubeTabHost & { writes: unknown[] } => {
   const writes: unknown[] = []
-  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {}, compareTarget: async () => ({ state: 'none' }), startCompare: () => undefined, compareKey: '/p' }
+  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {}, compareTarget: async () => ({ state: 'none' }), startCompare: async () => ({ state: 'none' }), compareKey: '/p' }
 }
 const render = (target: typeof pod | { context: string; namespace: null; resource: string; kind: string; name: string }): string =>
   renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, tabId: 'kube:t', host: stubHost() }))
@@ -276,6 +276,15 @@ describe('KubeObjectTab compare', () => {
     expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u2', 'k', '/p'))
     expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u1', 'k2', '/p'))
     expect(compareAskKey('u1', 'k', '/p')).not.toBe(compareAskKey('u1', 'k', '/q'))
+    expect(compareAskKey('u1', 'k', '/p', true)).not.toBe(compareAskKey('u1', 'k', '/p', false))
+  })
+
+  it('opens the compare at click time only while the fresh answer is still the same file', () => {
+    expect(compareAtClick({ state: 'same', file: 'a' }, 'a')).toEqual({ open: true, match: { state: 'same', file: 'a' } })
+    const other: ManifestMatch = { state: 'other', file: 'a', context: 'c', namespace: null }
+    expect(compareAtClick(other, 'a')).toEqual({ open: false, match: other })
+    expect(compareAtClick({ state: 'none' }, 'a')).toEqual({ open: false, match: { state: 'none' } })
+    expect(compareAtClick({ state: 'same', file: 'b' }, 'a')).toEqual({ open: false, match: { state: 'same', file: 'b' } })
   })
 
   it('asks the host again when the object changes and drops an answer that came late', async () => {

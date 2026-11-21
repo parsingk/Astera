@@ -170,11 +170,11 @@ import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
 import { KubeLogView } from './components/kube/logs/KubeLogView'
 import { useClusterView } from './hooks/useClusterView'
-import type { ObjectRef } from '../../core/kube/cluster/types'
+import type { ManifestMatch, ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
 import { clusterSeen, kubeRailClick } from './lib/kubeRail'
 import { kubeTabCloseNeedsAsk } from './lib/kubeEditTabs'
-import type { KubeTabHost } from './components/kube/cluster/KubeObjectTab'
+import { compareAtClick, type KubeTabHost } from './components/kube/cluster/KubeObjectTab'
 import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, setLogTabContainer, type KubeLogTab } from './lib/kubeLogTabs'
 import { shownBottomTab } from './lib/bottomTab'
 import { useDocumentShown } from './hooks/useDocumentShown'
@@ -3010,14 +3010,19 @@ export default function App(): React.JSX.Element {
         // The tooltip names the file by its path in the project.
         return m.state === 'other' ? { ...m, file: relativeToRoot(root, m.file) ?? m.file } : m
       },
-      startCompare: (file) => {
+      startCompare: async (ref, file) => {
         const root = currentProjectRef.current
-        if (!root) return
+        if (!root) return { state: 'none' }
+        // The folder's target may have changed since the button was drawn: ask again, open only for the same file.
+        const fresh = await window.api.kube.cluster.manifestFor(root, ref)
+        const shownFresh: ManifestMatch = fresh.state === 'other' ? { ...fresh, file: relativeToRoot(root, fresh.file) ?? fresh.file } : fresh
+        if (!compareAtClick(fresh, file).open) return shownFresh
         void window.api.kube.target(file, root).then((view) => {
           const req = kubeRequestOf([file], root, view, undefined, kubeEditorRef.current.contexts)
           if (!req) return void toast.info(tRef.current('kube.ops.chooseCluster'))
           kubeOpsRef.current.startCompare(req, namespaceLabelOf(view, req.pill))
         }, (err: unknown) => void toast.error(errText(err)))
+        return shownFresh
       }
     }),
     [kubeEditAsks, currentProject]
