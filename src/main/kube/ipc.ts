@@ -324,6 +324,11 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
   })
   ipcMain.handle('kube.cluster.editBase', async (_e, ref) => writes.editBase(objectRef(ref)))
   ipcMain.handle('kube.cluster.dependents', async (_e, ref) => writes.dependents(objectRef(ref)))
+  ipcMain.handle('kube.cluster.manifestFor', async (_e, projectRoot, ref) => {
+    const root = str(projectRoot, 'projectRoot')
+    await assertAllowedPath(root)
+    return service.manifestFor(root, objectRef(ref))
+  })
   ipcMain.handle('kube.cluster.reveal', async (_e, ref) => cluster.reveal(objectRef(ref)))
   ipcMain.handle('kube.cluster.list', async (_e, spec) => cluster.list(watchSpec(spec)))
   ipcMain.handle('kube.cluster.watch', async (_e, id, spec) => watches.watch(str(id, 'watchId'), watchSpec(spec)))

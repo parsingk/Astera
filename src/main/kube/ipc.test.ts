@@ -21,7 +21,8 @@ function setup(denied: string[] = []) {
     invalidateContexts: vi.fn(),
     preview: vi.fn(async () => ({})),
     run: vi.fn(async () => ({})),
-    status: vi.fn(async () => ({}))
+    status: vi.fn(async () => ({})),
+    manifestFor: vi.fn(async () => ({ state: 'none' }))
   }
   const assertAllowedPath = async (p: string): Promise<string> => {
     if (denied.includes(p)) throw new Error('path not allowed')
@@ -429,5 +430,16 @@ describe('live writes over IPC', () => {
     await t.call('kube.cluster.dependents', ref)
     expect(t.writes.dependents).toHaveBeenCalledWith(ref)
     await expect(t.call('kube.cluster.editBase', { ...ref, name: '-x' })).rejects.toThrow()
+  })
+
+  it('checks the project root of manifestFor', async () => {
+    const t = setup(['/p'])
+    await expect(t.call('kube.cluster.manifestFor', '/p', ref)).rejects.toThrow('path not allowed')
+    expect(t.service.manifestFor).not.toHaveBeenCalled()
+    const ok = setup()
+    await ok.call('kube.cluster.manifestFor', '/q', ref)
+    expect(ok.service.manifestFor).toHaveBeenCalledWith('/q', ref)
+    await expect(ok.call('kube.cluster.manifestFor', '/q', { ...ref, name: '-x' })).rejects.toThrow()
+    await expect(ok.call('kube.cluster.manifestFor', '', ref)).rejects.toThrow()
   })
 })

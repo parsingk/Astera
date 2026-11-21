@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { KubeObjectTab, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
+import { KubeObjectTab, askCompare, followTabObject, applyEdit, applyCurrentEdit, editAskOutcome, watchChip, type KubeTabHost } from './KubeObjectTab'
 import { liveErrorText } from './ClusterView'
+import type { ManifestMatch } from '../../../../../core/kube/cluster/types'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE } from '../../../../../core/kube/cluster/types'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
@@ -16,7 +17,7 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 const pod = { context: 'arn:aws:eks:ap-northeast-2:1:cluster/live', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'w-1' }
 const stubHost = (): KubeTabHost & { writes: unknown[] } => {
   const writes: unknown[] = []
-  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {} }
+  return { writes, startWrite: (op) => void writes.push(op), setDirty: () => undefined, editAsks: {}, compareTarget: async () => ({ state: 'none' }), startCompare: () => undefined }
 }
 const render = (target: typeof pod | { context: string; namespace: null; resource: string; kind: string; name: string }): string =>
   renderToStaticMarkup(React.createElement(KubeObjectTab, { target, visible: true, tabId: 'kube:t', host: stubHost() }))
@@ -245,5 +246,50 @@ describe('followTabObject', () => {
     expect(t.got).toEqual([{ state: 'live' }, { state: 'limit' }, { fail: null }, { object: '7' }])
     t.stop()
     expect(t.stopped()).toBe(0)
+  })
+})
+
+describe('KubeObjectTab compare', () => {
+  const object = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'w-1', namespace: 'api', uid: 'u1', resourceVersion: '7' }, spec: {} }
+  const html = (initialMatch: ManifestMatch, extra: { initialEdit?: { text: string; base: { resourceVersion: string; hash: string } } } = {}): string =>
+    renderToStaticMarkup(React.createElement(KubeObjectTab, { target: pod, visible: true, initial: object, tabId: 'kube:p', host: stubHost(), initialMatch, ...extra }))
+  const labels = (h: string): string[] => [...h.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])
+
+  it('shows compare for the same target and a tooltip for another', () => {
+    expect(labels(html({ state: 'none' }))).not.toContain('kube.edit.compare')
+    const same = html({ state: 'same', file: '/p/k8s/a.yaml' })
+    expect(same).toMatch(/<button[^>]*aria-label="kube\.edit\.compare"/)
+    expect(same).toContain('title="kube.edit.compare"')
+    // Compare reads the file against the cluster, so edit mode keeps it.
+    const edit = { text: 'kind: Pod', base: { resourceVersion: '7', hash: 'h' } }
+    expect(labels(html({ state: 'same', file: '/p/k8s/a.yaml' }, { initialEdit: edit }))).toContain('kube.edit.compare')
+    const other = html({ state: 'other', file: 'k8s/a.yaml', context: 'kind-dev', namespace: 'dev' })
+    expect(other).not.toMatch(/<button[^>]*aria-label="kube\.edit\.compare"/)
+    expect(other).toContain('kube.edit.compareElsewhere')
+    expect(other).toContain('k8s/a.yaml')
+    expect(other).toContain('kind-dev / dev')
+  })
+
+  it('asks the host again when the object changes and drops an answer that came late', async () => {
+    const answers: Array<(m: ManifestMatch) => void> = []
+    const ask = (): Promise<ManifestMatch> => new Promise((r) => void answers.push(r))
+    const seen: ManifestMatch[] = []
+    const stop = askCompare({ ask, apply: (m) => seen.push(m) })
+    answers[0]({ state: 'same', file: 'a' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seen).toEqual([{ state: 'same', file: 'a' }])
+    const stop2 = askCompare({ ask: () => Promise.reject(new Error('x')), apply: (m) => seen.push(m) })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seen.at(-1)).toEqual({ state: 'none' })
+    const late: Array<(m: ManifestMatch) => void> = []
+    const stop3 = askCompare({ ask: () => new Promise((r) => void late.push(r)), apply: (m) => seen.push(m) })
+    stop3()
+    late[0]({ state: 'same', file: 'late' })
+    await Promise.resolve()
+    expect(seen).not.toContainEqual({ state: 'same', file: 'late' })
+    stop()
+    stop2()
   })
 })

@@ -3556,6 +3556,7 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-btn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
 .kube-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 .kube-btn:disabled { opacity: .4; cursor: default; }
+.kube-btn-muted { opacity: .5; cursor: default; }
 .kube-btn.on { background: var(--elevated); color: var(--text); }
 .kube-btn.kube-primary { background: var(--accent); color: var(--accent-ink); }
 .kube-btn.kube-primary:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); filter: brightness(1.1); }

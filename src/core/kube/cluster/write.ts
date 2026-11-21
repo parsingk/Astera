@@ -59,13 +59,13 @@ export function editText(o: K8sObject): string {
   return stringify(shown(o, false))
 }
 
-function groupOf(apiVersion: string): string {
+export function groupOf(apiVersion: string): string {
   const i = apiVersion.indexOf('/')
   return i < 0 ? '' : apiVersion.slice(0, i)
 }
 
 /** The group of a resource name (`deployments.apps`); the core group has none. */
-function resourceGroup(resource: string): string {
+export function resourceGroup(resource: string): string {
   const i = resource.indexOf('.')
   return i < 0 ? '' : resource.slice(i + 1)
 }

@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Check, Lock, Pencil, RefreshCw, RotateCcw, Undo2 } from 'lucide-react'
+import { Check, GitCompare, Lock, Pencil, RefreshCw, RotateCcw, Undo2 } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
-import type { EditBase, LiveOp, ObjectRef, Read } from '../../../../../core/kube/cluster/types'
+import type { EditBase, LiveOp, ManifestMatch, ObjectRef, Read } from '../../../../../core/kube/cluster/types'
 import { ageText } from '../../../../../core/kube/cluster/status'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { follow, useFollowingRead, useRereadTick, useWatchClient, type WatchState } from '../../../hooks/useClusterView'
@@ -35,12 +35,28 @@ function ReadAgo({ at, visible }: { at: number; visible: boolean }): React.JSX.E
   return <span className="kube-tab-read">{t('kube.cluster.readAgo', { ago: ageText(new Date(at).toISOString(), Math.max(now, at)) })}</span>
 }
 
-/** What the app gives every kube tab: the confirmation dialog for a write, the dirty flag the tab's close asks about, and
- *  the count of edit asks per tab id (the cluster view's menu bumps it after it opens the tab). */
+/** What the app gives every kube tab: the confirmation dialog for a write, the dirty flag the tab's close asks about, the
+ *  count of edit asks per tab id (the cluster view's menu bumps it after it opens the tab), and the project file that
+ *  declares the object (`compareTarget`) with the diff against the cluster (`startCompare`). */
 export interface KubeTabHost {
   startWrite(op: LiveOp, onWritten: () => void): void
   setDirty(tabId: string, dirty: boolean): void
   editAsks: Record<string, number>
+  compareTarget(ref: ObjectRef): Promise<ManifestMatch>
+  startCompare(file: string): void
+}
+
+/** Asks which project file declares the object. A failed ask counts as none, and an answer arriving after the returned
+ *  stop is dropped (the tab moved on to another object or went). */
+export function askCompare(o: { ask(): Promise<ManifestMatch>; apply(m: ManifestMatch): void }): () => void {
+  let alive = true
+  o.ask().then(
+    (m) => alive && o.apply(m),
+    () => alive && o.apply({ state: 'none' })
+  )
+  return () => {
+    alive = false
+  }
 }
 
 /** Apply: opens the replace dialog with the edit's text and the base it started from. `onWritten` ends edit mode. */
@@ -129,7 +145,8 @@ export function KubeObjectTab({
   tabId: id,
   host,
   initial,
-  initialEdit
+  initialEdit,
+  initialMatch
 }: {
   target: ObjectRef
   visible: boolean
@@ -140,6 +157,8 @@ export function KubeObjectTab({
   initial?: K8sObject
   /** Edit mode on entry: for tests, as `initial` is. */
   initialEdit?: { text: string; base: EditBase }
+  /** The project file match on entry: for tests, as `initial` is. */
+  initialMatch?: ManifestMatch
 }): React.JSX.Element {
   const { t } = useI18n()
   const client = useWatchClient()
@@ -208,6 +227,15 @@ export function KubeObjectTab({
   )
 
   // Dropped with the tab (unmount), when the name comes back as another object (a new uid) and when the Secret changes.
+  // The project file that declares this object, asked on mount and again when the name comes back as another object.
+  const [match, setMatch] = useState<ManifestMatch>(initialMatch ?? { state: 'none' })
+  useEffect(
+    () => askCompare({ ask: () => hostRef.current.compareTarget(target), apply: setMatch }),
+    // `key` stands for `target`, as above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [uid, key]
+  )
+
   const reveal = useSecretReveal(object !== null ? target : null, uid, str(object?.metadata.resourceVersion))
 
   const isSecret = target.kind === 'Secret'
@@ -284,6 +312,28 @@ export function KubeObjectTab({
   const liveText = typeof state === 'object' ? liveErrorText(state.error, t) : t(state === 'live' ? 'kube.cluster.live' : 'kube.cluster.paused')
   const liveTone = typeof state === 'object' ? 'bad' : state === 'live' ? 'ok' : 'wait'
   const where = target.namespace !== null ? ` / ${target.namespace}` : ''
+  const elsewhere =
+    match.state === 'other'
+      ? t('kube.edit.compareElsewhere', {
+          file: match.file,
+          target: displayContextName(match.context).short + (match.namespace !== null ? ` / ${match.namespace}` : '')
+        })
+      : ''
+  const compare =
+    match.state === 'same' ? (
+      <button type="button" className="kube-btn" title={t('kube.edit.compare')} aria-label={t('kube.edit.compare')} onClick={() => host.startCompare(match.file)}>
+        <GitCompare size={14} />
+      </button>
+    ) : match.state === 'other' ? (
+      <span
+        className="kube-btn kube-btn-muted"
+        role="img"
+        title={elsewhere}
+        aria-label={elsewhere}
+      >
+        <GitCompare size={14} />
+      </span>
+    ) : null
 
   return (
     <div className={'kube-tab' + (gone ? ' deleted' : '')}>
@@ -348,6 +398,7 @@ export function KubeObjectTab({
             <button type="button" className="kube-btn" title={t('kube.edit.discard')} aria-label={t('kube.edit.discard')} onClick={() => void discard()}>
               <Undo2 size={14} />
             </button>
+            {compare}
           </>
         ) : (
           <>
@@ -364,6 +415,7 @@ export function KubeObjectTab({
             <button type="button" className="kube-btn" title={t('kube.cluster.refresh')} aria-label={t('kube.cluster.refresh')} onClick={() => setGen((g) => g + 1)}>
               <RefreshCw size={14} />
             </button>
+            {compare}
           </>
         )}
       </div>

@@ -13,7 +13,7 @@ import type {
   Remembered
 } from './kube/types'
 import type { K8sObject } from './kube/objects'
-import type { CountInfo, Dependents, EditBase, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
+import type { CountInfo, Dependents, EditBase, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ManifestMatch, ObjectRef, Read, SecretValue, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -1464,6 +1464,8 @@ export interface CoreApi {
       editBase(ref: ObjectRef): Promise<Read<{ text: string; base: EditBase }>>
       /** What deleting the object would take with it. */
       dependents(ref: ObjectRef): Promise<Read<{ dependents: Dependents }>>
+      /** The one plain manifest of the project that declares the object, and whether it targets the object's cluster. */
+      manifestFor(projectRoot: string, ref: ObjectRef): Promise<ManifestMatch>
     }
     /** Writes to objects already in the cluster. */
     write: {

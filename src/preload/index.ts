@@ -163,7 +163,8 @@ const api = {
       watch: invoke('kube.cluster.watch'),
       unwatch: invoke('kube.cluster.unwatch'),
       editBase: invoke('kube.cluster.editBase'),
-      dependents: invoke('kube.cluster.dependents')
+      dependents: invoke('kube.cluster.dependents'),
+      manifestFor: invoke('kube.cluster.manifestFor')
     },
     write: {
       preview: invoke('kube.write.preview'),

@@ -2979,6 +2979,8 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.edit.discard': 'Discard the edit and read the cluster again',
   'kube.edit.discardTitle': 'Discard the edit?',
   'kube.edit.discardBody': 'Your edit of {name} is not applied.',
+  'kube.edit.compare': 'Compare with project file',
+  'kube.edit.compareElsewhere': "{file} targets {target}, not this object's cluster",
   'kube.toolbar.compare': 'Compare with cluster',
   'kube.toolbar.apply': 'Apply to cluster…',
   'kube.toolbar.reload': 'Reload from cluster',

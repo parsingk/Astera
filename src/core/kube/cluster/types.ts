@@ -48,6 +48,12 @@ export type LogMessage = { logId: string } & (
   | { kind: 'ended' }
   | { kind: 'error'; message: string }
 )
+/** The one plain manifest in the project that declares an object: `same` when it targets the object's own context and
+ *  namespace, `other` (with that target) when it targets elsewhere. `file` is an absolute path. */
+export type ManifestMatch =
+  | { state: 'none' }
+  | { state: 'same'; file: string }
+  | { state: 'other'; file: string; context: string; namespace: string | null }
 export type LiveVerb = 'replace' | 'delete' | 'restart' | 'scale'
 /** What the tab read when editing started: the version, and a hash of the object without what only the server changes. */
 export interface EditBase { resourceVersion: string; hash: string }

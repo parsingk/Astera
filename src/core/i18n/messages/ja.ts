@@ -2791,5 +2791,7 @@ export const ja: Catalog = {
   'kube.edit.apply': '適用…',
   'kube.edit.discard': '編集を破棄してクラスターを読み直す',
   'kube.edit.discardTitle': '編集を破棄しますか?',
-  'kube.edit.discardBody': '{name} の編集は適用されていません。'
+  'kube.edit.discardBody': '{name} の編集は適用されていません。',
+  'kube.edit.compare': 'プロジェクトのファイルと比較',
+  'kube.edit.compareElsewhere': '{file} の対象はこのオブジェクトのクラスターではなく {target} です'
 }

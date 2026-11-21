@@ -153,7 +153,8 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
-import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { kubeRequestOf, settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { namespaceLabelOf } from './components/kube/fileNamespacePill'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
 import { useLiveWrites } from './hooks/useLiveWrites'
 import { replicasOf } from '../../core/kube/cluster/write'
@@ -2988,6 +2989,11 @@ export default function App(): React.JSX.Element {
   // The write starter is new at every render, so the host reads it through a ref and changes only with the asks.
   const liveWritesRef = useRef(liveWrites)
   liveWritesRef.current = liveWrites
+  // The contexts the editor listed, read when a compare starts (the host never changes for them).
+  const kubeEditorRef = useRef(kubeEditor)
+  kubeEditorRef.current = kubeEditor
+  const kubeOpsRef = useRef(kubeOps)
+  kubeOpsRef.current = kubeOps
   const kubeHost = useMemo<KubeTabHost>(
     () => ({
       startWrite: (op, onWritten) => liveWritesRef.current.start(op, onWritten),
@@ -2995,7 +3001,26 @@ export default function App(): React.JSX.Element {
         if (dirty) dirtyKubeTabs.current.add(tabId)
         else dirtyKubeTabs.current.delete(tabId)
       },
-      editAsks: kubeEditAsks
+      editAsks: kubeEditAsks,
+      compareTarget: async (ref) => {
+        const root = currentProjectRef.current
+        if (!root) return { state: 'none' }
+        const m = await window.api.kube.cluster.manifestFor(root, ref)
+        // The tooltip names the file by its path in the project.
+        if (m.state === 'other' && m.file.startsWith(root) && ['/', String.fromCharCode(92)].includes(m.file.charAt(root.length))) {
+          return { ...m, file: m.file.slice(root.length + 1) }
+        }
+        return m
+      },
+      startCompare: (file) => {
+        const root = currentProjectRef.current
+        if (!root) return
+        void window.api.kube.target(file, root).then((view) => {
+          const req = kubeRequestOf([file], root, view, undefined, kubeEditorRef.current.contexts)
+          if (!req) return void toast.info(tRef.current('kube.ops.chooseCluster'))
+          kubeOpsRef.current.startCompare(req, namespaceLabelOf(view, req.pill))
+        }, (err: unknown) => void toast.error(errText(err)))
+      }
     }),
     [kubeEditAsks]
   )

@@ -3233,6 +3233,8 @@ export const ko = {
   'kube.edit.discard': '수정을 버리고 클러스터를 다시 읽기',
   'kube.edit.discardTitle': '수정을 버릴까요?',
   'kube.edit.discardBody': '{name} 에 대한 수정이 적용되지 않았습니다.',
+  'kube.edit.compare': '프로젝트 파일과 비교',
+  'kube.edit.compareElsewhere': '{file} 은 이 오브젝트의 클러스터가 아니라 {target} 을 대상으로 합니다',
   'kube.toolbar.compare': '클러스터와 비교',
   'kube.toolbar.apply': '클러스터에 적용…',
   'kube.toolbar.reload': '클러스터에서 다시 불러오기',

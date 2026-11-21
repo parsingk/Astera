@@ -2821,5 +2821,7 @@ export const es: Catalog = {
   'kube.edit.apply': 'Aplicar…',
   'kube.edit.discard': 'Descartar la edición y leer el clúster de nuevo',
   'kube.edit.discardTitle': '¿Descartar la edición?',
-  'kube.edit.discardBody': 'Tu edición de {name} no se ha aplicado.'
+  'kube.edit.discardBody': 'Tu edición de {name} no se ha aplicado.',
+  'kube.edit.compare': 'Comparar con el archivo del proyecto',
+  'kube.edit.compareElsewhere': '{file} apunta a {target}, no al clúster de este objeto'
 }
