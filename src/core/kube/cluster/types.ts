@@ -1,5 +1,6 @@
 /** Shared shapes of the cluster view: main and renderer both import them, so nothing here may touch `node:`. */
 import type { K8sObject } from '../objects'
+import type { ResourceDiff } from '../types'
 
 export type GroupId = 'workloads' | 'network' | 'config' | 'storage' | 'access' | 'cluster' | 'custom'
 /** `resource` is the plural, with `.group` appended unless the resource is in the core group. */
@@ -66,3 +67,19 @@ export interface Dependents {
   incomplete: boolean // some kind could not be listed or counted
   recreatedBy: { kind: string; name: string } | null // its controller owner
 }
+/** What a live write would do, from a server dry run. `fingerprint` covers the exact arguments (and an edit's exact
+ *  body); a run with another one is refused. */
+export type LivePreview =
+  | {
+      ok: true
+      commandLines: string[][]
+      checkCommandLines: string[][]
+      diff: ResourceDiff
+      fingerprint: string
+      /** K11: changed beyond status since editing began; the diff is against the new object. */
+      changedSinceEdit?: true
+    }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'kind' }
+  | { ok: false; reason: 'edit'; problem: EditProblem; detail: string }
+  | { ok: false; reason: 'kubectl'; commandLines: string[][]; checkCommandLines: string[][]; stderr: string; timedOut?: true }

@@ -193,7 +193,9 @@ export type KubePreview =
 /** One finished operation. `ran` counts the commands executed: the first failing one stops the rest (C19). */
 export interface KubeRunResult {
   id: string
-  verb: KubeVerb | 'reload'
+  verb: KubeVerb | 'reload' | 'replace' | 'restart' | 'scale'
+  /** liveRef of the object a live write acted on. */
+  target?: string
   context: string
   commandLines: string[][]
   ran: number
