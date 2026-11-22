@@ -11,6 +11,8 @@ interface Entry {
   /** Identifies the current spawn: output and exits from a stopped or replaced pty are stale and ignored. */
   run: object
   pty: PtyLike | null
+  /** This shell's own, so stopping it discards what it had buffered without touching another shell's. */
+  batcher: DataBatcher
 }
 
 export function createShellRegistry(deps: {
@@ -29,13 +31,18 @@ export function createShellRegistry(deps: {
   size(): number
 } {
   const entries = new Map<string, Entry>()
-  const batcher = new DataBatcher(SHELL_FLUSH_MS, (shellId, data) => deps.emit({ shellId, kind: 'data', data }))
 
   const halt = (e: Entry): void => {
     e.run = {}
+    e.batcher.dispose()
     const pty = e.pty
     e.pty = null
-    pty?.kill()
+    // The entry is already gone, so a kill that throws has nothing left to protect.
+    try {
+      pty?.kill()
+    } catch {
+      /* ignored */
+    }
   }
 
   return {
@@ -45,7 +52,7 @@ export function createShellRegistry(deps: {
         entries.delete(shellId)
         halt(old)
       }
-      const e: Entry = { run: {}, pty: null }
+      const e: Entry = { run: {}, pty: null, batcher: new DataBatcher(SHELL_FLUSH_MS, (id, data) => deps.emit({ shellId: id, kind: 'data', data })) }
       const run = e.run
       entries.set(shellId, e)
       const live = (): boolean => entries.get(shellId) === e && e.run === run
@@ -53,20 +60,20 @@ export function createShellRegistry(deps: {
         const pty = deps.spawn(deps.bin(), shellArgs(spec.ref, spec.container), { cwd: deps.cwd, cols, rows, env: deps.env() })
         e.pty = pty
         pty.onData((d) => {
-          if (live()) batcher.push(shellId, d)
+          if (live()) e.batcher.push(shellId, d)
         })
         pty.onExit(({ exitCode }) => {
           if (!live()) return
           entries.delete(shellId)
           e.run = {}
           e.pty = null
-          batcher.flush()
+          e.batcher.flush()
+          e.batcher.dispose()
           deps.emit({ shellId, kind: 'exit', code: exitCode })
         })
       } catch (err) {
         entries.delete(shellId)
-        e.run = {}
-        e.pty = null
+        halt(e)
         deps.emit({ shellId, kind: 'error', message: deps.redact(err instanceof Error ? err.message : String(err)) })
       }
     },

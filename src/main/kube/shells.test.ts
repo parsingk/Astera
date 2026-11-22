@@ -10,6 +10,8 @@ interface FakePty extends PtyLike {
   writes: string[]
   resizes: Array<[number, number]>
   kills: number
+  killThrows: boolean
+  onDataThrows: boolean
 }
 
 function fakePty(): FakePty {
@@ -20,11 +22,13 @@ function fakePty(): FakePty {
     writes: [],
     resizes: [],
     kills: 0,
-    onData: (cb) => { data = cb },
+    killThrows: false,
+    onDataThrows: false,
+    onData: (cb) => { if (p.onDataThrows) throw new Error('boom'); data = cb },
     onExit: (cb) => { exit = cb },
     write: (d) => { p.writes.push(d) },
     resize: (c, r) => { p.resizes.push([c, r]) },
-    kill: () => { p.kills++ },
+    kill: () => { p.kills++; if (p.killThrows) throw new Error('kill failed') },
     pause: () => {},
     resume: () => {},
     fireData: (d) => data(d),
@@ -35,7 +39,7 @@ function fakePty(): FakePty {
 
 const spec: ShellSpec = { ref: { context: 'ctx', namespace: 'ns', kind: 'Pod', name: 'web' } as ShellSpec['ref'], container: 'app' }
 
-function setup(throws?: Error) {
+function setup(throws?: Error, prep?: (p: FakePty) => void) {
   const ptys: FakePty[] = []
   const calls: Array<{ file: string; args: string[] | string; opts: PtySpawnOptions }> = []
   const sent: ShellMessage[] = []
@@ -44,6 +48,7 @@ function setup(throws?: Error) {
     calls.push({ file, args, opts })
     if (throws) throw throws
     const p = fakePty()
+    prep?.(p)
     ptys.push(p)
     return p
   }
@@ -153,5 +158,66 @@ describe('createShellRegistry', () => {
     ptys[1].fireData('x')
     vi.advanceTimersByTime(SHELL_FLUSH_MS * 2)
     expect(sent).toEqual([])
+  })
+
+  it('drops output buffered before a stop', () => {
+    const { reg, ptys, sent } = setup()
+    reg.start('s1', spec, 80, 24)
+    ptys[0].fireData('x')
+    reg.stop('s1')
+    vi.advanceTimersByTime(SHELL_FLUSH_MS * 2)
+    expect(sent).toEqual([])
+  })
+
+  it('drops the old shell buffered output when the id is started again', () => {
+    const { reg, ptys, sent } = setup()
+    reg.start('s1', spec, 80, 24)
+    ptys[0].fireData('old')
+    reg.start('s1', spec, 80, 24)
+    ptys[1].fireData('new')
+    vi.advanceTimersByTime(SHELL_FLUSH_MS * 2)
+    expect(sent).toEqual([{ shellId: 's1', kind: 'data', data: 'new' }])
+  })
+
+  it('drops buffered output on stopAll', () => {
+    const { reg, ptys, sent } = setup()
+    reg.start('a', spec, 80, 24)
+    ptys[0].fireData('x')
+    reg.stopAll()
+    vi.advanceTimersByTime(SHELL_FLUSH_MS * 2)
+    expect(sent).toEqual([])
+  })
+
+  it('survives a kill that throws', () => {
+    let n = 0
+    const { reg, ptys, sent } = setup(undefined, (p) => { if (n++ === 0) p.killThrows = true })
+    reg.start('s1', spec, 80, 24)
+    expect(() => reg.stop('s1')).not.toThrow()
+    expect(reg.size()).toBe(0)
+    n = 0
+    reg.start('s2', spec, 80, 24)
+    expect(() => reg.start('s2', spec, 80, 24)).not.toThrow()
+    expect(ptys).toHaveLength(3)
+    ptys[3 - 1].fireData('ok')
+    vi.advanceTimersByTime(SHELL_FLUSH_MS)
+    expect(sent).toEqual([{ shellId: 's2', kind: 'data', data: 'ok' }])
+  })
+
+  it('stopAll kills the rest when one kill throws', () => {
+    let n = 0
+    const { reg, ptys } = setup(undefined, (p) => { if (n++ === 0) p.killThrows = true })
+    reg.start('a', spec, 80, 24)
+    reg.start('b', spec, 80, 24)
+    expect(() => reg.stopAll()).not.toThrow()
+    expect(ptys.map((p) => p.kills)).toEqual([1, 1])
+    expect(reg.size()).toBe(0)
+  })
+
+  it('kills a pty whose handlers cannot be registered', () => {
+    const { reg, ptys, sent } = setup(undefined, (p) => { p.onDataThrows = true })
+    reg.start('s1', spec, 80, 24)
+    expect(ptys[0].kills).toBe(1)
+    expect(reg.size()).toBe(0)
+    expect(sent).toEqual([{ shellId: 's1', kind: 'error', message: 'redacted:boom' }])
   })
 })
