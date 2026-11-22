@@ -22,8 +22,9 @@ describe('App.tsx closes a cluster object tab without closing a session', () => 
 
   it('only drops the tab from the tree there, and returns', () => {
     const kube = body.indexOf("if (ref.kind === 'kube') {")
-    const branch = body.slice(kube, body.indexOf('}', kube) + 1)
-    expect(branch).toMatch(/dropTabFromTree\(tabId\)\s*return\s*\}$/)
+    // The branch asks about an unapplied edit first (async), then drops the tab, and returns before the fall-through
+    const branch = body.slice(kube, body.indexOf("if (ref.kind === 'app') {", kube))
+    expect(branch).toMatch(/dropTabFromTree\(tabId\)\s*\}\)\(\)\s*return\s*\}\s*$/)
     expect(branch).not.toContain('closeSession')
   })
 })
