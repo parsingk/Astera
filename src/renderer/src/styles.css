@@ -3386,6 +3386,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The console plus what floats over it (the find bar). The host is the xterm mount as before. */
 .run-panel-body { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
 .run-panel-body > .run-panel-host { flex: 1; min-width: 0; }
+/* A shell tab's body: the host plus the find bar floating over it, filling the panel as .run-panel-body does. */
+.kube-shell { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; display: flex; }
+.kube-shell > .run-panel-host { flex: 1; min-width: 0; }
 /* The find bar — RunFindBar, top-right over the output, in the floating-panel treatment .run-more-menu
    and .sel-menu use (panel background, soft border, large radius, the large shadow). */
 .run-find { position: absolute; top: 6px; right: 14px; z-index: 5; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }

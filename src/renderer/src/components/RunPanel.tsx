@@ -16,7 +16,7 @@ import { createReplayJoin } from '../lib/runReplay'
 
 /** The app's amber, which both the find highlights and the console's selection colour are built from.
  *  Read from the theme rather than hardcoded; the fallback is the value every shipped theme defines. */
-function findHighlightColor(): string {
+export function findHighlightColor(): string {
   return getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#d9a441'
 }
 
@@ -26,7 +26,7 @@ function findHighlightColor(): string {
  *  out as two different pixels — see findHighlightPaint for the detail. The active match is told apart
  *  by its outline instead. A function of the paint, not a copy of it, so this and consoleTerminalOptions
  *  (which sets the selection side) cannot drift apart. */
-function searchDecorations(theme: Theme): ISearchOptions['decorations'] {
+export function searchDecorations(theme: Theme): ISearchOptions['decorations'] {
   const xtermTheme = xtermThemeOf(theme)
   const paint = findHighlightPaint({
     highlight: findHighlightColor(),

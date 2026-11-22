@@ -3480,5 +3480,13 @@ export const ko = {
   'kube.logs.tabContainer': '로그 {pod} · {container}',
   'kube.logs.closeTab': '로그 닫기',
   'kube.logs.open': '로그',
-  'kube.logs.openPrevious': '재시작 전 로그'
+  'kube.logs.openPrevious': '재시작 전 로그',
+  'kube.shell.open': '셸',
+  'kube.shell.tab': '셸 {pod}',
+  'kube.shell.tabContainer': '셸 {pod} · {container}',
+  'kube.shell.closeTab': '셸 닫기',
+  'kube.shell.find': '찾기',
+  'kube.shell.container': '컨테이너',
+  'kube.shell.ended': '셸이 끝났습니다(종료 코드 {code}).',
+  'kube.shell.failed': '셸을 시작하지 못했습니다: {message}'
 } as const

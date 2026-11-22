@@ -3226,5 +3226,13 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.logs.tabContainer': 'Logs {pod} · {container}',
   'kube.logs.closeTab': 'Close logs',
   'kube.logs.open': 'Logs',
-  'kube.logs.openPrevious': 'Previous logs'
+  'kube.logs.openPrevious': 'Previous logs',
+  'kube.shell.open': 'Shell',
+  'kube.shell.tab': 'Shell {pod}',
+  'kube.shell.tabContainer': 'Shell {pod} · {container}',
+  'kube.shell.closeTab': 'Close shell',
+  'kube.shell.find': 'Find',
+  'kube.shell.container': 'Container',
+  'kube.shell.ended': 'The shell ended (exit code {code}).',
+  'kube.shell.failed': 'Could not start the shell: {message}'
 }
