@@ -7,8 +7,9 @@ import type { KubeService } from './service'
 import type { createClusterReads } from './cluster'
 import type { createWatchRegistry } from './clusterWatch'
 import type { createLogRegistry } from './logStreams'
+import type { createShellRegistry } from './shells'
 import type { createLiveWrites } from './liveWrites'
-import type { KindDef, LiveOp, LogSpec, ObjectRef, WatchSpec } from '../../core/kube/cluster/types'
+import type { KindDef, LiveOp, LogSpec, ObjectRef, ShellSpec, WatchSpec } from '../../core/kube/cluster/types'
 
 export interface KubeIpcDeps {
   service: KubeService
@@ -21,6 +22,7 @@ export interface KubeIpcDeps {
   cluster: ReturnType<typeof createClusterReads>
   watches: ReturnType<typeof createWatchRegistry>
   logs: ReturnType<typeof createLogRegistry>
+  shells: ReturnType<typeof createShellRegistry>
   writes: ReturnType<typeof createLiveWrites>
   /** The folder the save dialog opens in. */
   downloadsDir(): string
@@ -33,6 +35,7 @@ export interface KubeIpcDeps {
 const RECHECK_TIMEOUT_MS = 15_000
 
 type Handle = (channel: string, fn: (e: unknown, ...a: unknown[]) => unknown) => void
+type On = (channel: string, fn: (e: unknown, ...a: unknown[]) => void) => void
 
 function str(v: unknown, what: string): string {
   if (typeof v !== 'string' || v === '') throw new Error(`kube: ${what} must be a non-empty string`)
@@ -141,6 +144,20 @@ function logSpec(v: unknown): LogSpec {
   return { ref, options: o.sinceTime !== undefined ? { ...options, sinceTime: o.sinceTime } : options }
 }
 
+/** A shell runs in one container of a namespaced Pod; the container is passed as a `-c` value, so a leading `-` would be read as a flag. */
+function shellSpec(v: unknown): ShellSpec {
+  const r = v as { ref?: unknown; container?: unknown } | null | undefined
+  if (!r || typeof r !== 'object') throw new Error('kube: shell spec must be { ref, container }')
+  const ref = objectRef(r.ref)
+  if (ref.kind !== 'Pod' || ref.resource !== 'pods' || ref.namespace === null) throw new Error('kube: ref must be a namespaced Pod')
+  return { ref, container: arg(r.container, 'shell container') }
+}
+
+function termSize(v: unknown, what: string): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 1000) throw new Error(`kube: ${what} must be an integer from 1 to 1000`)
+  return v
+}
+
 /** A bare file name: the save dialog decides the folder, so a path in the name has no use. */
 function fileName(v: unknown): string {
   const name = str(v, 'file name')
@@ -196,7 +213,7 @@ function liveOpts(v: unknown): { keepServerFields: boolean; showValues: boolean 
   return { keepServerFields: o.keepServerFields, showValues: o.showValues }
 }
 
-export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps): void {
+export function registerKubeIpc(ipcMain: { handle: Handle; on: On }, deps: KubeIpcDeps): void {
   const { service, assertAllowedPath } = deps
 
   const allowedRequest = async (v: unknown): Promise<KubeRequest> => {
@@ -346,6 +363,21 @@ export function registerKubeIpc(ipcMain: { handle: Handle }, deps: KubeIpcDeps):
 
   ipcMain.handle('kube.logs.start', async (_e, id, spec) => logs.start(str(id, 'logId'), logSpec(spec)))
   ipcMain.handle('kube.logs.stop', async (_e, id) => logs.stop(str(id, 'logId')))
+  const { shells } = deps
+  ipcMain.handle('kube.shell.start', async (_e, id, spec, cols, rows) => shells.start(str(id, 'shellId'), shellSpec(spec), termSize(cols, 'cols'), termSize(rows, 'rows')))
+  // An `on` handler has no caller to answer: input that fails validation is dropped, never thrown.
+  ipcMain.on('kube.shell.write', (_e, id, data) => {
+    if (typeof id !== 'string' || id === '' || typeof data !== 'string') return
+    shells.write(id, data)
+  })
+  ipcMain.on('kube.shell.resize', (_e, id, cols, rows) => {
+    try {
+      shells.resize(str(id, 'shellId'), termSize(cols, 'cols'), termSize(rows, 'rows'))
+    } catch {
+      // dropped
+    }
+  })
+  ipcMain.handle('kube.shell.stop', async (_e, id) => shells.stop(str(id, 'shellId')))
   ipcMain.handle('kube.logs.save', async (_e, defaultName, text) => {
     const name = fileName(defaultName)
     if (typeof text !== 'string') throw new Error('kube: text must be a string')

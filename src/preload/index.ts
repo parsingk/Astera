@@ -21,6 +21,7 @@ const fire =
 const EVENT_CHANNELS = [
   'kube:watch',
   'kube:log',
+  'kube:shell',
   'session:data',
   'session:reset',
   'session:remote-size',
@@ -175,6 +176,12 @@ const api = {
       start: invoke('kube.logs.start'),
       stop: invoke('kube.logs.stop'),
       save: invoke('kube.logs.save')
+    },
+    shell: {
+      start: invoke('kube.shell.start'),
+      write: fire('kube.shell.write'),
+      resize: fire('kube.shell.resize'),
+      stop: invoke('kube.shell.stop')
     }
   },
   github: {

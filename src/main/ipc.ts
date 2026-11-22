@@ -306,6 +306,8 @@ import { createClusterReads } from './kube/cluster'
 import { createLiveWrites } from './kube/liveWrites'
 import { createWatchRegistry } from './kube/clusterWatch'
 import { createLogRegistry } from './kube/logStreams'
+import { createShellRegistry } from './kube/shells'
+import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { kubectlBin } from '../core/kube/kubectl'
 import { streamKubectl } from '../core/kube/stream'
 import { redactKubectlStderr } from '../core/kube/redact'
@@ -4591,6 +4593,14 @@ export function registerIpc(
       return { cancel: () => clearTimeout(t) }
     }
   })
+  const kubeShells = createShellRegistry({
+    spawn: nodePtyFactory,
+    bin: () => kubectlBin(core.appSettings.getKubectlPath()),
+    env: () => kubeEnv(core.appSettings.getKubeconfigFiles(), process.env, os.homedir()),
+    cwd: os.homedir(),
+    redact: redactKubectlStderr,
+    emit: (m) => send('kube:shell', m)
+  })
   const kubeWrites = createLiveWrites({ run: kubeService.kubectl, counts: kubeCluster.counts, now: () => new Date() })
   registerKubeIpc(ipcMain, {
     service: kubeService,
@@ -4601,6 +4611,7 @@ export function registerIpc(
     cluster: kubeCluster,
     watches: kubeWatches,
     logs: kubeLogs,
+    shells: kubeShells,
     writes: kubeWrites,
     downloadsDir: () => app.getPath('downloads'),
     saveDialog: async (defaultPath) => {
@@ -4614,10 +4625,13 @@ export function registerIpc(
   app.once('will-quit', () => kubeWatches.stopAll())
   onNewDocument.push(() => kubeLogs.stopAll())
   app.once('will-quit', () => kubeLogs.stopAll())
+  onNewDocument.push(() => kubeShells.stopAll())
+  app.once('will-quit', () => kubeShells.stopAll())
   // A renderer that dies without a reload starts no new document: its kubectl processes would run on until quit.
   win.webContents.on('render-process-gone', () => {
     kubeWatches.stopAll()
     kubeLogs.stopAll()
+    kubeShells.stopAll()
   })
 
   /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
