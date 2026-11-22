@@ -486,4 +486,14 @@ describe('container shells over IPC', () => {
     await t.call('kube.shell.stop', 's')
     expect(t.shells.stop).toHaveBeenCalledWith('s')
   })
+
+  it('never throws out of a write or resize handler when the registry throws', () => {
+    const t = setup()
+    t.shells.write.mockImplementation(() => { throw new Error('pty gone') })
+    t.shells.resize.mockImplementation(() => { throw new Error('pty gone') })
+    expect(() => t.call('kube.shell.write', 's', 'x')).not.toThrow()
+    expect(() => t.call('kube.shell.resize', 's', 80, 24)).not.toThrow()
+    expect(t.shells.write).toHaveBeenCalledTimes(1)
+    expect(t.shells.resize).toHaveBeenCalledTimes(1)
+  })
 })

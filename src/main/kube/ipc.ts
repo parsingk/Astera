@@ -323,7 +323,7 @@ export function registerKubeIpc(ipcMain: { handle: Handle; on: On }, deps: KubeI
 
   // Read-only views of a cluster. Secret values leave only through `reveal` (an explicit click) and through `editBase` and
   // `kube.write.preview` with `showValues`, which the renderer's "show values" switch gates (D6).
-  const { cluster, watches, logs, writes } = deps
+  const { cluster, watches, logs, shells, writes } = deps
   ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(arg(context, 'context')))
   ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(arg(context, 'context')))
   ipcMain.handle('kube.cluster.counts', async (_e, context, namespace, kinds) =>
@@ -363,21 +363,6 @@ export function registerKubeIpc(ipcMain: { handle: Handle; on: On }, deps: KubeI
 
   ipcMain.handle('kube.logs.start', async (_e, id, spec) => logs.start(str(id, 'logId'), logSpec(spec)))
   ipcMain.handle('kube.logs.stop', async (_e, id) => logs.stop(str(id, 'logId')))
-  const { shells } = deps
-  ipcMain.handle('kube.shell.start', async (_e, id, spec, cols, rows) => shells.start(str(id, 'shellId'), shellSpec(spec), termSize(cols, 'cols'), termSize(rows, 'rows')))
-  // An `on` handler has no caller to answer: input that fails validation is dropped, never thrown.
-  ipcMain.on('kube.shell.write', (_e, id, data) => {
-    if (typeof id !== 'string' || id === '' || typeof data !== 'string') return
-    shells.write(id, data)
-  })
-  ipcMain.on('kube.shell.resize', (_e, id, cols, rows) => {
-    try {
-      shells.resize(str(id, 'shellId'), termSize(cols, 'cols'), termSize(rows, 'rows'))
-    } catch {
-      // dropped
-    }
-  })
-  ipcMain.handle('kube.shell.stop', async (_e, id) => shells.stop(str(id, 'shellId')))
   ipcMain.handle('kube.logs.save', async (_e, defaultName, text) => {
     const name = fileName(defaultName)
     if (typeof text !== 'string') throw new Error('kube: text must be a string')
@@ -390,4 +375,23 @@ export function registerKubeIpc(ipcMain: { handle: Handle; on: On }, deps: KubeI
       return { saved: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+
+  ipcMain.handle('kube.shell.start', async (_e, id, spec, cols, rows) => shells.start(str(id, 'shellId'), shellSpec(spec), termSize(cols, 'cols'), termSize(rows, 'rows')))
+  // An `on` handler has no caller to answer: input that fails validation, or a pty that throws, is dropped, never thrown.
+  ipcMain.on('kube.shell.write', (_e, id, data) => {
+    try {
+      if (typeof data !== 'string') return
+      shells.write(str(id, 'shellId'), data)
+    } catch {
+      // dropped
+    }
+  })
+  ipcMain.on('kube.shell.resize', (_e, id, cols, rows) => {
+    try {
+      shells.resize(str(id, 'shellId'), termSize(cols, 'cols'), termSize(rows, 'rows'))
+    } catch {
+      // dropped
+    }
+  })
+  ipcMain.handle('kube.shell.stop', async (_e, id) => shells.stop(str(id, 'shellId')))
 }
