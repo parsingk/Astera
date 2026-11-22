@@ -144,13 +144,20 @@ function logSpec(v: unknown): LogSpec {
   return { ref, options: o.sinceTime !== undefined ? { ...options, sinceTime: o.sinceTime } : options }
 }
 
-/** A shell runs in one container of a namespaced Pod; the container is passed as a `-c` value, so a leading `-` would be read as a flag. */
+/** A shell runs in one container of a namespaced Pod; the container is passed as a `-c` value, so a leading `-` would be read as a flag.
+ *  node-pty builds the Windows command line itself and leaves an argument alone that starts and ends with a double quote
+ *  and holds a space, so such a value could become several kubectl arguments. Kubernetes names never hold a double quote. */
 function shellSpec(v: unknown): ShellSpec {
   const r = v as { ref?: unknown; container?: unknown } | null | undefined
   if (!r || typeof r !== 'object') throw new Error('kube: shell spec must be { ref, container }')
   const ref = objectRef(r.ref)
   if (ref.kind !== 'Pod' || ref.resource !== 'pods' || ref.namespace === null) throw new Error('kube: ref must be a namespaced Pod')
-  return { ref, container: arg(r.container, 'shell container') }
+  const container = arg(r.container, 'shell container')
+  const fields: [string, string | null][] = [['context', ref.context], ['namespace', ref.namespace], ['name', ref.name], ['container', container]]
+  for (const [what, value] of fields) {
+    if (value !== null && value.includes('"')) throw new Error(`kube: shell ${what} must not contain a double quote`)
+  }
+  return { ref, container }
 }
 
 function termSize(v: unknown, what: string): number {

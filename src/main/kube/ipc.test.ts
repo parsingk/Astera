@@ -463,6 +463,19 @@ describe('container shells over IPC', () => {
     expect(t.shells.start).toHaveBeenCalledWith('s1', spec, 80, 24)
   })
 
+  it('rejects a double quote in any shell argument', async () => {
+    const t = setup()
+    const q = '"x --server=https://evil.example y"'
+    const bad = [
+      { ref: { ...podRef, context: q }, container: 'app' },
+      { ref: { ...podRef, namespace: q }, container: 'app' },
+      { ref: { ...podRef, name: q }, container: 'app' },
+      { ref: podRef, container: q }
+    ]
+    for (const b of bad) await expect(t.call('kube.shell.start', 's', b, 80, 24)).rejects.toThrow('double quote')
+    expect(t.shells.start).not.toHaveBeenCalled()
+  })
+
   it('rejects a size that is not a positive integer', async () => {
     const t = setup()
     for (const bad of [0, -1, 1.5, 1001, '80']) {
