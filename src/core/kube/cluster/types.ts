@@ -48,6 +48,14 @@ export type LogMessage = { logId: string } & (
   | { kind: 'ended' }
   | { kind: 'error'; message: string }
 )
+/** What main needs to start one shell into a container. */
+export interface ShellSpec { ref: ObjectRef; container: string }
+/** What a shell sends the renderer: its output in batches, then how it ended. */
+export type ShellMessage = { shellId: string } & (
+  | { kind: 'data'; data: string }
+  | { kind: 'exit'; code: number }
+  | { kind: 'error'; message: string }
+)
 /** The one plain manifest in the project that declares an object: `same` when it targets the object's own context and
  *  namespace, `other` (with that target) when it targets elsewhere. `file` is an absolute path. */
 export type ManifestMatch =
