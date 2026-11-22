@@ -192,6 +192,11 @@ export function ClusterDetail({
     setMenu(null)
     setShellMenu(null)
   }, [uid])
+  // The header picker closes when the selected Pod stops offering a shell (its container ended while the picker was open).
+  const offersShell = model.kind?.kind === 'Pod' && selectedRef !== null && shellChoice(onOpenShell, selectedRef, selected) !== undefined
+  useEffect(() => {
+    if (!offersShell) setShellMenu(null)
+  }, [offersShell])
   const ids = useId()
   const tabId = (id: DetailTab): string => `${ids}-tab-${id}`
   const panelId = `${ids}-panel`

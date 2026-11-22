@@ -247,9 +247,17 @@ describe('BottomPanel shell tabs', () => {
     expect(other).not.toContain('run.panel.clear')
   })
 
-  it('draws a body for each shell tab after the logs bodies', () => {
+  it('draws one body for a shell tab', () => {
     const html = render({ shellTabs: [shellTab('kubeshell:1', 'worker-1')], activeTab: 'kubeshell:1' })
     expect(html.match(/<div class="bottom-body" style="display:flex"><\/div>/g)).toHaveLength(1)
+  })
+
+  it('dims an ended shell tab', () => {
+    const live = shellTab('kubeshell:1', 'worker-1')
+    const html = render({ shellTabs: [live, { ...shellTab('kubeshell:2', 'worker-2'), ended: true }], activeTab: 'kubeshell:1' })
+    const tabClass = (id: string): string => new RegExp(`data-tab-id="${id}"[^>]*class="([^"]*)"`).exec(html)?.[1] ?? ''
+    expect(tabClass('kubeshell:2').split(' ')).toContain('ended')
+    expect(tabClass('kubeshell:1').split(' ')).not.toContain('ended')
   })
 })
 
@@ -307,7 +315,7 @@ describe('hosted tab bodies', () => {
     const names = [...app.matchAll(/host\.className = '([^']+)'/g)].map((m) => m[1])
     expect(names).toEqual(expect.arrayContaining(['kube-logs-host', 'kube-shell-host']))
     for (const name of names) {
-      const rule = new RegExp(String.raw`^\.${name}\s*\{([^}]*)\}`, 'm').exec(css)
+      const rule = new RegExp(String.raw`^\.${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\s*\{([^}]*)\}`, 'm').exec(css)
       expect(rule, `${name} has no rule in styles.css`).not.toBeNull()
       expect(rule?.[1], `${name} does not fill`).toMatch(/flex:\s*1\b/)
     }

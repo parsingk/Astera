@@ -64,6 +64,22 @@ describe('createShellClient', () => {
     expect(b.got).toEqual(['data:y'])
   })
 
+  it('delivers an error message from main once', () => {
+    const f = fakeApi()
+    const client = createShellClient(f.api)
+    const k = sink()
+    const sh = client.open(spec, size, k.s)
+    const id = f.started[0]
+    f.emit({ shellId: id, kind: 'error', message: 'spawn failed' })
+    f.emit({ shellId: id, kind: 'data', data: 'late' })
+    f.emit({ shellId: id, kind: 'error', message: 'again' })
+    sh.input('ls')
+    sh.resize(1, 1)
+    expect(k.got).toEqual(['failed:spawn failed'])
+    expect(f.written).toEqual([])
+    expect(f.resized).toEqual([])
+  })
+
   it('ignores input after the shell ended', () => {
     const f = fakeApi()
     const client = createShellClient(f.api)

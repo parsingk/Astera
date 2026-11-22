@@ -53,8 +53,8 @@ export function shellItems(s: ShellChoice, t: Translate): MenuItem[] {
 
 /** What the row menu and the detail's more button offer, in board D's groups: open in editor and describe, a Pod's logs,
  *  then the shell, copy name, then the writes. The port forward item of a later part is left out rather than disabled.
- *  Open in editor, logs, the shell and the writes are left out until something handles them. `onLogs(previous)`: previous true for the
- *  previous logs item. Restart and scale only for the kinds that have them. */
+ *  Open in editor, logs, the shell and the writes are left out until something handles them. `onLogs(previous)`:
+ *  previous true for the previous logs item. Restart and scale only for the kinds that have them. */
 export function clusterMenuItems(
   o: {
     kind: string

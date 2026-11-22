@@ -32,16 +32,16 @@ export function createShellRegistry(deps: {
 } {
   const entries = new Map<string, Entry>()
 
-  const halt = (e: Entry): void => {
+  const halt = (shellId: string, e: Entry): void => {
     e.run = {}
     e.batcher.dispose()
     const pty = e.pty
     e.pty = null
-    // The entry is already gone, so a kill that throws has nothing left to protect.
+    // The entry is already gone, so a kill that throws has nothing left to protect; it is said, not hidden.
     try {
       pty?.kill()
-    } catch {
-      /* ignored */
+    } catch (err) {
+      console.warn(`astera: kube shell ${shellId} could not be killed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -50,7 +50,7 @@ export function createShellRegistry(deps: {
       const old = entries.get(shellId)
       if (old) {
         entries.delete(shellId)
-        halt(old)
+        halt(shellId, old)
       }
       const e: Entry = { run: {}, pty: null, batcher: new DataBatcher(SHELL_FLUSH_MS, (id, data) => deps.emit({ shellId: id, kind: 'data', data })) }
       const run = e.run
@@ -73,7 +73,7 @@ export function createShellRegistry(deps: {
         })
       } catch (err) {
         entries.delete(shellId)
-        halt(e)
+        halt(shellId, e)
         deps.emit({ shellId, kind: 'error', message: deps.redact(err instanceof Error ? err.message : String(err)) })
       }
     },
@@ -87,12 +87,12 @@ export function createShellRegistry(deps: {
       const e = entries.get(shellId)
       if (!e) return
       entries.delete(shellId)
-      halt(e)
+      halt(shellId, e)
     },
     stopAll() {
-      const all = [...entries.values()]
+      const all = [...entries]
       entries.clear()
-      for (const e of all) halt(e)
+      for (const [id, e] of all) halt(id, e)
     },
     size: () => entries.size
   }

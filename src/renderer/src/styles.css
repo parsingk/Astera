@@ -3334,6 +3334,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* Same reasoning as .rail-btn.on:focus-visible above — box-shadow does not composite, so the active
    bottom tab needs both shadows restated explicitly or tabbing to it shows no ring. */
 .bottom-tab.on:focus-visible { box-shadow: inset 0 calc(-1 * var(--marker-w)) 0 var(--accent), 0 0 0 2px var(--ring); }
+.bottom-tab.ended { opacity: .6; }
 .bottom-tab-close { background: transparent; border: 0; color: inherit; opacity: .5; padding: 0 0 0 2px; font-size: 10px; cursor: pointer; }
 .bottom-tab-close:hover { opacity: 1; }
 .bottom-tab-new { background: transparent; border: 0; color: var(--text-dim); padding: 2px 6px; font-size: 12px; cursor: pointer; }

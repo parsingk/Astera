@@ -109,6 +109,16 @@ describe('createShellRegistry', () => {
     expect(ptys[0].resizes).toEqual([[120, 40]])
   })
 
+  it('says so when a pty fails to die', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { reg } = setup(undefined, (p) => { p.killThrows = true })
+    reg.start('s1', spec, 80, 24)
+    reg.stop('s1')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('s1')
+    warn.mockRestore()
+  })
+
   it('stops a shell without reporting its exit', () => {
     const { reg, ptys, sent } = setup()
     reg.start('s1', spec, 80, 24)
@@ -198,7 +208,7 @@ describe('createShellRegistry', () => {
     reg.start('s2', spec, 80, 24)
     expect(() => reg.start('s2', spec, 80, 24)).not.toThrow()
     expect(ptys).toHaveLength(3)
-    ptys[3 - 1].fireData('ok')
+    ptys[2].fireData('ok')
     vi.advanceTimersByTime(SHELL_FLUSH_MS)
     expect(sent).toEqual([{ shellId: 's2', kind: 'data', data: 'ok' }])
   })

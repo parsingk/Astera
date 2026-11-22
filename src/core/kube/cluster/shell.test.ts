@@ -44,6 +44,15 @@ describe('shell rules', () => {
   it('leaves out a waiting container', () => {
     expect(shellContainers(podIn('Running', { app: 'running', worker: 'waiting' })).map((c) => c.name)).toEqual(['app'])
   })
+  it('leaves out a container with no status entry', () => {
+    const p = pod({ containers: [{ name: 'app' }, { name: 'new' }] }, { phase: 'Running', containerStatuses: [{ name: 'app', state: running }] })
+    expect(shellContainers(p).map((c) => c.name)).toEqual(['app'])
+  })
+  it('offers no shell for a Pod with no status', () => {
+    const p = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'web-1', namespace: 'api' }, spec: { containers: [{ name: 'app' }] } } as unknown as K8sObject
+    expect(shellContainers(p)).toEqual([])
+    expect(canShell(p)).toBe(false)
+  })
   it('offers a shell only for a Running Pod with a running container', () => {
     expect(canShell(podIn('Pending', { app: 'running' }))).toBe(false)
     expect(canShell(podIn('Running', { app: 'waiting' }))).toBe(false)
