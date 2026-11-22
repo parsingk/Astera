@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { TerminalBuffer } from '../../../core/types'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
@@ -293,5 +295,21 @@ describe('holdHost', () => {
     expect(host.parentNode).toBeNull()
     holdHost(null, host as unknown as Node)
     expect(host.parentNode).toBeNull()
+  })
+})
+
+// The screen check: a shell tab's view drew 27 px wide because its host element had no rule, so the container's tty
+// was 2 columns. Every element App makes to hold a tab's view must fill the panel body the way the logs host does.
+describe('hosted tab bodies', () => {
+  it('gives every host element App creates a rule that fills the body', () => {
+    const app = readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8')
+    const css = readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8')
+    const names = [...app.matchAll(/host\.className = '([^']+)'/g)].map((m) => m[1])
+    expect(names).toEqual(expect.arrayContaining(['kube-logs-host', 'kube-shell-host']))
+    for (const name of names) {
+      const rule = new RegExp(String.raw`^\.${name}\s*\{([^}]*)\}`, 'm').exec(css)
+      expect(rule, `${name} has no rule in styles.css`).not.toBeNull()
+      expect(rule?.[1], `${name} does not fill`).toMatch(/flex:\s*1\b/)
+    }
   })
 })
