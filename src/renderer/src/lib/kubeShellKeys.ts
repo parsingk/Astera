@@ -14,3 +14,11 @@ export function shellKeyAction(
   if (k === 'v') return 'paste'
   return null
 }
+
+/** What a paste key types: the clipboard's text, or null for nothing. Files on the clipboard paste nothing (K8): on
+ *  macOS Finder also puts a copied file's name there as text, which must not be typed. */
+export function shellPasteText(clip: { readText(): string; hasFiles(): boolean }): string | null {
+  if (clip.hasFiles()) return null
+  const text = clip.readText()
+  return text ? text : null
+}

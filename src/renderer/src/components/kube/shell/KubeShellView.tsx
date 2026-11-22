@@ -10,7 +10,7 @@ import { useI18n } from '../../../i18n/I18nProvider'
 import { shellClient, type ShellHandle } from '../../../hooks/kubeShellClient'
 import { pinCursorBlinkOff } from '../../../lib/cursorBlink'
 import { activationFocusHeld } from '../../../lib/focusHold'
-import { shellKeyAction } from '../../../lib/kubeShellKeys'
+import { shellKeyAction, shellPasteText } from '../../../lib/kubeShellKeys'
 import { selectionCopy } from '../../../lib/terminalCopy'
 import { useTerminalFont } from '../../../lib/terminalFont'
 import { useTheme } from '../../../lib/theme'
@@ -79,6 +79,7 @@ export function KubeShellView({
     term.open(host)
     const measured = host.clientWidth !== 0 && host.clientHeight !== 0
     if (measured) fit.fit()
+    else term.resize(FALLBACK_SIZE.cols, FALLBACK_SIZE.rows)
     termRef.current = term
     fitRef.current = fit
     searchRef.current = search
@@ -100,8 +101,8 @@ export function KubeShellView({
       if (action === 'paste') {
         // preventDefault, or xterm's own paste handler types it a second time
         e.preventDefault()
-        const text = window.api.clipboard.readText()
-        if (text) term.paste(text)
+        const text = shellPasteText(window.api.clipboard)
+        if (text !== null) term.paste(text)
         return false
       }
       return copy.key(e)
