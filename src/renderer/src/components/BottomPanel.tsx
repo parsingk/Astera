@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
@@ -139,6 +139,12 @@ export function BottomPanel({
     return () => clearInterval(id)
   }, [anyRunning])
 
+  // A tab focused off the end of the strip (the strip scrolls sideways) would stay out of sight: bring the shown one in.
+  const tabListRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    tabListRef.current?.querySelector(`[data-tab-id="${CSS.escape(activeTab)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTab])
+
   const kubeFailures = kubeFailureCount(kubeLog)
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
@@ -156,10 +162,11 @@ export function BottomPanel({
   return (
     <div className="run-panel">
       <div className="bottom-tabs">
-        <span className="bottom-tab-list">
+        <span className="bottom-tab-list" ref={tabListRef}>
           {runAvailable && (
             <span
               role="tab"
+              data-tab-id="run"
               aria-selected={activeTab === 'run'}
               tabIndex={0}
               className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
@@ -173,6 +180,7 @@ export function BottomPanel({
           {kubeAvailable && (
             <span
               role="tab"
+              data-tab-id="kube"
               aria-selected={activeTab === 'kube'}
               tabIndex={0}
               className={activeTab === 'kube' ? 'bottom-tab on' : 'bottom-tab'}
@@ -192,6 +200,7 @@ export function BottomPanel({
             <span
               key={tab.id}
               role="tab"
+              data-tab-id={tab.id}
               aria-selected={activeTab === tab.id}
               tabIndex={0}
               className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
@@ -220,6 +229,7 @@ export function BottomPanel({
             <span
               key={tab.id}
               role="tab"
+              data-tab-id={tab.id}
               aria-selected={activeTab === tab.id}
               tabIndex={0}
               className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
@@ -248,6 +258,7 @@ export function BottomPanel({
             <span
               key={term.id}
               role="tab"
+              data-tab-id={term.id}
               aria-selected={activeTab === term.id}
               tabIndex={0}
               className={activeTab === term.id ? 'bottom-tab on' : 'bottom-tab'}

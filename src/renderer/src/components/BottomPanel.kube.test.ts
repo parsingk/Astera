@@ -313,3 +313,22 @@ describe('hosted tab bodies', () => {
     }
   })
 })
+
+describe('BottomPanel tab ids', () => {
+  it('marks every tab with its id so the strip can scroll the shown one into view', () => {
+    const html = render({
+      logTabs: [logTab('kubelog:1', 'worker-1')],
+      shellTabs: [shellTab('kubeshell:1', 'worker-1')],
+      terminals: [{ id: 't1', buffer: '' }]
+    })
+    const ids = [...html.matchAll(/<span role="tab"[^>]* data-tab-id="([^"]+)"/g)].map((m) => m[1])
+    expect(ids).toEqual(['kube', 'kubelog:1', 'kubeshell:1', 't1'])
+  })
+
+  it('marks the run tab too', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(BottomPanel, { runAvailable: true, runs: [], configIds: [], selectedRunId: null, activeTab: 'run', terminals: [], logTabs: [], shellTabs: [], kubeLog: [], kubeAvailable: false, kubeSegment: 'cluster' } as never)
+    )
+    expect(html).toContain('data-tab-id="run"')
+  })
+})
