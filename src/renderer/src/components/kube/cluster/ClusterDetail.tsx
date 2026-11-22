@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useState } from 'react'
-import { Ellipsis, ExternalLink, RotateCcw, ScrollText } from 'lucide-react'
+import { Ellipsis, ExternalLink, RotateCcw, ScrollText, SquareTerminal } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
@@ -10,7 +10,7 @@ import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import { useI18n } from '../../../i18n/I18nProvider'
 import { arrowStep } from '../../../lib/arrowStep'
 import { ContextMenu } from '../../ContextMenu'
-import { clusterMenuItems, writeMenuHandlers, type WriteAsk } from './clusterMenu'
+import { clusterMenuItems, shellChoice, shellItems, writeMenuHandlers, type WriteAsk } from './clusterMenu'
 import { liveErrorText } from './ClusterView'
 import { KubeYamlView } from './KubeYamlView'
 import { useSecretReveal } from './useSecretReveal'
@@ -162,6 +162,7 @@ export function ClusterDetail({
   model,
   onOpenInEditor,
   onOpenLogs,
+  onOpenShell,
   onWrite,
   onMenu
 }: {
@@ -172,6 +173,9 @@ export function ClusterDetail({
   /** Opens a Pod's logs tab (spec 4.8), `previous` true for previous logs; without it, or for another kind, the header
    *  button and the menu items are not drawn. */
   onOpenLogs?: (ref: ObjectRef, pod: K8sObject, previous: boolean) => void
+  /** Opens a shell in a running Pod's container; without it, or when the Pod has none running, the header button and the
+   *  menu item are not drawn. */
+  onOpenShell?: (ref: ObjectRef, container: string) => void
   /** The menu's edit, delete, restart and scale items; without it the menu has none. */
   onWrite?: (ask: WriteAsk) => void
   /** Where the more button opens the menu; without it the detail opens the menu itself. */
@@ -183,7 +187,11 @@ export function ClusterDetail({
   // Tied to the selection: another selection masks the values again.
   const reveal = useSecretReveal(selectedRef, uid, str(selected?.metadata.resourceVersion))
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  useEffect(() => setMenu(null), [uid])
+  const [shellMenu, setShellMenu] = useState<{ x: number; y: number } | null>(null)
+  useEffect(() => {
+    setMenu(null)
+    setShellMenu(null)
+  }, [uid])
   const ids = useId()
   const tabId = (id: DetailTab): string => `${ids}-tab-${id}`
   const panelId = `${ids}-panel`
@@ -193,6 +201,7 @@ export function ClusterDetail({
   const tabs = TABS.filter((id) => id !== 'pods' || podSelectorOf(kind, selected) !== null)
   const tab = tabs.includes(view.detailTab) ? view.detailTab : 'summary'
 
+  const shell = kind === 'Pod' ? shellChoice(onOpenShell, selectedRef, selected) : undefined
   const menuItems = clusterMenuItems(
     {
       kind,
@@ -200,6 +209,7 @@ export function ClusterDetail({
       onDescribe: () => model.setDetailTab('describe'),
       onCopyName: () => void window.api.clipboard.writeText(selectedRef.name),
       onLogs: onOpenLogs ? (previous) => onOpenLogs(selectedRef, selected, previous) : undefined,
+      shell,
       ...writeMenuHandlers(onWrite, selectedRef, selected)
     },
     t
@@ -234,6 +244,24 @@ export function ClusterDetail({
             <ScrollText size={14} />
           </button>
         )}
+        {shell && (
+          <button
+            type="button"
+            className="kube-btn"
+            title={t('kube.shell.open')}
+            aria-label={t('kube.shell.open')}
+            onClick={(e) => {
+              if (shell.containers.length === 1) {
+                shell.open(shell.containers[0].name)
+                return
+              }
+              const r = e.currentTarget.getBoundingClientRect()
+              setShellMenu({ x: r.left, y: r.bottom })
+            }}
+          >
+            <SquareTerminal size={14} />
+          </button>
+        )}
         <button
           type="button"
           className="kube-btn"
@@ -248,6 +276,14 @@ export function ClusterDetail({
           <Ellipsis size={14} />
         </button>
       </div>
+      {shell && shellMenu !== null && (
+        <ContextMenu
+          x={shellMenu.x}
+          y={shellMenu.y}
+          items={[{ heading: t('kube.shell.container') }, ...shellItems(shell, t)]}
+          onClose={() => setShellMenu(null)}
+        />
+      )}
       {menu !== null && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {model.deleted && <div className="kube-detail-deleted">{t('kube.cluster.deleted')}</div>}
       {model.detailError !== null && (
