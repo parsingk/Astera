@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { TerminalBuffer } from '../../../core/types'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
 import type { KubeLogTab } from '../lib/kubeLogTabs'
+import type { KubeShellTab } from '../lib/kubeShellTabs'
 import { BottomPanel, holdHost } from './BottomPanel'
 
 vi.mock('../i18n/I18nProvider', () => ({
@@ -36,12 +37,22 @@ const logTab = (id: string, name: string): KubeLogTab => ({
   request: 0
 })
 
+const shellTab = (id: string, name: string, container = 'worker'): KubeShellTab => ({
+  id,
+  ref: { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name },
+  container,
+  ended: false,
+  clear: 0,
+  find: 0
+})
+
 const render = ({
   kubeLog = [] as KubeLogEntry[],
   activeTab = 'kube',
   kubeAvailable = true,
   kubeSegment = 'cluster' as 'cluster' | 'log',
   logTabs = [] as KubeLogTab[],
+  shellTabs = [] as KubeShellTab[],
   terminals = [] as TerminalBuffer[]
 } = {}): string =>
   renderToStaticMarkup(
@@ -75,7 +86,11 @@ const render = ({
       logTabs,
       onCloseLogTab: noop,
       // A static render attaches no refs: the host only has to be there.
-      logHost: (id: string) => ({ id }) as unknown as HTMLElement
+      logHost: (id: string) => ({ id }) as unknown as HTMLElement,
+      shellTabs,
+      onCloseShellTab: noop,
+      shellHost: (id: string) => ({ id }) as unknown as HTMLElement,
+      onShellAction: noop
     })
   )
 
@@ -200,6 +215,39 @@ describe('BottomPanel log tabs', () => {
   // The header's clear empties a terminal's xterm; the log view has its own clear in its toolbar.
   it('offers no terminal clear in the header while a log tab shows', () => {
     expect(render({ logTabs: tabs, activeTab: 'kubelog:1' })).not.toContain('run.panel.clear')
+  })
+})
+
+// Spec 4.8: a shell into a container is a bottom tab of its own, after the logs tabs.
+describe('BottomPanel shell tabs', () => {
+  const tabTags = (html: string): string[] => [...html.matchAll(/<span role="tab"[^>]*>.*?<\/span>(?=<span role="tab"|<button class="bottom-tab-new")/g)].map((m) => m[0])
+
+  it("draws a shell tab with its Pod's name", () => {
+    const strip = tabTags(render({ logTabs: [logTab('kubelog:1', 'web-2')], shellTabs: [shellTab('kubeshell:1', 'worker-1')] }))
+    expect(strip).toHaveLength(3)
+    expect(strip[2]).toContain('kube.shell.tab{&quot;pod&quot;:&quot;worker-1&quot;}')
+    expect(strip[2]).toMatch(/^<span role="tab"[^>]* title="kind-dev \/ api · kube\.logs\.container worker"/)
+    expect(strip[2]).toMatch(/<button class="bottom-tab-close" aria-label="kube\.shell\.closeTab" title="kube\.shell\.closeTab">/)
+  })
+
+  it('names the container when two shells show one Pod', () => {
+    const strip = tabTags(render({ shellTabs: [shellTab('kubeshell:1', 'worker-1'), shellTab('kubeshell:2', 'worker-1', 'sidecar')] }))
+    expect(strip[1]).toContain('kube.shell.tabContainer{&quot;pod&quot;:&quot;worker-1&quot;,&quot;container&quot;:&quot;worker&quot;}')
+    expect(strip[2]).toContain('kube.shell.tabContainer{&quot;pod&quot;:&quot;worker-1&quot;,&quot;container&quot;:&quot;sidecar&quot;}')
+  })
+
+  it('offers find and clear for the shown shell tab', () => {
+    const shown = render({ shellTabs: [shellTab('kubeshell:1', 'worker-1')], activeTab: 'kubeshell:1' })
+    expect(shown).toContain('aria-label="kube.shell.find"')
+    expect(shown).toContain('aria-label="run.panel.clear"')
+    const other = render({ shellTabs: [shellTab('kubeshell:1', 'worker-1')], activeTab: 'kube' })
+    expect(other).not.toContain('kube.shell.find')
+    expect(other).not.toContain('run.panel.clear')
+  })
+
+  it('draws a body for each shell tab after the logs bodies', () => {
+    const html = render({ shellTabs: [shellTab('kubeshell:1', 'worker-1')], activeTab: 'kubeshell:1' })
+    expect(html.match(/<div class="bottom-body" style="display:flex"><\/div>/g)).toHaveLength(1)
   })
 })
 

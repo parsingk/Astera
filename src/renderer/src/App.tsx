@@ -169,6 +169,7 @@ import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
 import { ClusterView } from './components/kube/cluster/ClusterView'
 import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
 import { KubeLogView } from './components/kube/logs/KubeLogView'
+import { KubeShellView } from './components/kube/shell/KubeShellView'
 import { useClusterView } from './hooks/useClusterView'
 import type { ManifestMatch, ObjectRef } from '../../core/kube/cluster/types'
 import type { K8sObject } from '../../core/kube/objects'
@@ -176,6 +177,7 @@ import { clusterSeen, kubeRailClick } from './lib/kubeRail'
 import { kubeTabCloseNeedsAsk } from './lib/kubeEditTabs'
 import { compareAtClick, type KubeTabHost } from './components/kube/cluster/KubeObjectTab'
 import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, setLogTabContainer, type KubeLogTab } from './lib/kubeLogTabs'
+import { bumpShellTab, closeShellTab, endShellTab, isShellTabId, newShellTabId, openShellTab, type KubeShellTab } from './lib/kubeShellTabs'
 import { shownBottomTab } from './lib/bottomTab'
 import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
@@ -2717,6 +2719,19 @@ export default function App(): React.JSX.Element {
     }
     return host
   }
+  /** Shells into containers, after the logs tabs (spec 4.8), opened from the cluster view. */
+  const [shellTabs, setShellTabs] = useState<KubeShellTab[]>([])
+  /** Each shell tab's own element, as `logHosts` is for the logs tabs. */
+  const shellHosts = useRef(new Map<string, HTMLElement>())
+  const shellHostOf = (id: string): HTMLElement => {
+    let host = shellHosts.current.get(id)
+    if (host === undefined) {
+      host = document.createElement('div')
+      host.className = 'kube-shell-host'
+      shellHosts.current.set(id, host)
+    }
+    return host
+  }
   /** The Kubernetes tab's segment: the cluster view or the operation log (spec D4). */
   const [kubeSegment, setKubeSegment] = useState<KubeSegment>('cluster')
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
@@ -4206,7 +4221,7 @@ export default function App(): React.JSX.Element {
         setTerminals(list)
         // If a tab that does not belong to this project is still active, fall back to Run. The Kubernetes and logs
         // tabs belong to none.
-        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || isLogTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || isLogTabId(cur) || isShellTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])
@@ -4452,7 +4467,7 @@ export default function App(): React.JSX.Element {
     const remaining = runs.filter((r) => r.runId !== runId)
     setRuns(remaining)
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
-    if (remaining.length === 0 && terminals.length === 0 && logTabs.length === 0) setRunPanelOpen(false)
+    if (remaining.length === 0 && terminals.length === 0 && logTabs.length === 0 && shellTabs.length === 0) setRunPanelOpen(false)
   }
   /** Opens the two-pane manager, snapshotting the current project the way managerFor's own comment
    *  explains. Shared by the toolbar's ⋮ item and the configuration menu's "Edit '<name>'…" row — the
@@ -4612,6 +4627,19 @@ export default function App(): React.JSX.Element {
   const closeLogs = (id: string): void => {
     logHosts.current.delete(id)
     setLogTabs((prev) => closeLogTab(prev, id))
+    setBottomTab((cur) => (cur === id ? 'run' : cur))
+  }
+  /** A shell into a Pod's container from the cluster view (spec 4.8): its own tab, or the one whose shell still runs
+   *  in that container, is shown. */
+  const showPodShell = (ref: ObjectRef, container: string): void => {
+    const opened = openShellTab(shellTabs, ref, container, newShellTabId)
+    setShellTabs(opened.tabs)
+    setBottomTab(opened.focus)
+  }
+  /** A shell tab's ✕: its view unmounts, which ends the shell; the shown tab falls back as a closed logs tab does. */
+  const closeShell = (id: string): void => {
+    shellHosts.current.delete(id)
+    setShellTabs((prev) => closeShellTab(prev, id))
     setBottomTab((cur) => (cur === id ? 'run' : cur))
   }
 
@@ -5294,9 +5322,10 @@ export default function App(): React.JSX.Element {
                       kubectlFound ? (
                         <ClusterView
                           model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onWrite={writeKubeObject} />}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onOpenShell={showPodShell} onWrite={writeKubeObject} />}
                           onOpenInEditor={openKubeObject}
                           onOpenLogs={showPodLogs}
+                          onOpenShell={showPodShell}
                           onWrite={writeKubeObject}
                           toolbarStart={switcher}
                         />
@@ -5320,6 +5349,10 @@ export default function App(): React.JSX.Element {
                     logTabs={logTabs}
                     onCloseLogTab={closeLogs}
                     logHost={logHostOf}
+                    shellTabs={shellTabs}
+                    onCloseShellTab={closeShell}
+                    shellHost={shellHostOf}
+                    onShellAction={(id, what) => setShellTabs((prev) => bumpShellTab(prev, id, what))}
                   />
                 )}
                 {/* The logs views live here, outside the panel's mount: collapsing the panel unmounts it, and a view's
@@ -5337,6 +5370,21 @@ export default function App(): React.JSX.Element {
                       onContainer={(name) => setLogTabs((prev) => setLogTabContainer(prev, tab.id, name))}
                     />,
                     logHostOf(tab.id),
+                    tab.id
+                  )
+                )}
+                {/* The shell views live here for the same reason; each shell lasts as long as its tab. */}
+                {shellTabs.map((tab) =>
+                  createPortal(
+                    <KubeShellView
+                      spec={{ ref: tab.ref, container: tab.container }}
+                      visible={runPanelOpen && bottomTabShown === tab.id}
+                      clear={tab.clear}
+                      find={tab.find}
+                      onEnded={() => setShellTabs((prev) => endShellTab(prev, tab.id))}
+                      onOpenUrl={openUrl}
+                    />,
+                    shellHostOf(tab.id),
                     tab.id
                   )
                 )}

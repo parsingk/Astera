@@ -22,6 +22,10 @@ describe('shownBottomTab', () => {
     expect(shownBottomTab({ ...home, wanted: 'kube', terminalIds: ['t1'] })).toBe('kube')
   })
 
+  it('keeps a shell tab shown without a project', () => {
+    expect(shownBottomTab({ ...home, wanted: 'kubeshell:1', terminalIds: ['t1'] })).toBe('kubeshell:1')
+  })
+
   it('at home, shows the terminal asked for, and for Run the first terminal', () => {
     expect(shownBottomTab({ ...home, wanted: 't2', terminalIds: ['t1', 't2'] })).toBe('t2')
     expect(shownBottomTab({ ...home, wanted: 'run', terminalIds: ['t1', 't2'] })).toBe('t1')
