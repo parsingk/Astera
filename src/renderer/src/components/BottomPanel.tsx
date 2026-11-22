@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
@@ -11,7 +11,8 @@ import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
 import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
 import { logTabShowsContainer, type KubeLogTab } from '../lib/kubeLogTabs'
-import { ChevronDown, Delete, Plus, X } from 'lucide-react'
+import { shellTabShowsContainer, type KubeShellTab } from '../lib/kubeShellTabs'
+import { ChevronDown, Delete, Plus, Search, X } from 'lucide-react'
 
 /**
  * Bottom panel. The Run tab and the project terminals share this one panel through tabs.
@@ -52,7 +53,11 @@ export function BottomPanel({
   kubeCluster,
   logTabs,
   onCloseLogTab,
-  logHost
+  logHost,
+  shellTabs,
+  onCloseShellTab,
+  shellHost,
+  onShellAction
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -106,6 +111,12 @@ export function BottomPanel({
   logTabs: KubeLogTab[]
   onCloseLogTab: (id: string) => void
   logHost: (id: string) => HTMLElement
+  /** Shells into containers, after the logs tabs (spec 4.8), kept the same way: App holds each KubeShellView in the
+   *  element `shellHost` gives. `onShellAction` is the header's find and clear for the shown shell tab. */
+  shellTabs: KubeShellTab[]
+  onCloseShellTab: (id: string) => void
+  shellHost: (id: string) => HTMLElement
+  onShellAction: (id: string, what: 'clear' | 'find') => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -128,6 +139,12 @@ export function BottomPanel({
     return () => clearInterval(id)
   }, [anyRunning])
 
+  // A tab focused off the end of the strip (the strip scrolls sideways) would stay out of sight: bring the shown one in.
+  const tabListRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    tabListRef.current?.querySelector(`[data-tab-id="${CSS.escape(activeTab)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTab])
+
   const kubeFailures = kubeFailureCount(kubeLog)
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
@@ -145,10 +162,11 @@ export function BottomPanel({
   return (
     <div className="run-panel">
       <div className="bottom-tabs">
-        <span className="bottom-tab-list">
+        <span className="bottom-tab-list" ref={tabListRef}>
           {runAvailable && (
             <span
               role="tab"
+              data-tab-id="run"
               aria-selected={activeTab === 'run'}
               tabIndex={0}
               className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
@@ -162,6 +180,7 @@ export function BottomPanel({
           {kubeAvailable && (
             <span
               role="tab"
+              data-tab-id="kube"
               aria-selected={activeTab === 'kube'}
               tabIndex={0}
               className={activeTab === 'kube' ? 'bottom-tab on' : 'bottom-tab'}
@@ -181,6 +200,7 @@ export function BottomPanel({
             <span
               key={tab.id}
               role="tab"
+              data-tab-id={tab.id}
               aria-selected={activeTab === tab.id}
               tabIndex={0}
               className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
@@ -205,10 +225,40 @@ export function BottomPanel({
               </button>
             </span>
           ))}
+          {shellTabs.map((tab) => (
+            <span
+              key={tab.id}
+              role="tab"
+              data-tab-id={tab.id}
+              aria-selected={activeTab === tab.id}
+              tabIndex={0}
+              className={'bottom-tab' + (activeTab === tab.id ? ' on' : '') + (tab.ended ? ' ended' : '')}
+              // Two tabs of one Pod read the same: where each reads from tells them apart.
+              title={`${[tab.ref.context, tab.ref.namespace].filter((s) => s !== null).join(' / ')} · ${t('kube.logs.container')} ${tab.container}`}
+              onClick={() => onSelectTab(tab.id)}
+              onKeyDown={tabKeyDown(tab.id)}
+            >
+              {shellTabShowsContainer(shellTabs, tab)
+                ? t('kube.shell.tabContainer', { pod: tab.ref.name, container: tab.container })
+                : t('kube.shell.tab', { pod: tab.ref.name })}
+              <button
+                className="bottom-tab-close"
+                aria-label={t('kube.shell.closeTab')}
+                title={t('kube.shell.closeTab')}
+                onClick={(e) => {
+                  e.stopPropagation() // keeps close from also selecting the tab it closes
+                  onCloseShellTab(tab.id)
+                }}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
           {terminals.map((term, i) => (
             <span
               key={term.id}
               role="tab"
+              data-tab-id={term.id}
               aria-selected={activeTab === term.id}
               tabIndex={0}
               className={activeTab === term.id ? 'bottom-tab on' : 'bottom-tab'}
@@ -246,6 +296,16 @@ export function BottomPanel({
             <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
               <Delete size={12} />
             </button>
+          )}
+          {shellTabs.some((tab) => tab.id === activeTab) && (
+            <>
+              <button className="run-panel-btn" title={t('kube.shell.find')} aria-label={t('kube.shell.find')} onClick={() => onShellAction(activeTab, 'find')}>
+                <Search size={12} />
+              </button>
+              <button className="run-panel-btn" title={t('run.panel.clear')} aria-label={t('run.panel.clear')} onClick={() => onShellAction(activeTab, 'clear')}>
+                <Delete size={12} />
+              </button>
+            </>
           )}
           <button className="run-panel-btn" title={t('run.panel.collapse')} onClick={onCollapse}>
             <ChevronDown size={12} />
@@ -322,7 +382,10 @@ export function BottomPanel({
           </div>
         )}
         {logTabs.map((tab) => (
-          <LogBody key={tab.id} host={logHost(tab.id)} shown={activeTab === tab.id} />
+          <HostedBody key={tab.id} host={logHost(tab.id)} shown={activeTab === tab.id} />
+        ))}
+        {shellTabs.map((tab) => (
+          <HostedBody key={tab.id} host={shellHost(tab.id)} shown={activeTab === tab.id} />
         ))}
         {terminals.map((term) => (
           <div
@@ -355,9 +418,10 @@ export function holdHost(body: Node | null, host: Node): void {
   else if (host.parentNode !== body) body.appendChild(host)
 }
 
-/** A logs tab's body. The view is not mounted here: App keeps it in `host`, so the panel's own mount and unmount (a
- *  collapse) leave its kubectl and lines alone, and the body only holds that element while it is drawn. */
-function LogBody({ host, shown }: { host: HTMLElement; shown: boolean }): React.JSX.Element {
+/** A logs or shell tab's body. The view is not mounted here: App keeps it in `host`, so the panel's own mount and
+ *  unmount (a collapse) leave its kubectl or shell and lines alone, and the body only holds that element while it is
+ *  drawn. */
+function HostedBody({ host, shown }: { host: HTMLElement; shown: boolean }): React.JSX.Element {
   const hold = useCallback((el: HTMLDivElement | null) => holdHost(el, host), [host])
   return <div ref={hold} className="bottom-body" style={{ display: shown ? 'flex' : 'none' }} />
 }

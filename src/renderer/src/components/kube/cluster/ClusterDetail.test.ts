@@ -92,6 +92,32 @@ describe('ClusterDetail', () => {
     expect(render(model('ConfigMap', 'configmaps', cm), { onOpenLogs: noop })).not.toContain('kube.logs.open')
   })
 
+  it('draws the shell button for a running Pod', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'w-1', namespace: 'dev' },
+      spec: { containers: [{ name: 'app' }] },
+      status: { phase: 'Running', containerStatuses: [{ name: 'app', state: { running: {} } }] }
+    }
+    const html = render(model('Pod', 'pods', pod), { onOpenLogs: noop, onOpenShell: noop })
+    expect(html).toMatch(/title="kube\.shell\.open" aria-label="kube\.shell\.open"><svg [^>]*class="lucide lucide-square-terminal/)
+    expect(html.indexOf('kube.logs.open')).toBeLessThan(html.indexOf('kube.shell.open'))
+    expect(html.indexOf('kube.shell.open')).toBeLessThan(html.indexOf('kube.cluster.more'))
+    expect(render(model('Pod', 'pods', pod))).not.toContain('kube.shell.open')
+  })
+
+  it('leaves the shell button out for a Pending Pod', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'w-1', namespace: 'dev' },
+      spec: { containers: [{ name: 'app' }] },
+      status: { phase: 'Pending' }
+    }
+    expect(render(model('Pod', 'pods', pod), { onOpenShell: noop })).not.toContain('kube.shell.open')
+  })
+
   // Task 15 S5: a pencil reads as "edit" in a part that only reads; boards A and B draw open-in-editor as "open elsewhere".
   it('draws the editor button with the open-elsewhere icon, not a pencil', () => {
     const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }

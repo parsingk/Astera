@@ -3334,6 +3334,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* Same reasoning as .rail-btn.on:focus-visible above — box-shadow does not composite, so the active
    bottom tab needs both shadows restated explicitly or tabbing to it shows no ring. */
 .bottom-tab.on:focus-visible { box-shadow: inset 0 calc(-1 * var(--marker-w)) 0 var(--accent), 0 0 0 2px var(--ring); }
+.bottom-tab.ended { opacity: .6; }
 .bottom-tab-close { background: transparent; border: 0; color: inherit; opacity: .5; padding: 0 0 0 2px; font-size: 10px; cursor: pointer; }
 .bottom-tab-close:hover { opacity: 1; }
 .bottom-tab-new { background: transparent; border: 0; color: var(--text-dim); padding: 2px 6px; font-size: 12px; cursor: pointer; }
@@ -3386,6 +3387,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The console plus what floats over it (the find bar). The host is the xterm mount as before. */
 .run-panel-body { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
 .run-panel-body > .run-panel-host { flex: 1; min-width: 0; }
+/* A shell tab's body: the host plus the find bar floating over it, filling the panel as .run-panel-body does. */
+.kube-shell { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; display: flex; }
+.kube-shell > .run-panel-host { flex: 1; min-width: 0; }
 /* The find bar — RunFindBar, top-right over the output, in the floating-panel treatment .run-more-menu
    and .sel-menu use (panel background, soft border, large radius, the large shadow). */
 .run-find { position: absolute; top: 6px; right: 14px; z-index: 5; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
@@ -3762,6 +3766,8 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-tab.deleted .kube-tab-body { opacity: .5; }
 /* The element App keeps a logs view in for the tab's life; its tab's body holds it while the panel is open. */
 .kube-logs-host { flex: 1; min-width: 0; min-height: 0; display: flex; }
+/* The same for a shell tab's view: without it the element shrink-wraps in the body row and the terminal draws a few columns wide. */
+.kube-shell-host { flex: 1; min-width: 0; min-height: 0; display: flex; }
 /* A Pod's logs tab (KubeLogView, board E): the toolbar, then the lines in monospace, LINE_HEIGHT (20px) a line unless
    wrapped. The view does its own scroll keeping, so the browser's scroll anchoring stays out of it: with wrapped lines
    it would answer the window's moves with scrolls of its own. The body is positioned so the end spacer's offsetTop

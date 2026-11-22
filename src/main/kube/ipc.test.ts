@@ -47,10 +47,11 @@ function setup(denied: string[] = []) {
   }
   const logs = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
   const writes = { editBase: vi.fn(async () => ({ ok: true })), dependents: vi.fn(async () => ({ ok: true })), preview: vi.fn(async () => ({ ok: true })), run: vi.fn(async () => ({})), cancel: vi.fn() }
+  const shells = { start: vi.fn(), write: vi.fn(), resize: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
   const saveDialog = vi.fn(async (_defaultPath: string): Promise<string | null> => '/out/p.log')
   const writeFile = vi.fn(async (_p: string, _text: string) => {})
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, writes, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, writes, saveDialog, writeFile }
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn), on: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, shells, writes, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, shells, writes, saveDialog, writeFile }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -444,5 +445,68 @@ describe('live writes over IPC', () => {
     expect(ok.service.manifestFor).toHaveBeenCalledWith('/q', ref)
     await expect(ok.call('kube.cluster.manifestFor', '/q', { ...ref, name: '-x' })).rejects.toThrow()
     await expect(ok.call('kube.cluster.manifestFor', '', ref)).rejects.toThrow()
+  })
+})
+
+describe('container shells over IPC', () => {
+  const podRef = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const spec = { ref: podRef, container: 'app' }
+
+  it('validates a shell spec', async () => {
+    const t = setup()
+    await expect(t.call('kube.shell.start', 's', { ref: { ...podRef, namespace: null }, container: 'app' }, 80, 24)).rejects.toThrow()
+    await expect(t.call('kube.shell.start', 's', { ref: { ...podRef, kind: 'Deployment' }, container: 'app' }, 80, 24)).rejects.toThrow()
+    await expect(t.call('kube.shell.start', 's', { ref: podRef, container: '-c' }, 80, 24)).rejects.toThrow()
+    await expect(t.call('kube.shell.start', '', spec, 80, 24)).rejects.toThrow()
+    expect(t.shells.start).not.toHaveBeenCalled()
+    await t.call('kube.shell.start', 's1', spec, 80, 24)
+    expect(t.shells.start).toHaveBeenCalledWith('s1', spec, 80, 24)
+  })
+
+  it('rejects a double quote in any shell argument', async () => {
+    const t = setup()
+    const q = '"x --server=https://evil.example y"'
+    const bad = [
+      { ref: { ...podRef, context: q }, container: 'app' },
+      { ref: { ...podRef, namespace: q }, container: 'app' },
+      { ref: { ...podRef, name: q }, container: 'app' },
+      { ref: podRef, container: q }
+    ]
+    for (const b of bad) await expect(t.call('kube.shell.start', 's', b, 80, 24)).rejects.toThrow('double quote')
+    expect(t.shells.start).not.toHaveBeenCalled()
+  })
+
+  it('rejects a size that is not a positive integer', async () => {
+    const t = setup()
+    for (const bad of [0, -1, 1.5, 1001, '80']) {
+      await expect(t.call('kube.shell.start', 's', spec, bad, 24)).rejects.toThrow()
+      await expect(t.call('kube.shell.start', 's', spec, 80, bad)).rejects.toThrow()
+      expect(() => t.call('kube.shell.resize', 's', bad, 24)).not.toThrow()
+    }
+    expect(t.shells.start).not.toHaveBeenCalled()
+    expect(t.shells.resize).not.toHaveBeenCalled()
+  })
+
+  it('routes write, resize and stop to the shell', async () => {
+    const t = setup()
+    t.call('kube.shell.write', 's', 'ls')
+    expect(t.shells.write).toHaveBeenCalledWith('s', 'ls')
+    t.call('kube.shell.write', 's', 5)
+    t.call('kube.shell.write', '', 'x')
+    expect(t.shells.write).toHaveBeenCalledTimes(1)
+    t.call('kube.shell.resize', 's', 100, 30)
+    expect(t.shells.resize).toHaveBeenCalledWith('s', 100, 30)
+    await t.call('kube.shell.stop', 's')
+    expect(t.shells.stop).toHaveBeenCalledWith('s')
+  })
+
+  it('never throws out of a write or resize handler when the registry throws', () => {
+    const t = setup()
+    t.shells.write.mockImplementation(() => { throw new Error('pty gone') })
+    t.shells.resize.mockImplementation(() => { throw new Error('pty gone') })
+    expect(() => t.call('kube.shell.write', 's', 'x')).not.toThrow()
+    expect(() => t.call('kube.shell.resize', 's', 80, 24)).not.toThrow()
+    expect(t.shells.write).toHaveBeenCalledTimes(1)
+    expect(t.shells.resize).toHaveBeenCalledTimes(1)
   })
 })
