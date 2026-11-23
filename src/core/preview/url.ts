@@ -64,8 +64,9 @@ export function previewTargetOf(u: string): string {
 }
 
 /** The one link rule: a loopback address opens in the preview, anything else outside; the modifier
- *  (Ctrl, or Cmd on macOS) inverts it. */
-export function linkDestination(u: string, opts: { modifier: boolean }): 'preview' | 'external' {
+ *  (Ctrl, or Cmd on macOS) inverts it. A preview tab needs a project, so without one every link opens outside. */
+export function linkDestination(u: string, opts: { modifier: boolean; hasProject: boolean }): 'preview' | 'external' {
+  if (!opts.hasProject) return 'external'
   return isLoopbackUrl(u) !== opts.modifier ? 'preview' : 'external'
 }
 

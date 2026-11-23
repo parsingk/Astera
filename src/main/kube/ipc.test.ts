@@ -21,14 +21,39 @@ function setup(denied: string[] = []) {
     invalidateContexts: vi.fn(),
     preview: vi.fn(async () => ({})),
     run: vi.fn(async () => ({})),
-    status: vi.fn(async () => ({}))
+    status: vi.fn(async () => ({})),
+    manifestFor: vi.fn(async () => ({ state: 'none' }))
   }
   const assertAllowedPath = async (p: string): Promise<string> => {
     if (denied.includes(p)) throw new Error('path not allowed')
     return p
   }
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath } as never)
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath }
+  const cluster = {
+    namespaces: vi.fn(async () => ({ ok: true, names: [] })),
+    crds: vi.fn(async () => ({ ok: true, kinds: [], crds: [] })),
+    counts: vi.fn(async () => ({})),
+    get: vi.fn(async () => ({ ok: true, object: null })),
+    describe: vi.fn(async () => ({ ok: true, text: '' })),
+    events: vi.fn(async () => ({ ok: true, events: [] })),
+    pods: vi.fn(async () => ({ ok: true, objects: [] })),
+    reveal: vi.fn(async () => ({ ok: true, values: [] })),
+    list: vi.fn(async () => ({ ok: true, objects: [] }))
+  }
+  const watches = {
+    watch: vi.fn((): { ok: true } | { ok: false; reason: 'limit' } => ({ ok: true })),
+    unwatch: vi.fn(),
+    stopAll: vi.fn(),
+    size: vi.fn(() => 0)
+  }
+  const logs = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const writes = { editBase: vi.fn(async () => ({ ok: true })), dependents: vi.fn(async () => ({ ok: true })), preview: vi.fn(async () => ({ ok: true })), run: vi.fn(async () => ({})), cancel: vi.fn() }
+  const shells = { start: vi.fn(), write: vi.fn(), resize: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const forwards = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const localPort = vi.fn(async (p: number) => p)
+  const saveDialog = vi.fn(async (_defaultPath: string): Promise<string | null> => '/out/p.log')
+  const writeFile = vi.fn(async (_p: string, _text: string) => {})
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn), on: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, shells, forwards, localPort, writes, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, shells, forwards, localPort, writes, saveDialog, writeFile }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -171,5 +196,364 @@ describe('files.watch in ipc.ts', () => {
     expect(start).toBeGreaterThan(0)
     expect(handler.indexOf('await assertAllowedPath(root)')).toBeGreaterThan(0)
     expect(handler.indexOf('kubeService.forgetGraph(root)')).toBeGreaterThan(handler.indexOf('await assertAllowedPath(root)'))
+  })
+})
+
+describe('cluster view IPC', () => {
+  const ref = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const kinds = [{ kind: 'Pod', resource: 'pods', namespaced: true }]
+  const spec = { context: 'c', namespace: null, namespaced: true, resource: 'pods' }
+
+  it('forwards validated arguments to the reads', async () => {
+    const t = setup()
+    await t.call('kube.cluster.namespaces', 'c')
+    expect(t.cluster.namespaces).toHaveBeenCalledWith('c')
+    await t.call('kube.cluster.crds', 'c')
+    expect(t.cluster.crds).toHaveBeenCalledWith('c')
+    await t.call('kube.cluster.counts', 'c', null, kinds)
+    expect(t.cluster.counts).toHaveBeenCalledWith('c', null, kinds)
+    await t.call('kube.cluster.get', ref)
+    expect(t.cluster.get).toHaveBeenCalledWith(ref)
+    await t.call('kube.cluster.describe', ref)
+    expect(t.cluster.describe).toHaveBeenCalledWith(ref)
+    await t.call('kube.cluster.events', ref, 'u1')
+    expect(t.cluster.events).toHaveBeenCalledWith(ref, 'u1')
+    await t.call('kube.cluster.pods', 'c', 'ns', 'app=x')
+    expect(t.cluster.pods).toHaveBeenCalledWith('c', 'ns', 'app=x')
+    await t.call('kube.cluster.reveal', ref)
+    expect(t.cluster.reveal).toHaveBeenCalledWith(ref)
+  })
+
+  it('forwards a one-shot list validated as a watch spec', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.list', spec)).toEqual({ ok: true, objects: [] })
+    expect(t.cluster.list).toHaveBeenCalledWith(spec)
+    await expect(t.call('kube.cluster.list', { context: 'c', namespace: null, resource: 'pods' })).rejects.toThrow('kube: watch spec')
+    expect(t.cluster.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('forwards watch and unwatch, returning the registry answer', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.watch', 'w1', spec)).toEqual({ ok: true })
+    expect(t.watches.watch).toHaveBeenCalledWith('w1', spec)
+    t.watches.watch.mockReturnValueOnce({ ok: false, reason: 'limit' })
+    expect(await t.call('kube.cluster.watch', 'w2', { ...spec, name: 'n' })).toEqual({ ok: false, reason: 'limit' })
+    await t.call('kube.cluster.unwatch', 'w1')
+    expect(t.watches.unwatch).toHaveBeenCalledWith('w1')
+  })
+
+  it('rejects malformed arguments before reaching main', async () => {
+    const t = setup()
+    await expect(t.call('kube.cluster.get', { ...ref, context: '' })).rejects.toThrow('kube: ref')
+    await expect(t.call('kube.cluster.watch', 'w', { context: 'c', namespace: null, resource: 'pods' })).rejects.toThrow('kube: watch spec')
+    await expect(t.call('kube.cluster.counts', 'c', null, 'pods')).rejects.toThrow('kube: kinds')
+    await expect(t.call('kube.cluster.counts', 'c', null, [{ kind: 'Pod' }])).rejects.toThrow('kube: kinds')
+    await expect(t.call('kube.cluster.events', ref, '')).rejects.toThrow('kube: uid')
+    expect(t.cluster.get).not.toHaveBeenCalled()
+    expect(t.watches.watch).not.toHaveBeenCalled()
+    expect(t.cluster.counts).not.toHaveBeenCalled()
+  })
+
+  // A workload without a selector is a normal case: its Pods tab gets a failed read, not a thrown error. kubectl is not
+  // asked, as `-l ''` would list every Pod of the namespace.
+  it('answers pods with an empty selector as a failed read, without reading', async () => {
+    const t = setup()
+    expect(await t.call('kube.cluster.pods', 'c', 'ns', '')).toEqual({ ok: false, message: 'No label selector to list Pods by' })
+    expect(t.cluster.pods).not.toHaveBeenCalled()
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', undefined)).rejects.toThrow('kube: selector must be a string')
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', 3)).rejects.toThrow('kube: selector must be a string')
+  })
+
+  // kubectl would read a value starting with "-" as a flag (a resource or name is a positional argument).
+  it('rejects a context, namespace, resource, name or selector starting with "-"', async () => {
+    const t = setup()
+    const dash = (what: string) => `kube: ${what} must be a non-empty string not starting with "-"`
+    for (const [field, what] of [['context', 'ref context'], ['namespace', 'ref namespace'], ['resource', 'ref resource'], ['name', 'ref name']]) {
+      for (const channel of ['kube.cluster.get', 'kube.cluster.describe', 'kube.cluster.reveal']) {
+        await expect(t.call(channel, { ...ref, [field]: '-o=yaml' })).rejects.toThrow(dash(what))
+      }
+      await expect(t.call('kube.cluster.events', { ...ref, [field]: '-o=yaml' }, 'u1')).rejects.toThrow(dash(what))
+    }
+    const named = { ...spec, name: 'n' }
+    for (const [field, what] of [['context', 'watch context'], ['namespace', 'watch namespace'], ['resource', 'watch resource'], ['name', 'watch name']]) {
+      await expect(t.call('kube.cluster.watch', 'w', { ...named, [field]: '--all' })).rejects.toThrow(dash(what))
+      await expect(t.call('kube.cluster.list', { ...named, [field]: '--all' })).rejects.toThrow(dash(what))
+    }
+    await expect(t.call('kube.cluster.counts', 'c', null, [{ kind: 'Pod', resource: '-A', namespaced: true }])).rejects.toThrow(dash('kind resource'))
+    await expect(t.call('kube.cluster.counts', '-c', null, kinds)).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.counts', 'c', '-n', kinds)).rejects.toThrow(dash('namespace'))
+    await expect(t.call('kube.cluster.namespaces', '--kubeconfig=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.crds', '--kubeconfig=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.pods', '-c', 'ns', 'app=x')).rejects.toThrow(dash('context'))
+    await expect(t.call('kube.cluster.pods', 'c', '-n', 'app=x')).rejects.toThrow(dash('namespace'))
+    await expect(t.call('kube.cluster.pods', 'c', 'ns', '-A')).rejects.toThrow('kube: selector must be a string not starting with "-"')
+    for (const read of ['get', 'describe', 'events', 'reveal', 'list', 'counts', 'namespaces', 'crds', 'pods'] as const) expect(t.cluster[read]).not.toHaveBeenCalled()
+    expect(t.watches.watch).not.toHaveBeenCalled()
+  })
+})
+
+describe('Pod logs over IPC', () => {
+  const podRef = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const options = { container: 'app', previous: false, follow: true }
+
+  it('forwards a valid spec to the registry', async () => {
+    const t = setup()
+    await t.call('kube.logs.start', 'l1', { ref: podRef, options })
+    expect(t.logs.start).toHaveBeenCalledWith('l1', { ref: podRef, options })
+  })
+
+  it('rejects a ref that is not a Pod, a bad container and a non-boolean flag, starting nothing', async () => {
+    const t = setup()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, kind: 'Deployment' }, options })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, resource: 'deployments' }, options })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, name: '-x' }, options })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, container: '-c' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, container: '' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, follow: 'yes' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l', { ref: podRef, options: { ...options, previous: 1 } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', '', { ref: podRef, options })).rejects.toThrow()
+    expect(t.logs.start).not.toHaveBeenCalled()
+  })
+
+  it('forwards a time to read on from, and rejects one that is not a time', async () => {
+    const t = setup()
+    const since = { ...options, sinceTime: '2026-11-20T01:12:03.114539874Z' }
+    await t.call('kube.logs.start', 'l1', { ref: podRef, options: since })
+    expect(t.logs.start).toHaveBeenCalledWith('l1', { ref: podRef, options: since })
+    await expect(t.call('kube.logs.start', 'l2', { ref: podRef, options: { ...options, sinceTime: '-f' } })).rejects.toThrow()
+    await expect(t.call('kube.logs.start', 'l3', { ref: podRef, options: { ...options, sinceTime: 5 } })).rejects.toThrow()
+    expect(t.logs.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a Pod ref without a namespace', async () => {
+    const t = setup()
+    await expect(t.call('kube.logs.start', 'l', { ref: { ...podRef, namespace: null }, options })).rejects.toThrow('kube: ref must be a namespaced Pod')
+    expect(t.logs.start).not.toHaveBeenCalled()
+  })
+
+  it('forwards stop with the id', async () => {
+    const t = setup()
+    await t.call('kube.logs.stop', 'l1')
+    expect(t.logs.stop).toHaveBeenCalledWith('l1')
+  })
+
+  it('rejects a save name with a path separator, asking nothing', async () => {
+    const t = setup()
+    await expect(t.call('kube.logs.save', 'a/b.log', 'x')).rejects.toThrow()
+    await expect(t.call('kube.logs.save', 'a' + String.fromCharCode(92) + 'b.log', 'x')).rejects.toThrow()
+    await expect(t.call('kube.logs.save', 'p.log', 5)).rejects.toThrow()
+    expect(t.saveDialog).not.toHaveBeenCalled()
+  })
+
+  it('writes the text to the path the dialog answers', async () => {
+    const t = setup()
+    expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: true, path: '/out/p.log' })
+    expect(t.saveDialog).toHaveBeenCalledWith(path.join('/dl', 'p.log'))
+    expect(t.writeFile).toHaveBeenCalledWith('/out/p.log', 'hello')
+  })
+
+  it('answers saved: false without writing when the dialog is cancelled', async () => {
+    const t = setup()
+    t.saveDialog.mockResolvedValueOnce(null)
+    expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: false })
+    expect(t.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('answers the message of a failed write', async () => {
+    const t = setup()
+    t.writeFile.mockRejectedValueOnce(new Error('disk full'))
+    expect(await t.call('kube.logs.save', 'p.log', 'hello')).toEqual({ saved: false, error: 'disk full' })
+  })
+})
+
+describe('live writes over IPC', () => {
+  const ref = { context: 'c', namespace: 'n', resource: 'deployments', kind: 'Deployment', name: 'web' }
+  const OPTS = { keepServerFields: false, showValues: false }
+
+  it('validates a live op', async () => {
+    const t = setup()
+    const bad: unknown[] = [
+      { verb: 'apply', ref },
+      { verb: 'delete', ref: { ...ref, name: '-x' } },
+      { verb: 'delete', ref: { ...ref, resource: '-x' } },
+      { verb: 'replace', ref, base: { resourceVersion: '1', hash: 'h' } },
+      { verb: 'replace', ref, text: 5, base: { resourceVersion: '1', hash: 'h' } },
+      { verb: 'replace', ref, text: 'a' },
+      { verb: 'replace', ref, text: 'a', base: { resourceVersion: '', hash: 'h' } },
+      { verb: 'replace', ref, text: 'a', base: { resourceVersion: '1', hash: 2 } },
+      { verb: 'scale', ref, replicas: 1.5 },
+      { verb: 'scale', ref, replicas: -1 },
+      { verb: 'scale', ref, replicas: 2147483648 },
+      { verb: 'scale', ref, replicas: '3' },
+      { verb: 'scale', ref },
+      { verb: 'delete', ref: null },
+      { verb: 'replace', ref, text: 'a', base: [] },
+      { verb: 'replace', ref, text: 'a', base: 'x' },
+      null
+    ]
+    for (const op of bad) await expect(t.call('kube.write.preview', op, OPTS)).rejects.toThrow()
+    expect(t.writes.preview).not.toHaveBeenCalled()
+    const good = [
+      { verb: 'replace', ref, text: '', base: { resourceVersion: '1', hash: 'h' } },
+      { verb: 'delete', ref },
+      { verb: 'restart', ref },
+      { verb: 'scale', ref, replicas: 0 },
+      { verb: 'scale', ref, replicas: 2147483647 }
+    ]
+    for (const op of good) {
+      await t.call('kube.write.preview', { ...op, extra: 1 }, OPTS)
+      expect(t.writes.preview).toHaveBeenLastCalledWith(op, OPTS)
+    }
+  })
+
+  it('passes preview options', async () => {
+    const t = setup()
+    const op = { verb: 'delete', ref }
+    await t.call('kube.write.preview', op, { keepServerFields: true, showValues: true, x: 1 })
+    expect(t.writes.preview).toHaveBeenLastCalledWith(op, { keepServerFields: true, showValues: true })
+    for (const o of [undefined, {}, { keepServerFields: true }, { showValues: true }, { keepServerFields: 1, showValues: true }]) {
+      await expect(t.call('kube.write.preview', op, o)).rejects.toThrow()
+    }
+  })
+
+  it('routes run and cancel with their ids', async () => {
+    const t = setup()
+    const op = { verb: 'restart', ref }
+    await t.call('kube.write.run', 'r1', op, 'fp')
+    expect(t.writes.run).toHaveBeenCalledWith('r1', op, 'fp')
+    await expect(t.call('kube.write.run', '', op, 'fp')).rejects.toThrow()
+    await expect(t.call('kube.write.run', 'r1', op, '')).rejects.toThrow()
+    await expect(t.call('kube.write.run', 'r1', { verb: 'nope', ref }, 'fp')).rejects.toThrow()
+    await t.call('kube.write.cancel', 'r1')
+    expect(t.writes.cancel).toHaveBeenCalledWith('r1')
+    await expect((async () => t.call('kube.write.cancel', ''))()).rejects.toThrow()
+  })
+
+  it('reads the edit base and dependents of a validated ref', async () => {
+    const t = setup()
+    await t.call('kube.cluster.editBase', ref)
+    expect(t.writes.editBase).toHaveBeenCalledWith(ref)
+    await t.call('kube.cluster.dependents', ref)
+    expect(t.writes.dependents).toHaveBeenCalledWith(ref)
+    await expect(t.call('kube.cluster.editBase', { ...ref, name: '-x' })).rejects.toThrow()
+  })
+
+  it('checks the project root of manifestFor', async () => {
+    const t = setup(['/p'])
+    await expect(t.call('kube.cluster.manifestFor', '/p', ref)).rejects.toThrow('path not allowed')
+    expect(t.service.manifestFor).not.toHaveBeenCalled()
+    const ok = setup()
+    await ok.call('kube.cluster.manifestFor', '/q', ref)
+    expect(ok.service.manifestFor).toHaveBeenCalledWith('/q', ref)
+    await expect(ok.call('kube.cluster.manifestFor', '/q', { ...ref, name: '-x' })).rejects.toThrow()
+    await expect(ok.call('kube.cluster.manifestFor', '', ref)).rejects.toThrow()
+  })
+})
+
+describe('container shells over IPC', () => {
+  const podRef = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const spec = { ref: podRef, container: 'app' }
+
+  it('validates a shell spec', async () => {
+    const t = setup()
+    await expect(t.call('kube.shell.start', 's', { ref: { ...podRef, namespace: null }, container: 'app' }, 80, 24)).rejects.toThrow()
+    await expect(t.call('kube.shell.start', 's', { ref: { ...podRef, kind: 'Deployment' }, container: 'app' }, 80, 24)).rejects.toThrow()
+    await expect(t.call('kube.shell.start', 's', { ref: podRef, container: '-c' }, 80, 24)).rejects.toThrow()
+    await expect(t.call('kube.shell.start', '', spec, 80, 24)).rejects.toThrow()
+    expect(t.shells.start).not.toHaveBeenCalled()
+    await t.call('kube.shell.start', 's1', spec, 80, 24)
+    expect(t.shells.start).toHaveBeenCalledWith('s1', spec, 80, 24)
+  })
+
+  it('rejects a double quote in any shell argument', async () => {
+    const t = setup()
+    const q = '"x --server=https://evil.example y"'
+    const bad = [
+      { ref: { ...podRef, context: q }, container: 'app' },
+      { ref: { ...podRef, namespace: q }, container: 'app' },
+      { ref: { ...podRef, name: q }, container: 'app' },
+      { ref: podRef, container: q }
+    ]
+    for (const b of bad) await expect(t.call('kube.shell.start', 's', b, 80, 24)).rejects.toThrow('double quote')
+    expect(t.shells.start).not.toHaveBeenCalled()
+  })
+
+  it('rejects a size that is not a positive integer', async () => {
+    const t = setup()
+    for (const bad of [0, -1, 1.5, 1001, '80']) {
+      await expect(t.call('kube.shell.start', 's', spec, bad, 24)).rejects.toThrow()
+      await expect(t.call('kube.shell.start', 's', spec, 80, bad)).rejects.toThrow()
+      expect(() => t.call('kube.shell.resize', 's', bad, 24)).not.toThrow()
+    }
+    expect(t.shells.start).not.toHaveBeenCalled()
+    expect(t.shells.resize).not.toHaveBeenCalled()
+  })
+
+  it('routes write, resize and stop to the shell', async () => {
+    const t = setup()
+    t.call('kube.shell.write', 's', 'ls')
+    expect(t.shells.write).toHaveBeenCalledWith('s', 'ls')
+    t.call('kube.shell.write', 's', 5)
+    t.call('kube.shell.write', '', 'x')
+    expect(t.shells.write).toHaveBeenCalledTimes(1)
+    t.call('kube.shell.resize', 's', 100, 30)
+    expect(t.shells.resize).toHaveBeenCalledWith('s', 100, 30)
+    await t.call('kube.shell.stop', 's')
+    expect(t.shells.stop).toHaveBeenCalledWith('s')
+  })
+
+  it('never throws out of a write or resize handler when the registry throws', () => {
+    const t = setup()
+    t.shells.write.mockImplementation(() => { throw new Error('pty gone') })
+    t.shells.resize.mockImplementation(() => { throw new Error('pty gone') })
+    expect(() => t.call('kube.shell.write', 's', 'x')).not.toThrow()
+    expect(() => t.call('kube.shell.resize', 's', 80, 24)).not.toThrow()
+    expect(t.shells.write).toHaveBeenCalledTimes(1)
+    expect(t.shells.resize).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('port forwards over IPC', () => {
+  const podRef = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const spec = { ref: podRef, local: 8080, remote: 80 }
+
+  it('validates a forward spec', async () => {
+    const t = setup()
+    const bad: unknown[] = [
+      { ...spec, ref: { ...podRef, kind: 'ConfigMap', resource: 'configmaps' } },
+      { ...spec, ref: { ...podRef, namespace: null } },
+      { ...spec, ref: { ...podRef, name: '-x' } },
+      { ...spec, local: 0 },
+      { ...spec, remote: 65536 },
+      { ...spec, remote: 1.5 },
+      { ...spec, remoteName: 5 }
+    ]
+    for (const b of bad) await expect(t.call('kube.forward.start', 'f', b)).rejects.toThrow()
+    await expect(t.call('kube.forward.start', '', spec)).rejects.toThrow()
+    expect(t.forwards.start).not.toHaveBeenCalled()
+    await t.call('kube.forward.start', 'f1', spec)
+    expect(t.forwards.start).toHaveBeenCalledWith('f1', spec)
+    const svc = { ref: { ...podRef, kind: 'Service', resource: 'services' }, local: 1, remote: 2, remoteName: 'http' }
+    await t.call('kube.forward.start', 'f2', svc)
+    expect(t.forwards.start).toHaveBeenLastCalledWith('f2', svc)
+  })
+
+  it('accepts a Deployment ref as the cluster view carries it, and refuses the bare plural', async () => {
+    const t = setup()
+    const dep = { ...podRef, kind: 'Deployment', resource: 'deployments.apps', name: 'web' }
+    await t.call('kube.forward.start', 'f3', { ref: dep, local: 8080, remote: 80 })
+    expect(t.forwards.start).toHaveBeenCalledWith('f3', { ref: dep, local: 8080, remote: 80 })
+    await expect(t.call('kube.forward.start', 'f4', { ref: { ...dep, resource: 'deployments' }, local: 8080, remote: 80 })).rejects.toThrow()
+  })
+
+  it('routes stop and the local port ask', async () => {
+    const t = setup()
+    await t.call('kube.forward.stop', 'f1')
+    expect(t.forwards.stop).toHaveBeenCalledWith('f1')
+    await expect(t.call('kube.forward.localPort', 0)).rejects.toThrow()
+    await expect(t.call('kube.forward.localPort', '80')).rejects.toThrow()
+    expect(t.localPort).not.toHaveBeenCalled()
+    expect(await t.call('kube.forward.localPort', 8080)).toBe(8080)
+    expect(t.localPort).toHaveBeenCalledWith(8080)
   })
 })

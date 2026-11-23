@@ -4,6 +4,7 @@ import { displayContextName } from '../../../../core/kube/contextName'
 import type { KubeContext, KubeContexts } from '../../../../core/kube/types'
 import { nextCursor } from '../../../../core/ui/select'
 import { useI18n } from '../../i18n/I18nProvider'
+import { Select } from '../Select'
 
 export interface ClusterPickerProps {
   contexts: KubeContexts
@@ -39,12 +40,23 @@ export function pickerEnter(shown: KubeContext[], cursor: number): string | null
 
 const PROVIDER_TAG = { eks: 'EKS', gke: 'GKE' } as const
 
+/** Whether a key press closes the popover: Escape, unless the open folder list already took it to close itself
+ *  (Select calls preventDefault on that Escape). */
+export function dismissesOn(e: { key: string; defaultPrevented: boolean }): boolean {
+  return e.key === 'Escape' && !e.defaultPrevented
+}
+
+/** The remember-folder choices as dropdown items, in the order given. */
+export function folderItems(choices: string[], projectRoot: string, rootLabel: string): Array<{ value: string; label: string }> {
+  return choices.map((f) => ({ value: f, label: folderLabel(f, projectRoot, rootLabel) }))
+}
+
 /** Closes a popover on Escape and on a press outside it. */
 function useDismiss(onClose: () => void): React.RefObject<HTMLDivElement | null> {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const key = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (dismissesOn(e)) onClose()
     }
     const down = (e: MouseEvent): void => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
@@ -134,18 +146,15 @@ export function ClusterPicker(p: ClusterPickerProps): React.JSX.Element {
         <label className="kube-picker-remember">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
           <span>{t('kube.picker.remember')}</span>
-          <select
-            value={folder}
-            aria-label={t('kube.picker.rememberFolder')}
+          <Select
+            className="dense kube-sel kube-sel-fill"
+            ariaLabel={t('kube.picker.rememberFolder')}
             disabled={!remember}
-            onChange={(e) => setFolder(e.target.value)}
-          >
-            {p.rememberChoices.map((f) => (
-              <option key={f} value={f}>
-                {folderLabel(f, p.projectRoot, t('kube.picker.root'))}
-              </option>
-            ))}
-          </select>
+            items={folderItems(p.rememberChoices, p.projectRoot, t('kube.picker.root'))}
+            value={folder}
+            onChange={setFolder}
+            noCheck
+          />
         </label>
       )}
       <div className="kube-picker-items">

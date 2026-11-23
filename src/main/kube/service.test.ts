@@ -5,6 +5,7 @@ import { stringify } from 'yaml'
 import { createKubeService, type KubeServiceDeps } from './service'
 import { KubeTargetStore } from './targetStore'
 import type { KubectlResult } from '../../core/kube/kubectl'
+import type { ObjectRef } from '../../core/kube/cluster/types'
 import type { KubeRequest, KubeRunResult, KubeVerb } from '../../core/kube/types'
 import { targetKey } from '../../core/kube/target'
 import { objectsFromYaml } from '../../core/kube/objects'
@@ -1971,6 +1972,161 @@ describe('writes', () => {
       ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-f', a],
       ['delete', '--ignore-not-found', '--wait=false', '--context', 'kind-dev', '-k', prod]
     ])
+  })
+})
+
+describe('manifestFor', () => {
+  const ref = (over: Partial<ObjectRef> = {}): ObjectRef => ({ context: ARN, namespace: 'x', resource: 'configmaps', kind: 'ConfigMap', name: 'a', ...over })
+  const a = p('k8s', 'a.yaml')
+
+  it('finds the one manifest that declares the object', async () => {
+    const h = harness({ [a]: MANIFEST, [p('k8s', 'b.yaml')]: yamlDocs(cm('b', {})) })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect(await svc.manifestFor(root, ref())).toEqual({ state: 'same', file: a })
+    expect(await svc.manifestFor(root, ref({ name: 'nothing' }))).toEqual({ state: 'none' })
+  })
+
+  it('says another target when the file targets elsewhere', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect(await svc.manifestFor(root, ref({ context: 'kind-dev', namespace: 'dev' }))).toEqual({
+      state: 'other',
+      file: a,
+      context: ARN,
+      namespace: 'x'
+    })
+    expect(await svc.manifestFor(root, ref({ namespace: 'y' }))).toEqual({ state: 'other', file: a, context: ARN, namespace: 'x' })
+  })
+
+  it('finds none for two declaring files, a Kustomize member or another group', async () => {
+    const two = harness({ [a]: MANIFEST, [p('k8s', 'copy.yaml')]: MANIFEST })
+    const twoSvc = createKubeService(two.deps)
+    await twoSvc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect(await twoSvc.manifestFor(root, ref())).toEqual({ state: 'none' })
+
+    const member = harness(OVERLAY_TREE)
+    const memberSvc = createKubeService(member.deps)
+    await memberSvc.setTarget(p('envs'), { context: ARN, namespace: 'x' })
+    expect(await memberSvc.manifestFor(root, ref())).toEqual({ state: 'none' })
+
+    const group = harness({ [p('k8s', 'd.yaml')]: yamlDocs({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'd' } }) })
+    const groupSvc = createKubeService(group.deps)
+    await groupSvc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    const dep = ref({ resource: 'deployments.apps', kind: 'Deployment', name: 'd' })
+    expect(await groupSvc.manifestFor(root, dep)).toEqual({ state: 'same', file: p('k8s', 'd.yaml') })
+    expect(await groupSvc.manifestFor(root, { ...dep, resource: 'deployments.extensions' })).toEqual({ state: 'none' })
+  })
+
+  it('takes the namespace from the target when the doc names none', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    // Nothing remembered: the current context kind-dev has the namespace dev.
+    expect(await svc.manifestFor(root, ref({ context: 'kind-dev', namespace: 'dev' }))).toEqual({ state: 'same', file: a })
+    // A remembered context whose kubeconfig entry names none: default.
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: null })
+    expect(await svc.manifestFor(root, ref({ namespace: 'default' }))).toEqual({ state: 'same', file: a })
+    // A doc that names a namespace must match the object's.
+    const named = harness({ [a]: yamlDocs(cm('a', {}, 'prod')) })
+    const namedSvc = createKubeService(named.deps)
+    expect(await namedSvc.manifestFor(root, ref({ context: 'kind-dev', namespace: 'dev' }))).toEqual({ state: 'none' })
+    expect(await namedSvc.manifestFor(root, ref({ context: 'kind-dev', namespace: 'prod' }))).toEqual({ state: 'same', file: a })
+  })
+
+  it('compares a cluster-scoped kind with no namespace', async () => {
+    const ns = p('k8s', 'ns.yaml')
+    const h = harness({ [ns]: yamlDocs({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'team' } }) })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect(await svc.manifestFor(root, ref({ resource: 'namespaces', kind: 'Namespace', name: 'team', namespace: null }))).toEqual({
+      state: 'same',
+      file: ns
+    })
+  })
+
+  it('drops the index of the project a changed YAML file is under, not the graph', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    const copy = p('k8s', 'copy.yaml')
+    h.files.set(copy, { text: MANIFEST, mtimeMs: 1 })
+    svc.invalidate([{ path: copy, kind: 'add' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
+    h.files.delete(copy)
+    svc.invalidate([{ path: copy, kind: 'unlink' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    h.files.set(a, { text: yamlDocs(cm('renamed', {})), mtimeMs: 2 })
+    svc.invalidate([{ path: a, kind: 'change' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
+    // Another project's change leaves this one's index alone.
+    h.files.set(a, { text: MANIFEST, mtimeMs: 3 })
+    svc.invalidate([{ path: path.resolve('/elsewhere/x.yaml'), kind: 'change' }])
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
+  })
+
+  it('drops the index for a changed file whichever separator it is spelled with', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    const copy = p('k8s', 'copy.yaml')
+    const spellings = [copy.split(path.sep).join('/'), copy.split(path.sep).join(String.fromCharCode(92))]
+    for (const spelled of spellings) {
+      expect((await svc.manifestFor(root, ref())).state).toBe('same')
+      h.files.set(copy, { text: MANIFEST, mtimeMs: 1 })
+      // A watcher may report either spelling of the path; both are under the root.
+      svc.invalidate([{ path: spelled, kind: 'add' }])
+      expect((await svc.manifestFor(root, ref())).state).toBe('none')
+      h.files.delete(copy)
+      svc.invalidate([{ path: copy, kind: 'unlink' }])
+    }
+  })
+
+  it('does not keep a failed index build until the TTL', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const read = h.deps.readText
+    let fail = true
+    h.deps.readText = (f) => {
+      if (fail) throw new Error('EMFILE')
+      return read(f)
+    }
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    await expect(svc.manifestFor(root, ref())).rejects.toThrow('EMFILE')
+    fail = false
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+  })
+
+  it('reads manifest texts a few at a time', async () => {
+    const files: Record<string, string> = {}
+    for (let i = 0; i < 40; i++) files[p('k8s', `f${i}.yaml`)] = yamlDocs(cm(`c${i}`, {}))
+    const h = harness(files)
+    const read = h.deps.readText
+    let open = 0
+    let most = 0
+    h.deps.readText = async (f) => {
+      open++
+      most = Math.max(most, open)
+      await new Promise((r) => setTimeout(r, 1))
+      open--
+      return read(f)
+    }
+    const svc = createKubeService(h.deps)
+    await svc.manifestFor(root, ref())
+    expect(most).toBeGreaterThan(1)
+    expect(most).toBeLessThanOrEqual(8)
+  })
+
+  it('reads the project again once the graph is dropped', async () => {
+    const h = harness({ [a]: MANIFEST })
+    const svc = createKubeService(h.deps)
+    await svc.setTarget(p('k8s'), { context: ARN, namespace: 'x' })
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    h.files.set(p('k8s', 'copy.yaml'), { text: MANIFEST, mtimeMs: 1 })
+    expect((await svc.manifestFor(root, ref())).state).toBe('same')
+    svc.forgetGraph(root)
+    expect((await svc.manifestFor(root, ref())).state).toBe('none')
   })
 })
 

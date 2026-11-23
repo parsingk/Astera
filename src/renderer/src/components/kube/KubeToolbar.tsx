@@ -3,9 +3,11 @@ import { CloudUpload, Eye, GitCompare, Lock, RefreshCw, Trash2 } from 'lucide-re
 import { displayContextName } from '../../../../core/kube/contextName'
 import type { KubeFileKind, KubeStatus, TargetState } from '../../../../core/kube/types'
 import { useI18n } from '../../i18n/I18nProvider'
+import { Select } from '../Select'
 import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
 import { fileNamespacePill } from './fileNamespacePill'
+import { KubectlMissingNotice } from './KubectlMissingNotice'
 
 export interface KubeToolbarProps {
   kind: KubeFileKind
@@ -73,10 +75,7 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
     return (
       <div className="kube-strip">
         <div className="kube-bar">
-          <span className="kube-notice">{t('kube.toolbar.kubectlMissing')}</span>
-          <button type="button" className="kube-link" onClick={p.onOpenSettings}>
-            {t('kube.toolbar.openSettings')}
-          </button>
+          <KubectlMissingNotice onOpenSettings={p.onOpenSettings} />
         </div>
       </div>
     )
@@ -157,24 +156,17 @@ export function KubeToolbar(p: KubeToolbarProps): React.JSX.Element {
 
         {isKustomize &&
           (p.overlays.length > 1 ? (
-            <select
-              className="kube-pill kube-pill-overlay"
-              title={t('kube.toolbar.overlayTitle')}
-              aria-label={t('kube.toolbar.overlayTitle')}
-              value={p.overlay ?? ''}
-              onChange={(e) => p.onPickOverlay(e.target.value)}
-            >
-              {p.overlay === null && (
-                <option value="" disabled>
-                  {t('kube.toolbar.chooseOverlay')}
-                </option>
-              )}
-              {p.overlays.map((o) => (
-                <option key={o} value={o}>
-                  {tail(o)}
-                </option>
-              ))}
-            </select>
+            <span className="kube-sel-tip" title={t('kube.toolbar.overlayTitle')}>
+              <Select
+                className="dense kube-sel kube-sel-overlay"
+                ariaLabel={t('kube.toolbar.overlayTitle')}
+                placeholder={t('kube.toolbar.chooseOverlay')}
+                items={p.overlays.map((o) => ({ value: o, label: tail(o) }))}
+                value={p.overlay ?? ''}
+                onChange={p.onPickOverlay}
+                noCheck
+              />
+            </span>
           ) : (
             <span className="kube-pill kube-pill-overlay" title={p.overlay ?? undefined}>
               <FileIcon id="layers" tone="blue" />

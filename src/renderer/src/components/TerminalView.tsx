@@ -12,6 +12,7 @@ import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
 import { copyTextFor } from '../../../core/terminal/copy'
+import { attachFilePaste, isFilePasteKey } from '../lib/terminalFilePaste'
 import { SessionStateBanners } from './SessionStateBanners'
 import { activationFocusHeld } from '../lib/focusHold'
 
@@ -73,6 +74,8 @@ export function TerminalView({
     // If a program run inside the session changes the cursor style and does not restore it, only that tab's cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
     term.open(host)
+    // Files copied outside the app type their paths, taken from the paste event (lib/terminalFilePaste.ts)
+    const detachFilePaste = attachFilePaste(host, term, (f) => window.api.files.pathForFile(f))
     // URLs and paths in the output are links. A path is resolved by main — against the agent's current
     // directory (its statusLine payload), then the session's cwd — and is a link only when a regular
     // file is there (files.resolveLink); an agent printing where it put a rendered clip is the case
@@ -174,6 +177,9 @@ export function TerminalView({
         // 같은 상태이므로, 예전처럼 이 키가 제 갈 길을 가게 둔다.
         return true
       }
+      // Files on the clipboard: the key goes unprevented, so the browser's paste event follows and
+      // attachFilePaste types their paths from it (the one place the file list can be read).
+      if (isFilePasteKey(e, { isMac, hasFiles: () => window.api.clipboard.hasFiles() })) return false
       // Paste: read the clipboard directly and feed it in via term.paste (bracketed paste → onData → pty).
       // Without e.preventDefault() blocking the browser's default paste, xterm's built-in handler writes
       // it a second time and it ends up pasted twice.
@@ -247,6 +253,7 @@ export function TerminalView({
 
     return () => {
       disposeLinks()
+      detachFilePaste()
       selectionLatch.dispose()
       detach()
       blinkGuard.dispose()

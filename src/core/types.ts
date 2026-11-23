@@ -12,6 +12,8 @@ import type {
   KubeVerb,
   Remembered
 } from './kube/types'
+import type { K8sObject } from './kube/objects'
+import type { CountInfo, Dependents, EditBase, ForwardMessage, ForwardSpec, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ManifestMatch, ObjectRef, Read, SecretValue, ShellMessage, ShellSpec, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -936,6 +938,10 @@ export interface RuntimeView {
 }
 
 export interface CoreEvents {
+  'kube:watch': WatchMessage
+  'kube:log': LogMessage
+  'kube:shell': ShellMessage
+  'kube:forward': ForwardMessage
   'session:data': { sessionId: string; data: string }
   /** A remote session tab's checkpoint (Phase 9b, main/remote/remoteStreams.ts): the view resets, writes `state`, then
    *  `pending`. `sessionId` is the tab's key, `<runtimeId>:<sessionId>`. */
@@ -1440,6 +1446,58 @@ export interface CoreApi {
     render(overlayDir: string): Promise<KubeRenderResult>
     /** `context`: one chosen for the editor without remembering it (R11), which must be listed in kubeconfig. */
     status(filePath: string, projectRoot: string, context?: string): Promise<KubeStatus>
+    /** Read-only cluster view. Secret objects arrive masked; only `reveal` returns values. */
+    cluster: {
+      namespaces(context: string): Promise<Read<{ names: string[] }>>
+      /** `crds` carry only names, group, scope and each version's printer columns: no schemas. */
+      crds(context: string): Promise<Read<{ kinds: KindDef[]; crds: K8sObject[] }>>
+      counts(context: string, namespace: string | null, kinds: KindDef[]): Promise<Record<string, CountInfo>>
+      get(ref: ObjectRef): Promise<Read<{ object: K8sObject | null }>>
+      describe(ref: ObjectRef): Promise<Read<{ text: string }>>
+      events(ref: ObjectRef, uid: string): Promise<Read<{ events: K8sObject[] }>>
+      pods(context: string, namespace: string, selector: string): Promise<Read<{ objects: K8sObject[] }>>
+      reveal(ref: ObjectRef): Promise<Read<{ values: SecretValue[] }>>
+      /** What `watch(spec)` would list first, read once: for a watch refused with `limit`. */
+      list(spec: WatchSpec): Promise<Read<{ objects: K8sObject[] }>>
+      /** Events arrive on `'kube:watch'`. `limit`: MAX_WATCHES processes already run. */
+      watch(watchId: string, spec: WatchSpec): Promise<{ ok: true } | { ok: false; reason: 'limit' }>
+      unwatch(watchId: string): Promise<void>
+      /** The object's text for editing (Secrets unmasked) and what it was read at, for `write.preview` of a replace. */
+      editBase(ref: ObjectRef): Promise<Read<{ text: string; base: EditBase }>>
+      /** What deleting the object would take with it. */
+      dependents(ref: ObjectRef): Promise<Read<{ dependents: Dependents }>>
+      /** The one plain manifest of the project that declares the object, and whether it targets the object's cluster. */
+      manifestFor(projectRoot: string, ref: ObjectRef): Promise<ManifestMatch>
+    }
+    /** Writes to objects already in the cluster. */
+    write: {
+      /** A server dry run; never writes. */
+      preview(op: LiveOp, opts: { keepServerFields: boolean; showValues: boolean }): Promise<LivePreview>
+      /** The second write channel: refuses unless the op still matches the confirmed preview's `fingerprint`. Cancellable by `id`. */
+      run(id: string, op: LiveOp, fingerprint: string): Promise<KubeRunResult>
+      cancel(id: string): Promise<void>
+    }
+    /** Pod logs: lines arrive on `'kube:log'`, tagged with the logId. */
+    logs: {
+      start(logId: string, spec: LogSpec): Promise<void>
+      stop(logId: string): Promise<void>
+      /** `defaultName` is a bare file name; a cancelled dialog is `{ saved: false }`. */
+      save(defaultName: string, text: string): Promise<{ saved: boolean; path?: string; error?: string }>
+    }
+    /** A shell in one container of a Pod: output arrives on `'kube:shell'`, tagged with the shellId. */
+    shell: {
+      start(shellId: string, spec: ShellSpec, cols: number, rows: number): Promise<void>
+      write(shellId: string, data: string): void
+      resize(shellId: string, cols: number, rows: number): void
+      stop(shellId: string): Promise<void>
+    }
+    /** A kubectl port-forward: `'kube:forward'` carries the listening port or the exit, tagged with the forwardId. */
+    forward: {
+      start(forwardId: string, spec: ForwardSpec): Promise<void>
+      stop(forwardId: string): Promise<void>
+      /** The local port a forward would listen on for `port`: itself when free, else a free one. */
+      localPort(port: number): Promise<number>
+    }
   }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */

@@ -361,8 +361,9 @@ export function useFileOps(deps: {
     const paths = sel.selectionPaths()
     if (paths.length === 0) return
     sel.dispatch({ type: 'cutOrCopied', mode, paths })
-    // The path text goes on the OS clipboard so it can be pasted into the session terminal or an
-    // external app. It is written first and unconditionally: the file references below replace the
+    // The path text goes on the OS clipboard so it can be pasted into a terminal or an external app
+    // (after a Copy, the session and bottom panel terminals type the file list's paths on one line
+    // instead, lib/terminalFilePaste.ts). It is written first and unconditionally: the file references below replace the
     // clipboard wholesale when they succeed (carrying the same text with them), and when they fail
     // this is what is left, which is the behaviour this app has always had.
     window.api.clipboard.writeText(paths.join('\n'))

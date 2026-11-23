@@ -37,3 +37,34 @@ describe('a new document in the window', () => {
     expect(ipc).toContain('onNewDocument.push(() => accountUsage.stop())')
   })
 })
+
+// Kubernetes cluster view P2 final review: a renderer that dies without a reload starts no new document, so the kubectl
+// processes its logs tabs and cluster view asked for ran on until the app quit.
+describe('a renderer that dies', () => {
+  const ipc = readFileSync(path.join(__dirname, 'ipc.ts'), 'utf8')
+
+  it('stops every Kubernetes log stream and watch', () => {
+    const at = ipc.indexOf("win.webContents.on('render-process-gone'")
+    expect(at).toBeGreaterThan(-1)
+    const gone = ipc.slice(at)
+    const handler = gone.slice(0, gone.indexOf('\n  })'))
+    expect(handler).toContain('kubeWatches.stopAll()')
+    expect(handler).toContain('kubeLogs.stopAll()')
+  })
+
+  it('stops every Kubernetes shell', () => {
+    const at = ipc.indexOf("win.webContents.on('render-process-gone'")
+    const gone = ipc.slice(at)
+    expect(gone.slice(0, gone.indexOf(String.fromCharCode(10) + '  })'))).toContain('kubeShells.stopAll()')
+    expect(ipc).toContain('onNewDocument.push(() => kubeShells.stopAll())')
+    expect(ipc).toContain("app.once('will-quit', () => kubeShells.stopAll())")
+  })
+
+  it('stops every Kubernetes forward', () => {
+    const at = ipc.indexOf("win.webContents.on('render-process-gone'")
+    const gone = ipc.slice(at)
+    expect(gone.slice(0, gone.indexOf(String.fromCharCode(10) + '  })'))).toContain('kubeForwards.stopAll()')
+    expect(ipc).toContain('onNewDocument.push(() => kubeForwards.stopAll())')
+    expect(ipc).toContain("app.once('will-quit', () => kubeForwards.stopAll())")
+  })
+})

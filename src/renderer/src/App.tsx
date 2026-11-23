@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Account, CliInstallStatus, CliStatus, HistoryEntry, HostDriverReport, HostHoldings, HostStatus, HostRuntimeInstallState, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
 import type { UnattendedPermission } from '../../core/chat/types'
 import type { Lang, MessageKey } from '../../core/i18n'
@@ -143,21 +144,46 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { browserTab, fileTab, isRemoteSessionKey, mediaTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
-import { mediaTabsUnder, placeMediaTab, placeTab } from '../../core/panes/place'
+import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { useKubeKinds } from './hooks/useKubeKinds'
-import { settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { kubeRequestOf, relativeToRoot, settlePendingReloads, touchesSelection, useKubeOps } from './hooks/useKubeOps'
+import { namespaceLabelOf } from './components/kube/fileNamespacePill'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
+import { useLiveWrites } from './hooks/useLiveWrites'
+import { replicasOf } from '../../core/kube/cluster/write'
+import { forwardUrl } from '../../core/kube/cluster/forward'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
-import { kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
+import { KubeWriteDialog } from './components/kube/KubeWriteDialog'
+import { KubeForwardDialog } from './components/kube/forward/KubeForwardDialog'
+import { KubeForwardPanel } from './components/kube/forward/KubeForwardPanel'
+import { useKubeForwards } from './hooks/useKubeForwards'
+import type { WriteAsk } from './components/kube/cluster/clusterMenu'
+import { createKubeToastSlot, kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
+import type { KubeSegment } from './components/kube/KubeSegments'
+import { KubectlMissingNotice } from './components/kube/KubectlMissingNotice'
+import { ClusterView } from './components/kube/cluster/ClusterView'
+import { ClusterDetail } from './components/kube/cluster/ClusterDetail'
+import { KubeLogView } from './components/kube/logs/KubeLogView'
+import { KubeShellView } from './components/kube/shell/KubeShellView'
+import { useClusterView } from './hooks/useClusterView'
+import type { ManifestMatch, ObjectRef } from '../../core/kube/cluster/types'
+import type { K8sObject } from '../../core/kube/objects'
+import { clusterSeen, kubeRailClick } from './lib/kubeRail'
+import { kubeTabCloseNeedsAsk } from './lib/kubeEditTabs'
+import { compareAtClick, type KubeTabHost } from './components/kube/cluster/KubeObjectTab'
+import { closeLogTab, isLogTabId, newLogTabId, openPodLogs, setLogTabContainer, type KubeLogTab } from './lib/kubeLogTabs'
+import { bumpShellTab, closeShellTab, endShellTab, isShellTabId, newShellTabId, openShellTab, type KubeShellTab } from './lib/kubeShellTabs'
+import { shownBottomTab } from './lib/bottomTab'
+import { useDocumentShown } from './hooks/useDocumentShown'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
@@ -977,12 +1003,13 @@ export default function App(): React.JSX.Element {
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
    *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
-   *  both belong here. Browser tabs too — closing one closes a page, not a process. */
+   *  both belong here. Browser tabs too — closing one closes a page, not a process. A cluster object's
+   *  tab too: closing it ends only its own watch, never anything in the cluster. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media'
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media' || activeTab?.kind === 'kube'
       ? activeTabId
       : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
@@ -1974,6 +2001,15 @@ export default function App(): React.JSX.Element {
     if (reopened) setMediaNonces((prev) => ({ ...prev, [reopened]: (prev[reopened] ?? 0) + 1 }))
   }
 
+  /** Opens a cluster object in its read-only editor tab, or focuses the tab already showing it (placeKubeTab; kube
+   *  cluster view spec 4.6). The tab id is the whole record, so nothing else is kept, and like every non-session tab
+   *  it is not restored after a restart. */
+  const openKubeObject = (ref: ObjectRef): void => {
+    const placed = placeKubeTab(layoutRef.current, ref, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
   /** A resolved path link (a console, a terminal, a SendUserFile row): media goes to the viewer, any
    *  other file to an ordinary file tab at the line the output named. */
   const openLinkedPath = (path: string, at?: { line?: number; col?: number }): void => {
@@ -2161,6 +2197,21 @@ export default function App(): React.JSX.Element {
       // whole close; the viewer's slot unmounts with it
       setMediaNonces(({ [tabId]: _n, ...rest }) => rest)
       dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'kube') {
+      // The tab id is the whole record too: dropping it unmounts its slot, which stops its watch and drops any
+      // revealed Secret values with it (D6). An edit not applied is asked about first.
+      void (async () => {
+        if (kubeTabCloseNeedsAsk(dirtyKubeTabs.current, tabId)) {
+          const name = parseKubeTab(ref.id)?.name ?? ''
+          const ok = await confirmModal({ title: t('kube.edit.discardTitle'), body: t('kube.edit.discardBody', { name }), confirmLabel: t('common.close') })
+          if (!ok) return
+        }
+        dirtyKubeTabs.current.delete(tabId)
+        setKubeEditAsks(({ [tabId]: _n, ...rest }) => rest)
+        dropTabFromTree(tabId)
+      })()
       return
     }
     if (ref.kind === 'app') {
@@ -2657,7 +2708,36 @@ export default function App(): React.JSX.Element {
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
-  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId
+  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId | log tab id
+  /** Pods' logs tabs in the bottom panel (spec 4.8), opened from the cluster view. */
+  const [logTabs, setLogTabs] = useState<KubeLogTab[]>([])
+  /** Each logs tab's own element, which its view renders into for the tab's life (see the portals after BottomPanel):
+   *  made the first time the tab is drawn, dropped when it closes. */
+  const logHosts = useRef(new Map<string, HTMLElement>())
+  const logHostOf = (id: string): HTMLElement => {
+    let host = logHosts.current.get(id)
+    if (host === undefined) {
+      host = document.createElement('div')
+      host.className = 'kube-logs-host'
+      logHosts.current.set(id, host)
+    }
+    return host
+  }
+  /** Shells into containers, after the logs tabs (spec 4.8), opened from the cluster view. */
+  const [shellTabs, setShellTabs] = useState<KubeShellTab[]>([])
+  /** Each shell tab's own element, as `logHosts` is for the logs tabs. */
+  const shellHosts = useRef(new Map<string, HTMLElement>())
+  const shellHostOf = (id: string): HTMLElement => {
+    let host = shellHosts.current.get(id)
+    if (host === undefined) {
+      host = document.createElement('div')
+      host.className = 'kube-shell-host'
+      shellHosts.current.set(id, host)
+    }
+    return host
+  }
+  /** The Kubernetes tab's segment: the cluster view or the operation log (spec D4). */
+  const [kubeSegment, setKubeSegment] = useState<KubeSegment>('cluster')
   const [runPanelHeight, setRunPanelHeight] = useState<number>(() => {
     const v = Number(localStorage.getItem('cm.runPanelHeight'))
     return v >= 120 && v <= 800 ? v : 220
@@ -2920,32 +3000,113 @@ export default function App(): React.JSX.Element {
   const allFilePaths = useMemo(() => fileTabs.map((t) => t.path), [fileTabs])
   const kubeEditor = useKubeEditor(kubeTabs, allFilePaths, kubeOps)
   onFileSavedRef.current = kubeEditor.onSaved
+  /** Writes to objects already in the cluster, from the cluster view's menus (hooks/useLiveWrites.ts). */
+  const liveWrites = useLiveWrites(kubeOps)
+  /** Port forwards live here so a collapsed panel keeps them running. */
+  const forwards = useKubeForwards()
+  const [forwardDialog, setForwardDialog] = useState<{ target: ObjectRef; object: K8sObject } | null>(null)
+  const startForwardDialog = (target: ObjectRef, object: K8sObject): void => {
+    kubeToastSlot.clear()
+    setForwardDialog({ target, object })
+  }
+  /** Edit asks per kube tab id (the cluster view's menu bumps one), and the kube tabs whose edit holds unapplied text. */
+  const [kubeEditAsks, setKubeEditAsks] = useState<Record<string, number>>({})
+  const dirtyKubeTabs = useRef(new Set<string>())
+  // The write starter is new at every render, so the host reads it through a ref and changes only with the asks.
+  const liveWritesRef = useRef(liveWrites)
+  liveWritesRef.current = liveWrites
+  // The contexts the editor listed, read when a compare starts (the host never changes for them).
+  const kubeEditorRef = useRef(kubeEditor)
+  kubeEditorRef.current = kubeEditor
+  const kubeOpsRef = useRef(kubeOps)
+  kubeOpsRef.current = kubeOps
+  const kubeHost = useMemo<KubeTabHost>(
+    () => ({
+      startWrite: (op, onWritten) => liveWritesRef.current.start(op, onWritten),
+      setDirty: (tabId, dirty) => {
+        if (dirty) dirtyKubeTabs.current.add(tabId)
+        else dirtyKubeTabs.current.delete(tabId)
+      },
+      editAsks: kubeEditAsks,
+      compareKey: currentProject ?? '',
+      compareTarget: async (ref) => {
+        const root = currentProjectRef.current
+        if (!root) return { state: 'none' }
+        const m = await window.api.kube.cluster.manifestFor(root, ref)
+        // The tooltip names the file by its path in the project.
+        return m.state === 'other' ? { ...m, file: relativeToRoot(root, m.file) ?? m.file } : m
+      },
+      startCompare: async (ref, file) => {
+        const root = currentProjectRef.current
+        if (!root) return { state: 'none' }
+        // The folder's target may have changed since the button was drawn: ask again, open only for the same file.
+        const fresh = await window.api.kube.cluster.manifestFor(root, ref)
+        const shownFresh: ManifestMatch = fresh.state === 'other' ? { ...fresh, file: relativeToRoot(root, fresh.file) ?? fresh.file } : fresh
+        if (!compareAtClick(fresh, file).open) return shownFresh
+        void window.api.kube.target(file, root).then((view) => {
+          const req = kubeRequestOf([file], root, view, undefined, kubeEditorRef.current.contexts)
+          if (!req) return void toast.info(tRef.current('kube.ops.chooseCluster'))
+          kubeOpsRef.current.startCompare(req, namespaceLabelOf(view, req.pill))
+        }, (err: unknown) => void toast.error(errText(err)))
+        return shownFresh
+      }
+    }),
+    [kubeEditAsks, currentProject]
+  )
+  const writeKubeObject = (ask: WriteAsk): void => {
+    // Editing starts in the object's editor tab, which the bumped count tells to begin (a tab opened now reads it on mount).
+    if (ask.verb === 'edit') {
+      openKubeObject(ask.ref)
+      const id = kubeTab(ask.ref)
+      setKubeEditAsks((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+      return
+    }
+    const { ref, object } = ask
+    if (ask.verb === 'delete') return liveWrites.start({ verb: 'delete', ref })
+    if (ask.verb === 'restart') return liveWrites.start({ verb: 'restart', ref })
+    // The field starts at the count the object has; with none known nothing is previewed until one is typed.
+    const known = object?.spec && typeof object.spec === 'object' ? (object.spec as { replicas?: unknown }).replicas : undefined
+    const count = typeof known === 'number' && replicasOf(String(known)) !== null ? known : null
+    liveWrites.start({ verb: 'scale', ref, replicas: count ?? 0 }, undefined, count === null ? '' : String(count))
+  }
 
   /** Files whose last Kubernetes operation failed (the explorer's warning mark), and the finished entries already
    *  accounted for, so a log that re-renders never toasts or marks twice. */
   const [failedKubePaths, setFailedKubePaths] = useState<ReadonlySet<string>>(() => new Set())
   const kubeSeenRef = useRef(new Set<string>())
+  /** Only the newest Kubernetes result toast stays, and opening a confirmation dialog drops it. */
+  const kubeToastSlot = useRef(
+    createKubeToastSlot(
+      (kind: 'success' | 'error', message: string, options?: Parameters<typeof toast.success>[1]) =>
+        (kind === 'success' ? toast.success : toast.error)(message, options),
+      dismiss
+    )
+  ).current
+  useEffect(() => {
+    if (kubeOps.dialog || liveWrites.dialog) kubeToastSlot.clear()
+  }, [!!kubeOps.dialog, !!liveWrites.dialog])
   useEffect(() => {
     for (const e of kubeOps.log) {
       if (e.state !== 'done' || !e.result || kubeSeenRef.current.has(e.id)) continue
       kubeSeenRef.current.add(e.id)
       const result = e.result
-      if (result.verb !== 'reload') {
+      // A live write has no files: nothing to mark or refresh.
+      if (result.verb !== 'reload' && e.req) {
         setFailedKubePaths((prev) => nextFailedPaths(prev, result, e.req))
         kubeEditor.refreshAfterRun(e.req, result.commandLines)
       }
       const note = kubeToastOf(result, t as never)
       if (!note) continue
-      const show = note.kind === 'success' ? toast.success : toast.error
-      if (!note.showLog) show(note.message)
+      if (!note.showLog) kubeToastSlot.show(note.kind, note.message)
       else {
-        const id = show(note.message, {
+        const id = kubeToastSlot.show(note.kind, note.message, {
           action: {
             label: t('kube.toast.showLog'),
             onClick: () => {
               dismiss(id)
               setRunPanelOpen(true)
               setBottomTab('kube')
+              setKubeSegment('log')
             }
           }
         })
@@ -2957,11 +3118,35 @@ export default function App(): React.JSX.Element {
   const kubeRerun = (id: string): void => {
     const e = kubeOps.log.find((x) => x.id === id)
     if (!e) return
+    // A live write reopens its own dialog (an edit has none); never a run without a preview.
+    if (!e.req) {
+      if (e.live?.rerun) liveWrites.start(e.live.rerun)
+      return
+    }
     if (e.verb === 'reload') kubeOps.startReload(e.req.selection[0], e.req.context, e.req.pill)
     else if (e.verb === 'compare') kubeOps.startCompare(e.req, e.namespaceLabel, e.involved)
     else if (e.verb === 'apply') kubeOps.startApply(e.req, e.namespaceLabel, e.involved)
     else kubeOps.startDelete(e.req, e.namespaceLabel, e.involved)
   }
+  /** kubectl answers (K1): the rail's Kubernetes icon and the cluster view are there only then. Asked at mount and again
+   *  when the settings modal closes, where kubectl's path and the kubeconfig files are set. A rejected ask counts as not
+   *  found, like ENOENT. */
+  const [kubectlFound, setKubectlFound] = useState(false)
+  useEffect(() => {
+    if (showSettings) return
+    let alive = true
+    window.api.kube.contexts().then(
+      (c) => {
+        if (alive) setKubectlFound(c.error?.errorCode !== 'ENOENT')
+      },
+      () => {
+        if (alive) setKubectlFound(false)
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [showSettings])
 
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
@@ -3189,7 +3374,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -3431,11 +3616,11 @@ export default function App(): React.JSX.Element {
   closeAgentTabRef.current = closeAgentTab
 
   /** The one link rule (core/preview/url.ts): a loopback address opens in a preview tab, anything else
-   *  in the system browser, and Ctrl (Cmd on macOS) inverts. Every xterm's URL link and the guest's
-   *  popups land here. */
+   *  in the system browser, and Ctrl (Cmd on macOS) inverts; with no project open everything goes to the system
+   *  browser. Every xterm's URL link, the guest's popups and a port forward's Open land here. */
   const openUrl = (url: string, ev?: { ctrlKey: boolean; metaKey: boolean }): void => {
     const modifier = !!ev && (ev.ctrlKey || ev.metaKey)
-    if (linkDestination(url, { modifier }) === 'preview') openBrowserTab(previewTargetOf(url))
+    if (linkDestination(url, { modifier, hasProject: currentProjectRef.current !== null }) === 'preview') openBrowserTab(previewTargetOf(url))
     else void window.api.system.openExternal(url)
   }
   const openUrlRef = useRef(openUrl)
@@ -3694,18 +3879,32 @@ export default function App(): React.JSX.Element {
   // The Run tab is there for as long as a project is. Rows are closed one by one in the list; with none
   // left the tab shows where to start one rather than disappearing.
   const runAvailable = currentProject !== null
-  /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
-   *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
-   *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
-  // The Kubernetes tab exists only while its log has entries; once it is cleared the tab falls back like a closed terminal.
-  const kubeTabGone = bottomTab === 'kube' && kubeOps.log.length === 0
-  const bottomTabWanted = kubeTabGone ? 'run' : bottomTab
-  const bottomTabShown =
-    bottomTabWanted === 'kube'
-      ? 'kube'
-      : runAvailable
-        ? bottomTabWanted
-        : (terminals.find((x) => x.id === bottomTabWanted)?.id ?? terminals[0]?.id ?? 'run')
+  // The Kubernetes tab is there while kubectl is found, its log has entries or a port forward is listed.
+  const kubeAvailable = kubectlFound || kubeOps.log.length > 0 || forwards.forwards.length > 0
+  /** 아래쪽 패널에 실제로 넘길 탭. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
+   *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. 없는 탭을
+   *  어디로 떨어뜨리는지는 shownBottomTab(lib/bottomTab.ts)이 정한다. */
+  const bottomTabShown = shownBottomTab({ wanted: bottomTab, runAvailable, kubeAvailable, terminalIds: terminals.map((x) => x.id) })
+  const windowShown = useDocumentShown()
+  /** The cluster view follows the cluster only while it is seen (K4). */
+  const clusterVisible = clusterSeen({
+    hasRoot: bottomRoot !== null,
+    panelOpen: runPanelOpen,
+    kubectlFound,
+    shownTab: bottomTabShown,
+    segment: kubeSegment,
+    windowShown
+  })
+  const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
+  /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
+  const kubeRail = (): void => {
+    const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
+    setRunPanelOpen(next.panelOpen)
+    if (next.tab !== null) setBottomTab(next.tab)
+    if (next.segment !== null) setKubeSegment(next.segment)
+    // Room for this opening only (K3): cm.runPanelHeight keeps the height the person last dragged.
+    if (next.height !== null) setRunPanelHeight(next.height)
+  }
 
   // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
@@ -4031,8 +4230,9 @@ export default function App(): React.JSX.Element {
       (list) => {
         if (cancelled) return
         setTerminals(list)
-        // If a tab that does not belong to this project is still active, fall back to Run
-        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || list.some((x) => x.id === cur) ? cur : 'run'))
+        // If a tab that does not belong to this project is still active, fall back to Run. The Kubernetes and logs
+        // tabs belong to none.
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || isLogTabId(cur) || isShellTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])
@@ -4272,13 +4472,13 @@ export default function App(): React.JSX.Element {
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
    *  nearest remaining row. With no runs and no terminals left the panel collapses: a panel with nothing
-   *  but ＋ in it is worse than a collapsed one. */
+   *  but ＋ in it is worse than a collapsed one. An open logs tab keeps it open: it is something to see. */
   const runDismiss = (runId: string): void => {
     void window.api.run.dismiss(runId)
     const remaining = runs.filter((r) => r.runId !== runId)
     setRuns(remaining)
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
-    if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
+    if (remaining.length === 0 && terminals.length === 0 && logTabs.length === 0 && shellTabs.length === 0) setRunPanelOpen(false)
   }
   /** Opens the two-pane manager, snapshotting the current project the way managerFor's own comment
    *  explains. Shared by the toolbar's ⋮ item and the configuration menu's "Edit '<name>'…" row — the
@@ -4423,6 +4623,34 @@ export default function App(): React.JSX.Element {
   const closeTerminal = (id: string): void => {
     void window.api.terminal.close(id).catch(() => {})
     setTerminals((prev) => prev.filter((x) => x.id !== id))
+    setBottomTab((cur) => (cur === id ? 'run' : cur))
+  }
+
+  /** A Pod's logs from the cluster view (spec 4.7): their own tab, or the one already showing that Pod and container,
+   *  is shown. `previous`: previous logs were asked. */
+  const showPodLogs = (ref: ObjectRef, pod: K8sObject, previous: boolean): void => {
+    const opened = openPodLogs(logTabs, ref, pod, previous, newLogTabId)
+    if (opened === null) return
+    setLogTabs(opened.tabs)
+    setBottomTab(opened.focus)
+  }
+  /** A logs tab's ✕: its view unmounts, which stops its kubectl; the shown tab falls back as a closed terminal does. */
+  const closeLogs = (id: string): void => {
+    logHosts.current.delete(id)
+    setLogTabs((prev) => closeLogTab(prev, id))
+    setBottomTab((cur) => (cur === id ? 'run' : cur))
+  }
+  /** A shell into a Pod's container from the cluster view (spec 4.8): its own tab, or the one whose shell still runs
+   *  in that container, is shown. */
+  const showPodShell = (ref: ObjectRef, container: string): void => {
+    const opened = openShellTab(shellTabs, ref, container, newShellTabId)
+    setShellTabs(opened.tabs)
+    setBottomTab(opened.focus)
+  }
+  /** A shell tab's ✕: its view unmounts, which ends the shell; the shown tab falls back as a closed logs tab does. */
+  const closeShell = (id: string): void => {
+    shellHosts.current.delete(id)
+    setShellTabs((prev) => closeShellTab(prev, id))
     setBottomTab((cur) => (cur === id ? 'run' : cur))
   }
 
@@ -4661,6 +4889,33 @@ export default function App(): React.JSX.Element {
               아래에 붙는다 — 터미널 버튼에 따로 auto 마진을 주면(auto 형제가 둘) 남은 공간이 균등
               분배되어 버튼들이 벌어진다. */}
           <span className="rail-bottom">
+            {kubectlFound && bottomRoot && (
+              <button
+                className={runPanelOpen && bottomTabShown === 'kube' ? 'rail-btn on' : 'rail-btn'}
+                aria-label={t('kube.cluster.rail')}
+                title={t('kube.cluster.rail')}
+                onClick={kubeRail}
+              >
+                {/* The Kubernetes mark as the explorer's file icon draws it (FileIcon's kubernetes: a heptagon around a
+                    seven-spoke wheel), in the app's SVG convention: a 16 viewBox in a single currentColor, the outline
+                    at 1.4 and the wheel inside it at 1.2, so the spokes stay apart on a 30px button. */}
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
+                >
+                  <path d="M8 1.4 13.2 3.9 14.5 9.5 10.9 14H5.1L1.5 9.5 2.8 3.9Z" />
+                  <g strokeWidth="1.2" strokeLinecap="round">
+                    <circle cx="8" cy="8.3" r="2.9" />
+                    <path d="M8.0 7.2L8.0 4.1M8.86 7.61L11.28 5.68M9.07 8.54L12.09 9.23M8.48 9.29L9.82 12.08M7.52 9.29L6.18 12.08M6.93 8.54L3.91 9.23M7.14 7.61L4.72 5.68" />
+                  </g>
+                </svg>
+              </button>
+            )}
             {bottomRoot && (
               <button
                 className="rail-btn"
@@ -4941,6 +5196,7 @@ export default function App(): React.JSX.Element {
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
                 kubeKinds={kubeKinds}
+                kubeHost={kubeHost}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
@@ -5068,9 +5324,93 @@ export default function App(): React.JSX.Element {
                     onCollapse={() => setRunPanelOpen(false)}
                     kubeLog={kubeOps.log}
                     onKubeRerun={kubeRerun}
-                    onKubeCancel={kubeOps.cancel}
+                    onKubeCancel={(id) => (kubeOps.log.find((x) => x.id === id)?.live ? liveWrites.cancelRun(id) : kubeOps.cancel(id))}
                     onKubeClear={kubeOps.clear}
+                    kubeAvailable={kubeAvailable}
+                    kubeSegment={kubeSegment}
+                    onKubeSegment={setKubeSegment}
+                    kubeForwardCount={forwards.forwards.length}
+                    kubeForward={(switcher) => (
+                      <KubeForwardPanel
+                        switcher={switcher}
+                        forwards={forwards.forwards}
+                        onOpen={(f, ev) => openUrl(forwardUrl(f.spec), ev)}
+                        onStop={forwards.stop}
+                        onStopAll={forwards.stopAll}
+                        onReconnect={forwards.reconnect}
+                        onRemove={forwards.remove}
+                      />
+                    )}
+                    kubeCluster={(switcher) =>
+                      kubectlFound ? (
+                        <ClusterView
+                          model={cluster}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onOpenShell={showPodShell} onWrite={writeKubeObject} onForward={startForwardDialog} />}
+                          onOpenInEditor={openKubeObject}
+                          onOpenLogs={showPodLogs}
+                          onOpenShell={showPodShell}
+                          onWrite={writeKubeObject}
+                          onForward={startForwardDialog}
+                          toolbarStart={switcher}
+                        />
+                      ) : (
+                        // The tab is there for its log while kubectl is missing (spec 4.12): the manifests strip's
+                        // notice, with its link to the setting, after the switch in the log row's frame, so the switch
+                        // sits where it does in the log.
+                        <div className="kube-cluster">
+                          <div className="kube-segment-bar">
+                            {switcher}
+                            <KubectlMissingNotice
+                              onOpenSettings={() => {
+                                setSettingsTab('kubernetes')
+                                setShowSettings(true)
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    }
+                    logTabs={logTabs}
+                    onCloseLogTab={closeLogs}
+                    logHost={logHostOf}
+                    shellTabs={shellTabs}
+                    onCloseShellTab={closeShell}
+                    shellHost={shellHostOf}
+                    onShellAction={(id, what) => setShellTabs((prev) => bumpShellTab(prev, id, what))}
                   />
+                )}
+                {/* The logs views live here, outside the panel's mount: collapsing the panel unmounts it, and a view's
+                    kubectl, lines and settings last as long as its tab (spec 4.8). Each renders into its tab's own
+                    element, which the tab's body holds while the panel is open. After the panel in the tree, so the
+                    body holds the element before the view's layout effects run. The view reads the Pod itself, so
+                    the tab carries only where it lives. */}
+                {logTabs.map((tab) =>
+                  createPortal(
+                    <KubeLogView
+                      pod={null}
+                      target={tab.ref}
+                      initial={{ container: tab.container, previous: tab.previous, request: tab.request }}
+                      visible={runPanelOpen && bottomTabShown === tab.id}
+                      onContainer={(name) => setLogTabs((prev) => setLogTabContainer(prev, tab.id, name))}
+                    />,
+                    logHostOf(tab.id),
+                    tab.id
+                  )
+                )}
+                {/* The shell views live here for the same reason; each shell lasts as long as its tab. */}
+                {shellTabs.map((tab) =>
+                  createPortal(
+                    <KubeShellView
+                      spec={{ ref: tab.ref, container: tab.container }}
+                      visible={runPanelOpen && bottomTabShown === tab.id}
+                      clear={tab.clear}
+                      find={tab.find}
+                      onEnded={() => setShellTabs((prev) => endShellTab(prev, tab.id))}
+                      onOpenUrl={openUrl}
+                    />,
+                    shellHostOf(tab.id),
+                    tab.id
+                  )
                 )}
               </div>
             )}
@@ -5231,6 +5571,40 @@ export default function App(): React.JSX.Element {
           cancelling={kubeOps.dialog.cancelling}
           onAbort={kubeOps.abort}
           onApplyFirst={kubeOps.applyFirst}
+        />
+      )}
+      {liveWrites.dialog && (
+        <KubeWriteDialog
+          op={liveWrites.dialog.op}
+          preview={liveWrites.dialog.preview}
+          dependents={liveWrites.dialog.dependents}
+          keepServerFields={liveWrites.dialog.keepServerFields}
+          onToggleServerFields={liveWrites.toggleServerFields}
+          showValues={liveWrites.dialog.showValues}
+          onToggleValues={liveWrites.toggleValues}
+          replicas={liveWrites.dialog.replicas}
+          onReplicas={liveWrites.setReplicas}
+          typed={liveWrites.dialog.typed}
+          onTyped={liveWrites.setTyped}
+          stale={liveWrites.dialog.stale}
+          running={liveWrites.dialog.phase === 'running'}
+          cancelling={liveWrites.dialog.cancelling}
+          onConfirm={liveWrites.confirm}
+          onCancel={liveWrites.close}
+          onAbort={liveWrites.abort}
+        />
+      )}
+      {forwardDialog && (
+        <KubeForwardDialog
+          key={`${forwardDialog.target.kind}/${forwardDialog.target.namespace}/${forwardDialog.target.name}`}
+          target={forwardDialog.target}
+          object={forwardDialog.object}
+          onStart={(spec) => {
+            forwards.start(spec)
+            setForwardDialog(null)
+            setKubeSegment('forward')
+          }}
+          onCancel={() => setForwardDialog(null)}
         />
       )}
       {showSettings && (

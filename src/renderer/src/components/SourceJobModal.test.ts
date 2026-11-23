@@ -81,7 +81,9 @@ describe('SourceJobView', () => {
     expect(sourceChoice(SOURCES[1], t)).toEqual({ value: 'astera-linear-source', label: 'Linear (astera-linear-source is disabled)', disabled: true })
     expect(sourceChoice(SOURCES[0], t)).toEqual({ value: 'github', label: 'GitHub issues', disabled: false })
     const html = render()
-    expect(html).toMatch(/<option value="astera-linear-source" disabled="">Linear \(astera-linear-source is disabled\)<\/option>/)
+    // the picker is the app's Select now: closed, it shows the placeholder (nothing picked), and the grey rows are items
+    expect(html).not.toContain('<select')
+    expect(html).toContain('aria-label="jobs.source.source"')
     expect(html).toContain('jobs.source.sourcePick')
     expect(html).not.toContain('source-items')
   })

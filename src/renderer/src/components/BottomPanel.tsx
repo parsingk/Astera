@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
@@ -7,9 +7,12 @@ import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
 import { FileIcon } from './FileIcon'
 import { KubeLogPanel } from './kube/KubeLogPanel'
+import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
 import { kubeCommandText, kubeFailureCount } from './kube/kubeLogView'
 import type { KubeLogEntry } from '../hooks/useKubeOps'
-import { ChevronDown, Delete, Plus, X } from 'lucide-react'
+import { logTabShowsContainer, type KubeLogTab } from '../lib/kubeLogTabs'
+import { shellTabShowsContainer, type KubeShellTab } from '../lib/kubeShellTabs'
+import { ChevronDown, Delete, Plus, Search, X } from 'lucide-react'
 
 /**
  * Bottom panel. The Run tab and the project terminals share this one panel through tabs.
@@ -43,7 +46,20 @@ export function BottomPanel({
   kubeLog = [],
   onKubeRerun,
   onKubeCancel,
-  onKubeClear
+  onKubeClear,
+  kubeAvailable,
+  kubeSegment,
+  onKubeSegment,
+  kubeCluster,
+  kubeForwardCount,
+  kubeForward,
+  logTabs,
+  onCloseLogTab,
+  logHost,
+  shellTabs,
+  onCloseShellTab,
+  shellHost,
+  onShellAction
 }: {
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
@@ -78,11 +94,34 @@ export function BottomPanel({
   onNewTerminal: () => void
   onCloseTerminal: (id: string) => void
   onCollapse: () => void
-  /** The session's Kubernetes operations. The Kubernetes tab is there only while this is not empty. */
+  /** The session's Kubernetes operations, shown in the Kubernetes tab's Operation log segment. */
   kubeLog?: KubeLogEntry[]
   onKubeRerun?: (id: string) => void
   onKubeCancel?: (id: string) => void
   onKubeClear?: () => void
+  /** Whether to draw the Kubernetes tab: kubectl is found, or the log has entries to show (spec 4.1, 4.12). */
+  kubeAvailable: boolean
+  /** The Kubernetes tab's segment: the cluster view, the port forwards or the operation log. */
+  kubeSegment: KubeSegment
+  onKubeSegment: (s: KubeSegment) => void
+  /** The Cluster segment's body, given the segmented switch to put first in its toolbar row (spec 4.2). App owns the
+   *  view's state, so it builds this (or the kubectl-missing notice). */
+  kubeCluster: (switcher: React.ReactNode) => React.ReactNode
+  /** The Port forwarding segment's count and body, built by App, which owns the forwards. */
+  kubeForwardCount: number
+  kubeForward: (switcher: React.ReactNode) => React.ReactNode
+  /** Pods' logs tabs, after the Kubernetes tab (spec 4.8). App keeps each one's view mounted in an element of its own
+   *  (`logHost`) for the tab's life, so collapsing this panel does not stop its kubectl; the tab's body holds that
+   *  element while the panel is open. */
+  logTabs: KubeLogTab[]
+  onCloseLogTab: (id: string) => void
+  logHost: (id: string) => HTMLElement
+  /** Shells into containers, after the logs tabs (spec 4.8), kept the same way: App holds each KubeShellView in the
+   *  element `shellHost` gives. `onShellAction` is the header's find and clear for the shown shell tab. */
+  shellTabs: KubeShellTab[]
+  onCloseShellTab: (id: string) => void
+  shellHost: (id: string) => HTMLElement
+  onShellAction: (id: string, what: 'clear' | 'find') => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
@@ -105,6 +144,12 @@ export function BottomPanel({
     return () => clearInterval(id)
   }, [anyRunning])
 
+  // A tab focused off the end of the strip (the strip scrolls sideways) would stay out of sight: bring the shown one in.
+  const tabListRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    tabListRef.current?.querySelector(`[data-tab-id="${CSS.escape(activeTab)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTab])
+
   const kubeFailures = kubeFailureCount(kubeLog)
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
@@ -122,10 +167,11 @@ export function BottomPanel({
   return (
     <div className="run-panel">
       <div className="bottom-tabs">
-        <span className="bottom-tab-list">
+        <span className="bottom-tab-list" ref={tabListRef}>
           {runAvailable && (
             <span
               role="tab"
+              data-tab-id="run"
               aria-selected={activeTab === 'run'}
               tabIndex={0}
               className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
@@ -136,9 +182,10 @@ export function BottomPanel({
               {t('run.panel.tab')}
             </span>
           )}
-          {kubeLog.length > 0 && (
+          {kubeAvailable && (
             <span
               role="tab"
+              data-tab-id="kube"
               aria-selected={activeTab === 'kube'}
               tabIndex={0}
               className={activeTab === 'kube' ? 'bottom-tab on' : 'bottom-tab'}
@@ -154,10 +201,69 @@ export function BottomPanel({
               )}
             </span>
           )}
+          {logTabs.map((tab) => (
+            <span
+              key={tab.id}
+              role="tab"
+              data-tab-id={tab.id}
+              aria-selected={activeTab === tab.id}
+              tabIndex={0}
+              className={activeTab === tab.id ? 'bottom-tab on' : 'bottom-tab'}
+              // Two tabs of one Pod read the same: where each reads from tells them apart.
+              title={`${[tab.ref.context, tab.ref.namespace].filter((s) => s !== null).join(' / ')} · ${t('kube.logs.container')} ${tab.container}`}
+              onClick={() => onSelectTab(tab.id)}
+              onKeyDown={tabKeyDown(tab.id)}
+            >
+              {logTabShowsContainer(logTabs, tab)
+                ? t('kube.logs.tabContainer', { pod: tab.ref.name, container: tab.container })
+                : t('kube.logs.tab', { pod: tab.ref.name })}
+              <button
+                className="bottom-tab-close"
+                aria-label={t('kube.logs.closeTab')}
+                title={t('kube.logs.closeTab')}
+                onClick={(e) => {
+                  e.stopPropagation() // keeps close from also selecting the tab it closes
+                  onCloseLogTab(tab.id)
+                }}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+          {shellTabs.map((tab) => (
+            <span
+              key={tab.id}
+              role="tab"
+              data-tab-id={tab.id}
+              aria-selected={activeTab === tab.id}
+              tabIndex={0}
+              className={'bottom-tab' + (activeTab === tab.id ? ' on' : '') + (tab.ended ? ' ended' : '')}
+              // Two tabs of one Pod read the same: where each reads from tells them apart.
+              title={`${[tab.ref.context, tab.ref.namespace].filter((s) => s !== null).join(' / ')} · ${t('kube.logs.container')} ${tab.container}`}
+              onClick={() => onSelectTab(tab.id)}
+              onKeyDown={tabKeyDown(tab.id)}
+            >
+              {shellTabShowsContainer(shellTabs, tab)
+                ? t('kube.shell.tabContainer', { pod: tab.ref.name, container: tab.container })
+                : t('kube.shell.tab', { pod: tab.ref.name })}
+              <button
+                className="bottom-tab-close"
+                aria-label={t('kube.shell.closeTab')}
+                title={t('kube.shell.closeTab')}
+                onClick={(e) => {
+                  e.stopPropagation() // keeps close from also selecting the tab it closes
+                  onCloseShellTab(tab.id)
+                }}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
           {terminals.map((term, i) => (
             <span
               key={term.id}
               role="tab"
+              data-tab-id={term.id}
               aria-selected={activeTab === term.id}
               tabIndex={0}
               className={activeTab === term.id ? 'bottom-tab on' : 'bottom-tab'}
@@ -190,11 +296,21 @@ export function BottomPanel({
         </span>
         <span className="run-panel-actions">
           {/* On the Run tab, stop and clear live in the rail beside the console; the header keeps them
-              for terminal tabs, which have no rail. */}
-          {activeTab !== 'run' && activeTab !== 'kube' && (
+              for terminal tabs, which have no rail. A logs tab clears from its own toolbar. */}
+          {terminals.some((term) => term.id === activeTab) && (
             <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
               <Delete size={12} />
             </button>
+          )}
+          {shellTabs.some((tab) => tab.id === activeTab) && (
+            <>
+              <button className="run-panel-btn" title={t('kube.shell.find')} aria-label={t('kube.shell.find')} onClick={() => onShellAction(activeTab, 'find')}>
+                <Search size={12} />
+              </button>
+              <button className="run-panel-btn" title={t('run.panel.clear')} aria-label={t('run.panel.clear')} onClick={() => onShellAction(activeTab, 'clear')}>
+                <Delete size={12} />
+              </button>
+            </>
           )}
           <button className="run-panel-btn" title={t('run.panel.collapse')} onClick={onCollapse}>
             <ChevronDown size={12} />
@@ -247,21 +363,37 @@ export function BottomPanel({
             hidden wraps at that width, but opening the tab makes the ResizeObserver refit and corrects it
             — cosmetic and self-correcting. The same applies to a RunPanel mounted for a tab that is not
             selected. */}
-        {kubeLog.length > 0 && (
+        {kubeAvailable && (
           <div className="bottom-body kube-body" style={{ display: activeTab === 'kube' ? 'flex' : 'none' }}>
-            <KubeLogPanel
-              log={kubeLog}
-              onRerun={(id) => onKubeRerun?.(id)}
-              onCancel={(id) => onKubeCancel?.(id)}
-              onCopy={(id) => {
-                const e = kubeLog.find((x) => x.id === id)
-                if (e) window.api.clipboard.writeText(e.commandLines.map((a) => kubeCommandText(a, window.api.platform)).join(String.fromCharCode(10)))
-              }}
-              onClear={() => onKubeClear?.()}
-              onOpenFile={(path) => onOpenFile(path, {})}
+            <KubeSegments
+              segment={kubeSegment}
+              onSegment={onKubeSegment}
+              logCount={kubeLog.length}
+              cluster={kubeCluster}
+              forwardCount={kubeForwardCount}
+              forward={kubeForward}
+              log={
+                <KubeLogPanel
+                  log={kubeLog}
+                  onRerun={(id) => onKubeRerun?.(id)}
+                  onCancel={(id) => onKubeCancel?.(id)}
+                  onCopy={(id) => {
+                    const e = kubeLog.find((x) => x.id === id)
+                    if (e) window.api.clipboard.writeText(e.commandLines.map((a) => kubeCommandText(a, window.api.platform)).join(String.fromCharCode(10)))
+                  }}
+                  onClear={() => onKubeClear?.()}
+                  onOpenFile={(path) => onOpenFile(path, {})}
+                />
+              }
             />
           </div>
         )}
+        {logTabs.map((tab) => (
+          <HostedBody key={tab.id} host={logHost(tab.id)} shown={activeTab === tab.id} />
+        ))}
+        {shellTabs.map((tab) => (
+          <HostedBody key={tab.id} host={shellHost(tab.id)} shown={activeTab === tab.id} />
+        ))}
         {terminals.map((term) => (
           <div
             key={term.id}
@@ -283,4 +415,20 @@ export function BottomPanel({
       </div>
     </div>
   )
+}
+
+/** Puts a logs view's element in its tab's body unless it is there already: an element moved out and back loses its
+ *  scroll position, so a body drawn again must leave it where it is. A body going away (null) lets go of it, or the
+ *  element would keep the removed panel's DOM in memory until the panel opened again. */
+export function holdHost(body: Node | null, host: Node): void {
+  if (body === null) host.parentNode?.removeChild(host)
+  else if (host.parentNode !== body) body.appendChild(host)
+}
+
+/** A logs or shell tab's body. The view is not mounted here: App keeps it in `host`, so the panel's own mount and
+ *  unmount (a collapse) leave its kubectl or shell and lines alone, and the body only holds that element while it is
+ *  drawn. */
+function HostedBody({ host, shown }: { host: HTMLElement; shown: boolean }): React.JSX.Element {
+  const hold = useCallback((el: HTMLDivElement | null) => holdHost(el, host), [host])
+  return <div ref={hold} className="bottom-body" style={{ display: shown ? 'flex' : 'none' }} />
 }

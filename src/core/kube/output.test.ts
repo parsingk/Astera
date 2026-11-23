@@ -33,6 +33,16 @@ describe('parseKubectlOutput', () => {
     ])
   })
 
+  it('reads replaced, restarted and scaled as configured with the word as message', () => {
+    expect(
+      parseKubectlOutput(['deployment.apps/web replaced', 'deployment.apps/web restarted', 'deployment.apps/web scaled'].join('\n'), '')
+    ).toEqual([
+      { ref: 'deployment.apps/web', outcome: 'configured', message: 'replaced' },
+      { ref: 'deployment.apps/web', outcome: 'configured', message: 'restarted' },
+      { ref: 'deployment.apps/web', outcome: 'configured', message: 'scaled' }
+    ])
+  })
+
   it('reads plain delete output with a quoted name', () => {
     expect(
       parseKubectlOutput(['deployment.apps "api-server" deleted', 'service "web" deleted (server dry run)'].join('\n'), '')

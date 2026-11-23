@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { KubeContexts } from '../../../../core/kube/types'
-import { ClusterPicker, NamespacePicker, filterContexts, pickerCursor, pickerEnter } from './ClusterPicker'
+import { ClusterPicker, NamespacePicker, dismissesOn, filterContexts, folderItems, pickerCursor, pickerEnter } from './ClusterPicker'
 
 vi.mock('../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -38,6 +38,8 @@ const props = {
 const render = (over: Record<string, unknown> = {}): string =>
   renderToStaticMarkup(React.createElement(ClusterPicker, { ...props, ...over } as never))
 
+const folderTrigger = (html: string): string => /<button[^>]*aria-label="kube.picker.rememberFolder"[^>]*>.*?<\/button>/.exec(html)?.[0] ?? ''
+
 describe('ClusterPicker', () => {
   it('lists contexts with the short name, the full name as tooltip and the provider tag', () => {
     const html = render()
@@ -65,18 +67,14 @@ describe('ClusterPicker', () => {
   it('lists the folder chooser from the file folder up to the root, defaulting to the service folder', () => {
     const html = render()
     expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*checked=""/)
-    const opts = [...html.matchAll(/<option value="([^"]+)"( selected="")?/g)].map((m) => [m[1], !!m[2]])
-    expect(opts).toEqual([
-      ['/p/k8s/deep', false],
-      ['/p/k8s', true],
-      ['/p', false]
-    ])
-    expect(html).toContain('k8s/deep')
+    // The chooser is the app's Select; closed, its trigger shows the picked folder (relative to the project root).
+    expect(html).not.toContain('<select')
+    expect(folderTrigger(html)).toContain('<span class="sel-value">k8s</span>')
   })
 
   it('falls back to the first choice when the service folder is not among them, and hides the row without choices', () => {
     const html = render({ rememberFolder: '/elsewhere' })
-    expect([...html.matchAll(/<option value="([^"]+)"( selected="")?/g)][0][2]).toBe(' selected=""')
+    expect(folderTrigger(html)).toContain('<span class="sel-value">k8s/deep</span>')
     expect(render({ rememberChoices: [] })).not.toContain('type="checkbox"')
   })
 
@@ -150,5 +148,24 @@ describe('pickerCursor and pickerEnter', () => {
 
   it('Enter with an empty list picks nothing', () => {
     expect(pickerEnter([], 0)).toBeNull()
+  })
+})
+
+// Escape closes the popover, but not an Escape the open folder list already used to close itself.
+describe('dismissesOn', () => {
+  it('closes on a plain Escape only', () => {
+    expect(dismissesOn({ key: 'Escape', defaultPrevented: false })).toBe(true)
+    expect(dismissesOn({ key: 'Escape', defaultPrevented: true })).toBe(false)
+    expect(dismissesOn({ key: 'Enter', defaultPrevented: false })).toBe(false)
+  })
+})
+
+describe('folderItems', () => {
+  it('lists the choices in order, the project root by its word and the rest relative to it', () => {
+    expect(folderItems(['/p/k8s/deep', '/p/k8s', '/p'], '/p', 'root')).toEqual([
+      { value: '/p/k8s/deep', label: 'k8s/deep' },
+      { value: '/p/k8s', label: 'k8s' },
+      { value: '/p', label: 'root' }
+    ])
   })
 })

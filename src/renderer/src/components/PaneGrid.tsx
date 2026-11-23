@@ -14,10 +14,12 @@ import {
   type PaneNode,
   type Rect
 } from '../../../core/panes/tree'
-import { parseTab, sessionTab } from '../../../core/panes/tabId'
+import { parseKubeTab, parseTab, sessionTab } from '../../../core/panes/tabId'
 import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
+import { KubeObjectTab, type KubeTabHost } from './kube/cluster/KubeObjectTab'
+import { useDocumentShown } from '../hooks/useDocumentShown'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
 import type { RecordStatus } from '../../../core/understanding/types'
@@ -64,6 +66,7 @@ export function PaneGrid({
   fileTabs,
   dirtyFileIds,
   kubeKinds,
+  kubeHost,
   recordTabs,
   recordStatuses,
   browserTabs,
@@ -117,6 +120,8 @@ export function PaneGrid({
   dirtyFileIds: Set<string>
   /** Kubernetes kind per open file path (App's one useKubeKinds); a path with no entry is not a manifest */
   kubeKinds?: Record<string, KubeFileKind>
+  /** What every cluster object tab asks of the app: its write dialog, its dirty flag and the edit asks. */
+  kubeHost: KubeTabHost
   /** Every open record tab, whichever pane holds it — same place, same reason as fileTabs. The title
    *  and the project come from this record, so a record tab from another project keeps its name and
    *  its × too. */
@@ -188,6 +193,8 @@ export function PaneGrid({
   renderApp: (appTabId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
+  /** A kube tab follows its object only while the window is shown too (K4): a window hidden to the tray is not seen. */
+  const windowShown = useDocumentShown()
   const hostRef = useRef<HTMLDivElement>(null)
   // Preview while dragging — which zone of which pane it would land in
   const [hover, setHover] = useState<{ paneId: string; zone: DropZone } | null>(null)
@@ -218,12 +225,15 @@ export function PaneGrid({
   const paneOfBrowser = new Map<string, PaneLeaf>()
   // Media tab id → its pane. The tree is the only list of media tabs (the id is the whole record)
   const paneOfMedia = new Map<string, PaneLeaf>()
+  // Kube tab id → its pane. Same as media: the id names the cluster object, so the tree is the only list
+  const paneOfKube = new Map<string, PaneLeaf>()
   for (const l of paneLeaves)
     for (const tabId of l.tabIds) {
       const ref = parseTab(tabId)
       if (ref?.kind === 'session') paneOfSession.set(ref.id, l)
       else if (ref?.kind === 'browser') paneOfBrowser.set(tabId, l)
       else if (ref?.kind === 'media') paneOfMedia.set(tabId, l)
+      else if (ref?.kind === 'kube') paneOfKube.set(tabId, l)
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
@@ -546,6 +556,36 @@ export function PaneGrid({
           </div>
         )
       })}
+      {/* Cluster object slots (kube cluster view spec 4.6) — the media slots' rule: one per open kube tab for the tab's
+          whole life, display:none unless it is its pane's active tab, in tab-id order so a drag to another pane does
+          not move its node. The tab keeps what it read and its view across a switch; it watches the cluster only while
+          `visible` in a shown window (K4). Closing the tab drops it from the tree, which unmounts the slot and stops its watch. */}
+      {[...paneOfKube.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([tabId, pane]) => {
+        const target = parseKubeTab(tabId.slice('kube:'.length))
+        if (!target) return null
+        const rect = rects.get(pane.id)
+        const visible = rect != null && pane.activeTabId === tabId
+        return (
+          <div
+            key={tabId}
+            className="terminal-slot"
+            style={
+              visible
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
+            }
+            onMouseDown={() => onFocusPane(pane.id)}
+          >
+            <KubeObjectTab target={target} visible={visible && windowShown} tabId={tabId} host={kubeHost} />
+          </div>
+        )
+      })}
       {/* The pane bodies' drop targets — one per pane, whichever kind of tab that pane is showing. They
           cannot live on the slots: a session slot is display:none unless it is the active tab, so a pane
           showing a file had no target, and putting them on the editor slot as well would give one pane two
@@ -662,6 +702,11 @@ export function PaneGrid({
             if (ref?.kind === 'media') {
               const title = ref.id.split(/[\\/]/).pop() || t('media.tab.untitled')
               return { tabId, kind: 'media', path: ref.id, title, video: mediaKindOf(ref.id) === 'video' }
+            }
+            if (ref?.kind === 'kube') {
+              const obj = parseKubeTab(ref.id)
+              if (!obj) return null
+              return { tabId, kind: 'kube', title: `${obj.kind} ${obj.name}`, context: obj.context }
             }
             if (ref?.kind === 'app') {
               const info = appTabInfo(ref.id)

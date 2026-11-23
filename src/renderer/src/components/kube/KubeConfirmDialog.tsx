@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, Lock } from 'lucide-react'
+import { Check, Lock } from 'lucide-react'
 import type { KubePreview, KubeVerb, ResourceDiff, ResourceState } from '../../../../core/kube/types'
 import { useI18n } from '../../i18n/I18nProvider'
 import { backdropProps } from '../../lib/backdrop'
-import { shellQuote } from '../../lib/shellQuote'
 import { FileIcon } from '../FileIcon'
 import { isClusterScoped } from '../../../../core/kube/namespace'
 import { fileNamespacePill, type NamespaceLabel } from './fileNamespacePill'
+import { KubeCommands } from './KubeCommands'
 import { SideBySideDiff } from './SideBySideDiff'
 
 const MARK: Record<ResourceState, string> = {
@@ -24,9 +24,6 @@ const STATE_KEY = {
   delete: 'kube.confirm.state.delete',
   'not-found': 'kube.confirm.state.notFound'
 } as const
-
-const platform = (): string => (typeof window === 'undefined' ? 'linux' : window.api.platform)
-const commandText = (args: string[]): string => `kubectl ${args.map((a) => shellQuote(a, platform())).join(' ')}`
 
 /** The namespace pill of a shown preview: the one `-n` its commands send, "from the files" when none sends one, or
  *  "several" with the values as its tooltip; a failed dry run's planned commands count the same. Before a preview, the
@@ -100,7 +97,6 @@ export function KubeConfirmDialog({
   const [picked, setPicked] = useState<number | null>(null)
   const selectedIdx = Math.min(picked ?? Math.max(firstActive, 0), Math.max(entries.length - 1, 0))
   const selected: ResourceDiff | undefined = entries[selectedIdx]?.diff
-  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -120,11 +116,6 @@ export function KubeConfirmDialog({
         ? preview.checkCommandLines
         : preview.commandLines
       : []
-  const copyAll = (): void => {
-    window.api.clipboard.writeText(commandLines.map(commandText).join('\n'))
-    setCopied(true)
-  }
-
   const files = preview?.ok
     ? preview.plan.commands.reduce((n, c) => n + (c.kind === 'files' ? c.files.length : c.kind === 'objects' ? c.from.length : 1), 0)
     : 0
@@ -326,25 +317,10 @@ export function KubeConfirmDialog({
           </>
         )}
 
-        {commandLines.length > 0 && (
-          <div className="kube-list-title">
-            {t(verb === 'compare' ? 'kube.confirm.commandsToCompare' : 'kube.confirm.commandsToRun')}
-          </div>
-        )}
-        {commandLines.length > 0 && (
-          <div className="kube-commands">
-            <pre className="kube-cmd-text">{commandLines.map((l) => `$ ${commandText(l)}`).join('\n')}</pre>
-            <button
-              type="button"
-              className="icon-btn"
-              title={t('kube.confirm.copyCommands')}
-              aria-label={t('kube.confirm.copyCommands')}
-              onClick={copyAll}
-            >
-              {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
-            </button>
-          </div>
-        )}
+        <KubeCommands
+          lines={commandLines}
+          title={verb === 'compare' ? 'kube.confirm.commandsToCompare' : 'kube.confirm.commandsToRun'}
+        />
 
         <div className="row right">
           {running ? (

@@ -19,6 +19,10 @@ const fire =
     ipcRenderer.send(channel, ...args)
 
 const EVENT_CHANNELS = [
+  'kube:watch',
+  'kube:log',
+  'kube:shell',
+  'kube:forward',
   'session:data',
   'session:reset',
   'session:remote-size',
@@ -147,7 +151,44 @@ const api = {
     cancel: invoke('kube.cancel'),
     reload: invoke('kube.reload'),
     render: invoke('kube.render'),
-    status: invoke('kube.status')
+    status: invoke('kube.status'),
+    cluster: {
+      namespaces: invoke('kube.cluster.namespaces'),
+      crds: invoke('kube.cluster.crds'),
+      counts: invoke('kube.cluster.counts'),
+      get: invoke('kube.cluster.get'),
+      describe: invoke('kube.cluster.describe'),
+      events: invoke('kube.cluster.events'),
+      pods: invoke('kube.cluster.pods'),
+      reveal: invoke('kube.cluster.reveal'),
+      list: invoke('kube.cluster.list'),
+      watch: invoke('kube.cluster.watch'),
+      unwatch: invoke('kube.cluster.unwatch'),
+      editBase: invoke('kube.cluster.editBase'),
+      dependents: invoke('kube.cluster.dependents'),
+      manifestFor: invoke('kube.cluster.manifestFor')
+    },
+    write: {
+      preview: invoke('kube.write.preview'),
+      run: invoke('kube.write.run'),
+      cancel: invoke('kube.write.cancel')
+    },
+    logs: {
+      start: invoke('kube.logs.start'),
+      stop: invoke('kube.logs.stop'),
+      save: invoke('kube.logs.save')
+    },
+    shell: {
+      start: invoke('kube.shell.start'),
+      write: fire('kube.shell.write'),
+      resize: fire('kube.shell.resize'),
+      stop: invoke('kube.shell.stop')
+    },
+    forward: {
+      start: invoke('kube.forward.start'),
+      stop: invoke('kube.forward.stop'),
+      localPort: invoke('kube.forward.localPort')
+    }
   },
   github: {
     status: invoke('github.status'),
