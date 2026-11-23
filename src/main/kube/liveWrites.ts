@@ -153,14 +153,20 @@ export function createLiveWrites(d: LiveWritesDeps) {
       // K11: only the server's own churn (status, versions) since editing began is not a change of the person's.
       const clean = versionOf(live) === op.base.resourceVersion || hashOf(live) === op.base.hash
       // YAML 1.1, which kubectl reads: `on` or `yes` as a string stays quoted.
-      const body = objectsYaml([replaceBody(live, edited.object, versionOf(live))])
+      const replacement = replaceBody(live, edited.object, versionOf(live))
+      const body = objectsYaml([replacement])
       return {
         ok: true,
         commandLines: [command],
         reads,
         dry: { args: replaceArgs(ref, true), input: body },
         input: body,
-        fingerprint: covers(body),
+        // K11: the body and the live object, each without the server's churn (status, resourceVersion, generation,
+        // managedFields), so a write the server made after the preview does not refuse the run while anything else
+        // changed still does. The live object is covered too because the body is the edit: a label changed on the live
+        // object would not show in it, and the replace would silently overwrite it. The body sent is built from the
+        // fresh read.
+        fingerprint: covers([canonicalJson(churnFree(replacement)), hashOf(live)]),
         live,
         ...(clean ? {} : { changedSinceEdit: true as const })
       }

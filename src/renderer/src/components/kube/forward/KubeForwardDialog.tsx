@@ -5,12 +5,21 @@ import { forwardPorts, validPort } from '../../../../../core/kube/cluster/forwar
 import { displayContextName } from '../../../../../core/kube/contextName'
 import type { K8sObject } from '../../../../../core/kube/objects'
 import { useI18n } from '../../../i18n/I18nProvider'
+import { Select } from '../../Select'
 import { backdropProps } from '../../../lib/backdrop'
 
 const OTHER = 'other'
 
 /** The text as a whole number (`'80'` is 80, `'80a'` and `''` are NaN), so `validPort` judges it. */
 const portOf = (text: string): number => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : NaN)
+
+/** The remote port dropdown's items: each port with its name, then Other port. */
+export function remotePortItems(ports: Array<{ port: number; name?: string }>, otherLabel: string): Array<{ value: string; label: string }> {
+  return [
+    ...ports.map((p) => ({ value: String(p.port), label: p.name !== undefined ? `${p.port} ${p.name}` : String(p.port) })),
+    { value: OTHER, label: otherLabel }
+  ]
+}
 
 /** Starts one port forward (cluster view, board F). The remote port is a known port of the object or "other"; the
  *  local port follows `localPort`'s free answer for it until the person types there. State lives here, the start
@@ -34,7 +43,6 @@ export function KubeForwardDialog({
   const uid = useId()
   const ids = {
     title: `${uid}-title`,
-    remote: `${uid}-remote`,
     other: `${uid}-other`,
     local: `${uid}-local`,
     otherBad: `${uid}-other-bad`,
@@ -72,9 +80,10 @@ export function KubeForwardDialog({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      // Select preventDefaults the Escape that closes its open list, so that press must not also close the dialog.
+      if (e.key !== 'Escape' || e.defaultPrevented) return
       const el = document.activeElement
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
       onCancel()
     }
     window.addEventListener('keydown', onKey)
@@ -121,19 +130,23 @@ export function KubeForwardDialog({
             </span>
           </div>
 
-          <label className="kube-forward-label" htmlFor={ports.length > 0 ? ids.remote : ids.other}>
-            {t('kube.forward.remote')}
-          </label>
+          {ports.length > 0 ? (
+            // Select's trigger takes no id to point a label at, so it carries the name through ariaLabel instead.
+            <span className="kube-forward-label">{t('kube.forward.remote')}</span>
+          ) : (
+            <label className="kube-forward-label" htmlFor={ids.other}>
+              {t('kube.forward.remote')}
+            </label>
+          )}
           <div className="kube-field">
             {ports.length > 0 && (
-              <select id={ids.remote} value={choice} onChange={(e) => setChoice(e.target.value)} onKeyDown={onFieldKey}>
-                {ports.map((p) => (
-                  <option key={p.port} value={String(p.port)}>
-                    {p.name !== undefined ? `${p.port} ${p.name}` : String(p.port)}
-                  </option>
-                ))}
-                <option value={OTHER}>{t('kube.forward.other')}</option>
-              </select>
+              <Select
+                className="kube-sel-form"
+                ariaLabel={t('kube.forward.remote')}
+                items={remotePortItems(ports, t('kube.forward.other'))}
+                value={choice}
+                onChange={setChoice}
+              />
             )}
             {choice === OTHER && (
               <input

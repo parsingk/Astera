@@ -20,6 +20,7 @@ import { displayContextName } from '../../../../../core/kube/contextName'
 import { useKubeLogStream, type LogState } from '../../../hooks/useKubeLogStream'
 import { errText } from '../../../hooks/useFileOps'
 import { useI18n } from '../../../i18n/I18nProvider'
+import { Select } from '../../Select'
 import { toast } from '../../../lib/toast'
 import { liveErrorText } from '../cluster/ClusterView'
 
@@ -291,16 +292,20 @@ export function KubeLogView({
   return (
     <div className="kube-logs">
       <div className="kube-logs-bar" role="toolbar" aria-label={t('kube.logs.toolbar')}>
-        <label className="kube-pill kube-logs-picker">
+        <span className="kube-pill kube-logs-picker" title={t('kube.logs.container')}>
           <span className="kube-logs-lab">{t('kube.logs.container')}</span>
-          <select title={t('kube.logs.container')} aria-label={t('kube.logs.container')} value={container} onChange={(e) => pickContainer(e.target.value)}>
-            {choices.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.init ? t('kube.logs.initContainer', { name: c.name }) : c.sidecar ? t('kube.logs.sidecarContainer', { name: c.name }) : c.name}
-              </option>
-            ))}
-          </select>
-        </label>
+          <Select
+            className="dense kube-sel kube-sel-bare"
+            ariaLabel={t('kube.logs.container')}
+            items={choices.map((c) => ({
+              value: c.name,
+              label: c.init ? t('kube.logs.initContainer', { name: c.name }) : c.sidecar ? t('kube.logs.sidecarContainer', { name: c.name }) : c.name
+            }))}
+            value={container}
+            onChange={pickContainer}
+            noCheck
+          />
+        </span>
         <button
           type="button"
           className={'kube-segment' + (previous ? ' on' : '')}

@@ -147,7 +147,8 @@ describe('Kustomize member', () => {
       target: { state: 'none' }
     })
     expect(html).toContain('kube.toolbar.chooseOverlay')
-    expect(html).toContain('<option')
+    expect(html).not.toContain('<select')
+    expect(html).toMatch(/<button[^>]*class="sel-trigger"[^>]*aria-label="kube.toolbar.overlayTitle"/)
     expect(button(html, 'kube.toolbar.apply')).toContain('disabled')
     expect(html).not.toContain('kubectl apply -k')
   })

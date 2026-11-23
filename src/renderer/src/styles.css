@@ -3598,7 +3598,6 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-picker-current { font-size: 10.5px; color: var(--git-modified); }
 .kube-picker-empty { padding: 8px; font-size: 12px; color: var(--text-faint); }
 .kube-picker-remember { display: flex; align-items: center; gap: 6px; padding: 8px; margin-top: 4px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--text-dim); }
-.kube-picker-remember select { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); border-radius: var(--radius); font-size: 11.5px; padding: 2px 4px; }
 .kube-picker-items { display: flex; flex-direction: column; padding: 4px; border-top: 1px solid var(--line-soft); }
 .kube-picker-item { text-align: left; padding: 5px 8px; background: transparent; border: 0; border-radius: var(--radius); color: var(--text); font-size: 12px; cursor: pointer; }
 .kube-picker-item:hover { background: var(--panel); }
@@ -3608,7 +3607,6 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-render-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); font-size: 12px; flex-wrap: wrap; }
 .kube-render-title { font-weight: 500; color: var(--text); }
 .kube-render-badge { padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: var(--radius); font-size: 11px; color: var(--text-dim); }
-.kube-render-head select { min-width: 0; max-width: 220px; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); border-radius: var(--radius); font-size: 12px; }
 .kube-render-legend { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11.5px; }
 .kube-render-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--accent); opacity: 0.35; }
 .kube-render-body { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 6px 0; font-family: var(--mono); font-size: 12px; line-height: 1.5; user-select: text; }
@@ -3659,7 +3657,23 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 /* The Kubernetes cluster view: toolbar, then the kind tree (212px), the table and the detail column. */
 .kube-cluster { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .kube-cluster-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); min-width: 0; flex-wrap: wrap; }
-.kube-cluster-bar select.kube-pill, .kube-cluster-ns-input { background: transparent; color: var(--text-dim); font-family: inherit; }
+.kube-cluster-ns-input { background: transparent; color: var(--text-dim); font-family: inherit; }
+/* The app's Select in the Kubernetes tab, sized like .kube-pill (11.5px, pill) so the toolbar keeps its layout. The
+   wrapper carries the tooltip, since Select has no title of its own. */
+.kube-sel-tip { display: inline-flex; min-width: 0; }
+.sel.kube-sel { font-size: 11.5px; min-width: 0; }
+.sel.kube-sel .sel-trigger { height: 24px; padding: 2px 8px; gap: 6px; border-radius: 999px; background: transparent; color: var(--text-dim); }
+.sel.kube-sel .sel-trigger:hover { background: var(--elevated); color: var(--text); border-color: var(--line-soft); }
+.sel.kube-sel .sel-trigger:focus-visible { border-color: var(--accent); }
+.sel.kube-sel-ctx { max-width: 260px; }
+.sel.kube-sel-ns, .sel.kube-sel-overlay, .sel.kube-sel-render { max-width: 220px; }
+.sel.kube-sel-fill { flex: 1; }
+/* Inside the log bar's container pill, which already draws the border: the trigger is bare text and a caret. */
+.sel.kube-sel-bare { max-width: 200px; }
+.sel.kube-sel-bare .sel-trigger { height: auto; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); }
+.sel.kube-sel-bare .sel-trigger:hover { background: transparent; }
+.sel.kube-sel-bare .sel-trigger:focus-visible { box-shadow: none; }
+.sel.kube-sel-form .sel-trigger { height: auto; padding: 6px; }
 .kube-cluster-ns-input { width: 150px; }
 .kube-cluster-filter { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 200px; min-width: 100px; padding: 2px 8px; border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--text-faint); }
 .kube-cluster-filter input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font-size: 12px; }
@@ -3703,7 +3717,14 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-cluster-empty { padding: 24px 12px; font-size: 12.5px; color: var(--text-dim); }
 .kube-cluster-forbidden { overflow-wrap: anywhere; }
 .kube-cluster-failed { overflow-wrap: anywhere; color: var(--danger); }
-.kube-detail { width: 380px; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line-soft); background: var(--panel); font-size: 12px; }
+/* The column's width is the wrapper's (DetailColumn sets it); with nothing selected the detail renders nothing and the
+   wrapper, handle included, goes with it. */
+.kube-detail-col { position: relative; min-width: 0; min-height: 0; display: flex; }
+.kube-detail-col:not(:has(.kube-detail)) { display: none; }
+/* The handle straddles the column's left border, over the table's edge: a 5px strip like .resizer, drawn on hover. */
+.kube-detail-resizer { position: absolute; z-index: 2; top: 0; bottom: 0; left: -3px; width: 5px; cursor: col-resize; background: transparent; }
+.kube-detail-resizer:hover, .kube-detail-resizer:active, .kube-detail-resizer:focus-visible { background: var(--accent); outline: none; }
+.kube-detail { flex: 1; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line-soft); background: var(--panel); font-size: 12px; }
 .kube-detail.deleted .kube-detail-body { opacity: .5; }
 .kube-detail-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--line-soft); }
 .kube-detail-kind { flex: none; padding: 1px 6px; border-radius: var(--radius); background: var(--elevated); color: var(--text-dim); font-size: 11px; }
@@ -3777,11 +3798,9 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 /* A wrapping row places items by their basis before any shrinks: the filter's small basis lets the bar stay on one row
    in a narrow panel, and it grows into the room there is. */
 .kube-logs-bar .kube-cluster-filter { flex: 1 1 120px; max-width: 260px; }
-.kube-logs-picker { cursor: pointer; }
 .kube-logs-picker:hover { background: var(--elevated); }
 .kube-logs-picker:focus-within { box-shadow: 0 0 0 2px var(--ring); }
 .kube-logs-lab { color: var(--text-faint); }
-.kube-logs-picker select { max-width: 200px; padding: 0; background: transparent; border: 0; outline: none; color: var(--text); font: inherit; cursor: pointer; }
 .kube-logs-bar .kube-segment:disabled { opacity: .4; color: var(--text-dim); cursor: default; }
 .kube-logs-where { margin-left: auto; }
 .kube-logs-dropped { flex: none; padding: 3px 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 11.5px; }
@@ -3805,7 +3824,6 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-forward-target { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-top: 5px; font-size: 12.5px; }
 .kube-forward-dim { color: var(--text-faint); font-size: 11.5px; }
 .kube-forward-form .kube-field { margin-bottom: 0; }
-.kube-forward-form .kube-field select { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: var(--radius); }
 .kube-forward-bad { color: var(--danger); font-size: 11.5px; }
 .kube-segment-forward { flex-direction: column; }
 .kube-segment-spacer { flex: 1; }

@@ -3,7 +3,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ObjectRef } from '../../../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../../../core/kube/objects'
-import { KubeForwardDialog } from './KubeForwardDialog'
+import { KubeForwardDialog, remotePortItems } from './KubeForwardDialog'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -30,10 +30,10 @@ describe('KubeForwardDialog', () => {
     expect(html).toContain('web')
     expect(html).toContain('prod')
     expect(html).toContain('shop')
+    // The remote port is the app's Select: closed, its trigger shows the first port.
     expect(html).toContain('>80 http<')
-    expect(html).toContain('>443<')
-    expect(html).toContain('kube.forward.other')
-    expect(html).toContain('<select')
+    expect(html).not.toContain('<select')
+    expect(html).toMatch(/<button[^>]*class="sel-trigger"[^>]*aria-label="kube.forward.remote"/)
   })
 
   it('draws the target kind as the list chip', () => {
@@ -55,9 +55,11 @@ describe('KubeForwardDialog', () => {
   it('names its fields', () => {
     const html = render(service([{ port: 80, name: 'http' }]))
     const forOf = [...html.matchAll(/<label[^>]*for="([^"]+)"/g)].map((m) => m[1])
-    const select = /<select[^>]*id="([^"]+)"/.exec(html)?.[1]
     const inputs = [...html.matchAll(/<input[^>]*id="([^"]+)"/g)].map((m) => m[1])
-    expect(select && forOf).toContain(select)
+    // With ports the remote field is the Select, named through its aria-label; no label may point at nothing.
+    expect(html).toMatch(/aria-label="kube.forward.remote"/)
+    const ids = [...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1])
+    for (const f of forOf) expect(ids).toContain(f)
     expect(inputs.length).toBeGreaterThan(0)
     for (const id of inputs) expect(forOf).toContain(id)
     expect(html).not.toContain('type="number"')
@@ -71,5 +73,15 @@ describe('KubeForwardDialog', () => {
     const labelled = /aria-labelledby="([^"]+)"/.exec(html)?.[1]
     expect(labelled).toBeTruthy()
     expect(html).toContain(`id="${labelled}"`)
+  })
+})
+
+describe('remotePortItems', () => {
+  it('lists each port with its name, then the Other port item last', () => {
+    expect(remotePortItems([{ port: 80, name: 'http' }, { port: 443 }], 'Other port')).toEqual([
+      { value: '80', label: '80 http' },
+      { value: '443', label: '443' },
+      { value: 'other', label: 'Other port' }
+    ])
   })
 })

@@ -106,6 +106,12 @@ const byLabel = (tree: unknown, label: string): ReactElement<Record<string, unkn
   if (!hit) throw new Error(`no element labelled ${label}`)
   return hit as ReactElement<Record<string, unknown>>
 }
+/** The container picker is the app's Select: its choices are the items prop, and a pick is onChange(value). */
+const picker = (tree: unknown): ReactElement<{ items: Array<{ value: string; label: string }>; onChange: (v: string) => void }> => {
+  const hit = elements(tree).find((e) => (e.props as Record<string, unknown>).ariaLabel === 'kube.logs.container')
+  if (!hit) throw new Error('no container picker')
+  return hit as never
+}
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 const target = { context: 'kind-dev', namespace: 'api', resource: 'pods', kind: 'Pod', name: 'worker-1' }
@@ -204,7 +210,7 @@ describe('KubeLogView stream', () => {
 
   it('restarts its stream when the container or previous changes', () => {
     const tree = hooks.render(view())
-    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    picker(tree).props.onChange('sidecar')
     const next = hooks.render(view())
     expect(api.started.map((s) => s.container)).toEqual(['worker', 'sidecar'])
     expect(api.stopped).toEqual([api.started[0].id])
@@ -217,10 +223,7 @@ describe('KubeLogView stream', () => {
   // Task 5 review I3: the tab knows only where the Pod lives (Task 6), so the view reads the Pod itself; a Pod handed in
   // is only what shows until the read answers.
   it('reads the Pod itself, so the picker lists its containers', async () => {
-    const options = (tree: unknown): string[] =>
-      elements(tree)
-        .filter((e) => e.type === 'option')
-        .map((e) => textOf(e))
+    const options = (tree: unknown): string[] => picker(tree).props.items.map((i) => i.label)
     expect(options(hooks.render(view(null)))).toEqual(['worker'])
     expect(api.reads).toEqual([target])
     await settle()
@@ -279,7 +282,7 @@ describe('KubeLogView stream', () => {
     hooks.render(view())
     await vi.advanceTimersByTimeAsync(0)
     expect(api.reads).toHaveLength(2)
-    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    picker(tree).props.onChange('sidecar')
     hooks.render(view())
     await vi.advanceTimersByTimeAsync(10_000)
     expect(api.reads).toHaveLength(2)
@@ -292,7 +295,7 @@ describe('KubeLogView stream', () => {
     await vi.advanceTimersByTimeAsync(0)
     ;(byLabel(tree, 'kube.logs.follow').props.onClick as () => void)()
     tree = hooks.render(view())
-    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    picker(tree).props.onChange('sidecar')
     hooks.render(view())
     expect(api.started[1]).toMatchObject({ container: 'sidecar', follow: false })
     api.emit({ logId: api.started[1].id, kind: 'ended' })
@@ -417,7 +420,7 @@ describe('KubeLogView stream', () => {
         }
       })
     const tree = hooks.render(v)
-    ;(byLabel(tree, 'kube.logs.container').props.onChange as (e: unknown) => void)({ target: { value: 'sidecar' } })
+    picker(tree).props.onChange('sidecar')
     expect(picked).toEqual(['sidecar'])
     hooks.render(v)
     const shown = hooks.render(v)

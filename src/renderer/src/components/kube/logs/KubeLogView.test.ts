@@ -18,7 +18,19 @@ vi.mock('../../../i18n/I18nProvider', () => ({
 const stub = vi.hoisted(() => ({ stream: null as KubeLogStream | null }))
 vi.mock('../../../hooks/useKubeLogStream', () => ({ useKubeLogStream: () => stub.stream }))
 
+// The app's Select draws its list only when open, which a static render never is; the stub lists the items instead.
+vi.mock('../../Select', () => ({
+  Select: (p: { ariaLabel?: string; value: string; items: Array<{ value: string; label: string }> }) =>
+    React.createElement(
+      'div',
+      { className: 'sel', 'aria-label': p.ariaLabel, 'data-value': p.value },
+      p.items.map((i) => React.createElement('i', { key: i.value, className: 'opt' }, i.label))
+    )
+}))
+
 import { KubeLogView, lineWindow } from './KubeLogView'
+
+const optionsOf = (html: string): string[] => [...html.matchAll(/<i class="opt">([^<]*)<\/i>/g)].map((m) => m[1])
 
 const pod = {
   apiVersion: 'v1',
@@ -58,14 +70,12 @@ const button = (html: string, label: string): string => {
 describe('KubeLogView', () => {
   it('renders the toolbar controls', () => {
     const html = render(streamOf(['2026-11-20T01:12:03.114539874Z worker starting']))
-    const select = /<select[^>]*aria-label="kube.logs.container"[^>]*>(.*?)<\/select>/.exec(html)
-    expect(select).not.toBeNull()
-    const options = [...(select?.[1] ?? '').matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1])
-    expect(options).toEqual(['kube.logs.initContainer{&quot;name&quot;:&quot;migrate&quot;}', 'worker', 'sidecar'])
-    expect(select?.[1]).toContain('<option value="worker" selected="">')
+    // The picker is the app's Select, stubbed above to list its items: the choices and the picked one.
+    expect(optionsOf(html)).toEqual(['kube.logs.initContainer{&quot;name&quot;:&quot;migrate&quot;}', 'worker', 'sidecar'])
+    expect(html).toContain('aria-label="kube.logs.container" data-value="worker"')
+    expect(html).not.toContain('<select')
     const withSidecar = { ...pod, spec: { ...pod.spec, initContainers: [{ name: 'migrate' }, { name: 'shipper', restartPolicy: 'Always' }] } }
-    const sidecarSelect = /<select[^>]*>(.*?)<\/select>/.exec(render(streamOf([]), undefined, withSidecar))?.[1] ?? ''
-    expect([...sidecarSelect.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1])).toEqual([
+    expect(optionsOf(render(streamOf([]), undefined, withSidecar))).toEqual([
       'kube.logs.initContainer{&quot;name&quot;:&quot;migrate&quot;}',
       'kube.logs.sidecarContainer{&quot;name&quot;:&quot;shipper&quot;}',
       'worker',
@@ -87,7 +97,7 @@ describe('KubeLogView', () => {
   it('labels the toolbar and the picker, and keeps the lines out of live announcements', () => {
     const html = render(streamOf(['a', 'b', 'c'], 'streaming', 2))
     expect(html).toMatch(/<div[^>]*role="toolbar"[^>]*aria-label="kube.logs.toolbar"/)
-    expect(html).toMatch(/<label class="kube-pill kube-logs-picker"><span class="kube-logs-lab">kube.logs.container<\/span><select/)
+    expect(html).toMatch(/<span class="kube-pill kube-logs-picker" title="kube.logs.container"><span class="kube-logs-lab">kube.logs.container<\/span><div class="sel"/)
     expect(html).toMatch(/<div[^>]*role="log"[^>]*aria-live="off"/)
     expect(html).toMatch(/<div class="kube-logs-dropped"[^>]*aria-live="off"/)
   })
