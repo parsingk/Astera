@@ -118,6 +118,34 @@ describe('ClusterDetail', () => {
     expect(render(model('Pod', 'pods', pod), { onOpenShell: noop })).not.toContain('kube.shell.open')
   })
 
+  it('draws the port forward button for a Service', () => {
+    const svc: K8sObject = { apiVersion: 'v1', kind: 'Service', metadata: { name: 'web', namespace: 'dev' } }
+    const html = render(model('Service', 'services', svc), { onForward: noop })
+    expect(html).toMatch(/title="kube\.forward\.open" aria-label="kube\.forward\.open"><svg [^>]*class="lucide lucide-arrow-left-right/)
+    expect(html.indexOf('kube.forward.open')).toBeLessThan(html.indexOf('kube.cluster.more'))
+    expect(render(model('Service', 'services', svc))).not.toContain('kube.forward.open')
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'w-1', namespace: 'dev' },
+      spec: { containers: [{ name: 'app' }] },
+      status: { phase: 'Running', containerStatuses: [{ name: 'app', state: { running: {} } }] }
+    }
+    const podHtml = render(model('Pod', 'pods', pod), { onOpenShell: noop, onForward: noop })
+    expect(podHtml.indexOf('kube.shell.open')).toBeLessThan(podHtml.indexOf('kube.forward.open'))
+  })
+
+  it('leaves the port forward button out for a Pending Pod', () => {
+    const pod: K8sObject = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'w-1', namespace: 'dev' },
+      spec: { containers: [{ name: 'app' }] },
+      status: { phase: 'Pending' }
+    }
+    expect(render(model('Pod', 'pods', pod), { onForward: noop })).not.toContain('kube.forward.open')
+  })
+
   // Task 15 S5: a pencil reads as "edit" in a part that only reads; boards A and B draw open-in-editor as "open elsewhere".
   it('draws the editor button with the open-elsewhere icon, not a pencil', () => {
     const cm: K8sObject = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'cfg', namespace: 'dev' } }
