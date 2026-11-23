@@ -3820,8 +3820,8 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-forward-reason { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .kube-forward-name, .kube-forward-cluster { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .kube-forward-cluster { max-width: 180px; }
-/* The actions stay at the right edge whatever the panel width; the cells scroll under them. */
-.kube-cluster-table .kube-forward-sticky { position: sticky; right: 0; z-index: 1; background: var(--bg); }
+/* The actions stay at the right edge whatever the panel width; the cells scroll under them. The rows sit on the bottom panel's --term-bg. */
+.kube-cluster-table .kube-forward-sticky { position: sticky; right: 0; z-index: 1; background: var(--term-bg); }
 .kube-cluster-table th.kube-forward-sticky { z-index: 2; background: var(--panel); }
 .kube-cluster-row:hover .kube-forward-sticky { background: var(--elevated); }
 .kube-forward-state.bad { color: var(--danger); }
