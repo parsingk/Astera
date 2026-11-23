@@ -3512,6 +3512,8 @@ export const ko = {
   'kube.forward.state.disconnectedPlain': '끊김',
   'kube.forward.state.failedPlain': '실패',
   'kube.forward.lostPod': 'Pod가 바뀌었거나 사라졌습니다',
+  'kube.forward.lost': 'Pod와의 연결이 끊겼습니다',
+  'kube.forward.refused': 'Pod가 연결을 거부했습니다',
   'kube.forward.openBrowser': '브라우저로 열기',
   'kube.forward.stop': '끄기',
   'kube.forward.reconnect': '다시 연결',

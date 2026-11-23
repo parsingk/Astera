@@ -1,12 +1,16 @@
 /** Port forwarding: which objects offer it, their ports, the kubectl arguments and how to read kubectl's lines. The
  *  renderer imports this, so nothing here may touch `node:`. */
 import type { K8sObject } from '../objects'
-import type { ForwardPort, ForwardSpec } from './types'
+import type { ForwardPort, ForwardSpec, LostCause } from './types'
 
 /** Loopback only: a forward is never reachable from the network. */
 export const FORWARD_ADDRESS = '127.0.0.1'
 /** The reason of a forward that ended because its Pod was replaced. */
 export const LOST_POD = 'lost-pod'
+/** The reason of a forward whose Pod refused the connection (nothing listens on the remote port). */
+export const REFUSED = 'refused'
+/** The reason of a forward that lost its connection for a cause kubectl's lines do not tell. */
+export const LOST = 'lost'
 
 export function validPort(n: unknown): n is number {
   return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 65535
@@ -58,7 +62,29 @@ export function listeningPort(line: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-export function forwardReason(message: string | null): typeof LOST_POD | string | null {
+/** kubectl ends with `error: lost connection to pod` for several causes; only the klog line before it tells them apart.
+ *  The last matching line wins. */
+export function lostCause(stderr: string): LostCause | null {
+  let cause: LostCause | null = null
+  for (const line of stderr.split('\n')) {
+    if (line.includes('network namespace for sandbox') && line.includes('is closed')) cause = 'pod-gone'
+    else if (line.includes('connect: connection refused')) cause = 'refused'
+  }
+  return cause
+}
+
+export function forwardReason(
+  message: string | null,
+  cause?: LostCause
+): typeof LOST_POD | typeof REFUSED | typeof LOST | string | null {
   if (message === null) return null
-  return message.includes('lost connection to pod') ? LOST_POD : message
+  if (cause === 'pod-gone') return LOST_POD
+  if (cause === 'refused') return REFUSED
+  return message.includes('lost connection to pod') ? LOST : message
+}
+
+/** What Open uses for a forward: https for port 443 or a port named https, else http. */
+export function forwardUrl(spec: ForwardSpec): string {
+  const scheme = spec.remote === 443 || spec.remoteName === 'https' ? 'https' : 'http'
+  return `${scheme}://${FORWARD_ADDRESS}:${spec.local}/`
 }

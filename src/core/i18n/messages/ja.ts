@@ -2790,6 +2790,8 @@ export const ja: Catalog = {
   'kube.forward.state.disconnectedPlain': '切断',
   'kube.forward.state.failedPlain': '失敗',
   'kube.forward.lostPod': 'Pod が置き換えられたか、なくなりました',
+  'kube.forward.lost': 'Pod との接続が切れました',
+  'kube.forward.refused': 'Pod が接続を拒否しました',
   'kube.forward.openBrowser': 'ブラウザーで開く',
   'kube.forward.stop': '停止',
   'kube.forward.reconnect': '再接続',

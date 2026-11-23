@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addForward, forwardMessage, forwardRunMs, isLive, reconnectForward, removeForward, stopForward } from './kubeForwards'
-import { LOST_POD } from '../../../core/kube/cluster/forward'
+import { LOST, LOST_POD, REFUSED } from '../../../core/kube/cluster/forward'
 import type { ForwardSpec } from '../../../core/kube/cluster/types'
 
 const spec: ForwardSpec = {
@@ -9,7 +9,12 @@ const spec: ForwardSpec = {
   remote: 80
 }
 const listening = (forwardId: string) => ({ forwardId, kind: 'listening' as const, local: 8080 })
-const exit = (forwardId: string, message: string | null) => ({ forwardId, kind: 'exit' as const, message })
+const exit = (forwardId: string, message: string | null, cause?: 'pod-gone' | 'refused') => ({
+  forwardId,
+  kind: 'exit' as const,
+  message,
+  ...(cause ? { cause } : {})
+})
 
 describe('kubeForwards', () => {
   it('starts a row connecting', () => {
@@ -26,10 +31,17 @@ describe('kubeForwards', () => {
   it('turns an ended connected forward disconnected', () => {
     const l = forwardMessage(
       forwardMessage(addForward([], 'a', spec), listening('a'), 1000),
-      exit('a', 'error: lost connection to pod'),
+      exit('a', 'error: lost connection to pod', 'pod-gone'),
       9000
     )
     expect(l[0]).toMatchObject({ state: 'disconnected', reason: LOST_POD, endedAt: 9000, connectedAt: 1000 })
+  })
+
+  it("follows the exit's cause for the reason", () => {
+    const connected = forwardMessage(addForward([], 'a', spec), listening('a'), 1000)
+    const lost = 'error: lost connection to pod'
+    expect(forwardMessage(connected, exit('a', lost, 'refused'), 2000)[0]).toMatchObject({ reason: REFUSED })
+    expect(forwardMessage(connected, exit('a', lost), 2000)[0]).toMatchObject({ reason: LOST })
   })
 
   it('turns a forward that ends before listening failed', () => {

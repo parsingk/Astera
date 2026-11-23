@@ -1,4 +1,4 @@
-// The port forwards the cluster view started (spec 4.9): one row per forward, kept after it ends so the person sees how it
+// The port forwards the cluster view started (spec 4.10): one row per forward, kept after it ends so the person sees how it
 // ended and can start it again. useKubeForwards feeds this list from main's 'kube:forward' messages.
 import { forwardReason } from '../../../core/kube/cluster/forward'
 import type { ForwardMessage, ForwardSpec } from '../../../core/kube/cluster/types'
@@ -33,7 +33,7 @@ export function forwardMessage(list: readonly KubeForward[], m: ForwardMessage, 
     return {
       ...f,
       state: f.state === 'connected' ? 'disconnected' : 'failed',
-      reason: forwardReason(m.message),
+      reason: forwardReason(m.message, m.cause),
       endedAt: now
     }
   })

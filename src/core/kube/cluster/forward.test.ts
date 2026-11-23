@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { K8sObject } from '../objects'
-import { FORWARD_ADDRESS, LOST_POD, canForward, forwardArgs, forwardPorts, forwardReason, listeningPort, validPort } from './forward'
+import {
+  FORWARD_ADDRESS, LOST, LOST_POD, REFUSED, canForward, forwardArgs, forwardPorts, forwardReason, forwardUrl, listeningPort, lostCause,
+  validPort
+} from './forward'
 
 const obj = (kind: string, rest: object): K8sObject =>
   ({ apiVersion: 'v1', kind, metadata: { name: 'x', namespace: 'api' }, ...rest }) as unknown as K8sObject
@@ -47,10 +50,41 @@ describe('forward rules', () => {
     expect(listeningPort('Handling connection for 18080')).toBeNull()
     expect(listeningPort('Forwarding from [::1]:18080 -> 80')).toBeNull()
   })
-  it('names a lost Pod', () => {
-    expect(forwardReason('error: lost connection to pod')).toBe(LOST_POD)
+  it('names the cause of a lost connection', () => {
+    expect(forwardReason('error: lost connection to pod', 'pod-gone')).toBe(LOST_POD)
+    expect(forwardReason('error: lost connection to pod', 'refused')).toBe(REFUSED)
+    expect(forwardReason('error: lost connection to pod')).toBe(LOST)
+    expect(forwardReason('Unable to listen on port 18080: boom', 'pod-gone')).toBe(LOST_POD)
     expect(forwardReason('Unable to listen on port 18080: boom')).toBe('Unable to listen on port 18080: boom')
     expect(forwardReason(null)).toBeNull()
+  })
+  it('tells a replaced Pod from a refused port', () => {
+    const gone =
+      'E1123 10:00:00.000000 1 portforward.go:413] "Unhandled Error" err="an error occurred forwarding 18090 -> 80: error forwarding port 80 to pod abc, uid : network namespace for sandbox \\"x\\" is closed"'
+    const refused =
+      'E1123 10:00:01.000000 1 portforward.go:413] "Unhandled Error" err="an error occurred forwarding 18095 -> 81: error forwarding port 81 to pod abc, uid : failed to connect to localhost:81 inside namespace \\"x\\", IPv4: dial tcp4 127.0.0.1:81: connect: connection refused IPv6 dial tcp6: connect: connection refused"'
+    expect(lostCause(`${gone}
+error: lost connection to pod
+`)).toBe('pod-gone')
+    expect(lostCause(`${refused}
+error: lost connection to pod
+`)).toBe('refused')
+    expect(lostCause(`${gone}
+${refused}
+error: lost connection to pod
+`)).toBe('refused')
+    expect(lostCause(`${refused}
+${gone}
+error: lost connection to pod
+`)).toBe('pod-gone')
+    expect(lostCause('error: lost connection to pod\n')).toBeNull()
+  })
+  it('opens https for port 443 or a port named https', () => {
+    const ref = { context: 'c', namespace: 'n', resource: 'services', kind: 'Service', name: 'web' }
+    expect(forwardUrl({ ref, local: 8443, remote: 443 })).toBe('https://127.0.0.1:8443/')
+    expect(forwardUrl({ ref, local: 8443, remote: 8443, remoteName: 'https' })).toBe('https://127.0.0.1:8443/')
+    expect(forwardUrl({ ref, local: 8080, remote: 80, remoteName: 'http' })).toBe('http://127.0.0.1:8080/')
+    expect(forwardUrl({ ref, local: 8080, remote: 80 })).toBe('http://127.0.0.1:8080/')
   })
   it('accepts ports 1 to 65535', () => {
     expect([1, 80, 65535].every(validPort)).toBe(true)
