@@ -3798,7 +3798,6 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 /* A wrapping row places items by their basis before any shrinks: the filter's small basis lets the bar stay on one row
    in a narrow panel, and it grows into the room there is. */
 .kube-logs-bar .kube-cluster-filter { flex: 1 1 120px; max-width: 260px; }
-.kube-logs-picker { cursor: pointer; }
 .kube-logs-picker:hover { background: var(--elevated); }
 .kube-logs-picker:focus-within { box-shadow: 0 0 0 2px var(--ring); }
 .kube-logs-lab { color: var(--text-faint); }

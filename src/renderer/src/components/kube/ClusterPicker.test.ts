@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { KubeContexts } from '../../../../core/kube/types'
-import { ClusterPicker, NamespacePicker, filterContexts, pickerCursor, pickerEnter } from './ClusterPicker'
+import { ClusterPicker, NamespacePicker, dismissesOn, filterContexts, folderItems, pickerCursor, pickerEnter } from './ClusterPicker'
 
 vi.mock('../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -148,5 +148,24 @@ describe('pickerCursor and pickerEnter', () => {
 
   it('Enter with an empty list picks nothing', () => {
     expect(pickerEnter([], 0)).toBeNull()
+  })
+})
+
+// Escape closes the popover, but not an Escape the open folder list already used to close itself.
+describe('dismissesOn', () => {
+  it('closes on a plain Escape only', () => {
+    expect(dismissesOn({ key: 'Escape', defaultPrevented: false })).toBe(true)
+    expect(dismissesOn({ key: 'Escape', defaultPrevented: true })).toBe(false)
+    expect(dismissesOn({ key: 'Enter', defaultPrevented: false })).toBe(false)
+  })
+})
+
+describe('folderItems', () => {
+  it('lists the choices in order, the project root by its word and the rest relative to it', () => {
+    expect(folderItems(['/p/k8s/deep', '/p/k8s', '/p'], '/p', 'root')).toEqual([
+      { value: '/p/k8s/deep', label: 'k8s/deep' },
+      { value: '/p/k8s', label: 'k8s' },
+      { value: '/p', label: 'root' }
+    ])
   })
 })

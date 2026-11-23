@@ -6,12 +6,17 @@ export const TABLE_MIN = 240
 /** One arrow key press on the resize handle. */
 export const DETAIL_STEP = 16
 
-/** The detail column's width for a wish: at least DETAIL_MIN and at most what leaves TABLE_MIN beside the kind tree.
+/** The range a detail width stays in: at least DETAIL_MIN and at most what leaves TABLE_MIN beside the kind tree.
  *  A body too narrow for both keeps the minimum, since an unreadable detail is worse than a scrolling table. */
+export function detailBounds(bodyWidth: number, treeWidth: number): { min: number; max: number } {
+  return { min: DETAIL_MIN, max: Math.max(DETAIL_MIN, bodyWidth - treeWidth - TABLE_MIN) }
+}
+
+/** The detail column's width for a wish, kept inside detailBounds. */
 export function clampDetailWidth(want: number, bodyWidth: number, treeWidth: number): number {
   const w = Number.isFinite(want) ? Math.round(want) : DETAIL_DEFAULT
-  const max = bodyWidth - treeWidth - TABLE_MIN
-  return Math.max(DETAIL_MIN, Math.min(w, max))
+  const { min, max } = detailBounds(bodyWidth, treeWidth)
+  return Math.max(min, Math.min(w, max))
 }
 
 /** The width saved in localStorage, or the default for nothing or junk. */

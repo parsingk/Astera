@@ -3,7 +3,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ObjectRef } from '../../../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../../../core/kube/objects'
-import { KubeForwardDialog } from './KubeForwardDialog'
+import { KubeForwardDialog, remotePortItems } from './KubeForwardDialog'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
   useI18n: () => ({
@@ -73,5 +73,15 @@ describe('KubeForwardDialog', () => {
     const labelled = /aria-labelledby="([^"]+)"/.exec(html)?.[1]
     expect(labelled).toBeTruthy()
     expect(html).toContain(`id="${labelled}"`)
+  })
+})
+
+describe('remotePortItems', () => {
+  it('lists each port with its name, then the Other port item last', () => {
+    expect(remotePortItems([{ port: 80, name: 'http' }, { port: 443 }], 'Other port')).toEqual([
+      { value: '80', label: '80 http' },
+      { value: '443', label: '443' },
+      { value: 'other', label: 'Other port' }
+    ])
   })
 })

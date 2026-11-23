@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DETAIL_DEFAULT, DETAIL_MIN, DETAIL_STEP, clampDetailWidth, readDetailWidth } from './kubeDetailWidth'
+import { DETAIL_DEFAULT, DETAIL_MIN, DETAIL_STEP, clampDetailWidth, detailBounds, readDetailWidth } from './kubeDetailWidth'
 
 // The detail column's width: at least 280, and never so wide that the table beside it (with the tree) drops under 240.
 describe('clampDetailWidth', () => {
@@ -39,5 +39,15 @@ describe('readDetailWidth', () => {
 describe('step', () => {
   it('is 16px', () => {
     expect(DETAIL_STEP).toBe(16)
+  })
+})
+
+describe('detailBounds', () => {
+  it('is the range the clamp keeps a width in', () => {
+    expect(detailBounds(1000, 212)).toEqual({ min: 280, max: 548 })
+  })
+
+  it('has max equal to min when the body is too narrow', () => {
+    expect(detailBounds(600, 212)).toEqual({ min: 280, max: 280 })
   })
 })

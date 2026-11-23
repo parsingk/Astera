@@ -86,7 +86,7 @@ describe('ClusterView', () => {
     const detail = React.createElement('aside', { className: 'kube-detail' })
     const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail }))
     expect(html).toMatch(/<div[^>]*role="separator"[^>]*aria-orientation="vertical"[^>]*aria-label="kube.cluster.resizeDetail"/)
-    expect(html).toMatch(/role="separator"[^>]*aria-valuenow="380"[^>]*tabindex="0"/)
+    expect(html).toMatch(/role="separator"[^>]*aria-valuemin="280"[^>]*aria-valuenow="380"[^>]*tabindex="0"/)
     expect(html).toMatch(/class="kube-detail-resizer"[^>]*>.*<aside class="kube-detail">/)
     expect(renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))).not.toContain('kube.cluster.resizeDetail')
   })

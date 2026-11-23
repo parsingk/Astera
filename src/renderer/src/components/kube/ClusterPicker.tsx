@@ -40,12 +40,23 @@ export function pickerEnter(shown: KubeContext[], cursor: number): string | null
 
 const PROVIDER_TAG = { eks: 'EKS', gke: 'GKE' } as const
 
+/** Whether a key press closes the popover: Escape, unless the open folder list already took it to close itself
+ *  (Select calls preventDefault on that Escape). */
+export function dismissesOn(e: { key: string; defaultPrevented: boolean }): boolean {
+  return e.key === 'Escape' && !e.defaultPrevented
+}
+
+/** The remember-folder choices as dropdown items, in the order given. */
+export function folderItems(choices: string[], projectRoot: string, rootLabel: string): Array<{ value: string; label: string }> {
+  return choices.map((f) => ({ value: f, label: folderLabel(f, projectRoot, rootLabel) }))
+}
+
 /** Closes a popover on Escape and on a press outside it. */
 function useDismiss(onClose: () => void): React.RefObject<HTMLDivElement | null> {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const key = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (dismissesOn(e)) onClose()
     }
     const down = (e: MouseEvent): void => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
@@ -139,7 +150,7 @@ export function ClusterPicker(p: ClusterPickerProps): React.JSX.Element {
             className="dense kube-sel kube-sel-fill"
             ariaLabel={t('kube.picker.rememberFolder')}
             disabled={!remember}
-            items={p.rememberChoices.map((f) => ({ value: f, label: folderLabel(f, p.projectRoot, t('kube.picker.root')) }))}
+            items={folderItems(p.rememberChoices, p.projectRoot, t('kube.picker.root'))}
             value={folder}
             onChange={setFolder}
             noCheck

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../../i18n/I18nProvider'
-import { DETAIL_KEY, DETAIL_STEP, clampDetailWidth, readDetailWidth } from '../../../lib/kubeDetailWidth'
+import { DETAIL_KEY, DETAIL_MIN, DETAIL_STEP, clampDetailWidth, detailBounds, readDetailWidth } from '../../../lib/kubeDetailWidth'
 
 const saved = (): number => {
   try {
@@ -39,9 +39,14 @@ export function DetailColumn({ bodyRef, children }: { bodyRef: React.RefObject<H
   // A window made narrower after the width was chosen would leave the table no room: show the width that fits, keep
   // the one chosen.
   const [shown, setShown] = useState(width)
+  const [max, setMax] = useState<number | undefined>(undefined)
   useEffect(() => {
     const body = bodyRef.current
-    const fit = (): void => setShown(clamp(width))
+    const fit = (): void => {
+      setShown(clamp(width))
+      const tree = body?.firstElementChild
+      if (body && tree) setMax(detailBounds(body.getBoundingClientRect().width, tree.getBoundingClientRect().width).max)
+    }
     fit()
     if (!body || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(fit)
@@ -51,6 +56,8 @@ export function DetailColumn({ bodyRef, children }: { bodyRef: React.RefObject<H
   }, [width])
 
   const onPointerDown = (e: React.PointerEvent): void => {
+    // Only the primary button drags; a right or middle press must not start one.
+    if (e.button !== 0) return
     e.preventDefault()
     if (dragCleanup.current) return
     const startId = e.pointerId
@@ -107,6 +114,8 @@ export function DetailColumn({ bodyRef, children }: { bodyRef: React.RefObject<H
         role="separator"
         aria-orientation="vertical"
         aria-label={t('kube.cluster.resizeDetail')}
+        aria-valuemin={DETAIL_MIN}
+        aria-valuemax={max}
         aria-valuenow={shown}
         tabIndex={0}
         onPointerDown={onPointerDown}
