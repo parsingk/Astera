@@ -160,6 +160,34 @@ describe('createLiveWrites replace', () => {
     expect(c.writes()).toEqual([])
   })
 
+  // K11: a change of only status and server-written metadata between the preview and the confirm runs onto the new version.
+  it('runs an edit onto a status-only change after the preview', async () => {
+    const c = fakeCluster([deployment()])
+    const w = writesOn(c)
+    const op = await edit(w, ref, (t) => t.replace('replicas: 2', 'replicas: 3'))
+    const p = okPreview(await w.preview(op, opts))
+    c.live.set(keyOf(ref), deployment({ resourceVersion: '9', generation: 4 }, { replicas: 2 }, { readyReplicas: 0, conditions: [{ type: 'Available', status: 'False' }] }))
+    const r = await w.run('r1', op, p.fingerprint)
+    expect(r.refused).toBeUndefined()
+    expect(r).toMatchObject({ ran: 1, ok: true })
+    const [write] = c.writes()
+    expect(write.args).toEqual(replaceArgs(ref, false))
+    expect(write.input).toMatch(/resourceVersion: "?9"?$/m)
+    expect(write.input).not.toMatch(/resourceVersion: "?7"?$/m)
+    expect(write.input).toContain('replicas: 3')
+  })
+
+  it('still refuses a run when something else changed after the preview', async () => {
+    const c = fakeCluster([deployment()])
+    const w = writesOn(c)
+    const op = await edit(w, ref, (t) => t.replace('replicas: 2', 'replicas: 3'))
+    const p = okPreview(await w.preview(op, opts))
+    c.live.set(keyOf(ref), deployment({ resourceVersion: '9', labels: { app: 'web', tier: 'new' } }))
+    const r = await w.run('r1', op, p.fingerprint)
+    expect(r).toMatchObject({ ran: 0, ok: false, refused: { reason: 'changed' } })
+    expect(c.writes()).toEqual([])
+  })
+
   it('runs replace with the previewed body on stdin and reads the outcome', async () => {
     const c = fakeCluster([deployment()])
     const w = writesOn(c)
