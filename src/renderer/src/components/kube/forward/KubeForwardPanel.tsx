@@ -84,7 +84,7 @@ export function KubeForwardPanel({
                     <span className="kube-forward-th">{t(`kube.forward.col.${c}`)}</span>
                   </th>
                 ))}
-                <th />
+                <th className="kube-forward-sticky" />
               </tr>
             </thead>
             <tbody>
@@ -92,11 +92,14 @@ export function KubeForwardPanel({
                 const { ref, local, remote, remoteName } = f.spec
                 const run = forwardRunMs(f, now)
                 const bad = f.state === 'disconnected' || f.state === 'failed'
+                const cluster = `${displayContextName(ref.context).short}${ref.namespace ? ` / ${ref.namespace}` : ''}`
                 const address = `${FORWARD_ADDRESS}:${local}`
                 return (
                   <tr key={f.id} className="kube-cluster-row">
                     <td>
-                      <span className="kube-forward-kind">{ref.kind}</span> {ref.name}
+                      <span className="kube-forward-name" title={`${ref.kind} ${ref.name}`}>
+                        <span className="kube-forward-kind">{ref.kind}</span> {ref.name}
+                      </span>
                     </td>
                     <td className="kube-forward-mono">
                       {f.state === 'connected' ? (
@@ -109,8 +112,9 @@ export function KubeForwardPanel({
                     </td>
                     <td className="kube-forward-mono">{remoteName ? `${remote} ${remoteName}` : String(remote)}</td>
                     <td>
-                      {displayContextName(ref.context).short}
-                      {ref.namespace ? ` / ${ref.namespace}` : ''}
+                      <span className="kube-forward-cluster" title={cluster}>
+                        {cluster}
+                      </span>
                     </td>
                     <td className={bad ? 'kube-forward-state bad' : 'kube-forward-state'}>
                       <span className={`kube-forward-dot ${f.state}`} aria-hidden="true" />{' '}
@@ -119,7 +123,7 @@ export function KubeForwardPanel({
                       </span>
                     </td>
                     <td className="kube-forward-mono">{run === null ? '' : runText(run)}</td>
-                    <td className="kube-forward-actions">
+                    <td className="kube-forward-actions kube-forward-sticky">
                       {slot(f.state === 'connected', 'kube.forward.openBrowser', <Globe size={13} />, (ev) => onOpen(f, ev))}
                       {slot(isLive(f), 'kube.forward.stop', <Square size={13} />, () => onStop(f.id))}
                       {slot(!isLive(f), 'kube.forward.reconnect', <RotateCw size={13} />, () => onReconnect(f.id))}

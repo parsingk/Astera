@@ -60,6 +60,14 @@ describe('KubeForwardPanel', () => {
     const full = `kube.forward.state.failed{&quot;reason&quot;:&quot;${reason}&quot;}`
     expect(html).toContain(`<span class="kube-forward-reason" title="${full}">${full}</span>`)
   })
+  it('keeps the actions in reach and long names to one line', () => {
+    const name = 'a-very-long-deployment-name-that-would-push-the-actions-off-screen-0'
+    const html = render([fwd({ spec: { ...fwd().spec, ref: { ...fwd().spec.ref, name } } })])
+    expect(html).toContain('<th class="kube-forward-sticky"></th>')
+    expect(html).toContain('<td class="kube-forward-actions kube-forward-sticky">')
+    expect(html).toContain(`<span class="kube-forward-name" title="Pod ${name}">`)
+    expect(html).toContain('<span class="kube-forward-cluster" title="kind-dev / shop">kind-dev / shop</span>')
+  })
   it('draws a disconnected row with its reason and actions', () => {
     const html = render([fwd({ state: 'disconnected', reason: LOST_POD, endedAt: Date.now() })])
     expect(html).toContain('kube.forward.state.disconnected{&quot;reason&quot;:&quot;kube.forward.lostPod&quot;}')
