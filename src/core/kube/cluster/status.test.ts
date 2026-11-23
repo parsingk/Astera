@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ATTENTION_KINDS, ageText, needsAttention, podStatus } from './status'
+import { ATTENTION_KINDS, ageText, needsAttention, podStatus, runText } from './status'
 import { KIND_GROUPS } from './kinds'
 
 const pod = (status: object, meta: object = {}) => ({ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p', ...meta }, status })
@@ -91,6 +91,11 @@ describe('cluster status', () => {
     expect(ageText(ago(3 * 86400 + 4 * 3600), now)).toBe('3d4h')
     expect(ageText(ago(12 * 86400), now)).toBe('12d')
     expect(ageText(undefined, now)).toBe('')
+  })
+  it('formats a run time as kubectl does', () => {
+    expect(runText(3000)).toBe('3s')
+    expect(runText(150000)).toBe('2m30s')
+    expect(runText(3 * 3600000)).toBe('3h')
   })
   // The counts read objects only for ATTENTION_KINDS (final review I1): a rule for another kind would never be asked.
   it('has a rule only for the kinds whose objects the counts read', () => {

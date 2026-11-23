@@ -51,6 +51,8 @@ export function BottomPanel({
   kubeSegment,
   onKubeSegment,
   kubeCluster,
+  kubeForwardCount,
+  kubeForward,
   logTabs,
   onCloseLogTab,
   logHost,
@@ -99,12 +101,15 @@ export function BottomPanel({
   onKubeClear?: () => void
   /** Whether to draw the Kubernetes tab: kubectl is found, or the log has entries to show (spec 4.1, 4.12). */
   kubeAvailable: boolean
-  /** The Kubernetes tab's segment: the cluster view or the operation log. */
+  /** The Kubernetes tab's segment: the cluster view, the port forwards or the operation log. */
   kubeSegment: KubeSegment
   onKubeSegment: (s: KubeSegment) => void
   /** The Cluster segment's body, given the segmented switch to put first in its toolbar row (spec 4.2). App owns the
    *  view's state, so it builds this (or the kubectl-missing notice). */
   kubeCluster: (switcher: React.ReactNode) => React.ReactNode
+  /** The Port forwarding segment's count and body, built by App, which owns the forwards. */
+  kubeForwardCount: number
+  kubeForward: (switcher: React.ReactNode) => React.ReactNode
   /** Pods' logs tabs, after the Kubernetes tab (spec 4.8). App keeps each one's view mounted in an element of its own
    *  (`logHost`) for the tab's life, so collapsing this panel does not stop its kubectl; the tab's body holds that
    *  element while the panel is open. */
@@ -365,6 +370,8 @@ export function BottomPanel({
               onSegment={onKubeSegment}
               logCount={kubeLog.length}
               cluster={kubeCluster}
+              forwardCount={kubeForwardCount}
+              forward={kubeForward}
               log={
                 <KubeLogPanel
                   log={kubeLog}

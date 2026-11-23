@@ -55,7 +55,8 @@ const render = ({
   kubeSegment = 'cluster' as 'cluster' | 'log',
   logTabs = [] as KubeLogTab[],
   shellTabs = [] as KubeShellTab[],
-  terminals = [] as TerminalBuffer[]
+  terminals = [] as TerminalBuffer[],
+  kubeForwardCount = 0
 } = {}): string =>
   renderToStaticMarkup(
     React.createElement(BottomPanel, {
@@ -85,6 +86,8 @@ const render = ({
       kubeSegment,
       onKubeSegment: noop,
       kubeCluster: (switcher: React.ReactNode) => React.createElement('div', { className: 'cluster-marker' }, switcher),
+      kubeForwardCount,
+      kubeForward: (switcher: React.ReactNode) => React.createElement('div', { className: 'forward-marker' }, switcher),
       logTabs,
       onCloseLogTab: noop,
       // A static render attaches no refs: the host only has to be there.
@@ -130,9 +133,16 @@ describe('BottomPanel Kubernetes tab', () => {
     expect(html).not.toContain('role="tablist"><button')
     expect(html).toContain('role="radiogroup" aria-label="kube.log.tab"')
     const radios = [...html.matchAll(/<button[^>]*role="radio"[^>]*>/g)].map((m) => m[0])
-    expect(radios).toHaveLength(4)
-    expect(radios.filter((r) => r.includes('aria-checked="true"') && r.includes('tabindex="0"') && r.includes('data-segment="log"'))).toHaveLength(2)
-    expect(radios.filter((r) => r.includes('aria-checked="false"') && r.includes('tabindex="-1"') && r.includes('data-segment="cluster"'))).toHaveLength(2)
+    expect(radios).toHaveLength(9)
+    expect(radios.filter((r) => r.includes('aria-checked="true"') && r.includes('tabindex="0"') && r.includes('data-segment="log"'))).toHaveLength(3)
+    expect(radios.filter((r) => r.includes('aria-checked="false"') && r.includes('tabindex="-1"') && r.includes('data-segment="cluster"'))).toHaveLength(3)
+    expect(radios.filter((r) => r.includes('aria-checked="false"') && r.includes('tabindex="-1"') && r.includes('data-segment="forward"'))).toHaveLength(3)
+  })
+
+  it('hands the forward segment its body and count', () => {
+    const html = render({ kubeSegment: 'forward' as 'cluster', kubeForwardCount: 2 })
+    expect(html).toContain('forward-marker')
+    expect(html).toMatch(/data-segment="forward"[^>]*>.*?2/)
   })
 
   it('shows the operation log in its segment', () => {

@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useId, useState } from 'react'
-import { Ellipsis, ExternalLink, RotateCcw, ScrollText, SquareTerminal } from 'lucide-react'
+import { ArrowLeftRight, Ellipsis, ExternalLink, RotateCcw, ScrollText, SquareTerminal } from 'lucide-react'
 import type { MessageKey } from '../../../../../core/i18n'
 import type { K8sObject } from '../../../../../core/kube/objects'
+import { canForward } from '../../../../../core/kube/cluster/forward'
 import { podSelectorOf, summaryOf } from '../../../../../core/kube/cluster/summary'
 import type { Column, ObjectRef, Row } from '../../../../../core/kube/cluster/types'
 import type { DetailTab } from '../../../../../core/kube/cluster/viewState'
@@ -163,6 +164,7 @@ export function ClusterDetail({
   onOpenInEditor,
   onOpenLogs,
   onOpenShell,
+  onForward,
   onWrite,
   onMenu
 }: {
@@ -176,6 +178,9 @@ export function ClusterDetail({
   /** Opens a shell in a running Pod's container; without it, or when the Pod has none running, the header button and the
    *  menu item are not drawn. */
   onOpenShell?: (ref: ObjectRef, container: string) => void
+  /** Starts a port forward for a running Pod, a Service or a Deployment; without it, or for another object, the header
+   *  button and the menu item are not drawn. */
+  onForward?: (ref: ObjectRef, object: K8sObject) => void
   /** The menu's edit, delete, restart and scale items; without it the menu has none. */
   onWrite?: (ask: WriteAsk) => void
   /** Where the more button opens the menu; without it the detail opens the menu itself. */
@@ -215,6 +220,8 @@ export function ClusterDetail({
       onCopyName: () => void window.api.clipboard.writeText(selectedRef.name),
       onLogs: onOpenLogs ? (previous) => onOpenLogs(selectedRef, selected, previous) : undefined,
       shell,
+      onForward: onForward ? () => onForward(selectedRef, selected) : undefined,
+      object: selected,
       ...writeMenuHandlers(onWrite, selectedRef, selected)
     },
     t
@@ -265,6 +272,17 @@ export function ClusterDetail({
             }}
           >
             <SquareTerminal size={14} />
+          </button>
+        )}
+        {onForward && canForward(kind, selected) && (
+          <button
+            type="button"
+            className="kube-btn"
+            title={t('kube.forward.open')}
+            aria-label={t('kube.forward.open')}
+            onClick={() => onForward(selectedRef, selected)}
+          >
+            <ArrowLeftRight size={14} />
           </button>
         )}
         <button

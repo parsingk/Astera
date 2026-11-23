@@ -85,12 +85,9 @@ export function needsAttention(kind: string, o: K8sObject): boolean {
   }
 }
 
-/** kubectl's HumanDuration, so a row reads the same here as in a terminal. */
-export function ageText(fromIso: string | undefined, nowMs: number): string {
-  if (!fromIso) return ''
-  const from = Date.parse(fromIso)
-  if (Number.isNaN(from)) return ''
-  const s = Math.max(0, Math.floor((nowMs - from) / 1000))
+/** kubectl's HumanDuration of a millisecond count, so a time reads the same here as in a terminal. */
+export function runText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
   if (s < 120) return `${s}s`
   const m = Math.floor(s / 60)
   if (m < 10) return s % 60 === 0 ? `${m}m` : `${m}m${s % 60}s`
@@ -104,4 +101,12 @@ export function ageText(fromIso: string | undefined, nowMs: number): string {
   const y = Math.floor(d / 365)
   if (y < 8) return `${y}y${d % 365}d`
   return `${y}y`
+}
+
+/** How old an object is, as kubectl prints it. */
+export function ageText(fromIso: string | undefined, nowMs: number): string {
+  if (!fromIso) return ''
+  const from = Date.parse(fromIso)
+  if (Number.isNaN(from)) return ''
+  return runText(nowMs - from)
 }

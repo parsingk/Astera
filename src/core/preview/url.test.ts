@@ -66,10 +66,17 @@ describe('previewTargetOf', () => {
 
 describe('linkDestination', () => {
   it('loopback → preview, others → external; the modifier inverts', () => {
-    expect(linkDestination('http://localhost:5173', { modifier: false })).toBe('preview')
-    expect(linkDestination('http://localhost:5173', { modifier: true })).toBe('external')
-    expect(linkDestination('https://github.com', { modifier: false })).toBe('external')
-    expect(linkDestination('https://github.com', { modifier: true })).toBe('preview')
+    expect(linkDestination('http://localhost:5173', { modifier: false, hasProject: true })).toBe('preview')
+    expect(linkDestination('http://localhost:5173', { modifier: true, hasProject: true })).toBe('external')
+    expect(linkDestination('https://github.com', { modifier: false, hasProject: true })).toBe('external')
+    expect(linkDestination('https://github.com', { modifier: true, hasProject: true })).toBe('preview')
+  })
+})
+
+describe('linkDestination without a project', () => {
+  it('opens a loopback link outside without a project', () => {
+    expect(linkDestination('http://127.0.0.1:18090/', { modifier: false, hasProject: false })).toBe('external')
+    expect(linkDestination('http://127.0.0.1:18090/', { modifier: true, hasProject: false })).toBe('external')
   })
 })
 

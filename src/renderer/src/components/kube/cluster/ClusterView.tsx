@@ -72,13 +72,14 @@ function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns
 }
 
 /** The Kubernetes tab's cluster view: toolbar, then the kind tree, the table and the detail column (spec 4.2). The
- *  Cluster | Operation log switch is drawn by the bottom panel, which hands it in as `toolbarStart`. */
+ *  Cluster | Port forwarding | Operation log switch is drawn by the bottom panel, which hands it in as `toolbarStart`. */
 export function ClusterView({
   model,
   detail,
   onOpenInEditor,
   onOpenLogs,
   onOpenShell,
+  onForward,
   onWrite,
   toolbarStart
 }: {
@@ -90,6 +91,8 @@ export function ClusterView({
   onOpenLogs?: (ref: ObjectRef, pod: K8sObject, previous: boolean) => void
   /** A shell in a running Pod's container; without it the row menu has no shell item. */
   onOpenShell?: (ref: ObjectRef, container: string) => void
+  /** A port forward for a running Pod, a Service or a Deployment; without it the row menu has no such item. */
+  onForward?: (ref: ObjectRef, object: K8sObject) => void
   /** The row menu's edit, delete, restart and scale items act on the right-clicked row's object; without it the menu has none. */
   onWrite?: (ask: WriteAsk) => void
   /** The toolbar row's first item, before the context pill: the bottom panel's segmented switch (spec 4.2). */
@@ -123,7 +126,7 @@ export function ClusterView({
   // Paused says why in a few words; the tooltip has it in full (spec 4.2, "paused" with the reason).
   const liveTitle = why !== null && why !== 'ended' ? why.forbidden : liveText
   const liveTone = failed ? 'bad' : live === 'live' ? 'ok' : 'wait'
-  // Logs open on the Pod's default container, which only the object says.
+  // Logs open on the Pod's default container, and a port forward is judged on the object: only the object says.
   const rowPod = rowMenu !== null ? rowObjectOf(model.selected, model.selectedRef, rowMenu.ref) : null
 
   return (
@@ -250,6 +253,8 @@ export function ClusterView({
               onCopyName: () => void window.api.clipboard.writeText(rowMenu.ref.name),
               onLogs: onOpenLogs && rowPod !== null ? (previous) => onOpenLogs(rowMenu.ref, rowPod, previous) : undefined,
               shell: shellChoice(onOpenShell, rowMenu.ref, rowPod),
+              onForward: onForward && rowPod !== null ? () => onForward(rowMenu.ref, rowPod) : undefined,
+              object: rowPod,
               ...writeMenuHandlers(onWrite, rowMenu.ref, rowPod)
             },
             t

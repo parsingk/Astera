@@ -56,6 +56,19 @@ export type ShellMessage = { shellId: string } & (
   | { kind: 'exit'; code: number }
   | { kind: 'error'; message: string }
 )
+/** A port an object offers for forwarding; `name` is the port's name where it has one. */
+export interface ForwardPort { port: number; name?: string }
+/** What main needs to start one port forward. */
+export interface ForwardSpec { ref: ObjectRef; local: number; remote: number; remoteName?: string }
+/** Why a lost connection ended: the Pod was replaced, or nothing listens on the remote port. */
+export type LostCause = 'pod-gone' | 'refused'
+/** What a forward sends the renderer: kubectl is listening, then how it ended (message: kubectl's last stderr line
+ *  after listening, else its first, redacted, or null when it printed none; cause: set for a lost connection whose klog
+ *  line tells why). */
+export type ForwardMessage = { forwardId: string } & (
+  | { kind: 'listening'; local: number }
+  | { kind: 'exit'; message: string | null; cause?: LostCause }
+)
 /** The one plain manifest in the project that declares an object: `same` when it targets the object's own context and
  *  namespace, `other` (with that target) when it targets elsewhere. `file` is an absolute path. */
 export type ManifestMatch =

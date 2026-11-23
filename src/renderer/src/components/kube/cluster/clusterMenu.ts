@@ -1,6 +1,7 @@
 import type { MessageKey, MessageParams } from '../../../../../core/i18n'
 import { canRestart, canScale } from '../../../../../core/kube/cluster/write'
 import type { ContainerChoice } from '../../../../../core/kube/cluster/logs'
+import { canForward } from '../../../../../core/kube/cluster/forward'
 import { canShell, shellContainers } from '../../../../../core/kube/cluster/shell'
 import type { ObjectRef } from '../../../../../core/kube/cluster/types'
 import type { K8sObject } from '../../../../../core/kube/objects'
@@ -52,8 +53,9 @@ export function shellItems(s: ShellChoice, t: Translate): MenuItem[] {
 }
 
 /** What the row menu and the detail's more button offer, in board D's groups: open in editor and describe, a Pod's logs,
- *  then the shell, copy name, then the writes. The port forward item of a later part is left out rather than disabled.
- *  Open in editor, logs, the shell and the writes are left out until something handles them. `onLogs(previous)`:
+ *  then the shell and the port forward, copy name, then the writes (a Service or a Deployment has the port forward as a
+ *  group of its own). Open in editor, logs, the shell, the port forward and the writes are left out until something handles
+ *  them; the port forward also needs `object` to pass `canForward`. `onLogs(previous)`:
  *  previous true for the previous logs item. Restart and scale only for the kinds that have them. */
 export function clusterMenuItems(
   o: {
@@ -67,6 +69,8 @@ export function clusterMenuItems(
     onRestart?(): void
     onScale?(): void
     shell?: ShellChoice
+    onForward?(): void
+    object?: K8sObject | null
   },
   t: Translate
 ): MenuItem[] {
@@ -89,7 +93,12 @@ export function clusterMenuItems(
         : { label: t('kube.shell.open'), submenu: shellItems(shell, t) }
     )
   }
+  const onForward = o.onForward
+  const forward: MenuItem | null =
+    onForward && canForward(o.kind, o.object ?? null) ? { label: t('kube.forward.open'), onSelect: onForward } : null
+  if (forward && o.kind === 'Pod') podGroup.push(forward)
   if (podGroup.length > 0) items.push(...podGroup, 'separator')
+  if (forward && o.kind !== 'Pod') items.push(forward, 'separator')
   items.push({ label: t('kube.cluster.copyName'), onSelect: o.onCopyName })
   const writes: MenuItem[] = []
   if (o.onEdit) writes.push({ label: t('kube.cluster.edit'), onSelect: o.onEdit })

@@ -137,3 +137,47 @@ describe('the shell item', () => {
     expect(items.map(label)).toEqual(['kube.cluster.describe', '-', 'kube.cluster.copyName'])
   })
 })
+
+describe('the port forward item', () => {
+  const t = (k: string): string => k
+  const obj = (kind: string, extra: Record<string, unknown> = {}): K8sObject =>
+    ({ apiVersion: 'v1', kind, metadata: { name: 'x', namespace: 'dev' }, ...extra }) as K8sObject
+  const running = obj('Pod', { status: { phase: 'Running' } })
+  const menu = (kind: string, object: K8sObject | null, extra: Record<string, unknown> = {}): string[] =>
+    clusterMenuItems({ kind, onDescribe: noop, onCopyName: noop, onForward: noop, object, ...extra }, t).map(label)
+
+  it('offers port forwarding for a running Pod, a Service and a Deployment', () => {
+    expect(menu('Pod', running, { onLogs: noop })).toEqual([
+      'kube.cluster.describe', '-', 'kube.logs.open', 'kube.logs.openPrevious', 'kube.forward.open', '-', 'kube.cluster.copyName'
+    ])
+    expect(menu('Pod', running)).toEqual(['kube.cluster.describe', '-', 'kube.forward.open', '-', 'kube.cluster.copyName'])
+    expect(menu('Service', obj('Service'))).toEqual(['kube.cluster.describe', '-', 'kube.forward.open', '-', 'kube.cluster.copyName'])
+    expect(menu('Deployment', obj('Deployment'))).toEqual(['kube.cluster.describe', '-', 'kube.forward.open', '-', 'kube.cluster.copyName'])
+  })
+
+  it('puts it after the shell item of a Pod and runs onForward when picked', () => {
+    const asked: string[] = []
+    const shell = shellChoice(noop, { context: 'c', namespace: 'dev', resource: 'pods', kind: 'Pod', name: 'x' }, {
+      ...running,
+      spec: { containers: [{ name: 'app' }] },
+      status: { phase: 'Running', containerStatuses: [{ name: 'app', state: { running: {} } }] }
+    } as K8sObject)
+    const items = clusterMenuItems(
+      { kind: 'Pod', onDescribe: noop, onCopyName: noop, onLogs: noop, shell, object: running, onForward: () => void asked.push('f') },
+      t
+    )
+    expect(items.map(label)).toEqual([
+      'kube.cluster.describe', '-', 'kube.logs.open', 'kube.logs.openPrevious', 'kube.shell.open', 'kube.forward.open', '-', 'kube.cluster.copyName'
+    ])
+    ;(items.find((i) => label(i) === 'kube.forward.open') as { onSelect(): void }).onSelect()
+    expect(asked).toEqual(['f'])
+  })
+
+  it('leaves it out for a Pending Pod and a ConfigMap, without a handler, and without the object', () => {
+    const base = ['kube.cluster.describe', '-', 'kube.cluster.copyName']
+    expect(menu('Pod', obj('Pod', { status: { phase: 'Pending' } }))).toEqual(base)
+    expect(menu('ConfigMap', obj('ConfigMap'))).toEqual(base)
+    expect(menu('Pod', null)).toEqual(base)
+    expect(menu('Service', obj('Service'), { onForward: undefined })).toEqual(base)
+  })
+})

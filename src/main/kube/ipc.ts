@@ -8,8 +8,10 @@ import type { createClusterReads } from './cluster'
 import type { createWatchRegistry } from './clusterWatch'
 import type { createLogRegistry } from './logStreams'
 import type { createShellRegistry } from './shells'
+import type { createForwardRegistry } from './forwards'
+import { validPort } from '../../core/kube/cluster/forward'
 import type { createLiveWrites } from './liveWrites'
-import type { KindDef, LiveOp, LogSpec, ObjectRef, ShellSpec, WatchSpec } from '../../core/kube/cluster/types'
+import type { ForwardSpec, KindDef, LiveOp, LogSpec, ObjectRef, ShellSpec, WatchSpec } from '../../core/kube/cluster/types'
 
 export interface KubeIpcDeps {
   service: KubeService
@@ -23,6 +25,9 @@ export interface KubeIpcDeps {
   watches: ReturnType<typeof createWatchRegistry>
   logs: ReturnType<typeof createLogRegistry>
   shells: ReturnType<typeof createShellRegistry>
+  forwards: ReturnType<typeof createForwardRegistry>
+  /** The local port a forward would use for `wanted`: itself when free, else a free one. */
+  localPort(wanted: number): Promise<number>
   writes: ReturnType<typeof createLiveWrites>
   /** The folder the save dialog opens in. */
   downloadsDir(): string
@@ -158,6 +163,21 @@ function shellSpec(v: unknown): ShellSpec {
     if (value !== null && value.includes('"')) throw new Error(`kube: shell ${what} must not contain a double quote`)
   }
   return { ref, container }
+}
+
+const FORWARD_RESOURCES: Record<string, string> = { Pod: 'pods', Service: 'services', Deployment: 'deployments.apps' }
+
+/** A forward targets one namespaced Pod, Service or Deployment; the ports are numbers kubectl gets as `local:remote`. */
+function forwardSpec(v: unknown): ForwardSpec {
+  const r = v as { ref?: unknown; local?: unknown; remote?: unknown; remoteName?: unknown } | null | undefined
+  if (!r || typeof r !== 'object') throw new Error('kube: forward spec must be { ref, local, remote, remoteName? }')
+  const ref = objectRef(r.ref)
+  if (FORWARD_RESOURCES[ref.kind] !== ref.resource || ref.namespace === null) {
+    throw new Error('kube: ref must be a namespaced Pod, Service or Deployment')
+  }
+  if (!validPort(r.local) || !validPort(r.remote)) throw new Error('kube: forward ports must be integers from 1 to 65535')
+  if (r.remoteName !== undefined && typeof r.remoteName !== 'string') throw new Error('kube: forward remoteName must be a string')
+  return { ref, local: r.local, remote: r.remote, ...(r.remoteName !== undefined ? { remoteName: r.remoteName } : {}) }
 }
 
 function termSize(v: unknown, what: string): number {
@@ -330,7 +350,7 @@ export function registerKubeIpc(ipcMain: { handle: Handle; on: On }, deps: KubeI
 
   // Read-only views of a cluster. Secret values leave only through `reveal` (an explicit click) and through `editBase` and
   // `kube.write.preview` with `showValues`, which the renderer's "show values" switch gates (D6).
-  const { cluster, watches, logs, shells, writes } = deps
+  const { cluster, watches, logs, shells, forwards, writes } = deps
   ipcMain.handle('kube.cluster.namespaces', async (_e, context) => cluster.namespaces(arg(context, 'context')))
   ipcMain.handle('kube.cluster.crds', async (_e, context) => cluster.crds(arg(context, 'context')))
   ipcMain.handle('kube.cluster.counts', async (_e, context, namespace, kinds) =>
@@ -401,4 +421,11 @@ export function registerKubeIpc(ipcMain: { handle: Handle; on: On }, deps: KubeI
     }
   })
   ipcMain.handle('kube.shell.stop', async (_e, id) => shells.stop(str(id, 'shellId')))
+
+  ipcMain.handle('kube.forward.start', async (_e, id, spec) => forwards.start(str(id, 'forwardId'), forwardSpec(spec)))
+  ipcMain.handle('kube.forward.stop', async (_e, id) => forwards.stop(str(id, 'forwardId')))
+  ipcMain.handle('kube.forward.localPort', async (_e, port) => {
+    if (!validPort(port)) throw new Error('kube: port must be an integer from 1 to 65535')
+    return deps.localPort(port)
+  })
 }

@@ -2,11 +2,10 @@ import { useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { arrowStep } from '../../lib/arrowStep'
 
-export type KubeSegment = 'cluster' | 'log'
-const SEGMENTS: KubeSegment[] = ['cluster', 'log']
+export type KubeSegment = 'cluster' | 'forward' | 'log'
 
-/** The Kubernetes tab's body (spec 4.1, D4): the Cluster | Operation log switch and the segment it picks. Port
- *  forwarding joins the switch in a later part. The switch is the first item of one row (spec 4.2): the Cluster
+/** The Kubernetes tab's body (spec 4.1, D4): the Cluster | Port forwarding | Operation log switch and the segment it picks;
+ *  Port forwarding is drawn only when a body is given for it. The switch is the first item of one row (spec 4.2): the Cluster
  *  segment's body places it at the head of its toolbar, and the log gets a row of its own with the switch in the same
  *  place, so it does not move on a switch. Both segments stay mounted under display:none, as the bottom panel's tabs
  *  do, so the log keeps what is open and the table its scroll across a switch. The switch is a radio group, not a
@@ -15,19 +14,26 @@ export function KubeSegments({
   segment,
   onSegment,
   logCount,
+  forwardCount = 0,
   cluster,
+  forward,
   log
 }: {
   segment: KubeSegment
   onSegment(s: KubeSegment): void
   /** Entries in the operation log; shown beside its label only when non-zero. */
   logCount: number
+  /** Port forwards listed; shown beside their label only when non-zero. */
+  forwardCount?: number
   /** The Cluster segment's body, given the switch to put first in its toolbar row. */
   cluster: (switcher: React.ReactNode) => React.ReactNode
+  /** The Port forwarding segment's body, given the switch; absent while the part is not built into the host. */
+  forward?: (switcher: React.ReactNode) => React.ReactNode
   log: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
-  const bodies = { cluster: useRef<HTMLDivElement>(null), log: useRef<HTMLDivElement>(null) }
+  const shown: KubeSegment[] = forward ? ['cluster', 'forward', 'log'] : ['cluster', 'log']
+  const bodies = { cluster: useRef<HTMLDivElement>(null), forward: useRef<HTMLDivElement>(null), log: useRef<HTMLDivElement>(null) }
   /** The switch had the focus when the segment changed: each segment's body draws its own copy, and the one used is about
    *  to hide, so the focus moves to the shown copy. */
   const refocus = useRef(false)
@@ -56,7 +62,7 @@ export function KubeSegments({
       className={segment === s ? 'kube-segment on' : 'kube-segment'}
       onClick={(e) => pick(s, e.currentTarget)}
       onKeyDown={(e) => {
-        const to = arrowStep(SEGMENTS, segment, e.key, true)
+        const to = arrowStep(shown, segment, e.key, true)
         if (to === null) return
         e.preventDefault()
         pick(to, e.currentTarget)
@@ -69,6 +75,7 @@ export function KubeSegments({
   const switcher = (
     <div className="kube-segment-switch" role="radiogroup" aria-label={t('kube.log.tab')}>
       {radio('cluster', t('kube.cluster.segment.cluster'), 0)}
+      {forward && radio('forward', t('kube.cluster.segment.forward'), forwardCount)}
       {radio('log', t('kube.cluster.segment.log'), logCount)}
     </div>
   )
@@ -77,6 +84,11 @@ export function KubeSegments({
       <div ref={bodies.cluster} className="kube-segment-body" style={{ display: segment === 'cluster' ? 'flex' : 'none' }}>
         {cluster(switcher)}
       </div>
+      {forward && (
+        <div ref={bodies.forward} className="kube-segment-body kube-segment-forward" style={{ display: segment === 'forward' ? 'flex' : 'none' }}>
+          {forward(switcher)}
+        </div>
+      )}
       <div ref={bodies.log} className="kube-segment-body kube-segment-log" style={{ display: segment === 'log' ? 'flex' : 'none' }}>
         <div className="kube-segment-bar">{switcher}</div>
         {log}

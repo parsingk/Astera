@@ -48,10 +48,12 @@ function setup(denied: string[] = []) {
   const logs = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
   const writes = { editBase: vi.fn(async () => ({ ok: true })), dependents: vi.fn(async () => ({ ok: true })), preview: vi.fn(async () => ({ ok: true })), run: vi.fn(async () => ({})), cancel: vi.fn() }
   const shells = { start: vi.fn(), write: vi.fn(), resize: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const forwards = { start: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), size: vi.fn(() => 0) }
+  const localPort = vi.fn(async (p: number) => p)
   const saveDialog = vi.fn(async (_defaultPath: string): Promise<string | null> => '/out/p.log')
   const writeFile = vi.fn(async (_p: string, _text: string) => {})
-  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn), on: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, shells, writes, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
-  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, shells, writes, saveDialog, writeFile }
+  registerKubeIpc({ handle: (c, fn) => void handlers.set(c, fn), on: (c, fn) => void handlers.set(c, fn) }, { service, assertAllowedPath, settings, run, binPath, cluster, watches, logs, shells, forwards, localPort, writes, saveDialog, writeFile, downloadsDir: () => '/dl' } as never)
+  return { call: (c: string, ...a: unknown[]) => handlers.get(c)!(null, ...a), settings, service, run, binPath, cluster, watches, logs, shells, forwards, localPort, writes, saveDialog, writeFile }
 }
 
 describe('kubeconfig files settings IPC', () => {
@@ -508,5 +510,50 @@ describe('container shells over IPC', () => {
     expect(() => t.call('kube.shell.resize', 's', 80, 24)).not.toThrow()
     expect(t.shells.write).toHaveBeenCalledTimes(1)
     expect(t.shells.resize).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('port forwards over IPC', () => {
+  const podRef = { context: 'c', namespace: 'ns', resource: 'pods', kind: 'Pod', name: 'p' }
+  const spec = { ref: podRef, local: 8080, remote: 80 }
+
+  it('validates a forward spec', async () => {
+    const t = setup()
+    const bad: unknown[] = [
+      { ...spec, ref: { ...podRef, kind: 'ConfigMap', resource: 'configmaps' } },
+      { ...spec, ref: { ...podRef, namespace: null } },
+      { ...spec, ref: { ...podRef, name: '-x' } },
+      { ...spec, local: 0 },
+      { ...spec, remote: 65536 },
+      { ...spec, remote: 1.5 },
+      { ...spec, remoteName: 5 }
+    ]
+    for (const b of bad) await expect(t.call('kube.forward.start', 'f', b)).rejects.toThrow()
+    await expect(t.call('kube.forward.start', '', spec)).rejects.toThrow()
+    expect(t.forwards.start).not.toHaveBeenCalled()
+    await t.call('kube.forward.start', 'f1', spec)
+    expect(t.forwards.start).toHaveBeenCalledWith('f1', spec)
+    const svc = { ref: { ...podRef, kind: 'Service', resource: 'services' }, local: 1, remote: 2, remoteName: 'http' }
+    await t.call('kube.forward.start', 'f2', svc)
+    expect(t.forwards.start).toHaveBeenLastCalledWith('f2', svc)
+  })
+
+  it('accepts a Deployment ref as the cluster view carries it, and refuses the bare plural', async () => {
+    const t = setup()
+    const dep = { ...podRef, kind: 'Deployment', resource: 'deployments.apps', name: 'web' }
+    await t.call('kube.forward.start', 'f3', { ref: dep, local: 8080, remote: 80 })
+    expect(t.forwards.start).toHaveBeenCalledWith('f3', { ref: dep, local: 8080, remote: 80 })
+    await expect(t.call('kube.forward.start', 'f4', { ref: { ...dep, resource: 'deployments' }, local: 8080, remote: 80 })).rejects.toThrow()
+  })
+
+  it('routes stop and the local port ask', async () => {
+    const t = setup()
+    await t.call('kube.forward.stop', 'f1')
+    expect(t.forwards.stop).toHaveBeenCalledWith('f1')
+    await expect(t.call('kube.forward.localPort', 0)).rejects.toThrow()
+    await expect(t.call('kube.forward.localPort', '80')).rejects.toThrow()
+    expect(t.localPort).not.toHaveBeenCalled()
+    expect(await t.call('kube.forward.localPort', 8080)).toBe(8080)
+    expect(t.localPort).toHaveBeenCalledWith(8080)
   })
 })

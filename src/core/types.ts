@@ -13,7 +13,7 @@ import type {
   Remembered
 } from './kube/types'
 import type { K8sObject } from './kube/objects'
-import type { CountInfo, Dependents, EditBase, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ManifestMatch, ObjectRef, Read, SecretValue, ShellMessage, ShellSpec, WatchMessage, WatchSpec } from './kube/cluster/types'
+import type { CountInfo, Dependents, EditBase, ForwardMessage, ForwardSpec, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ManifestMatch, ObjectRef, Read, SecretValue, ShellMessage, ShellSpec, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
@@ -941,6 +941,7 @@ export interface CoreEvents {
   'kube:watch': WatchMessage
   'kube:log': LogMessage
   'kube:shell': ShellMessage
+  'kube:forward': ForwardMessage
   'session:data': { sessionId: string; data: string }
   /** A remote session tab's checkpoint (Phase 9b, main/remote/remoteStreams.ts): the view resets, writes `state`, then
    *  `pending`. `sessionId` is the tab's key, `<runtimeId>:<sessionId>`. */
@@ -1489,6 +1490,13 @@ export interface CoreApi {
       write(shellId: string, data: string): void
       resize(shellId: string, cols: number, rows: number): void
       stop(shellId: string): Promise<void>
+    }
+    /** A kubectl port-forward: `'kube:forward'` carries the listening port or the exit, tagged with the forwardId. */
+    forward: {
+      start(forwardId: string, spec: ForwardSpec): Promise<void>
+      stop(forwardId: string): Promise<void>
+      /** The local port a forward would listen on for `port`: itself when free, else a free one. */
+      localPort(port: number): Promise<number>
     }
   }
   github: {

@@ -59,4 +59,12 @@ describe('a renderer that dies', () => {
     expect(ipc).toContain('onNewDocument.push(() => kubeShells.stopAll())')
     expect(ipc).toContain("app.once('will-quit', () => kubeShells.stopAll())")
   })
+
+  it('stops every Kubernetes forward', () => {
+    const at = ipc.indexOf("win.webContents.on('render-process-gone'")
+    const gone = ipc.slice(at)
+    expect(gone.slice(0, gone.indexOf(String.fromCharCode(10) + '  })'))).toContain('kubeForwards.stopAll()')
+    expect(ipc).toContain('onNewDocument.push(() => kubeForwards.stopAll())')
+    expect(ipc).toContain("app.once('will-quit', () => kubeForwards.stopAll())")
+  })
 })
