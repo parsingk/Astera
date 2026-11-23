@@ -3807,3 +3807,20 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-forward-form .kube-field { margin-bottom: 0; }
 .kube-forward-form .kube-field select { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: var(--radius); }
 .kube-forward-bad { color: var(--danger); font-size: 11.5px; }
+.kube-segment-forward { flex-direction: column; }
+.kube-segment-spacer { flex: 1; }
+.kube-segment-bar .icon-btn:disabled { opacity: .4; cursor: default; }
+.kube-forward-table { flex: 1; min-height: 0; }
+.kube-forward-th { display: inline-block; padding: 0 8px; color: var(--text-dim); font-size: 11.5px; line-height: 26px; }
+.kube-forward-kind { display: inline-block; padding: 0 6px; margin-right: 4px; border-radius: var(--radius); background: var(--elevated); color: var(--text-dim); font-size: 11px; }
+.kube-forward-mono { font-family: var(--mono); }
+.kube-forward-link { background: transparent; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.kube-forward-link:hover { text-decoration: underline; }
+.kube-forward-link:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.kube-forward-state.bad { color: var(--danger); }
+.kube-forward-dot { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--text-faint); }
+.kube-forward-dot.connected { background: var(--run); }
+.kube-forward-dot.connecting { background: var(--warn-ink); }
+.kube-forward-dot.disconnected, .kube-forward-dot.failed { background: var(--danger); }
+.kube-forward-actions { text-align: right; }
+.kube-forward-actions .icon-btn { display: inline-grid; width: 22px; height: 22px; }
