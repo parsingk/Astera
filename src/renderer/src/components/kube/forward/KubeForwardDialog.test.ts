@@ -36,6 +36,10 @@ describe('KubeForwardDialog', () => {
     expect(html).toContain('<select')
   })
 
+  it('draws the target kind as the list chip', () => {
+    expect(render(service([{ port: 80 }]))).toContain('<span class="kube-forward-kind">Service</span>')
+  })
+
   it('starts on Other port for a target with no ports', () => {
     const html = render(service([]))
     expect(html).not.toContain('<select')

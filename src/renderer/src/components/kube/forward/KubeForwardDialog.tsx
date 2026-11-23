@@ -113,7 +113,7 @@ export function KubeForwardDialog({
         <div className="kube-forward-form">
           <span className="kube-forward-label">{t('kube.forward.target')}</span>
           <div className="kube-forward-target">
-            <span className="kube-chip-kind">{target.kind}</span>
+            <span className="kube-forward-kind">{target.kind}</span>
             <span className="mono">{target.name}</span>
             <span className="kube-forward-dim">
               {ctx.short}
