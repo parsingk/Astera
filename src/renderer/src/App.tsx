@@ -162,6 +162,9 @@ import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
 import { KubeWriteDialog } from './components/kube/KubeWriteDialog'
+import { KubeForwardDialog } from './components/kube/forward/KubeForwardDialog'
+import { KubeForwardPanel } from './components/kube/forward/KubeForwardPanel'
+import { useKubeForwards } from './hooks/useKubeForwards'
 import type { WriteAsk } from './components/kube/cluster/clusterMenu'
 import { createKubeToastSlot, kubeToastOf, nextFailedPaths } from './components/kube/kubeLogView'
 import type { KubeSegment } from './components/kube/KubeSegments'
@@ -2998,6 +3001,13 @@ export default function App(): React.JSX.Element {
   onFileSavedRef.current = kubeEditor.onSaved
   /** Writes to objects already in the cluster, from the cluster view's menus (hooks/useLiveWrites.ts). */
   const liveWrites = useLiveWrites(kubeOps)
+  /** Port forwards live here so a collapsed panel keeps them running. */
+  const forwards = useKubeForwards()
+  const [forwardDialog, setForwardDialog] = useState<{ target: ObjectRef; object: K8sObject } | null>(null)
+  const startForwardDialog = (target: ObjectRef, object: K8sObject): void => {
+    kubeToastSlot.clear()
+    setForwardDialog({ target, object })
+  }
   /** Edit asks per kube tab id (the cluster view's menu bumps one), and the kube tabs whose edit holds unapplied text. */
   const [kubeEditAsks, setKubeEditAsks] = useState<Record<string, number>>({})
   const dirtyKubeTabs = useRef(new Set<string>())
@@ -5318,15 +5328,28 @@ export default function App(): React.JSX.Element {
                     kubeAvailable={kubeAvailable}
                     kubeSegment={kubeSegment}
                     onKubeSegment={setKubeSegment}
+                    kubeForwardCount={forwards.forwards.length}
+                    kubeForward={(switcher) => (
+                      <KubeForwardPanel
+                        switcher={switcher}
+                        forwards={forwards.forwards}
+                        onOpen={(f, ev) => openUrl(`http://127.0.0.1:${f.spec.local}/`, ev)}
+                        onStop={forwards.stop}
+                        onStopAll={forwards.stopAll}
+                        onReconnect={forwards.reconnect}
+                        onRemove={forwards.remove}
+                      />
+                    )}
                     kubeCluster={(switcher) =>
                       kubectlFound ? (
                         <ClusterView
                           model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onOpenShell={showPodShell} onWrite={writeKubeObject} />}
+                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onOpenShell={showPodShell} onWrite={writeKubeObject} onForward={startForwardDialog} />}
                           onOpenInEditor={openKubeObject}
                           onOpenLogs={showPodLogs}
                           onOpenShell={showPodShell}
                           onWrite={writeKubeObject}
+                          onForward={startForwardDialog}
                           toolbarStart={switcher}
                         />
                       ) : (
@@ -5568,6 +5591,19 @@ export default function App(): React.JSX.Element {
           onConfirm={liveWrites.confirm}
           onCancel={liveWrites.close}
           onAbort={liveWrites.abort}
+        />
+      )}
+      {forwardDialog && (
+        <KubeForwardDialog
+          key={`${forwardDialog.target.kind}/${forwardDialog.target.namespace}/${forwardDialog.target.name}`}
+          target={forwardDialog.target}
+          object={forwardDialog.object}
+          onStart={(spec) => {
+            forwards.start(spec)
+            setForwardDialog(null)
+            setKubeSegment('forward')
+          }}
+          onCancel={() => setForwardDialog(null)}
         />
       )}
       {showSettings && (
