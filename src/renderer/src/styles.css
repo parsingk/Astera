@@ -3184,7 +3184,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .dm-row:hover .dm-actions, .dm-row:focus-within .dm-actions { opacity: 1; }
 .dm-actions button { background: none; border: 0; border-radius: var(--radius-sm); color: var(--text-dim); cursor: pointer; padding: 1px 4px; font-size: 12px; }
 .dm-actions button:hover { color: var(--text); background: var(--panel); }
-.dm-actions button.danger:hover { color: var(--danger); }
+.dm-actions button.danger:hover { color: var(--danger, #e5484d); }
 
 .dm-edit { flex: 1; min-width: 0; }
 .dm-edit textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); color: var(--text);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import type { ForwardSpec, ObjectRef } from '../../../../../core/kube/cluster/types'
 import { forwardPorts, validPort } from '../../../../../core/kube/cluster/forward'
@@ -31,6 +31,15 @@ export function KubeForwardDialog({
   const [choice, setChoice] = useState<string>(ports.length > 0 ? String(ports[0].port) : OTHER)
   const [otherText, setOtherText] = useState('')
   const [localText, setLocalText] = useState('')
+  const uid = useId()
+  const ids = {
+    title: `${uid}-title`,
+    remote: `${uid}-remote`,
+    other: `${uid}-other`,
+    local: `${uid}-local`,
+    otherBad: `${uid}-other-bad`,
+    localBad: `${uid}-local-bad`
+  }
   const typedLocal = useRef(false)
   const request = useRef(0)
 
@@ -80,13 +89,24 @@ export function KubeForwardDialog({
   }
 
   const ctx = displayContextName(target.context)
-  const bad = (text: string, n: number): React.JSX.Element | null =>
-    text.trim() !== '' && !validPort(n) ? <div className="kube-forward-bad">{t('kube.forward.badPort')}</div> : null
+  const isBad = (text: string, n: number): boolean => text.trim() !== '' && !validPort(n)
+  const bad = (id: string): React.JSX.Element => (
+    <div id={id} className="kube-forward-bad">
+      {t('kube.forward.badPort')}
+    </div>
+  )
+  const otherBad = choice === OTHER && isBad(otherText, remote)
+  const localBad = isBad(localText, local)
 
   return (
     <div className="modal-backdrop" {...backdropProps(onCancel)}>
-      <div className="modal kube-forward" onClick={(e) => e.stopPropagation()}>
-        <h2 className="kube-forward-title">
+      <div
+        className="modal kube-forward"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={ids.title}
+        onClick={(e) => e.stopPropagation()}>
+        <h2 id={ids.title} className="kube-forward-title">
           <ArrowLeftRight size={15} aria-hidden="true" />
           {t('kube.forward.title')}
         </h2>
@@ -101,10 +121,12 @@ export function KubeForwardDialog({
             </span>
           </div>
 
-          <span className="kube-forward-label">{t('kube.forward.remote')}</span>
+          <label className="kube-forward-label" htmlFor={ports.length > 0 ? ids.remote : ids.other}>
+            {t('kube.forward.remote')}
+          </label>
           <div className="kube-field">
             {ports.length > 0 && (
-              <select value={choice} onChange={(e) => setChoice(e.target.value)} onKeyDown={onFieldKey}>
+              <select id={ids.remote} value={choice} onChange={(e) => setChoice(e.target.value)} onKeyDown={onFieldKey}>
                 {ports.map((p) => (
                   <option key={p.port} value={String(p.port)}>
                     {p.name !== undefined ? `${p.port} ${p.name}` : String(p.port)}
@@ -115,26 +137,35 @@ export function KubeForwardDialog({
             )}
             {choice === OTHER && (
               <input
-                type="number"
+                id={ids.other}
+                type="text"
+                inputMode="numeric"
                 className="mono"
-                min={1}
-                max={65535}
+                autoComplete="off"
+                aria-label={ports.length > 0 ? t('kube.forward.other') : undefined}
+                aria-invalid={otherBad || undefined}
+                aria-describedby={otherBad ? ids.otherBad : undefined}
                 value={otherText}
                 autoFocus={ports.length === 0}
                 onChange={(e) => setOtherText(e.target.value)}
                 onKeyDown={onFieldKey}
               />
             )}
-            {choice === OTHER && bad(otherText, remote)}
+            {otherBad && bad(ids.otherBad)}
           </div>
 
-          <span className="kube-forward-label">{t('kube.forward.local')}</span>
+          <label className="kube-forward-label" htmlFor={ids.local}>
+            {t('kube.forward.local')}
+          </label>
           <div className="kube-field">
             <input
-              type="number"
+              id={ids.local}
+              type="text"
+              inputMode="numeric"
               className="mono"
-              min={1}
-              max={65535}
+              autoComplete="off"
+              aria-invalid={localBad || undefined}
+              aria-describedby={localBad ? ids.localBad : undefined}
               value={localText}
               onChange={(e) => {
                 typedLocal.current = true
@@ -142,7 +173,7 @@ export function KubeForwardDialog({
               }}
               onKeyDown={onFieldKey}
             />
-            {bad(localText, local)}
+            {localBad && bad(ids.localBad)}
           </div>
         </div>
         <div className="row right">
