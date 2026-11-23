@@ -13,9 +13,6 @@ const OTHER = 'other'
 /** The text as a whole number (`'80'` is 80, `'80a'` and `''` are NaN), so `validPort` judges it. */
 const portOf = (text: string): number => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : NaN)
 
-/** Starts one port forward (cluster view, board F). The remote port is a known port of the object or "other"; the
- *  local port follows `localPort`'s free answer for it until the person types there. State lives here, the start
- *  itself with the caller. */
 /** The remote port dropdown's items: each port with its name, then Other port. */
 export function remotePortItems(ports: Array<{ port: number; name?: string }>, otherLabel: string): Array<{ value: string; label: string }> {
   return [
@@ -24,6 +21,9 @@ export function remotePortItems(ports: Array<{ port: number; name?: string }>, o
   ]
 }
 
+/** Starts one port forward (cluster view, board F). The remote port is a known port of the object or "other"; the
+ *  local port follows `localPort`'s free answer for it until the person types there. State lives here, the start
+ *  itself with the caller. */
 export function KubeForwardDialog({
   target,
   object,
