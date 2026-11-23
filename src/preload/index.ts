@@ -22,6 +22,7 @@ const EVENT_CHANNELS = [
   'kube:watch',
   'kube:log',
   'kube:shell',
+  'kube:forward',
   'session:data',
   'session:reset',
   'session:remote-size',
@@ -182,6 +183,11 @@ const api = {
       write: fire('kube.shell.write'),
       resize: fire('kube.shell.resize'),
       stop: invoke('kube.shell.stop')
+    },
+    forward: {
+      start: invoke('kube.forward.start'),
+      stop: invoke('kube.forward.stop'),
+      localPort: invoke('kube.forward.localPort')
     }
   },
   github: {
