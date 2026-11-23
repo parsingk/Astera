@@ -538,6 +538,14 @@ describe('port forwards over IPC', () => {
     expect(t.forwards.start).toHaveBeenLastCalledWith('f2', svc)
   })
 
+  it('accepts a Deployment ref as the cluster view carries it, and refuses the bare plural', async () => {
+    const t = setup()
+    const dep = { ...podRef, kind: 'Deployment', resource: 'deployments.apps', name: 'web' }
+    await t.call('kube.forward.start', 'f3', { ref: dep, local: 8080, remote: 80 })
+    expect(t.forwards.start).toHaveBeenCalledWith('f3', { ref: dep, local: 8080, remote: 80 })
+    await expect(t.call('kube.forward.start', 'f4', { ref: { ...dep, resource: 'deployments' }, local: 8080, remote: 80 })).rejects.toThrow()
+  })
+
   it('routes stop and the local port ask', async () => {
     const t = setup()
     await t.call('kube.forward.stop', 'f1')

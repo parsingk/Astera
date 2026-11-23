@@ -165,7 +165,7 @@ function shellSpec(v: unknown): ShellSpec {
   return { ref, container }
 }
 
-const FORWARD_RESOURCES: Record<string, string> = { Pod: 'pods', Service: 'services', Deployment: 'deployments' }
+const FORWARD_RESOURCES: Record<string, string> = { Pod: 'pods', Service: 'services', Deployment: 'deployments.apps' }
 
 /** A forward targets one namespaced Pod, Service or Deployment; the ports are numbers kubectl gets as `local:remote`. */
 function forwardSpec(v: unknown): ForwardSpec {
