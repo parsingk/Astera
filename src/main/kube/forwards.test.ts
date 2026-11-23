@@ -67,6 +67,44 @@ describe('createForwardRegistry', () => {
     ])
   })
 
+  it('keeps the closing line after a long run', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.start('f1', spec)
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    const klog = 'E1123 10:00:00.000000 1 portforward.go:413] "Unhandled Error" err="an error occurred forwarding 18080 -> 80: boom"\n'
+    for (let i = 0; i < 50; i++) spawns[0].h.onStderr(klog)
+    spawns[0].h.onStderr('error: lost connection to pod\n')
+    spawns[0].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(emitted[1]).toMatchObject({ kind: 'exit', message: 'error: lost connection to pod' })
+  })
+
+  it('still keeps the first line when kubectl ends before listening after much output', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.start('f1', spec)
+    spawns[0].h.onStderr('error: unable to listen on any of the requested ports\n')
+    for (let i = 0; i < 200; i++) spawns[0].h.onStderr('E1123 10:00:00.000000 1 portforward.go:413] noise noise noise noise\n')
+    spawns[0].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(emitted[0]).toMatchObject({ message: 'error: unable to listen on any of the requested ports' })
+  })
+
+  it('sends the cause of a lost connection with the exit', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.start('f1', spec)
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    spawns[0].h.onStderr('E1123 10:00:00.000000 1 portforward.go:413] "Unhandled Error" err="x: network namespace for sandbox \\"s\\" is closed"\n')
+    spawns[0].h.onStderr('error: lost connection to pod\n')
+    spawns[0].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(emitted[1]).toEqual({ forwardId: 'f1', kind: 'exit', message: 'error: lost connection to pod', cause: 'pod-gone' })
+  })
+
+  it('sends no cause for another ending', () => {
+    const { reg, spawns, emitted } = setup()
+    reg.start('f1', spec)
+    spawns[0].h.onStderr('error: unable to listen: connect: connection refused\n')
+    spawns[0].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(emitted[0]).not.toHaveProperty('cause')
+  })
+
   it('reports a null message when kubectl ends silently', () => {
     const { reg, spawns, emitted } = setup()
     reg.start('f1', spec)
@@ -145,6 +183,34 @@ describe('the real probes', () => {
       expect(await realPortProbe(port)).toBe(false)
     } finally {
       await new Promise((r) => s.close(r))
+    }
+  })
+
+  it('counts a port held on every address as busy', async (ctx) => {
+    const { createServer } = await import('node:net')
+    const hold = async (host: string): Promise<{ port: number; close(): Promise<void> } | null> => {
+      const s = createServer()
+      const ok = await new Promise<boolean>((resolve, reject) => {
+        s.once('error', (e: NodeJS.ErrnoException) => (e.code === 'EAFNOSUPPORT' || e.code === 'EADDRNOTAVAIL' ? resolve(false) : reject(e)))
+        s.listen({ host, port: 0 }, () => resolve(true))
+      })
+      if (!ok) return null
+      const address = s.address()
+      return { port: typeof address === 'object' && address ? address.port : 0, close: () => new Promise<void>((r) => s.close(() => r())) }
+    }
+    const any = await hold('0.0.0.0')
+    try {
+      expect(any).not.toBeNull()
+      expect(await realPortProbe(any!.port)).toBe(false)
+    } finally {
+      await any?.close()
+    }
+    const v6 = await hold('::')
+    try {
+      if (v6 === null) ctx.skip('IPv6 (::) is not available on this machine')
+      expect(await realPortProbe(v6!.port)).toBe(false)
+    } finally {
+      await v6?.close()
     }
   })
 })

@@ -1,13 +1,14 @@
 /** The live `kubectl port-forward` processes of the forwards: each reports once that it listens and once when it ends,
  *  and the local port a new forward proposes is checked here, where the network stack is. */
-import { createServer } from 'node:net'
-import { forwardArgs, listeningPort } from '../../core/kube/cluster/forward'
+import { connect, createServer } from 'node:net'
+import { forwardArgs, listeningPort, lostCause } from '../../core/kube/cluster/forward'
 import type { ForwardMessage, ForwardSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
 import { firstStderrLine, streamFailureMessage } from './cluster'
 
 export type { ForwardMessage, ForwardSpec }
-/** Only the first stderr line is reported, so there is no need to keep more than this. */
+/** Before kubectl listens its first stderr line is what matters, so the head is kept; after, a forward lives for hours
+ *  and kubectl's closing line comes last, so a tail of this size is kept instead. */
 const STDERR_CAP = 4096
 
 interface Handlers {
@@ -63,7 +64,18 @@ export function createForwardRegistry(deps: {
         }
       },
       onStderr(chunk) {
-        if (live() && stderr.length < STDERR_CAP) stderr += chunk
+        if (!live()) return
+        if (!listening) {
+          if (stderr.length < STDERR_CAP) stderr += chunk
+          return
+        }
+        stderr += chunk
+        if (stderr.length > STDERR_CAP) {
+          // Cut at the first newline so a partial line cannot pass for a real one.
+          const tail = stderr.slice(-STDERR_CAP)
+          const nl = tail.indexOf('\n')
+          stderr = nl === -1 ? tail : tail.slice(nl + 1)
+        }
       },
       onExit(x) {
         if (!live() || x.stopped) return
@@ -72,7 +84,8 @@ export function createForwardRegistry(deps: {
         e.run = {}
         const redacted = deps.redact(stderr)
         const message = x.errorCode && x.code === null ? streamFailureMessage(x, redacted) : (firstStderrLine(redacted) ?? null)
-        deps.emit({ forwardId, kind: 'exit', message })
+        const cause = message?.includes('lost connection to pod') ? lostCause(redacted) : null
+        deps.emit(cause ? { forwardId, kind: 'exit', message, cause } : { forwardId, kind: 'exit', message })
       }
     })
   }
@@ -108,20 +121,37 @@ export function createForwardRegistry(deps: {
   }
 }
 
-/** True when 127.0.0.1:<port> can be bound right now. */
+/** True when the port is free on 127.0.0.1 right now (see realPortProbe). */
 export type PortProbe = (port: number) => Promise<boolean>
 
 export async function pickLocalPort(wanted: number, probe: PortProbe, anyFree: () => Promise<number>): Promise<number> {
   return (await probe(wanted)) ? wanted : await anyFree()
 }
 
-/** Binds 127.0.0.1:<port> exclusively and lets go at once; any error (in use, refused) means it cannot be used. */
-export const realPortProbe: PortProbe = (port) =>
+/** True when nothing answers on 127.0.0.1:<port>: a TCP connect there is refused (a timeout counts as busy). */
+const refusesConnections = (port: number): Promise<boolean> =>
   new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    const done = (free: boolean): void => {
+      socket.destroy()
+      resolve(free)
+    }
+    socket.setTimeout(500, () => done(false))
+    socket.once('connect', () => done(false))
+    socket.once('error', (e: NodeJS.ErrnoException) => done(e.code === 'ECONNREFUSED'))
+  })
+
+/** A port is free when 127.0.0.1:<port> can be bound and nothing answers a connect there. The bind alone is not enough:
+ *  on Windows it succeeds beside another program's 0.0.0.0 or :: listener, which kubectl's 127.0.0.1 bind would then
+ *  shadow. (`exclusive: true` only concerns Node's cluster module, not the operating system.) */
+export const realPortProbe: PortProbe = async (port) => {
+  const bound = await new Promise<boolean>((resolve) => {
     const server = createServer()
     server.once('error', () => resolve(false))
-    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => server.close(() => resolve(true)))
+    server.listen({ host: '127.0.0.1', port }, () => server.close(() => resolve(true)))
   })
+  return bound && (await refusesConnections(port))
+}
 
 /** A port the system hands out for 127.0.0.1, read before the socket is closed again. */
 export const realAnyFreePort = (): Promise<number> =>
