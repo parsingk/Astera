@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  groupRowsOf, menuAlignment, menuPlacement, nextCursor,
+  groupRowsOf, menuAlignment, menuPlacement, nextEnabledCursor, optionAria,
   type MenuAlignment, type MenuPlacement, type SelectItem
 } from '../../../core/ui/select'
 import { useI18n } from '../i18n/I18nProvider'
@@ -79,7 +79,8 @@ export function Select({
   className,
   noCheck = false,
   ariaLabel,
-  disabled = false
+  disabled = false,
+  autoFocus = false
 }: {
   items: SelectOption[]
   value: string
@@ -94,6 +95,8 @@ export function Select({
   ariaLabel?: string
   /** Shown but not opened: a choice the form cannot use right now. */
   disabled?: boolean
+  /** Focuses the trigger on mount, as `autoFocus` does on a native control. */
+  autoFocus?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -166,11 +169,13 @@ export function Select({
   }, [open, items.length])
 
   const openList = (): void => {
-    setCursor(Math.max(0, items.findIndex((it) => it.value === value)))
+    const at = items.findIndex((it) => it.value === value)
+    setCursor(at >= 0 && !items[at].disabled ? at : nextEnabledCursor(items, -1, 1))
     setOpen(true)
   }
 
   const commit = (item: SelectOption): void => {
+    if (item.disabled) return
     onChange(item.value)
     setOpen(false)
   }
@@ -188,7 +193,7 @@ export function Select({
       setOpen(false)
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      setCursor((c) => nextCursor(c, items.length, e.key === 'ArrowDown' ? 1 : -1))
+      setCursor((c) => nextEnabledCursor(items, c, e.key === 'ArrowDown' ? 1 : -1))
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
       const item = items[cursor]
@@ -209,6 +214,7 @@ export function Select({
         aria-expanded={open}
         aria-label={ariaLabel}
         disabled={disabled}
+        autoFocus={autoFocus}
         onClick={() => (open ? setOpen(false) : openList())}
         onKeyDown={onKeyDown}
       >
@@ -249,9 +255,9 @@ export function Select({
               <li
                 key={`o-${row.index}-${row.item.value}`}
                 role="option"
-                aria-selected={row.item.value === value}
+                {...optionAria(row.item, value)}
                 className={`sel-option${row.index === cursor ? ' cursor' : ''}`}
-                onMouseEnter={() => setCursor(row.index)}
+                onMouseEnter={() => { if (!row.item.disabled) setCursor(row.index) }}
                 onClick={() => commit(row.item)}
               >
                 {iconCell(row.item)}
