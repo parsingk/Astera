@@ -2827,7 +2827,7 @@ export const ja: Catalog = {
   'kube.write.replicasHint': '実行するレプリカ数を入力してください。',
   'kube.write.loading': 'クラスターで確認しています…',
   'kube.edit.start': '編集',
-  'kube.edit.revealFirst': 'Secret を編集するには先に値を表示してください',
+  'kube.edit.revealFirst': '右側の「値を表示」(目のアイコン)ボタンを押してから編集してください',
   'kube.edit.editing': '編集中',
   'kube.edit.apply': '適用…',
   'kube.edit.discard': '編集を破棄してクラスターを読み直す',

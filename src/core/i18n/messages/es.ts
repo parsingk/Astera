@@ -2857,7 +2857,7 @@ export const es: Catalog = {
   'kube.write.replicasHint': 'Introduce cuántas réplicas ejecutar.',
   'kube.write.loading': 'Comprobando con el clúster…',
   'kube.edit.start': 'Editar',
-  'kube.edit.revealFirst': 'Muestra primero los valores para editar un Secret',
+  'kube.edit.revealFirst': 'Pulsa el botón Mostrar valores (el ojo) de la derecha y luego edita',
   'kube.edit.editing': 'Editando',
   'kube.edit.apply': 'Aplicar…',
   'kube.edit.discard': 'Descartar la edición y leer el clúster de nuevo',

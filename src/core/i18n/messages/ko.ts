@@ -3228,7 +3228,7 @@ export const ko = {
   'kube.write.replicasHint': '실행할 레플리카 수를 입력하세요.',
   'kube.write.loading': '클러스터에서 확인하는 중…',
   'kube.edit.start': '수정',
-  'kube.edit.revealFirst': '시크릿을 수정하려면 먼저 값을 표시하세요',
+  'kube.edit.revealFirst': '오른쪽의 값 보기(눈 모양) 버튼을 누른 뒤 수정하세요',
   'kube.edit.editing': '수정 중',
   'kube.edit.apply': '적용…',
   'kube.edit.discard': '수정을 버리고 클러스터를 다시 읽기',

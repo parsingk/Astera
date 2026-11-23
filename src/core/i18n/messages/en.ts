@@ -2974,7 +2974,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.write.replicasHint': 'Enter how many replicas to run.',
   'kube.write.loading': 'Checking with the cluster…',
   'kube.edit.start': 'Edit',
-  'kube.edit.revealFirst': 'Show values first to edit a Secret',
+  'kube.edit.revealFirst': 'Press the Show values (eye) button on the right, then edit',
   'kube.edit.editing': 'Editing',
   'kube.edit.apply': 'Apply…',
   'kube.edit.discard': 'Discard the edit and read the cluster again',
