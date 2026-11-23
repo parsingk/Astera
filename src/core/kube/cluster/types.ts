@@ -56,6 +56,16 @@ export type ShellMessage = { shellId: string } & (
   | { kind: 'exit'; code: number }
   | { kind: 'error'; message: string }
 )
+/** A port an object offers for forwarding; `name` is the port's name where it has one. */
+export interface ForwardPort { port: number; name?: string }
+/** What main needs to start one port forward. */
+export interface ForwardSpec { ref: ObjectRef; local: number; remote: number; remoteName?: string }
+/** What a forward sends the renderer: kubectl is listening, then how it ended (message: kubectl's first real stderr
+ *  line, redacted, or null when it printed none). */
+export type ForwardMessage = { forwardId: string } & (
+  | { kind: 'listening'; local: number }
+  | { kind: 'exit'; message: string | null }
+)
 /** The one plain manifest in the project that declares an object: `same` when it targets the object's own context and
  *  namespace, `other` (with that target) when it targets elsewhere. `file` is an absolute path. */
 export type ManifestMatch =
