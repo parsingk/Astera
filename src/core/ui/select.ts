@@ -35,7 +35,9 @@ export function nextCursor(current: number, length: number, delta: number): numb
  * nowhere and Enter has nothing to pick. A current of -1 (nowhere) steps in from the end the delta points away from.
  */
 export function nextEnabledCursor(items: SelectItem[], current: number, delta: number): number {
-  let at = current
+  // From nowhere (-1), start just outside the end the delta points away from, so up lands on the last item
+  // and down on the first (nextCursor would normalise -1 to the last index and step back from it).
+  let at = current === -1 ? (delta < 0 ? items.length : -1) : current
   for (let i = 0; i < items.length; i++) {
     at = nextCursor(at, items.length, delta)
     if (!items[at].disabled) return at

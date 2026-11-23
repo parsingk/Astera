@@ -66,6 +66,11 @@ describe('nextEnabledCursor', () => {
     expect(nextEnabledCursor(mk(false, false, false), 0, -1)).toBe(2)
   })
 
+  it('from nowhere, up lands on the last item and down on the first when all are enabled', () => {
+    expect(nextEnabledCursor(mk(false, false, false), -1, -1)).toBe(2)
+    expect(nextEnabledCursor(mk(false, false, false), -1, 1)).toBe(0)
+  })
+
   it('starts from the top or bottom when the cursor is at nowhere (-1)', () => {
     expect(nextEnabledCursor(mk(true, false, false), -1, 1)).toBe(1)
     expect(nextEnabledCursor(mk(false, false, true), -1, -1)).toBe(1)
