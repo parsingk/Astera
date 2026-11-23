@@ -3619,7 +3619,7 @@ export default function App(): React.JSX.Element {
    *  popups land here. */
   const openUrl = (url: string, ev?: { ctrlKey: boolean; metaKey: boolean }): void => {
     const modifier = !!ev && (ev.ctrlKey || ev.metaKey)
-    if (linkDestination(url, { modifier }) === 'preview') openBrowserTab(previewTargetOf(url))
+    if (linkDestination(url, { modifier, hasProject: currentProjectRef.current !== null }) === 'preview') openBrowserTab(previewTargetOf(url))
     else void window.api.system.openExternal(url)
   }
   const openUrlRef = useRef(openUrl)
