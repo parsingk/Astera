@@ -157,10 +157,18 @@ describe('the port forward item', () => {
 
   it('puts it after the shell item of a Pod and runs onForward when picked', () => {
     const asked: string[] = []
+    const shell = shellChoice(noop, { context: 'c', namespace: 'dev', resource: 'pods', kind: 'Pod', name: 'x' }, {
+      ...running,
+      spec: { containers: [{ name: 'app' }] },
+      status: { phase: 'Running', containerStatuses: [{ name: 'app', state: { running: {} } }] }
+    } as K8sObject)
     const items = clusterMenuItems(
-      { kind: 'Pod', onDescribe: noop, onCopyName: noop, object: running, onForward: () => void asked.push('f') },
+      { kind: 'Pod', onDescribe: noop, onCopyName: noop, onLogs: noop, shell, object: running, onForward: () => void asked.push('f') },
       t
     )
+    expect(items.map(label)).toEqual([
+      'kube.cluster.describe', '-', 'kube.logs.open', 'kube.logs.openPrevious', 'kube.shell.open', 'kube.forward.open', '-', 'kube.cluster.copyName'
+    ])
     ;(items.find((i) => label(i) === 'kube.forward.open') as { onSelect(): void }).onSelect()
     expect(asked).toEqual(['f'])
   })

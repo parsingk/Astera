@@ -75,6 +75,13 @@ describe('createForwardsDriver', () => {
     expect(f.list()[0]).toMatchObject({ state: 'connecting', reason: null })
   })
 
+  it('does nothing when asked to reconnect a live row', () => {
+    const f = setup()
+    const id = f.driver.start(spec)
+    f.driver.reconnect(id, spec)
+    expect(f.started).toEqual([id])
+  })
+
   it('stops every live row and none of the ended ones', () => {
     const f = setup()
     const a = f.driver.start(spec)

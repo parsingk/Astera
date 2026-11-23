@@ -57,6 +57,7 @@ export function createForwardsDriver(
       for (const f of list) if (isLive(f)) stop(f.id)
     },
     reconnect(id: string, spec: ForwardSpec): void {
+      if (live.has(id)) return
       set((l) => reconnectForward(l, id))
       run(id, spec)
     },

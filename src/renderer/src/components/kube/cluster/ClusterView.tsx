@@ -72,7 +72,7 @@ function NamespaceField({ value, onCommit }: { value: string | null; onCommit(ns
 }
 
 /** The Kubernetes tab's cluster view: toolbar, then the kind tree, the table and the detail column (spec 4.2). The
- *  Cluster | Operation log switch is drawn by the bottom panel, which hands it in as `toolbarStart`. */
+ *  Cluster | Port forwarding | Operation log switch is drawn by the bottom panel, which hands it in as `toolbarStart`. */
 export function ClusterView({
   model,
   detail,

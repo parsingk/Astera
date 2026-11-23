@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { KubeForward } from '../../../lib/kubeForwards'
-import { LOST_POD } from '../../../../../core/kube/cluster/forward'
+import { LOST, LOST_POD, REFUSED } from '../../../../../core/kube/cluster/forward'
 import { KubeForwardPanel } from './KubeForwardPanel'
 
 vi.mock('../../../i18n/I18nProvider', () => ({
@@ -66,6 +66,18 @@ describe('KubeForwardPanel', () => {
     expect(html).toContain('kube.forward.reconnect')
     expect(html).toContain('kube.forward.remove')
     expect(html).not.toContain('kube-forward-link')
+  })
+  it('draws a refused connection and a plain lost one', () => {
+    const refused = render([fwd({ state: 'disconnected', reason: REFUSED, endedAt: Date.now() })])
+    expect(refused).toContain('kube.forward.state.disconnected{&quot;reason&quot;:&quot;kube.forward.refused&quot;}')
+    const lost = render([fwd({ state: 'disconnected', reason: LOST, endedAt: Date.now() })])
+    expect(lost).toContain('kube.forward.state.disconnected{&quot;reason&quot;:&quot;kube.forward.lost&quot;}')
+  })
+  it('gives a connected row and a stopped row the same number of action slots', () => {
+    const slots = (html: string): number => (html.match(/class="kube-forward-slot/g) ?? []).length
+    const connected = slots(render([fwd()]))
+    expect(connected).toBeGreaterThan(0)
+    expect(slots(render([fwd({ state: 'stopped', endedAt: Date.now() })]))).toBe(connected)
   })
   it("draws a failed row with kubectl's line", () => {
     const html = render([fwd({ state: 'failed', reason: 'unable to listen on port 8080', connectedAt: null, endedAt: 1 })])

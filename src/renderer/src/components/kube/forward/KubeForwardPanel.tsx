@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react'
 import { Globe, RotateCw, Square, X } from 'lucide-react'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { MessageKey } from '../../../../../core/i18n'
-import { LOST_POD, FORWARD_ADDRESS } from '../../../../../core/kube/cluster/forward'
+import { LOST, LOST_POD, REFUSED, FORWARD_ADDRESS } from '../../../../../core/kube/cluster/forward'
 import { runText } from '../../../../../core/kube/cluster/status'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { forwardRunMs, isLive, type KubeForward } from '../../../lib/kubeForwards'
 
-/** The Port forwarding segment (spec 4.9, board F): the switch with a stop all button, then one row per forward. Ended
+/** The Port forwarding segment (spec 4.10, board F): the switch with a stop all button, then one row per forward. Ended
  *  rows stay so the person sees how each ended and can start it again or remove it. */
 export function KubeForwardPanel({
   switcher,
@@ -40,13 +40,21 @@ export function KubeForwardPanel({
   const stateText = (f: KubeForward): string => {
     if (f.state !== 'disconnected' && f.state !== 'failed') return t(`kube.forward.state.${f.state}`)
     if (f.reason === null) return t(`kube.forward.state.${f.state}Plain`)
-    return t(`kube.forward.state.${f.state}`, { reason: f.reason === LOST_POD ? t('kube.forward.lostPod') : f.reason })
+    const named = { [LOST_POD]: 'kube.forward.lostPod', [LOST]: 'kube.forward.lost', [REFUSED]: 'kube.forward.refused' } as const
+    const reason = f.reason in named ? t(named[f.reason as keyof typeof named]) : f.reason
+    return t(`kube.forward.state.${f.state}`, { reason })
   }
-  const act = (label: MessageKey, icon: React.ReactNode, run: (ev: React.MouseEvent) => void): React.JSX.Element => (
-    <button type="button" className="icon-btn" title={t(label)} aria-label={t(label)} onClick={(ev) => run(ev)}>
-      {icon}
-    </button>
-  )
+  // Each action has its own fixed slot, empty where it does not apply, so a button never moves under a double-click.
+  const slot = (shown: boolean, label: MessageKey, icon: React.ReactNode, run: (ev: React.MouseEvent) => void): React.JSX.Element =>
+    shown ? (
+      <span className="kube-forward-slot">
+        <button type="button" className="icon-btn" title={t(label)} aria-label={t(label)} onClick={(ev) => run(ev)}>
+          {icon}
+        </button>
+      </span>
+    ) : (
+      <span className="kube-forward-slot" />
+    )
 
   return (
     <>
@@ -112,10 +120,10 @@ export function KubeForwardPanel({
                     </td>
                     <td className="kube-forward-mono">{run === null ? '' : runText(run)}</td>
                     <td className="kube-forward-actions">
-                      {f.state === 'connected' && act('kube.forward.openBrowser', <Globe size={13} />, (ev) => onOpen(f, ev))}
-                      {isLive(f) && act('kube.forward.stop', <Square size={13} />, () => onStop(f.id))}
-                      {!isLive(f) && act('kube.forward.reconnect', <RotateCw size={13} />, () => onReconnect(f.id))}
-                      {!isLive(f) && act('kube.forward.remove', <X size={13} />, () => onRemove(f.id))}
+                      {slot(f.state === 'connected', 'kube.forward.openBrowser', <Globe size={13} />, (ev) => onOpen(f, ev))}
+                      {slot(isLive(f), 'kube.forward.stop', <Square size={13} />, () => onStop(f.id))}
+                      {slot(!isLive(f), 'kube.forward.reconnect', <RotateCw size={13} />, () => onReconnect(f.id))}
+                      {slot(!isLive(f), 'kube.forward.remove', <X size={13} />, () => onRemove(f.id))}
                     </td>
                   </tr>
                 )

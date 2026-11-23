@@ -158,6 +158,7 @@ import { namespaceLabelOf } from './components/kube/fileNamespacePill'
 import { useKubeEditor, type KubeTab } from './hooks/useKubeEditor'
 import { useLiveWrites } from './hooks/useLiveWrites'
 import { replicasOf } from '../../core/kube/cluster/write'
+import { forwardUrl } from '../../core/kube/cluster/forward'
 import { KubeEditorStrip } from './components/kube/KubeEditorStrip'
 import { KustomizePreview } from './components/kube/KustomizePreview'
 import { KubeConfirmDialog } from './components/kube/KubeConfirmDialog'
@@ -3373,7 +3374,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -3615,8 +3616,8 @@ export default function App(): React.JSX.Element {
   closeAgentTabRef.current = closeAgentTab
 
   /** The one link rule (core/preview/url.ts): a loopback address opens in a preview tab, anything else
-   *  in the system browser, and Ctrl (Cmd on macOS) inverts. Every xterm's URL link and the guest's
-   *  popups land here. */
+   *  in the system browser, and Ctrl (Cmd on macOS) inverts; with no project open everything goes to the system
+   *  browser. Every xterm's URL link, the guest's popups and a port forward's Open land here. */
   const openUrl = (url: string, ev?: { ctrlKey: boolean; metaKey: boolean }): void => {
     const modifier = !!ev && (ev.ctrlKey || ev.metaKey)
     if (linkDestination(url, { modifier, hasProject: currentProjectRef.current !== null }) === 'preview') openBrowserTab(previewTargetOf(url))
@@ -3878,8 +3879,8 @@ export default function App(): React.JSX.Element {
   // The Run tab is there for as long as a project is. Rows are closed one by one in the list; with none
   // left the tab shows where to start one rather than disappearing.
   const runAvailable = currentProject !== null
-  // The Kubernetes tab is there while kubectl is found or its log has entries.
-  const kubeAvailable = kubectlFound || kubeOps.log.length > 0
+  // The Kubernetes tab is there while kubectl is found, its log has entries or a port forward is listed.
+  const kubeAvailable = kubectlFound || kubeOps.log.length > 0 || forwards.forwards.length > 0
   /** 아래쪽 패널에 실제로 넘길 탭. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. 없는 탭을
    *  어디로 떨어뜨리는지는 shownBottomTab(lib/bottomTab.ts)이 정한다. */
@@ -5333,7 +5334,7 @@ export default function App(): React.JSX.Element {
                       <KubeForwardPanel
                         switcher={switcher}
                         forwards={forwards.forwards}
-                        onOpen={(f, ev) => openUrl(`http://127.0.0.1:${f.spec.local}/`, ev)}
+                        onOpen={(f, ev) => openUrl(forwardUrl(f.spec), ev)}
                         onStop={forwards.stop}
                         onStopAll={forwards.stopAll}
                         onReconnect={forwards.reconnect}

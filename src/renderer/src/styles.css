@@ -3825,3 +3825,4 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-forward-dot.disconnected, .kube-forward-dot.failed { background: var(--danger); }
 .kube-forward-actions { text-align: right; white-space: nowrap; }
 .kube-forward-actions .icon-btn { display: inline-grid; width: 22px; height: 22px; }
+.kube-forward-slot { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
