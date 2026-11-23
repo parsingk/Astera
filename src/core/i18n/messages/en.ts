@@ -3105,6 +3105,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.cluster.refresh': 'Refresh',
   'kube.cluster.retry': 'Retry',
   'kube.cluster.filter': 'Filter by name',
+  'kube.cluster.resizeDetail': 'Resize the detail panel',
   'kube.cluster.tree': 'Resource kinds',
   'kube.cluster.group.workloads': 'Workloads',
   'kube.cluster.group.network': 'Network',

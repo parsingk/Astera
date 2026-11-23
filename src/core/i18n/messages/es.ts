@@ -2667,6 +2667,7 @@ export const es: Catalog = {
   'kube.cluster.refresh': 'Actualizar',
   'kube.cluster.retry': 'Reintentar',
   'kube.cluster.filter': 'Filtrar por nombre',
+  'kube.cluster.resizeDetail': 'Cambiar el tamaño del panel de detalles',
   'kube.cluster.tree': 'Tipos de recurso',
   'kube.cluster.group.workloads': 'Cargas de trabajo',
   'kube.cluster.group.network': 'Red',

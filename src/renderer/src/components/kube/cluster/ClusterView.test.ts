@@ -81,6 +81,16 @@ describe('ClusterView', () => {
     expect(html).toContain('title="kind-dev"')
   })
 
+  // The detail column has a drag handle on its left edge, a focusable separator that says its width.
+  it('puts a resize handle beside the detail column, and none without one', () => {
+    const detail = React.createElement('aside', { className: 'kube-detail' })
+    const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail }))
+    expect(html).toMatch(/<div[^>]*role="separator"[^>]*aria-orientation="vertical"[^>]*aria-label="kube.cluster.resizeDetail"/)
+    expect(html).toMatch(/role="separator"[^>]*aria-valuenow="380"[^>]*tabindex="0"/)
+    expect(html).toMatch(/class="kube-detail-resizer"[^>]*>.*<aside class="kube-detail">/)
+    expect(renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))).not.toContain('kube.cluster.resizeDetail')
+  })
+
   // Final review T10: kubeconfig that could not be read says so, not that the remembered cluster is missing.
   it('shows a failed kubeconfig read instead of a missing cluster', () => {
     const detail = 'error: error loading config file "/home/u/.kube/config": yaml: line 3'

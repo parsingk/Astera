@@ -3359,6 +3359,7 @@ export const ko = {
   'kube.cluster.refresh': '새로 고침',
   'kube.cluster.retry': '다시 시도',
   'kube.cluster.filter': '이름으로 거르기',
+  'kube.cluster.resizeDetail': '상세 칸 크기 조절',
   'kube.cluster.tree': '리소스 종류',
   'kube.cluster.group.workloads': '워크로드',
   'kube.cluster.group.network': '네트워크',

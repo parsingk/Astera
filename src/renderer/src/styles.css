@@ -3717,7 +3717,14 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-cluster-empty { padding: 24px 12px; font-size: 12.5px; color: var(--text-dim); }
 .kube-cluster-forbidden { overflow-wrap: anywhere; }
 .kube-cluster-failed { overflow-wrap: anywhere; color: var(--danger); }
-.kube-detail { width: 380px; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line-soft); background: var(--panel); font-size: 12px; }
+/* The column's width is the wrapper's (DetailColumn sets it); with nothing selected the detail renders nothing and the
+   wrapper, handle included, goes with it. */
+.kube-detail-col { position: relative; min-width: 0; min-height: 0; display: flex; }
+.kube-detail-col:not(:has(.kube-detail)) { display: none; }
+/* The handle straddles the column's left border, over the table's edge: a 5px strip like .resizer, drawn on hover. */
+.kube-detail-resizer { position: absolute; z-index: 2; top: 0; bottom: 0; left: -3px; width: 5px; cursor: col-resize; background: transparent; }
+.kube-detail-resizer:hover, .kube-detail-resizer:active, .kube-detail-resizer:focus-visible { background: var(--accent); outline: none; }
+.kube-detail { flex: 1; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line-soft); background: var(--panel); font-size: 12px; }
 .kube-detail.deleted .kube-detail-body { opacity: .5; }
 .kube-detail-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--line-soft); }
 .kube-detail-kind { flex: none; padding: 1px 6px; border-radius: var(--radius); background: var(--elevated); color: var(--text-dim); font-size: 11px; }

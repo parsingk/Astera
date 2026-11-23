@@ -9,6 +9,7 @@ import { ContextMenu } from '../../ContextMenu'
 import { Select } from '../../Select'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
+import { DetailColumn } from './DetailColumn'
 import { clusterMenuItems, shellChoice, writeMenuHandlers, type WriteAsk } from './clusterMenu'
 
 /** A watch's error line as shown: kubectl's own words, except a missing binary and a list page over the cap, which main
@@ -100,6 +101,7 @@ export function ClusterView({
   toolbarStart?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
+  const bodyRef = useRef<HTMLDivElement>(null)
   /** The open row menu, with the right-clicked row's object, which its actions act on. */
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number; ref: ObjectRef } | null>(null)
   const { view, live } = model
@@ -201,7 +203,7 @@ export function ClusterView({
         </button>
       </div>
 
-      <div className="kube-cluster-body">
+      <div className="kube-cluster-body" ref={bodyRef}>
         <ClusterTree
           groups={model.groups}
           custom={model.customKinds}
@@ -235,7 +237,7 @@ export function ClusterView({
             if (ref !== null) onOpenInEditor(ref)
           }}
         />
-        {detail}
+        {detail !== null && <DetailColumn bodyRef={bodyRef}>{detail}</DetailColumn>}
       </div>
       {rowMenu !== null && (
         <ContextMenu

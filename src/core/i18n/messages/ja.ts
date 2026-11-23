@@ -2637,6 +2637,7 @@ export const ja: Catalog = {
   'kube.cluster.refresh': '更新',
   'kube.cluster.retry': '再試行',
   'kube.cluster.filter': '名前で絞り込み',
+  'kube.cluster.resizeDetail': '詳細パネルのサイズを変更',
   'kube.cluster.tree': 'リソースの種類',
   'kube.cluster.group.workloads': 'ワークロード',
   'kube.cluster.group.network': 'ネットワーク',
