@@ -105,7 +105,10 @@ export function KubeForwardPanel({
                       {ref.namespace ? ` / ${ref.namespace}` : ''}
                     </td>
                     <td className={bad ? 'kube-forward-state bad' : 'kube-forward-state'}>
-                      <span className={`kube-forward-dot ${f.state}`} aria-hidden="true" /> {stateText(f)}
+                      <span className={`kube-forward-dot ${f.state}`} aria-hidden="true" />{' '}
+                      <span className="kube-forward-reason" title={stateText(f)}>
+                        {stateText(f)}
+                      </span>
                     </td>
                     <td className="kube-forward-mono">{run === null ? '' : runText(run)}</td>
                     <td className="kube-forward-actions">

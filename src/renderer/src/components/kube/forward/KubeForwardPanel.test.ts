@@ -54,6 +54,12 @@ describe('KubeForwardPanel', () => {
     expect(html).toContain('kube.forward.stop"')
     expect(html).not.toContain('kube.forward.reconnect')
   })
+  it('keeps a long reason to one line with the full text in its tooltip', () => {
+    const reason = 'Unable to listen on port 18090: Listeners failed to create with the following errors: [unable to create listener]'
+    const html = render([fwd({ state: 'failed', reason, endedAt: Date.now() })])
+    const full = `kube.forward.state.failed{&quot;reason&quot;:&quot;${reason}&quot;}`
+    expect(html).toContain(`<span class="kube-forward-reason" title="${full}">${full}</span>`)
+  })
   it('draws a disconnected row with its reason and actions', () => {
     const html = render([fwd({ state: 'disconnected', reason: LOST_POD, endedAt: Date.now() })])
     expect(html).toContain('kube.forward.state.disconnected{&quot;reason&quot;:&quot;kube.forward.lostPod&quot;}')
