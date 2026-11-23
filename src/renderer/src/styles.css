@@ -737,9 +737,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* Scrolls as a whole in a short app window, so the columns never run over the account field and the buttons (4c final review M11) */
 .modal.source-job { width: 820px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); overflow: auto; }
 .modal.source-job .source-pick { display: flex; gap: 8px; }
-.modal.source-job .source-pick select { flex: 0 0 240px; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: var(--radius); color-scheme: dark; }
+.modal.source-job .source-pick .sel { flex: 0 0 240px; }
 .modal.source-job .source-pick input { flex: 1; }
-.modal.source-job .source-pick select:focus-visible, .modal.source-job .source-pick input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.modal.source-job .source-pick input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
 .modal.source-job .source-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
 .modal.source-job .source-items, .modal.source-job .source-detail { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
 .modal.source-job .source-items ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -1569,6 +1569,7 @@ input.settings-reviewer-line { color: var(--text); }
 .sel-group { padding: 7px 8px 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
 .sel-option { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius); cursor: pointer; transition: background var(--ease); }
 .sel-option.cursor { background: var(--surface-hover); }
+.sel-option[aria-disabled='true'] { opacity: .5; cursor: default; }
 .sel-option[aria-selected='true'] .sel-value { color: var(--accent); }
 .sel-check { flex: none; width: 14px; height: 14px; display: grid; place-items: center; color: var(--accent); opacity: 0; }
 .sel-option[aria-selected='true'] .sel-check { opacity: 1; }
