@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { KubeRenderResult } from '../../../../core/kube/types'
 import { docIdentity, patchLines, sameResource } from '../../../../core/kube/patchLines'
 import { useI18n } from '../../i18n/I18nProvider'
+import { Select } from '../Select'
 
 /** One resource of the rendered output: its picker label and its own YAML text. */
 export interface RenderedDoc {
@@ -74,18 +75,16 @@ export function KustomizePreview({
         <span className="kube-render-title">{t('kube.render.title')}</span>
         <span className="kube-render-badge">{t('kube.render.readOnly')}</span>
         {docs.length > 0 && (
-          <select
-            value={index}
-            title={t('kube.render.resource')}
-            aria-label={t('kube.render.resource')}
-            onChange={(e) => setPicked(Number(e.target.value))}
-          >
-            {docs.map((d, i) => (
-              <option key={i} value={i}>
-                {d.label}
-              </option>
-            ))}
-          </select>
+          <span className="kube-sel-tip" title={t('kube.render.resource')}>
+            <Select
+              className="dense kube-sel kube-sel-render"
+              ariaLabel={t('kube.render.resource')}
+              items={docs.map((d, i) => ({ value: String(i), label: d.label }))}
+              value={String(index)}
+              onChange={(v) => setPicked(Number(v))}
+              noCheck
+            />
+          </span>
         )}
         <span className="kube-render-legend">
           <span className="kube-render-swatch" />

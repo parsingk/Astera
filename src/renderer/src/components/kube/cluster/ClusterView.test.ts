@@ -64,12 +64,21 @@ describe('ClusterView', () => {
     const html = renderToStaticMarkup(
       React.createElement(ClusterView, { model, detail: null, toolbarStart: React.createElement('span', { className: 'switch-marker' }) })
     )
-    expect(html).toContain('<div class="kube-cluster-bar"><span class="switch-marker"></span><select')
+    expect(html).toContain('<div class="kube-cluster-bar"><span class="switch-marker"></span><span class="kube-sel-tip"')
   })
 
   it('starts the row with the context pill without one', () => {
     const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))
-    expect(html).toContain('<div class="kube-cluster-bar"><select')
+    expect(html).toContain('<div class="kube-cluster-bar"><span class="kube-sel-tip"')
+  })
+
+  // The open list of a native select is drawn by the OS and ignores the theme: both pickers are the app's Select.
+  it('draws the context and the namespace as the app dropdown', () => {
+    const html = renderToStaticMarkup(React.createElement(ClusterView, { model, detail: null }))
+    expect(html).not.toContain('<select')
+    expect(html).toMatch(/<button[^>]*class="sel-trigger"[^>]*aria-label="kube.cluster.context"/)
+    expect(html).toMatch(/<button[^>]*class="sel-trigger"[^>]*aria-label="kube.cluster.namespace"/)
+    expect(html).toContain('title="kind-dev"')
   })
 
   // Final review T10: kubeconfig that could not be read says so, not that the remembered cluster is missing.

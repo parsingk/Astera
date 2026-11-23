@@ -6,6 +6,7 @@ import { useI18n } from '../../../i18n/I18nProvider'
 import type { ClusterViewModel } from '../../../hooks/useClusterView'
 import { KUBECTL_MISSING, LIST_PAGE_TOO_LARGE, type KindDef, type ObjectRef, type Row } from '../../../../../core/kube/cluster/types'
 import { ContextMenu } from '../../ContextMenu'
+import { Select } from '../../Select'
 import { ClusterTable } from './ClusterTable'
 import { ClusterTree } from './ClusterTree'
 import { clusterMenuItems, shellChoice, writeMenuHandlers, type WriteAsk } from './clusterMenu'
@@ -143,38 +144,35 @@ export function ClusterView({
             <span className="kube-pill-text">{t('kube.cluster.contextMissing', { name: displayContextName(contextName).short })}</span>
           </span>
         )}
-        <select
-          className="kube-pill kube-pill-ctx"
-          title={contextName ?? t('kube.cluster.context')}
-          aria-label={t('kube.cluster.context')}
-          value={contextName ?? ''}
-          onChange={(e) => model.setContext(e.target.value)}
-        >
-          {contextName === null && <option value="" disabled />}
-          {contextOptions.map((n) => (
-            <option key={n} value={n}>
-              {displayContextName(n).short}
-            </option>
-          ))}
-        </select>
+        {/* Select has no title prop; the full context name is what the short label hides. */}
+        <span className="kube-sel-tip" title={contextName ?? t('kube.cluster.context')}>
+          <Select
+            className="dense kube-sel kube-sel-ctx"
+            ariaLabel={t('kube.cluster.context')}
+            placeholder={t('kube.cluster.context')}
+            items={contextOptions.map((n) => ({ value: n, label: displayContextName(n).short }))}
+            value={contextName ?? ''}
+            onChange={model.setContext}
+            noCheck
+          />
+        </span>
 
         {model.namespacesForbidden ? (
           <NamespaceField value={view.namespace} onCommit={model.setNamespace} />
         ) : (
-          <select
-            className="kube-pill kube-pill-ns"
-            title={t('kube.cluster.namespace')}
-            aria-label={t('kube.cluster.namespace')}
-            value={view.namespace ?? ''}
-            onChange={(e) => model.setNamespace(e.target.value === '' ? null : e.target.value)}
-          >
-            <option value="">{t('kube.cluster.allNamespaces')}</option>
-            {nsOptions.map((n) => (
-              <option key={n} value={n}>
-                {t('kube.toolbar.ns', { ns: n })}
-              </option>
-            ))}
-          </select>
+          <span className="kube-sel-tip" title={t('kube.cluster.namespace')}>
+            <Select
+              className="dense kube-sel kube-sel-ns"
+              ariaLabel={t('kube.cluster.namespace')}
+              items={[
+                { value: '', label: t('kube.cluster.allNamespaces') },
+                ...nsOptions.map((n) => ({ value: n, label: t('kube.toolbar.ns', { ns: n }) }))
+              ]}
+              value={view.namespace ?? ''}
+              onChange={(v) => model.setNamespace(v === '' ? null : v)}
+              noCheck
+            />
+          </span>
         )}
 
         <label className="kube-cluster-filter">

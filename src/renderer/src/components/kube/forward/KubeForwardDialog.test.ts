@@ -30,10 +30,10 @@ describe('KubeForwardDialog', () => {
     expect(html).toContain('web')
     expect(html).toContain('prod')
     expect(html).toContain('shop')
+    // The remote port is the app's Select: closed, its trigger shows the first port.
     expect(html).toContain('>80 http<')
-    expect(html).toContain('>443<')
-    expect(html).toContain('kube.forward.other')
-    expect(html).toContain('<select')
+    expect(html).not.toContain('<select')
+    expect(html).toMatch(/<button[^>]*class="sel-trigger"[^>]*aria-label="kube.forward.remote"/)
   })
 
   it('draws the target kind as the list chip', () => {
@@ -55,9 +55,11 @@ describe('KubeForwardDialog', () => {
   it('names its fields', () => {
     const html = render(service([{ port: 80, name: 'http' }]))
     const forOf = [...html.matchAll(/<label[^>]*for="([^"]+)"/g)].map((m) => m[1])
-    const select = /<select[^>]*id="([^"]+)"/.exec(html)?.[1]
     const inputs = [...html.matchAll(/<input[^>]*id="([^"]+)"/g)].map((m) => m[1])
-    expect(select && forOf).toContain(select)
+    // With ports the remote field is the Select, named through its aria-label; no label may point at nothing.
+    expect(html).toMatch(/aria-label="kube.forward.remote"/)
+    const ids = [...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1])
+    for (const f of forOf) expect(ids).toContain(f)
     expect(inputs.length).toBeGreaterThan(0)
     for (const id of inputs) expect(forOf).toContain(id)
     expect(html).not.toContain('type="number"')
