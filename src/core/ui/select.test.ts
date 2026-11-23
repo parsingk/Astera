@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupRowsOf, menuAlignment, menuPlacement, nextCursor, type SelectItem } from './select'
+import { groupRowsOf, menuAlignment, menuPlacement, nextCursor, nextEnabledCursor, optionAria, type SelectItem } from './select'
 
 const it_ = (value: string, group?: string): SelectItem => ({ value, label: value, group })
 
@@ -31,6 +31,61 @@ describe('nextCursor', () => {
     // 목록이 줄어든 뒤 커서가 남아 있는 경우 — 렌더가 빈 항목을 짚지 않아야 한다
     expect(nextCursor(9, 3, 1)).toBe(1)
     expect(nextCursor(-4, 3, 1)).toBe(0)
+  })
+})
+
+describe('nextEnabledCursor', () => {
+  const mk = (...off: boolean[]): SelectItem[] => off.map((d, i) => ({ value: `v${i}`, label: `v${i}`, disabled: d }))
+
+  it('skips a disabled item going down', () => {
+    expect(nextEnabledCursor(mk(false, true, false), 0, 1)).toBe(2)
+  })
+
+  it('skips a disabled item going up', () => {
+    expect(nextEnabledCursor(mk(false, true, false), 2, -1)).toBe(0)
+  })
+
+  it('wraps past a disabled item at either end', () => {
+    expect(nextEnabledCursor(mk(true, false, false), 2, 1)).toBe(1)
+    expect(nextEnabledCursor(mk(false, false, true), 0, -1)).toBe(1)
+  })
+
+  it('lands on the only enabled item from anywhere', () => {
+    expect(nextEnabledCursor(mk(true, false, true), 1, 1)).toBe(1)
+    expect(nextEnabledCursor(mk(true, false, true), 0, -1)).toBe(1)
+  })
+
+  it('rests nowhere (-1) when every item is disabled, or there are none', () => {
+    expect(nextEnabledCursor(mk(true, true), 0, 1)).toBe(-1)
+    expect(nextEnabledCursor(mk(true, true), 1, -1)).toBe(-1)
+    expect(nextEnabledCursor([], 0, 1)).toBe(-1)
+  })
+
+  it('behaves like nextCursor when nothing is disabled', () => {
+    expect(nextEnabledCursor(mk(false, false, false), 2, 1)).toBe(0)
+    expect(nextEnabledCursor(mk(false, false, false), 0, -1)).toBe(2)
+  })
+
+  it('from nowhere, up lands on the last item and down on the first when all are enabled', () => {
+    expect(nextEnabledCursor(mk(false, false, false), -1, -1)).toBe(2)
+    expect(nextEnabledCursor(mk(false, false, false), -1, 1)).toBe(0)
+  })
+
+  it('starts from the top or bottom when the cursor is at nowhere (-1)', () => {
+    expect(nextEnabledCursor(mk(true, false, false), -1, 1)).toBe(1)
+    expect(nextEnabledCursor(mk(false, false, true), -1, -1)).toBe(1)
+  })
+})
+
+describe('optionAria', () => {
+  it('marks a disabled row aria-disabled="true" and an enabled one not at all', () => {
+    expect(optionAria({ value: 'a', label: 'a', disabled: true }, '')['aria-disabled']).toBe(true)
+    expect(optionAria({ value: 'a', label: 'a' }, '')['aria-disabled']).toBeUndefined()
+  })
+
+  it('marks the row whose value is selected', () => {
+    expect(optionAria({ value: 'a', label: 'a' }, 'a')['aria-selected']).toBe(true)
+    expect(optionAria({ value: 'a', label: 'a' }, 'b')['aria-selected']).toBe(false)
   })
 })
 

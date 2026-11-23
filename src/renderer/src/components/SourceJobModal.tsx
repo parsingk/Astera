@@ -5,6 +5,7 @@ import { DEFAULT_BLOCKING_SEVERITY } from '../../../core/orchestration/convergen
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
+import { Select } from './Select'
 import { failureLine } from './pluginsText'
 import { backdropProps } from '../lib/backdrop'
 import { createPause } from '../lib/pausedSearch'
@@ -182,8 +183,8 @@ export function SourceJobView(p: SourceJobViewProps): React.JSX.Element {
       <div className="modal source-job" onClick={(e) => e.stopPropagation()}>
         <h2>{t('jobs.source.title')}</h2>
         <p className="modal-hint">{t('jobs.new.gitRequired')}</p>
-        {/* A native select, not the app's Select: a source that is not ready is a greyed option, which Select has no
-            way to draw (§3.1). `field` gives the search the app's input look. */}
+        {/* A source that is not ready is a dimmed, unpickable row in the app's Select, its reason already in the label.
+            `field` gives the search the app's input look. */}
         <div className="field source-pick">
           {p.sources === null ? (
             p.sourcesError !== undefined ? (
@@ -195,17 +196,14 @@ export function SourceJobView(p: SourceJobViewProps): React.JSX.Element {
               <p className="modal-hint">{t('jobs.source.sourcesLoading')}</p>
             )
           ) : (
-            <select value={p.source} onChange={(e) => p.onSource(e.target.value)} aria-label={t('jobs.source.source')} autoFocus>
-              <option value="">{t('jobs.source.sourcePick')}</option>
-              {p.sources.map((s) => {
-                const c = sourceChoice(s, t)
-                return (
-                  <option key={c.value} value={c.value} disabled={c.disabled}>
-                    {c.label}
-                  </option>
-                )
-              })}
-            </select>
+            <Select
+              items={p.sources.map((s) => sourceChoice(s, t))}
+              value={p.source}
+              onChange={p.onSource}
+              placeholder={t('jobs.source.sourcePick')}
+              ariaLabel={t('jobs.source.source')}
+              autoFocus
+            />
           )}
           {p.source !== '' && (
             <input
