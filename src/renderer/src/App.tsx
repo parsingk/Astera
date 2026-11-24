@@ -6332,7 +6332,8 @@ export default function App(): React.JSX.Element {
           }}
           onOpenFile={(path) => {
             setPaletteOpen(null)
-            openFile(path)
+            // The explorer's opener: an image or a video goes to the media viewer, the rest to the editor
+            openProjectFile(path)
           }}
           onClose={() => setPaletteOpen(null)}
         />

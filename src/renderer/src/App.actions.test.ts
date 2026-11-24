@@ -47,7 +47,8 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   // The key remounts the box when it is reopened on the other list (going to a file chosen from the actions list).
   it("gives the palette the query it opens with, the explorer's project, and a file opener that closes it first", () => {
     expect(src).toMatch(/<CommandPalette\s+key=\{paletteOpen\.query\}\s+initialQuery=\{paletteOpen\.query\}\s+projectRoot=\{currentProject\}/)
-    expect(src).toMatch(/onOpenFile=\{\(path\) => \{\s*setPaletteOpen\(null\)\s*openFile\(path\)/)
+    // The explorer's own opener: an image or a video goes to the media viewer, as a click in the explorer sends it
+    expect(src).toMatch(/onOpenFile=\{\(path\) => \{\s*setPaletteOpen\(null\)\s*(?:\/\/[^\n]*\n\s*)?openProjectFile\(path\)/)
     expect(src).toMatch(/const \[paletteOpen, setPaletteOpen\] = useState<\{ query: '>' \| '' \} \| null>\(null\)/)
   })
 
