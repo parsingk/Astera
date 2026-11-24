@@ -5726,9 +5726,11 @@ export function registerIpc(
   const quickOpen = createQuickOpen({ index: fileIndex, allowedRoot: assertAllowedPath })
   ipcMain.handle('files.quickOpen', (_e, root: unknown, query: unknown, refresh?: unknown) => quickOpen(root, query, refresh))
   // Text search (spec W2): lines of the files that same index lists, behind the same guard; one search per renderer, which
-  // a newer query or an empty one stops (main/textSearch.ts).
+  // a newer query or an empty one stops (main/textSearch.ts). A new document runs no cleanup and keeps its webContents id,
+  // so its searches are stopped here, as the kube registries are.
   const textSearch = createTextSearch({ index: fileIndex, allowedRoot: assertAllowedPath })
-  ipcMain.handle('files.searchText', (e, root: unknown, query: unknown, refresh?: unknown) => textSearch(e.sender.id, root, query, refresh))
+  ipcMain.handle('files.searchText', (e, root: unknown, query: unknown, refresh?: unknown) => textSearch.ask(e.sender.id, root, query, refresh))
+  onNewDocument.push(() => textSearch.stopAll())
 
   // ---- git status. A path-to-state map for inline display in the tree.
   // --no-optional-locks is required: without it, status updates .git/index, which fires GitWatcher again

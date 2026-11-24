@@ -11,8 +11,14 @@ describe('text search wiring', () => {
   it('answers files.searchText from the shared index, behind the files path guard, one search per renderer', () => {
     expect(ipc).toContain('createTextSearch({ index: fileIndex, allowedRoot: assertAllowedPath })')
     expect(ipc).toContain(
-      "ipcMain.handle('files.searchText', (e, root: unknown, query: unknown, refresh?: unknown) => textSearch(e.sender.id, root, query, refresh))"
+      "ipcMain.handle('files.searchText', (e, root: unknown, query: unknown, refresh?: unknown) => textSearch.ask(e.sender.id, root, query, refresh))"
     )
+  })
+
+  // Review I1: a reloaded renderer runs no cleanup and keeps its webContents id, so its search would stay in the map and
+  // answer the next box's refresh. The kube registries are stopped the same way.
+  it('stops every search when the window loads a new document', () => {
+    expect(ipc).toContain('onNewDocument.push(() => textSearch.stopAll())')
   })
 
   it('is on window.api.files', () => {
