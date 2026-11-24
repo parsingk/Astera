@@ -323,6 +323,17 @@ describe('buildIndexIgnoreMatcher', () => {
     expect(ig('src/index.ts')).toBe(false)
   })
 
+  // W2b: 사람이 검색에서 빼고 싶은 것은 루트 .ignore 에 적는다. ripgrep·fd·VS Code 검색이 읽는 그 파일이라 에이전트의 검색도 같은
+  // 폴더를 건너뛴다. 빼기만 하고 되살리지는 않으므로, .gitignore 가 없을 때도 큐레이트 목록은 그대로 둔다.
+  it('루트 .ignore 에 적은 것은 .gitignore 가 있든 없든 더 뺀다', () => {
+    const withGit = buildIndexIgnoreMatcher('/dist\n', 'fixtures/\n*.snap\n')
+    for (const p of ['fixtures/big.json', 'src/a.snap', 'dist/x.js', 'node_modules/y']) expect(withGit(p), p).toBe(true)
+    for (const p of ['src/a.ts', 'build/installer.nsh']) expect(withGit(p), p).toBe(false)
+    const without = buildIndexIgnoreMatcher(null, 'fixtures/\n')
+    for (const p of ['fixtures/big.json', 'build/x', 'node_modules/z']) expect(without(p), p).toBe(true)
+    expect(without('src/index.ts')).toBe(false)
+  })
+
   it('루트 경로("")는 제외하지 않는다', () => {
     expect(buildIndexIgnoreMatcher('x\n')('')).toBe(false)
   })

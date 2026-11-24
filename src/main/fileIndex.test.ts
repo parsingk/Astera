@@ -52,6 +52,26 @@ describe('createFileIndex', () => {
     expect(all).toContain('src/app.ts')
   })
 
+  // W2b's user exclusion: the file ripgrep, fd and VS Code's search already read.
+  it('leaves out what the root .ignore names, as well as the .gitignore', async () => {
+    await write('fixtures/huge.json')
+    await write('.ignore', 'fixtures/\n')
+    const all = await createFileIndex().search(root, '', 100)
+    expect(all.some((p) => p.startsWith('fixtures/'))).toBe(false)
+    expect(all).toContain('build/installer.nsh')
+  })
+
+  // Text search reads every listed file, so it asks for the whole list and whether it is whole.
+  it('lists the whole walked list, with whether it is the whole project and could be read', async () => {
+    const index = createFileIndex()
+    const listed = await index.list(root)
+    expect(listed.paths).toEqual(expect.arrayContaining(['README.md', '.gitignore', 'src/app.ts', 'src/core/conversation.ts', 'build/installer.nsh']))
+    expect(listed.paths).toHaveLength(5)
+    expect(listed.truncated).toBe(false)
+    expect(listed.unavailable).toBe(false)
+    expect(await index.list(path.join(root, 'nope'))).toEqual({ paths: [], truncated: false, unavailable: true })
+  })
+
   it('answers root-relative paths with forward slashes, whatever the platform writes', async () => {
     const found = await createFileIndex().search(root, 'conversation', 10)
     expect(found).toEqual(['src/core/conversation.ts'])
@@ -385,6 +405,9 @@ describe('createFileIndex — noteChanges', () => {
     t.index.noteChanges([{ path: at('.gitignore'), kind: 'change' }])
     await t.index.search(ROOT, '', 10)
     expect(t.walks()).toBe(2)
+    t.index.noteChanges([{ path: at('.ignore'), kind: 'add' }])
+    await t.index.search(ROOT, '', 10)
+    expect(t.walks()).toBe(3)
   })
 
   it('a change outside every cached root changes nothing', async () => {
@@ -455,6 +478,20 @@ describe('createFileIndex — noteChanges', () => {
     const small = tree({ '': [fileEntry('a.ts')] })
     await small.index.search(ROOT, '', 1)
     expect((await small.index.lookup(ROOT, '', 5)).truncated).toBeUndefined()
+    const whole = await t.index.list(ROOT)
+    expect(whole.paths).toHaveLength(20_000)
+    expect(whole.truncated).toBe(true)
+  })
+
+  it('list waits for a walk under way, and answers the list with what the watcher reported since', async () => {
+    const t = tree({ '': [fileEntry('a.ts'), fileEntry('gone.ts')] })
+    t.hold()
+    const listed = t.index.list(ROOT)
+    await new Promise((r) => setTimeout(r, 5))
+    t.index.noteChanges([{ path: at('gone.ts'), kind: 'unlink' }])
+    t.release()
+    expect(await listed).toEqual({ paths: ['a.ts'], truncated: false, unavailable: false })
+    expect(t.walks()).toBe(1)
   })
 })
 

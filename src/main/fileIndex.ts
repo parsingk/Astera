@@ -36,6 +36,10 @@ export const FILE_INDEX_ROOTS_KEPT = 8
  *  files comes back from one readdir, and filtering it is a synchronous loop on main. */
 const YIELD_EVERY = 500
 
+/** The root files that decide what the walk leaves out (buildIndexIgnoreMatcher): the project's .gitignore, and the
+ *  .ignore a person writes to keep folders out of search. A change to either makes the next ask walk again. */
+const IGNORE_FILES = ['.gitignore', '.ignore'] as const
+
 /** The part of a Dirent the walk reads — what a test's in-memory tree has to provide. */
 export interface DirEntry {
   name: string
@@ -65,8 +69,8 @@ interface Entry {
   truncated: boolean
   /** What the walk left out, so a file the watcher reports is added only where the walk would have kept it. */
   ignored: (relPath: string) => boolean
-  /** A folder came, the root's .gitignore changed, or Quick Open opened (expire): the list still answers while the next
-   *  ask walks again. */
+  /** A folder came, the root's .gitignore or .ignore changed, or Quick Open opened (expire): the list still answers while
+   *  the next ask walks again. */
   changed?: true
 }
 
@@ -113,9 +117,13 @@ export interface FileIndex {
    *  period, what it has found so far with `indexing` set; or `unavailable` when the walk failed or
    *  ran out of time. Never rejects. */
   lookup(root: string, query: string, limit: number): Promise<FileIndexAnswer>
+  /** The whole list under `root`, for text search (main/textSearch.ts), which reads every file on it. Waits for a current
+   *  list as `search` does, and says whether it is only the shallow part of a larger project (`truncated`) and whether the
+   *  root could be read at all (`unavailable`, with no paths). Never rejects. */
+  list(root: string): Promise<{ paths: string[]; truncated: boolean; unavailable: boolean }>
   /** What the explorer's file watcher saw (one batch, absolute paths). A deleted file or folder leaves every list below
    *  it, and a new file joins it, at once; a new folder, whose contents are not reported file by file, or a change to the
-   *  root's .gitignore makes the next ask walk again. A content change alone changes no list. A walk under way when the
+   *  root's .gitignore or .ignore makes the next ask walk again. A content change alone changes no list. A walk under way when the
    *  batch arrives gets it applied to its result, since it may have read the folder before the change. */
   noteChanges(changes: readonly FileChange[]): void
   /** Makes the next ask of `root` walk again, its current list answering meanwhile. Quick Open asks for this as it opens:
@@ -142,8 +150,8 @@ function changesUnder(root: string, changes: readonly FileChange[]): RootChanges
   for (const c of changes) {
     if (!isPathWithin(root, c.path)) continue
     const rel = path.relative(root, c.path).split(path.sep).join('/')
-    // The root's .gitignore decides what the walk leaves out, however it changed
-    if (rel === '.gitignore') get().rewalk = true
+    // The root's .gitignore and .ignore decide what the walk leaves out, however they changed
+    if ((IGNORE_FILES as readonly string[]).includes(rel)) get().rewalk = true
     if (c.kind === 'unlink') get().gone.add(rel)
     else if (c.kind === 'unlinkDir') get().goneDirs.add(rel)
     else if (c.kind === 'add') get().added.push(rel)
@@ -213,13 +221,11 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
     // The root is asked about first, within the probe budget. One that does not answer (a dead share)
     // or is not there has no list to wait for.
     if ((await probe(root)) !== 'present') throw new IndexUnavailable(root)
-    let gitignore: string | null = null
-    try {
-      gitignore = await readFile(path.join(root, '.gitignore'))
-    } catch {
-      /* No .gitignore — the curated list only, exactly as the watcher does */
-    }
-    const ignored = buildIndexIgnoreMatcher(gitignore)
+    // No .gitignore: the curated list, exactly as the watcher does. No .ignore: nothing more left out.
+    const [gitignore, ignoreFile] = await Promise.all(
+      IGNORE_FILES.map((name) => readFile(path.join(root, name)).catch(() => null))
+    )
+    const ignored = buildIndexIgnoreMatcher(gitignore, ignoreFile)
     // Breadth-first, so a cap cuts the deepest corners rather than everything after one large folder.
     // Read by an index, never shifted: shift() moves the whole array each time, which made the walk
     // quadratic in the folder count. The folders already read stay in the array — strings, and at
@@ -336,6 +342,12 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
       const current = fresh(root)
       const paths = current ? current.paths : (await walkOf(root).doneOrOverdue).paths
       return filterFilePaths(paths, query, limit)
+    },
+    async list(root) {
+      if (root === '') return { paths: [], truncated: false, unavailable: true }
+      const r = fresh(root) ?? (await walkOf(root).doneOrOverdue)
+      // A walk past its time has a part of a list, which is not a scope a search can say it covered
+      return r.unavailable ? { paths: [], truncated: false, unavailable: true } : { paths: r.paths, truncated: r.truncated, unavailable: false }
     },
     async lookup(root, query, limit) {
       if (root === '') return { paths: [], indexing: false }
