@@ -2173,6 +2173,22 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rtp-item { flex: none; display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box; white-space: nowrap; text-align: left; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); cursor: pointer; }
 .rtp-item .fi { flex: none; }
 .rtp-item:hover { background: var(--elevated); }
+
+/* Command palette (CommandPalette.tsx): a modal near the top of the window, like every editor's. The box keeps focus;
+   the selected row is marked here, not by DOM focus. A blocked row stays listed, dimmed, with its reason. */
+.palette-backdrop { align-items: flex-start; padding-top: 12vh; }
+.palette { width: 560px; max-width: calc(100vw - 32px); max-height: 60vh; box-sizing: border-box; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: 6px; }
+.palette-input { flex: none; width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 7px 9px; font-size: 13px; margin-bottom: 4px; }
+.palette-input:focus { outline: none; border-color: var(--accent); }
+.palette-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.palette-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius); font-size: 12.5px; color: var(--text); cursor: pointer; }
+.palette-row.selected { background: var(--elevated); }
+.palette-row.blocked .palette-title { color: var(--text-dim); }
+.palette-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-reason { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
+.palette-chord { flex: none; font-family: inherit; font-size: 11px; line-height: 1.4; color: var(--text-dim); background: var(--elevated); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); padding: 0 5px; white-space: nowrap; }
+.palette-row.selected .palette-chord { background: var(--panel); }
+.palette-empty { padding: 10px 8px; font-size: 12px; color: var(--text-faint); }
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */
 .rcm-add-option { position: relative; align-self: flex-start; }

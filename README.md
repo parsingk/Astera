@@ -185,6 +185,8 @@ what to check when an explanation is missing.
   and the run console, leaving the panes where they are
 - The other two sidebar views have a key each — `Ctrl`/`Cmd`+`Shift`+`J` for Jobs and
   `Ctrl`/`Cmd`+`Shift`+`H` for How It Works
+- **Command palette:** `Ctrl`/`Cmd`+`Shift`+`P` lists every action with its key and runs the one you
+  type, from inside a terminal too. An action that cannot run right now stays in the list and says why
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
@@ -197,7 +199,7 @@ what to check when an explanation is missing.
   recoverable. Kept 30 days, up to 200 MB per project
 - Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
   splitting panes, moving focus between them, cycling sessions, closing a file tab, opening a
-  sidebar view
+  sidebar view, starting a new session or Job, opening the Kubernetes panel
 
 **Appearance**
 - Seven themes — Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius — picked from cards that each draw

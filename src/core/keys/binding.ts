@@ -34,6 +34,10 @@ export type ActionId =
   | 'run.stop'
   | 'run.rerun'
   | 'run.selectConfig'
+  | 'session.new'
+  | 'job.new'
+  | 'kube.open'
+  | 'palette.open'
 
 export type ActionSpec = {
   id: ActionId
@@ -48,6 +52,13 @@ export type ActionSpec = {
    * lives here rather than on the binding.
    */
   yieldsToTerminal: boolean
+  /**
+   * When the action cannot run right now, does the app still take its key? Normally a blocked action lets the
+   * key go on to whatever has focus (Ctrl+Shift+arrow with no pane that way reaches the terminal). Two families
+   * keep it: an F-key nobody claims reaches a terminal as an escape sequence a shell may print, and Ctrl+\ is
+   * SIGQUIT there. Like yieldsToTerminal, it travels with the action, not with whatever key it is bound to.
+   */
+  swallowsWhenBlocked: boolean
 }
 
 /**
@@ -75,14 +86,16 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       // session. Ctrl+Shift+E was already the second default, so nothing was lost.
       defaults: [`${M}+Shift+E`],
       descKey: 'shortcut.explorer.toggleMode',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'explorer.closeFileTab',
       defaults: [`${M}+W`],
       descKey: 'shortcut.explorer.closeFileTab',
       // On win32, Ctrl+W yields to the terminal's 'delete previous word'. On mac, Cmd+W has no competitor.
-      yieldsToTerminal: !mac
+      yieldsToTerminal: !mac,
+      swallowsWhenBlocked: false
     },
     {
       id: 'explorer.cyclePreview',
@@ -92,7 +105,8 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       // v/V 와 clipMod 만 보고 e.shiftKey 를 확인하지 않아(복사 쪽 매칭과 다르게), 이 조합이 터미널의
       // 붙여넣기이기도 하다. Linux·Windows Terminal 에서 Ctrl+Shift+V 는 표준 터미널 붙여넣기 조합이기도
       // 하다. 마크다운 프리뷰 모드 순환에 터미널 입력을 가로챌 이유가 없으므로 양보한다.
-      yieldsToTerminal: true
+      yieldsToTerminal: true,
+      swallowsWhenBlocked: false
     },
     // The two sidebar views the rail can open. There is no explorer entry beside them: Ctrl+Shift+E
     // switches the explorer's mode rather than opening it, so the file tree has no "open me" key and
@@ -104,7 +118,8 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       defaults: [`${M}+Shift+A`],
       descKey: 'shortcut.sidebar.home',
       // 사이드바 뷰를 여는 것은 셸이 읽는 무엇과도 다투지 않는다 — 나머지 셋과 같은 판단.
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'sidebar.jobs',
@@ -114,13 +129,15 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       descKey: 'shortcut.sidebar.jobs',
       // Opening a sidebar view competes with nothing a shell reads — the same judgement
       // explorer.toggleMode makes.
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'sidebar.howItWorks',
       defaults: [`${M}+Shift+H`],
       descKey: 'shortcut.sidebar.howItWorks',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'sessionTab.prev',
@@ -130,50 +147,58 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       // shipped binding and session mode's users have them in their fingers.
       defaults: ['Ctrl+Shift+Tab', `${M}+PageUp`],
       descKey: 'shortcut.sessionTab.prev',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'sessionTab.next',
       // See sessionTab.prev for why this is Ctrl rather than `${M}`.
       defaults: ['Ctrl+Tab', `${M}+PageDown`],
       descKey: 'shortcut.sessionTab.next',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'pane.splitRight',
       defaults: [`${M}+\\`],
       descKey: 'shortcut.pane.splitRight',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: true
     },
     {
       id: 'pane.splitDown',
       defaults: [`${M}+Shift+\\`],
       descKey: 'shortcut.pane.splitDown',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: true
     },
     {
       id: 'pane.focusLeft',
       defaults: [`${M}+Shift+←`],
       descKey: 'shortcut.pane.focusLeft',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'pane.focusRight',
       defaults: [`${M}+Shift+→`],
       descKey: 'shortcut.pane.focusRight',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'pane.focusUp',
       defaults: [`${M}+Shift+↑`],
       descKey: 'shortcut.pane.focusUp',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     {
       id: 'pane.focusDown',
       defaults: [`${M}+Shift+↓`],
       descKey: 'shortcut.pane.focusDown',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     },
     // The run shortcuts are F-key combinations, and the same on every platform. The Cmd/Ctrl split
     // above exists because Ctrl combos must reach the shell through xterm; F-keys have no such
@@ -189,25 +214,62 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       id: 'run.run',
       defaults: ['Shift+F10'],
       descKey: 'shortcut.run.run',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: true
     },
     {
       id: 'run.stop',
       defaults: ['Ctrl+F2'],
       descKey: 'shortcut.run.stop',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: true
     },
     {
       id: 'run.rerun',
       defaults: ['Ctrl+F5'],
       descKey: 'shortcut.run.rerun',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: true
     },
     {
       id: 'run.selectConfig',
       defaults: ['Alt+Shift+F10'],
       descKey: 'shortcut.run.selectConfig',
-      yieldsToTerminal: false
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: true
+    },
+    // Actions that had only a button until the command palette (ADR-007). No default key: the palette reaches them,
+    // and a person who wants one sets it in Shortcut settings. None yields to the terminal or keeps a key when
+    // blocked, so a key someone gives them behaves like the sidebar keys.
+    {
+      id: 'session.new',
+      defaults: [],
+      descKey: 'shortcut.session.new',
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
+    },
+    {
+      id: 'job.new',
+      defaults: [],
+      descKey: 'shortcut.job.new',
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
+    },
+    {
+      id: 'kube.open',
+      defaults: [],
+      descKey: 'shortcut.kube.open',
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
+    },
+    {
+      id: 'palette.open',
+      // What every editor with a palette binds. Nothing in Astera uses it, and the shell's previous-history key is
+      // Ctrl+P without Shift. It works over a focused terminal, like the sidebar keys.
+      defaults: [`${M}+Shift+P`],
+      descKey: 'shortcut.palette.open',
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
     }
   ]
 }

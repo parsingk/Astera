@@ -169,6 +169,9 @@
   barra de ejecución y la consola de ejecución, dejando los paneles donde están
 - Las otras dos vistas de la barra lateral tienen su propia tecla: `Ctrl`/`Cmd`+`Shift`+`J` para Jobs
   y `Ctrl`/`Cmd`+`Shift`+`H` para How It Works
+- **Paleta de comandos:** `Ctrl`/`Cmd`+`Shift`+`P` muestra todas las acciones con su atajo y ejecuta
+  la que escribes, también desde dentro de una terminal. Una acción que ahora no puede ejecutarse sigue
+  en la lista y dice por qué
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo
@@ -184,7 +187,8 @@
   tú— se puede recuperar. Se conserva 30 días, hasta 200 MB por proyecto
 - Todos los atajos se pueden reasignar en los ajustes, con `Cmd` por defecto en macOS y `Ctrl` en el
   resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de
-  archivo, abrir una vista de la barra lateral
+  archivo, abrir una vista de la barra lateral, empezar una sesión o un Job nuevos, abrir el panel de
+  Kubernetes
 
 **Apariencia**
 - Siete temas — Vega, Orion, Umbra, Aurora, Antares, Quasar y Sirius — elegidos desde tarjetas que se dibujan

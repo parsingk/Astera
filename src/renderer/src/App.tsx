@@ -31,6 +31,7 @@ import { UnderstandingView } from './components/UnderstandingView'
 import { RecordDetailHost } from './components/RecordDetail'
 import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
+import { CommandPalette } from './components/CommandPalette'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -93,8 +94,11 @@ import type { ProjectUnderstanding, RecordStatus } from '../../core/understandin
 import { findRun, runDetailKey } from '../../core/orchestration/snapshot'
 import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
 import { toolbarState, upsertRun } from '../../core/run/instances'
-import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
+import { findActionForEvent, formatChord, resolveBindings, type ActionId, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
+import { createActionRegistry, type ActionHandler } from './lib/actionRegistry'
+import { keyDecision, keyFocusOf } from './lib/keyRouting'
+import { paneKeyTarget } from './lib/paneKeys'
 import {
   MIN_CHECKING_MS,
   formatCheckedAt,
@@ -128,7 +132,6 @@ import {
   addTab,
   countLeaves,
   createGroup,
-  findNeighbor,
   firstLeaf,
   groupOfTab,
   leafOf,
@@ -140,8 +143,8 @@ import {
   splitAndMove,
   unsplit,
   type DropZone,
-  type MoveDir,
   type PaneDir,
+  type PaneLeaf,
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
@@ -702,6 +705,13 @@ export default function App(): React.JSX.Element {
   const [keyOverrides, setKeyOverrides] = useState<Record<string, string[]>>({})
   const bindingsRef = useRef<Bindings>(resolveBindings({}, ACTIONS))
   bindingsRef.current = resolveBindings(keyOverrides, ACTIONS)
+  // Every UI action runs through this registry (knowledge/decisions/ADR-007): the keydown listener, the command
+  // palette, and later the actions plugins contribute. What each core action does is actionImplRef, rebuilt every
+  // render further down once everything it calls exists; an effect beside the keydown listener registers one
+  // delegate per action that reads it from there.
+  const [actionRegistry] = useState(createActionRegistry)
+  const actionImplRef = useRef<Record<ActionId, ActionHandler> | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
   const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
@@ -1013,15 +1023,9 @@ export default function App(): React.JSX.Element {
       ? activeTabId
       : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
-   *  render-time values (via closeFileTab), so a key listener registered once that called a captured
-   *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
+   *  render-time values (via closeFileTab), so a subscription registered once (an agent tab closing when its
+   *  session ends) that called a captured stale closure would act on outdated tabs. */
   const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
-  // The run shortcuts (Task 9). Same reason as the two refs above: the keydown effect is registered
-  // once with no dependencies, so it would otherwise close over the first render's runStart/runStop/
-  // selectedRunId. Assigned once those exist, further down.
-  const runStartRef = useRef<() => void>(() => {})
-  const runStopSelectionRef = useRef<() => void>(() => {})
-  const runRerunSelectedRef = useRef<() => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
@@ -1094,8 +1098,6 @@ export default function App(): React.JSX.Element {
       })
       .catch(() => {})
   }, [])
-  const cliRef = useRef(cli)
-  cliRef.current = cli
   // The install button on the toast is pressed later — it has to see the real number of running sessions at that moment
   const runningCountRef = useRef(0)
 
@@ -1453,202 +1455,43 @@ export default function App(): React.JSX.Element {
     }
   }, [showSettings])
 
-  // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
-  // is. Being in the capture phase, it catches keys before xterm and blocks the residual sequence with
-  // preventDefault plus stopPropagation. Ctrl+PageUp/Down cycles tabs within the active group, while
-  // Ctrl+Shift+arrow moves focus to a neighbouring group. Both wrap around.
-  // Switching only changes activeSessionId (or activeFileId); focusing the newly active terminal is
-  // done by TerminalView's active effect.
+  // The global shortcuts: one capture listener on the window, so a key works wherever focus is and is caught before
+  // xterm sees it (preventDefault plus stopPropagation keep the residual sequence out of the terminal). It decides
+  // only whether the key is the app's: not while a modal is open, not when the focused terminal or text field keeps
+  // it (keyRouting.ts), and not when the action cannot run, unless that action keeps its key anyway
+  // (ActionSpec.swallowsWhenBlocked). What an action does is its handler in the action registry (ADR-007).
+  // Matching is on e.code, so it is unaffected by IME state or Shift, and a key rebound in settings arrives here too.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // The bindings come from the registry. Keys the user changed in settings arrive here too, so no
-      // key is hardcoded in a condition. Matching is on e.code, so it is unaffected by IME state or Shift.
       const action = findActionForEvent(bindingsRef.current, e, ACTIONS)
       if (!action) return
       if (modalOpenRef.current || isConfirmOpen()) return
-      const focusEl = document.activeElement as HTMLElement | null
-      const inXterm = !!focusEl?.closest('.xterm')
-      // The conversation view's composer is a real <textarea>, so the `editable` guard below caught it
-      // and every app shortcut with that guard died the moment a person clicked into it — Ctrl+Shift+E,
-      // Ctrl+Tab, Ctrl+Shift+arrow. The guard predates this view: its exceptions name xterm and
-      // CodeMirror, the two text surfaces that existed when it was written.
-      //
-      // The composer is the third, and it plays the part xterm plays in the other view — the place you
-      // sit while working, not a form field. So it takes the same deal xterm already took: app
-      // navigation wins over the field's own editing (Ctrl+Shift+arrow selects by word in a textarea;
-      // the terminal gave that up for pane focus long ago, and a message box is no more precious).
-      const inConversation = !!focusEl?.closest('[data-slot="conversation-pane"]')
-      const editable =
-        !!focusEl &&
-        (focusEl.tagName === 'INPUT' ||
-          focusEl.tagName === 'TEXTAREA' ||
-          focusEl.tagName === 'SELECT' ||
-          focusEl.isContentEditable)
-      // Each action has its own rule about yielding to the terminal — the registry holds it (so it follows a rebind)
-      if (inXterm && ACTIONS.find((a) => a.id === action)?.yieldsToTerminal) return
-
-      // Toggling explorer mode. The exceptions are xterm and CodeMirror. Both are text areas the app
-      // owns and neither has this feature inside it, so the mode toggle wins. CM6 sets
-      // contenteditable=true on .cm-content for an editable file, so without this exception the toggle
-      // would be blocked entirely while the editor has focus.
-      if (action === 'explorer.toggleMode') {
-        if (editable && !inConversation && !focusEl?.closest('.xterm, .cm-editor')) return
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        toggleExplorer()
-        return
-      }
-      // The two sidebar views the rail can open. Pressed again they close, which is what the rail
-      // button does — so the key is the button, not a second way in.
-      //
-      // Not blocked while a text field has focus, unlike the tab-cycling actions below: the default
-      // chords are Ctrl+Shift+J/H, which no input of ours uses, and switching sidebars while reading a
-      // file is exactly when it is wanted.
-      //
-      // Both toggles are recreated on every render and this listener holds the first one, but their
-      // bodies are all refs and setters, so a stale closure still acts on the latest state — the same
-      // convention toggleExplorer and closeFileTab already rely on.
-      if (action === 'sidebar.home' || action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return // holding the key would flap the sidebar
-        if (action === 'sidebar.home') toggleSessions()
-        else if (action === 'sidebar.jobs') toggleJobs()
-        else toggleHiw()
-        return
-      }
-      // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
-      // confirmation modal. The condition is that the active tab is one Ctrl+W may close — a file or a
-      // How It Works record. Both are opened and closed freely to read something; a session is not, and
-      // closing one kills a process, so it is left out (the tab strip's × still closes all three).
-      // A tab lives in a pane now, so whether the explorer sidebar is showing says nothing about it.
-      // It is still not intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous
-      // word, which is needed while typing to Claude (see yieldsToTerminal above).
-      if (action === 'explorer.closeFileTab') {
-        const id = closableTabIdRef.current
-        if (!id) return // nothing closable is open — unlike a browser, this does not close the window
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return // stops tabs closing in a chain while the key is held
-        // Through the shared closer rather than closeFileTab, so a file still gets its dirty-file
-        // confirmation and a record tab takes its own branch (which also clears the remembered scope).
-        closeWorkbenchTabRef.current(id)
-        return
-      }
-      // 마크다운 프리뷰 모드 순환. 활성 탭이 .md 일 때만 의미가 있다. 툴바 버튼은 모드를 직접
-      // 지정하고 이 키만 순환한다 — 두 진입점의 역할이 다르다.
-      // CM6 안에서도 동작해야 한다(explorer.toggleMode 와 같은 예외): 편집하다가 결과를 보려고
-      // 누르는 키인데 에디터에 포커스가 있을 때 막히면 쓸 수 없다
-      if (action === 'explorer.cyclePreview') {
-        const id = activeFileIdRef.current
-        if (!id) return
-        const tab = fileTabsRef.current.find((tb) => tb.id === id)
-        if (!tab || !isMarkdownPath(tab.path)) return
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        const cur = mdModesRef.current[id] ?? defaultMdMode()
-        setMdMode(id, cycleViewMode(cur))
-        return
-      }
-      // The run shortcuts. Unlike most branches here there is no `editable` guard: these are F-key
-      // combinations that no text field claims, and running the project from inside the terminal is
-      // the case they exist for.
-      if (action === 'run.run' || action === 'run.stop' || action === 'run.rerun' || action === 'run.selectConfig') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        if (action === 'run.selectConfig') {
-          // The toolbar (and its menu) is only rendered for an open project. Forcing the menu open
-          // with none open would arm it to spring open by itself the next time a project is opened,
-          // since RunConfigMenu is controlled and mounts already open.
-          if (!currentProjectRef.current) return
-          setRunMenuOpen((v) => !v)
-        } else if (action === 'run.run') runStartRef.current()
-        else if (action === 'run.stop') runStopSelectionRef.current()
-        else runRerunSelectedRef.current()
-        return
-      }
-      // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
-      // puts them. Neither the Claude Code nor the Codex TUI uses Ctrl+\, so terminal input is unaffected.
-      if (action === 'pane.splitRight' || action === 'pane.splitDown') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        const cur = layoutRef.current
-        const dir: PaneDir = action === 'pane.splitDown' ? 'col' : 'row'
-        if (cur && countLeaves(cur) >= MAX_PANES) {
-          toast.info(tRef.current('session.pane.maxReached'))
-          return
-        }
-        // With 2 or more tabs in the active group, the active tab moves into a new group — whichever
-        // kind it is. A file on one side and a session on the other is the arrangement this keyboard
-        // path exists for, so the tab id goes to the tree unread.
-        const target =
-          cur && ((activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur))
-        if (target && target.tabIds.length >= 2) {
-          splitActiveRef.current(dir, false, target.activeTabId)
-          return
-        }
-        // With only one tab, splitting would change nothing, so a new session is created first —
-        // cancelling leaves the layout untouched. pendingSplitRef is set only when the dialog actually
-        // opens: if it does not, no cleanup path runs, the value lingers, and some later unrelated
-        // session picks it up and splits unexpectedly.
-        if (cliRef.current?.claude.ok === true || cliRef.current?.codex.ok === true) {
-          pendingSplitRef.current = dir
-          setShowNew(true)
-        }
-        return
-      }
-      // The remaining actions are tab cycling (sessionTab.*) and moving focus to a neighbouring pane (pane.focus*).
-      const focusMove = action.startsWith('pane.focus')
-      const delta = action === 'sessionTab.prev' || action === 'pane.focusLeft' || action === 'pane.focusUp' ? -1 : 1
-      const vertical = action === 'pane.focusUp' || action === 'pane.focusDown'
-      // Ignored while a normal input field — not a terminal — has focus (preserves its own Ctrl+Shift+arrow selection).
-      // Tab cycling is the exception inside our own editor: the tab bar is reachable from the terminal
-      // but would otherwise be unreachable from the editor, which is where you sit while reading a file.
-      // The exception is scoped to .cm-editor rather than to every input, so a rebind onto an arrow chord
-      // still leaves a settings field's own selection alone. Same shape as explorer.toggleMode's exception.
-      const tabCycle = action === 'sessionTab.prev' || action === 'sessionTab.next'
-      if (editable && !inXterm && !inConversation && !(tabCycle && focusEl?.closest('.cm-editor'))) return
-      // With Shift, move focus to a neighbouring group; otherwise cycle tabs within the
-      // active group. Global session cycling is gone: sessions are scattered across groups, so there is
-      // no such thing as a "global order". To reach a session in another group, move groups with
-      // Ctrl+Shift+arrow and pick the tab with Ctrl+PageUp/Down (the same division of labour as
-      // IntelliJ's Goto Next Splitter plus Select Next Tab).
-      const cur = layoutRef.current
-      const curPane = activePaneIdRef.current
-      if (focusMove && cur && curPane && countLeaves(cur) >= 2) {
-        const dir: MoveDir = vertical ? (delta < 0 ? 'up' : 'down') : delta < 0 ? 'left' : 'right'
-        const next = findNeighbor(cur, curPane, dir)
-        // With no neighbour, do nothing and let it flow through to the terminal — putting
-        // preventDefault before the next check would swallow a key like Ctrl+Shift+↓ with no neighbour
-        // before it ever reached the terminal
-        if (!next) return
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        setActivePaneId(next)
-        return
-      }
-      if (vertical) return // unsplit, there is no cycling up or down
-      // Unsplit, there is only one group, so this effectively cycles every session — the same as it always felt
-      const group = cur && ((curPane && leafOf(cur, curPane)) || firstLeaf(cur))
-      if (!group || group.tabIds.length < 2) return
-      const i = group.tabIds.indexOf(group.activeTabId)
-      if (i < 0) return
+      const spec = ACTIONS.find((a) => a.id === action)
+      if (!spec) return
+      // pass: focus keeps the key, or the action has nothing to do and lets the key go on (Ctrl+Shift+arrow with no
+      // pane that way reaches the terminal). swallow: blocked, but the action keeps its key. See keyRouting.ts.
+      const decision = keyDecision(spec, keyFocusOf(document.activeElement), actionRegistry.state(action).ok)
+      if (decision === 'pass') return
       e.preventDefault()
       e.stopPropagation()
-      if (e.repeat) return
-      const n = group.tabIds.length
-      // 종류를 가리지 않고 그 페인의 탭 줄에 그려진 순서대로 돈다 — 파일 탭과 세션 탭 사이에 경계가
-      // 없다. 클릭과 같은 경로(selectWorkbenchTab)를 타야 세션 탭을 지날 때 활성 세션도 함께 맞춰진다
-      selectWorkbenchTabRef.current(group.tabIds[(i + delta + n) % n])
+      if (e.repeat) return // holding the key would flap a sidebar or close tabs in a chain
+      if (decision === 'run') actionRegistry.run(action)
     }
     window.addEventListener('keydown', onKey, true) // capture
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
+  }, [actionRegistry])
+
+  // One delegate per action under the 'core' owner, registered once. Each reads this render's handler from
+  // actionImplRef, so it acts on the latest state without registering again.
+  useEffect(() => {
+    const disposers = ACTIONS.map((a) =>
+      actionRegistry.register('core', a.id, {
+        blockedBy: () => (actionImplRef.current ? (actionImplRef.current[a.id].blockedBy?.() ?? null) : 'action.blocked.noHandler'),
+        run: () => actionImplRef.current?.[a.id].run()
+      })
+    )
+    return () => disposers.forEach((dispose) => dispose())
+  }, [actionRegistry])
 
   useEffect(() => {
     // Rolling: swap the session in place in the same tab, plus the progress banner state
@@ -2511,9 +2354,6 @@ export default function App(): React.JSX.Element {
     setLayout(res.root)
     setActivePaneId(res.paneId)
   }
-  // A ref so onKey (useEffect([])) can call the latest splitActive without a stale closure
-  const splitActiveRef = useRef(splitActive)
-  splitActiveRef.current = splitActive
 
   /** A drop aimed at a specific group's body (coming from PaneGrid). The tab id arrives as it is and goes
    *  straight to the tree, so which kind it is does not matter here.
@@ -2673,7 +2513,7 @@ export default function App(): React.JSX.Element {
 
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
-  // Read by the run:status subscription, which is registered once — same reason as runStartRef
+  // Read by the run:status subscription, which is registered once — same reason as closeWorkbenchTabRef
   // Runs whose address has already been offered — the toast is a one-time hint, not a repeat on
   // every status change the run goes through.
   const previewOfferedRef = useRef(new Set<string>())
@@ -3374,7 +3214,11 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
+  modalOpenRef.current = modalOpenRef.current || paletteOpen || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
+  // Three more dialogs with a backdrop, under the conditions they are drawn on below: the remote sessions dialog, a
+  // block-mode update campaign's gate, and the first-run question. Without them a shortcut or the palette acted on
+  // the workbench behind them, and Escape in the palette also dismissed the first-run question for good.
+  modalOpenRef.current = modalOpenRef.current || remoteDialog !== null || campaign?.mode === 'block' || (firstRunAsked === false && accounts.length > 0)
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -3571,7 +3415,7 @@ export default function App(): React.JSX.Element {
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
   }
-  // The run:status subscription (registered once) opens previews through this — same reason as runStartRef
+  // The run:status subscription (registered once) opens previews through this — same reason as closeWorkbenchTabRef
   const openBrowserTabRef = useRef(openBrowserTab)
   openBrowserTabRef.current = openBrowserTab
 
@@ -4453,21 +4297,139 @@ export default function App(): React.JSX.Element {
   const runStop = (runId: string): void => {
     void window.api.run.stop(runId)
   }
-  // The run shortcuts' refs (see their declaration above): kept fresh on every render so the keydown
-  // effect's stale closure still calls today's runStart/runStop against today's runs and selection.
-  runStartRef.current = () => runStart()
-  // The same expansion the toolbar's ⏹ makes (toolbarState.stopTargets), so a compound stops every live member.
-  runStopSelectionRef.current = () => toolbarState(runs, runSelectedId, runConfigs).stopTargets.forEach(runStop)
-  // What the run list's ↻ does: restart the selected run's own configuration. Silently does nothing
-  // with the panel closed or no run selected, like the other run shortcuts' no-ops.
-  runRerunSelectedRef.current = (): void => {
-    if (!selectedRunId) return
-    const configId = runs.find((r) => r.runId === selectedRunId)?.configId
-    // The rail's ↻ is disabled when the configuration is gone (rerunGone); a run outlives its
-    // configuration when the manager deletes it or the temporary cap evicts it. The shortcut has to
-    // carry the same guard, or it sends a dead id and the user reads a raw NO_CONFIG.
-    if (!configId || !runConfigs.some((c) => c.id === configId)) return
-    runStart(configId)
+  /** Why the rail's ↻ would rerun nothing now: no run selected, or its configuration is gone (a run outlives its
+   *  configuration when the manager deletes it or the temporary cap evicts it), which the rail says in the same
+   *  words (rerunGone). Sending the dead id would show the person a raw NO_CONFIG. */
+  const rerunBlocked = (): MessageKey | null => {
+    const run = selectedRunId ? runs.find((r) => r.runId === selectedRunId) : undefined
+    if (!run) return 'action.blocked.noSelectedRun'
+    return runConfigs.some((c) => c.id === run.configId) ? null : 'run.rail.rerunGone'
+  }
+  /** The tab and pane keys (paneKeys.ts): cycle the active group's tabs or move to the neighbouring group. */
+  const paneKeyAction = (id: ActionId): ActionHandler => ({
+    blockedBy: () => (paneKeyTarget(id, layoutRef.current, activePaneIdRef.current) ? null : 'action.blocked.noTarget'),
+    run: () => {
+      const target = paneKeyTarget(id, layoutRef.current, activePaneIdRef.current)
+      if (target?.kind === 'pane') setActivePaneId(target.paneId)
+      // The path a click takes (selectWorkbenchTab), so passing a session tab also makes it the active session.
+      else if (target) selectWorkbenchTabRef.current(target.tabId)
+    }
+  })
+  /** Pane splitting, by default Ctrl+\ to the right and Ctrl+Shift+\ below, where VS Code puts them. Neither the
+   *  Claude Code nor the Codex TUI uses Ctrl+\. */
+  const splitAction = (dir: PaneDir): ActionHandler => {
+    const target = (): PaneLeaf | null => {
+      const cur = layoutRef.current
+      return cur && ((activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur))
+    }
+    const cliReady = (): boolean => cli?.claude.ok === true || cli?.codex.ok === true
+    const full = (): boolean => !!layoutRef.current && countLeaves(layoutRef.current) >= MAX_PANES
+    return {
+      // A full grid is not blocked: running it says so in a toast, as it always has.
+      // The CLI that runs here, not a paired Runtime: the new session it opens is a local one.
+      blockedBy: () => (full() || (target()?.tabIds.length ?? 0) >= 2 || cliReady() ? null : 'action.blocked.noLocalCli'),
+      run: () => {
+        if (full()) {
+          toast.info(tRef.current('session.pane.maxReached'))
+          return
+        }
+        // With 2 or more tabs in the active group, the active tab moves into a new group, whichever kind it is. A
+        // file on one side and a session on the other is the arrangement this exists for.
+        const group = target()
+        if (group && group.tabIds.length >= 2) {
+          splitActive(dir, false, group.activeTabId)
+          return
+        }
+        // With only one tab, splitting would change nothing, so a new session is created first; cancelling leaves
+        // the layout untouched. pendingSplitRef is set only when the dialog actually opens: if it does not, no
+        // cleanup path runs, the value lingers, and some later unrelated session picks it up and splits.
+        if (cliReady()) {
+          pendingSplitRef.current = dir
+          setShowNew(true)
+        }
+      }
+    }
+  }
+  /** The active tab when it is a Markdown file, the only tab the preview cycle means anything on. */
+  const markdownTabId = (): string | null => {
+    const id = activeFileIdRef.current
+    const tab = id ? fileTabsRef.current.find((tb) => tb.id === id) : undefined
+    return tab && isMarkdownPath(tab.path) ? tab.id : null
+  }
+  // What each action does, and when it cannot (ADR-007). Rebuilt every render, so a handler reads this render's
+  // state; the registry's delegates read it from here. A Record over ActionId: an action added to ACTIONS without a
+  // handler here does not compile.
+  actionImplRef.current = {
+    'explorer.toggleMode': { run: toggleExplorer },
+    // Ctrl+W, like closing a browser tab: only a tab that opens and closes freely (closableTabIdRef). A session is
+    // not one, since closing it kills a process; the tab strip's × still closes it.
+    'explorer.closeFileTab': {
+      blockedBy: () => (closableTabIdRef.current ? null : 'action.blocked.noClosableTab'),
+      run: () => {
+        const id = closableTabIdRef.current
+        // The shared closer, so a dirty file still asks first and a record tab takes its own branch.
+        if (id) closeWorkbenchTabRef.current(id)
+      }
+    },
+    // Cycles the Markdown preview mode. The toolbar's buttons set a mode directly; only this cycles.
+    'explorer.cyclePreview': {
+      blockedBy: () => (markdownTabId() ? null : 'action.blocked.notMarkdown'),
+      run: () => {
+        const id = markdownTabId()
+        if (id) setMdMode(id, cycleViewMode(mdModesRef.current[id] ?? defaultMdMode()))
+      }
+    },
+    // The rail's sidebar buttons: pressed again they close the view, which is what the button does.
+    'sidebar.home': { run: toggleSessions },
+    'sidebar.jobs': { run: toggleJobs },
+    'sidebar.howItWorks': { run: toggleHiw },
+    'sessionTab.prev': paneKeyAction('sessionTab.prev'),
+    'sessionTab.next': paneKeyAction('sessionTab.next'),
+    'pane.splitRight': splitAction('row'),
+    'pane.splitDown': splitAction('col'),
+    'pane.focusLeft': paneKeyAction('pane.focusLeft'),
+    'pane.focusRight': paneKeyAction('pane.focusRight'),
+    'pane.focusUp': paneKeyAction('pane.focusUp'),
+    'pane.focusDown': paneKeyAction('pane.focusDown'),
+    // ▶ for the toolbar's selection.
+    'run.run': {
+      blockedBy: () => (!currentProject ? 'action.blocked.noProject' : !runSelectedId ? 'action.blocked.noRunConfig' : null),
+      run: () => runStart()
+    },
+    // The expansion the toolbar's ⏹ makes (toolbarState.stopTargets), so a compound stops every live member.
+    'run.stop': {
+      blockedBy: () => (toolbarState(runs, runSelectedId, runConfigs).stopTargets.length > 0 ? null : 'action.blocked.nothingRunning'),
+      run: () => toolbarState(runs, runSelectedId, runConfigs).stopTargets.forEach(runStop)
+    },
+    // What the run list's ↻ does: restart the selected run's own configuration.
+    'run.rerun': {
+      blockedBy: rerunBlocked,
+      run: () => {
+        const configId = runs.find((r) => r.runId === selectedRunId)?.configId
+        if (configId && rerunBlocked() === null) runStart(configId)
+      }
+    },
+    // The toolbar and its menu exist only for an open project. Forcing the menu open with none would arm it to
+    // spring open by itself the next time a project opens, since RunConfigMenu is controlled and mounts open.
+    'run.selectConfig': {
+      blockedBy: () => (currentProjectRef.current ? null : 'action.blocked.noProject'),
+      run: () => setRunMenuOpen((v) => !v)
+    },
+    // The placeholder's and a group's + button: the same gate (canStart), then the new-session dialog.
+    'session.new': { blockedBy: () => (canStart() ? null : 'action.blocked.noCli'), run: () => setShowNew(true) },
+    // The Jobs sidebar's New Job, with its guard: without a project newRunOpen must never become true.
+    'job.new': { blockedBy: () => (currentProject ? null : 'action.blocked.noProject'), run: () => setNewRunOpen(true) },
+    // The rail's Kubernetes icon, shown under the same condition.
+    'kube.open': { blockedBy: () => (kubectlFound && bottomRoot ? null : 'action.blocked.noKubectl'), run: kubeRail },
+    // A menu left open (a tab's menu draws above the palette's backdrop) would stay on screen and keep acting on the
+    // workbench behind the palette, so opening the palette closes the two the keyboard can open.
+    'palette.open': {
+      run: () => {
+        setTabMenu(null)
+        setRunMenuOpen(false)
+        setPaletteOpen(true)
+      }
+    }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -6344,6 +6306,22 @@ export default function App(): React.JSX.Element {
             // 만들자마자 상세 창을 열어 Task 를 짤 수 있게 한다 — onOpenRun 이 하는 것과 같은 짝
             setOpenRun({ projectPath: currentProject, runId })
           }}
+        />
+      )}
+      {paletteOpen && (
+        // Every action but itself, with its first chord and whether it can run now, read from the registry as this
+        // render sees it. It closes before the action runs, so the action is not run behind a modal guard.
+        <CommandPalette
+          entries={ACTIONS.filter((a) => a.id !== 'palette.open').map((a) => {
+            const chord = bindingsRef.current[a.id]?.[0]
+            const state = actionRegistry.state(a.id)
+            return { id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }
+          })}
+          onRun={(id) => {
+            setPaletteOpen(false)
+            actionRegistry.run(id)
+          }}
+          onClose={() => setPaletteOpen(false)}
         />
       )}
       {sourceJobOpen !== null && (
