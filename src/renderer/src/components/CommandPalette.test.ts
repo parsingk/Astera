@@ -8,11 +8,13 @@ import path from 'node:path'
 const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'CommandPalette.tsx'), 'utf8')
 
 describe('CommandPalette wiring', () => {
-  // React.StrictMode runs mount effects twice in development: read inside the effect, the second run would take the
-  // palette's own box as "where focus was", and closing would restore nothing. The render runs before focus moves.
-  it('takes where focus was during the first render, not in the mount effect', () => {
-    expect(src).toMatch(/const \[restoreTo\] = useState\(\(\) => document\.activeElement as HTMLElement \| null\)/)
-    expect(src).not.toMatch(/const before = document\.activeElement/)
+  // Where focus was is read by App as the palette opens (an event handler, so React.StrictMode's doubled effects cannot
+  // read the box itself), and kept when the box is remounted on the other list. Read in the box's own first render, a
+  // remount took the old box's input, already gone, and Escape left focus nowhere (review M1).
+  it('gives focus back to the element App read as the palette opened', () => {
+    expect(src).toMatch(/restoreTo: HTMLElement \| null/)
+    expect(src).not.toMatch(/useState\(\(\) => document\.activeElement/)
+    expect(src).toMatch(/restoreTo\?\.isConnected\) restoreTo\.focus\(\)/)
   })
 
   // A menu left open behind the palette (the run configuration menu, a tab's context menu) listens on document in the
@@ -54,8 +56,16 @@ describe('the palette on files (Quick Open)', () => {
 
   // Rows answering an older query stay on screen while the newer one is asked; Enter on them would open a file the
   // person did not finish typing the name of.
-  it('waits for the rows of what is typed before Enter opens one', () => {
-    expect(src).toMatch(/files\.answeredFor !== text/)
+  it('waits for the rows of what is typed before Enter opens one (lib/quickOpen.ts decides)', () => {
+    expect(src).toMatch(/filesWaiting\(\{ mode, current: files\.current, indexing: files\.indexing, rows: rows\.length \}\)/)
+    expect(src).toMatch(/enterAction\(waiting, cur\)/)
+    expect(src).toMatch(/settleEnter\(waiting, rows\.length\)/)
+  })
+
+  // Spec W2 asks for the search scope to show (review M6): which project, and whether a large one was cut.
+  it('says which project it searches, and when the list was cut', () => {
+    expect(src).toMatch(/t\('quickOpen\.scope', \{ name: /)
+    expect(src).toContain("t('quickOpen.truncated')")
   })
 
   it('says why there are no file rows, or that more are coming', () => {
@@ -81,6 +91,11 @@ describe('useQuickOpenFiles', () => {
     expect(hook).toMatch(/let first = refreshedFor\.current !== root/)
     expect(hook).toMatch(/window\.api\.files\.quickOpen\(root, text, first\)/)
     expect(hook).toMatch(/first = false/)
+  })
+
+  // Review M3: rows of the project the box was on before are not current for the one it is on now.
+  it('counts rows as current only for the project and the query they answer', () => {
+    expect(hook).toMatch(/current: enabled && root !== null && files\.answeredFor === answerKey\(root, text\)/)
   })
 
   it('stops asking for a query once the box holds another', () => {

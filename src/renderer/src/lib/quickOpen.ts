@@ -3,10 +3,35 @@
  *
  * The box is one entry point for two lists. A leading `>` asks for an action, the convention people bring from other
  * editors, and is what Ctrl+Shift+P opens with; anything else is a file name under the explorer's project, which is what
- * Ctrl+P opens with. Deleting the `>` turns one into the other without closing the box.
+ * Ctrl+P opens with. Deleting the `>` turns one into the other without closing the box. A file name's backslashes read
+ * as the slashes the list is written with, so a path copied from a Windows terminal finds its file.
  */
 export function paletteMode(query: string): { mode: 'actions' | 'files'; text: string } {
-  return query.startsWith('>') ? { mode: 'actions', text: query.slice(1).trimStart() } : { mode: 'files', text: query.trim() }
+  return query.startsWith('>')
+    ? { mode: 'actions', text: query.slice(1).trimStart() }
+    : { mode: 'files', text: query.trim().replace(/\\/g, '/') }
+}
+
+/**
+ * Whether Enter has to wait for the file rows: they answer an older query or another project (`current` false), or the
+ * first walk of the project has found nothing yet. Rows on screen that answer what is typed, even while a walk goes on,
+ * are what the person is choosing from.
+ */
+export function filesWaiting(s: { mode: 'actions' | 'files'; current: boolean; indexing: boolean; rows: number }): boolean {
+  return s.mode === 'files' && (!s.current || (s.indexing && s.rows === 0))
+}
+
+/** What Enter does: wait for the rows of what is typed, pick the selected row, or nothing on an empty list. */
+export function enterAction(waiting: boolean, selected: number): { do: 'wait' } | { do: 'choose'; index: number } | { do: 'keep' } {
+  if (waiting) return { do: 'wait' }
+  return selected < 0 ? { do: 'keep' } : { do: 'choose', index: selected }
+}
+
+/** What an Enter that waited does as the rows change: keep waiting, open the first row (as Enter on a current list
+ *  takes it), or end when the answer has no row. */
+export function settleEnter(waiting: boolean, rows: number): 'hold' | 'first' | 'none' {
+  if (waiting) return 'hold'
+  return rows > 0 ? 'first' : 'none'
 }
 
 /**

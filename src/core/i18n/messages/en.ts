@@ -1337,6 +1337,8 @@ export const en: Record<keyof typeof ko, string> = {
   'quickOpen.empty': 'No matching file',
   'quickOpen.indexing': 'Listing the files',
   'quickOpen.unavailable': "Could not list this folder's files",
+  'quickOpen.scope': 'Searching in {name}',
+  'quickOpen.truncated': 'Too many files: only part of them is searched, shallowest folders first',
   'files.action.delete': 'Delete',
   'files.action.duplicate': 'Duplicate',
   'files.action.move': 'Move',

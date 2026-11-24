@@ -713,6 +713,8 @@ export default function App(): React.JSX.Element {
   const actionImplRef = useRef<Record<ActionId, ActionHandler> | null>(null)
   // The palette box, open on actions ('>') or on files (''); null when closed (CommandPalette).
   const [paletteOpen, setPaletteOpen] = useState<{ query: '>' | '' } | null>(null)
+  /** Where focus was before the palette opened (openPalette), given back when it closes. */
+  const paletteRestoreRef = useRef<HTMLElement | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
   const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
@@ -4360,6 +4362,9 @@ export default function App(): React.JSX.Element {
   /** Opens the palette box on actions or on files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
   const openPalette = (query: '>' | ''): void => {
+    // Where focus goes back on closing, read here, before the box takes it, and only from closed: an action chosen in
+    // the box that reopens it on the other list (going to a file) keeps the element focused before the first opening.
+    if (paletteOpen === null) paletteRestoreRef.current = document.activeElement as HTMLElement | null
     setTabMenu(null)
     setRunMenuOpen(false)
     setPaletteOpen({ query })
@@ -4430,11 +4435,9 @@ export default function App(): React.JSX.Element {
     // The rail's Kubernetes icon, shown under the same condition.
     'kube.open': { blockedBy: () => (kubectlFound && bottomRoot ? null : 'action.blocked.noKubectl'), run: kubeRail },
     'palette.open': { run: () => openPalette('>') },
-    // The same box on files (spec W2). It searches the explorer's project, so without one there is nothing to search.
-    'file.quickOpen': {
-      blockedBy: () => (currentProject ? null : 'action.blocked.noProject'),
-      run: () => openPalette('')
-    }
+    // The same box on files (spec W2), over the explorer's project. With no project it still opens: the box says why it is
+    // empty, where a key that did nothing would explain nothing.
+    'file.quickOpen': { run: () => openPalette('') }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -6321,6 +6324,7 @@ export default function App(): React.JSX.Element {
           key={paletteOpen.query}
           initialQuery={paletteOpen.query}
           projectRoot={currentProject}
+          restoreTo={paletteRestoreRef.current}
           entries={ACTIONS.filter((a) => a.id !== 'palette.open').map((a) => {
             const chord = bindingsRef.current[a.id]?.[0]
             const state = actionRegistry.state(a.id)

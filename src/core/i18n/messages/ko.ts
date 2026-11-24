@@ -1419,6 +1419,8 @@ export const ko = {
   'quickOpen.empty': '맞는 파일이 없습니다',
   'quickOpen.indexing': '파일 목록을 만드는 중입니다',
   'quickOpen.unavailable': '이 폴더의 파일 목록을 읽지 못했습니다',
+  'quickOpen.scope': '{name} 안에서 찾습니다',
+  'quickOpen.truncated': '파일이 많아 얕은 폴더부터 일부만 찾습니다',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',

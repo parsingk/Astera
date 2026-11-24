@@ -1306,6 +1306,8 @@ export const es: Catalog = {
   'quickOpen.empty': 'Ningún archivo coincide',
   'quickOpen.indexing': 'Listando los archivos',
   'quickOpen.unavailable': 'No se pudo listar los archivos de esta carpeta',
+  'quickOpen.scope': 'Buscando en {name}',
+  'quickOpen.truncated': 'Hay demasiados archivos: solo se busca una parte, empezando por las carpetas menos profundas',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',

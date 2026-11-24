@@ -1294,6 +1294,8 @@ export const ja: Catalog = {
   'quickOpen.empty': '一致するファイルはありません',
   'quickOpen.indexing': 'ファイル一覧を作成しています',
   'quickOpen.unavailable': 'このフォルダのファイル一覧を読み取れませんでした',
+  'quickOpen.scope': '{name} の中を検索します',
+  'quickOpen.truncated': 'ファイルが多いため、浅いフォルダから一部だけを検索します',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',

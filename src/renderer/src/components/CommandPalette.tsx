@@ -5,7 +5,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { backdropProps } from '../lib/backdrop'
 import { paletteKey } from '../lib/paletteKey'
 import { rankActions } from '../lib/paletteMatch'
-import { displayPath, paletteMode } from '../lib/quickOpen'
+import { displayPath, enterAction, filesWaiting, paletteMode, settleEnter } from '../lib/quickOpen'
 import { readRecentActions, rememberAction } from '../lib/recentActions'
 import { toast } from '../lib/toast'
 import { useQuickOpenFiles } from '../hooks/useQuickOpenFiles'
@@ -48,7 +48,8 @@ export function CommandPalette({
   onClose,
   initialQuery,
   projectRoot,
-  onOpenFile
+  onOpenFile,
+  restoreTo
 }: {
   entries: readonly PaletteEntry[]
   onRun: (id: ActionId) => void
@@ -58,6 +59,10 @@ export function CommandPalette({
   /** The explorer's project, whose files the file list searches; null when none is open. */
   projectRoot: string | null
   onOpenFile: (path: string) => void
+  /** Where focus was before the palette opened, read by the caller as it opened (an event handler, not this box's
+   *  render or effects: React.StrictMode runs those twice, and a box remounted on the other list would read the old
+   *  box's input). Closing gives focus back to it. */
+  restoreTo: HTMLElement | null
 }): React.JSX.Element {
   const { t } = useI18n()
   const listId = useId()
@@ -65,12 +70,9 @@ export function CommandPalette({
   const [selected, setSelected] = useState(0)
   const known = entries.map((e) => e.id)
   const [recent] = useState(() => readRecentActions(known))
-  // Where focus was, read while the first render runs, before the box takes it. Not in the mount effect: under
-  // React.StrictMode that effect runs twice in development, and the second run would read the box itself.
-  const [restoreTo] = useState(() => document.activeElement as HTMLElement | null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
-  /** Enter was pressed while the file rows still answered an older query; the newer answer's first row is opened. */
+  /** Enter was pressed while the file rows were not yet those of what is typed; the first current row is opened. */
   const pendingEnter = useRef(false)
   const { mode, text } = paletteMode(query)
   const files = useQuickOpenFiles(projectRoot, text, mode === 'files')
@@ -109,8 +111,8 @@ export function CommandPalette({
         })
   const at = rows.length === 0 ? -1 : Math.min(selected, rows.length - 1)
   const optionId = (i: number): string => `${listId}-${i}`
-  /** The file rows on screen answer an older query than the one in the box: Enter waits for the newer answer. */
-  const stale = mode === 'files' && files.answeredFor !== text
+  /** Enter waits: the file rows on screen answer an older query or project, or a first walk has found nothing yet. */
+  const waiting = filesWaiting({ mode, current: files.current, indexing: files.indexing, rows: rows.length })
 
   useEffect(() => {
     if (at < 0) return
@@ -127,29 +129,34 @@ export function CommandPalette({
 
   // An Enter that waited for the rows of what was typed: the first of them, as an Enter on a current list would take.
   useEffect(() => {
-    if (!pendingEnter.current || stale) return
+    if (!pendingEnter.current) return
+    const next = settleEnter(waiting, rows.length)
+    if (next === 'hold') return
     pendingEnter.current = false
-    if (rows.length > 0) choose(rows[0])
+    if (next === 'first') choose(rows[0])
   })
 
   // The palette's own keys, taken in the window's capture phase and stopped there. A menu left open behind the palette
   // (the run configuration menu, a tab's context menu) listens on document in the capture phase and would otherwise
   // take the arrows and Enter first, and act on the workbench behind the dialog. The global shortcut listener, also on
   // the window, was registered earlier and stands aside while the palette is open (modalOpenRef).
-  const keyState = useRef({ at, rows, choose, onClose, stale })
-  keyState.current = { at, rows, choose, onClose, stale }
+  const keyState = useRef({ at, rows, choose, onClose, waiting })
+  keyState.current = { at, rows, choose, onClose, waiting }
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const { at: cur, rows: list, choose: pick, onClose: close, stale: waiting } = keyState.current
+      const { at: cur, rows: list, choose: pick, onClose: close, waiting } = keyState.current
       const outcome = paletteKey(e.key, cur, list.length, e.isComposing)
       if (!outcome) return
       e.preventDefault()
       e.stopPropagation()
-      // Enter over rows of an older query, or over none yet: wait for what was typed
-      if (waiting && e.key === 'Enter') pendingEnter.current = true
-      else if (outcome.do === 'close') close()
+      if (outcome.do === 'close') close()
       else if (outcome.do === 'select') setSelected(outcome.index)
-      else if (outcome.do === 'choose') pick(list[outcome.index])
+      else if (e.key === 'Enter') {
+        // Over rows of an older query or project, or over none yet during a first walk: wait for what was typed
+        const act = enterAction(waiting, cur)
+        if (act.do === 'wait') pendingEnter.current = true
+        else if (act.do === 'choose') pick(list[act.index])
+      }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -166,7 +173,7 @@ export function CommandPalette({
           ? t('quickOpen.unavailable')
           : files.indexing
             ? t('quickOpen.indexing')
-            : files.answeredFor !== null && rows.length === 0
+            : files.current && rows.length === 0
               ? t('quickOpen.empty')
               : null
   const note = mode === 'actions' ? (rows.length === 0 ? t('palette.empty') : null) : fileNote
@@ -200,6 +207,13 @@ export function CommandPalette({
             pendingEnter.current = false
           }}
         />
+        {mode === 'files' && projectRoot && (
+          // Spec W2's search scope: which project is searched, and whether a large one is searched only in part
+          <div className="palette-scope">
+            {t('quickOpen.scope', { name: projectRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || projectRoot })}
+            {files.truncated && ` · ${t('quickOpen.truncated')}`}
+          </div>
+        )}
         <ul className="palette-list" role="listbox" id={listId} ref={listRef} aria-label={title}>
           {rows.map((row, i) => (
             <li

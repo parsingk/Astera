@@ -35,13 +35,20 @@ describe('App.tsx runs shortcuts through the action registry', () => {
 
   // A menu left open would stay drawn over the palette's backdrop (a tab's menu sits above it) and act on the workbench.
   it('closes the tab menu and the run configuration menu as the palette opens', () => {
-    expect(src).toMatch(/const openPalette = \(query: '>' \| ''\): void => \{\s*setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(\{ query \}\)/)
+    expect(src).toMatch(/const openPalette = \(query: '>' \| ''\): void => \{[\s\S]*?setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(\{ query \}\)/)
     expect(src).toMatch(/'palette\.open': \{ run: \(\) => openPalette\('>'\) \}/)
   })
 
-  // W2a: Ctrl+P is the same box on the explorer's project's files, so it needs a project.
-  it('goes to a file through the palette opened on files, only with a project open', () => {
-    expect(src).toMatch(/'file\.quickOpen': \{\s*blockedBy: \(\) => \(currentProject \? null : 'action\.blocked\.noProject'\),\s*run: \(\) => openPalette\(''\)/)
+  // W2a: Ctrl+P is the same box on the explorer's project's files. With no project it still opens, and the box says why it
+  // is empty (review M7): a key that does nothing explains nothing.
+  it('goes to a file through the palette opened on files, with or without a project', () => {
+    expect(src).toMatch(/'file\.quickOpen': \{ run: \(\) => openPalette\(''\) \}/)
+  })
+
+  // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.
+  it('reads where focus was as the palette opens from closed, and hands it to the box', () => {
+    expect(src).toMatch(/if \(paletteOpen === null\) paletteRestoreRef\.current = document\.activeElement as HTMLElement \| null/)
+    expect(src).toMatch(/restoreTo=\{paletteRestoreRef\.current\}/)
   })
 
   // The key remounts the box when it is reopened on the other list (going to a file chosen from the actions list).
