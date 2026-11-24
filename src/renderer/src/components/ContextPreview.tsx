@@ -76,7 +76,8 @@ export function ContextPreview({
         <div className="field">
           <label>{t('context.preview.session')}</label>
           <Select
-            items={sessions.map((s) => ({ value: s.id, label: s.title, meta: s.account }))}
+            // The account in the label itself: the closed picker shows the label only, and that is the choice that counts
+            items={sessions.map((s) => ({ value: s.id, label: `${s.title} · ${s.account}` }))}
             value={target}
             onChange={(v) => {
               setTarget(v)
