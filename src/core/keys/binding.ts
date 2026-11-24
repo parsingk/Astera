@@ -39,6 +39,7 @@ export type ActionId =
   | 'kube.open'
   | 'palette.open'
   | 'file.quickOpen'
+  | 'search.text'
 
 export type ActionSpec = {
   id: ActionId
@@ -279,6 +280,15 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       defaults: [`${M}+P`],
       descKey: 'shortcut.file.quickOpen',
       yieldsToTerminal: !mac,
+      swallowsWhenBlocked: false
+    },
+    {
+      id: 'search.text',
+      // What every editor binds to finding in files. Nothing in Astera takes it: the find bars are Ctrl+F without Shift,
+      // and so is the shell's forward-char. It works over a focused terminal, like the palette key.
+      defaults: [`${M}+Shift+F`],
+      descKey: 'shortcut.search.text',
+      yieldsToTerminal: false,
       swallowsWhenBlocked: false
     }
   ]
