@@ -10,7 +10,8 @@ const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
 describe('ContextPreview', () => {
   it('shows the exact text that will be pasted, and offers only the sessions it was given', () => {
     expect(src).toMatch(/<pre className="context-preview-text">\{text\}<\/pre>/)
-    expect(src).toMatch(/items=\{sessions\.map\(\(s\) => \(\{ value: s\.id, label: s\.title \}\)\)\}/)
+    // Screen check: two sessions in one folder are both named after it; the account tells them apart
+    expect(src).toMatch(/items=\{sessions\.map\(\(s\) => \(\{ value: s\.id, label: s\.title, meta: s\.account \}\)\)\}/)
   })
 
   it('says what was masked or cut, and warns of unsaved edits', () => {

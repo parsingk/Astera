@@ -732,7 +732,7 @@ export default function App(): React.JSX.Element {
     masked: number
     cut: boolean
     dirty: boolean
-    sessions: Array<{ id: string; title: string }>
+    sessions: Array<{ id: string; title: string; account: string }>
     fileTabId?: string
   } | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
@@ -4403,7 +4403,7 @@ export default function App(): React.JSX.Element {
       ref,
       ...made,
       dirty,
-      sessions: fitting.map((s) => ({ id: s.id, title: s.title })),
+      sessions: fitting.map((s) => ({ id: s.id, title: s.title, account: accounts.find((a) => a.id === s.accountId)?.label ?? s.accountId })),
       ...(fileTabId !== undefined ? { fileTabId } : {})
     })
   }

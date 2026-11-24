@@ -67,6 +67,7 @@ describe('App.tsx runs shortcuts through the action registry', () => {
     expect(attach).toMatch(/sessionBus\.pasteInto\(sessionId, p\.text\)/)
     expect(attach).not.toMatch(/pasteAndSubmit|submitInto/)
     expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen !== null \|\| contextPreview !== null \|\|/)
+    expect(src).toMatch(/sessions: fitting\.map\(\(s\) => \(\{ id: s\.id, title: s\.title, account: accounts\.find\(\(a\) => a\.id === s\.accountId\)\?\.label \?\? s\.accountId \}\)\)/)
   })
 
   // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.

@@ -33,8 +33,9 @@ export function ContextPreview({
   cut: boolean
   /** The editor holds edits the file on disk does not: the agent will read the saved file. */
   dirty: boolean
-  /** The sessions that may receive it (sessionFits), the first chosen. Never empty: App says so instead of opening. */
-  sessions: ReadonlyArray<{ id: string; title: string }>
+  /** The sessions that may receive it (sessionFits), the first chosen, with the account each runs as: sessions in one
+   *  folder are all named after it. Never empty: App says so instead of opening. */
+  sessions: ReadonlyArray<{ id: string; title: string; account: string }>
   onAttach: (sessionId: string) => AttachOutcome
   onClose: () => void
 }): React.JSX.Element {
@@ -75,7 +76,7 @@ export function ContextPreview({
         <div className="field">
           <label>{t('context.preview.session')}</label>
           <Select
-            items={sessions.map((s) => ({ value: s.id, label: s.title }))}
+            items={sessions.map((s) => ({ value: s.id, label: s.title, meta: s.account }))}
             value={target}
             onChange={(v) => {
               setTarget(v)
