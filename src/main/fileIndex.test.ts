@@ -381,3 +381,41 @@ describe('createFileIndex — noteChanges', () => {
     expect(t.walks()).toBe(2)
   })
 })
+
+// Quick Open asks for a fresh list each time it opens: the watcher runs only while the explorer is open, and a file an
+// agent deleted from a terminal with the explorer closed would otherwise be offered until the list went stale.
+describe('createFileIndex — expire', () => {
+  const ROOT = path.resolve('/fake')
+
+  it('makes the next ask walk again, the old list answering while it runs', async () => {
+    const dirs: Record<string, FakeEntry[]> = { '': [fileEntry('old.ts')] }
+    const gate = deferred()
+    let holding = false
+    let walks = 0
+    const readdir = async (abs: string): Promise<FakeEntry[]> => {
+      const rel = path.relative('/fake', abs).split(path.sep).join('/')
+      if (rel === '') walks++
+      const entries = dirs[rel]
+      if (holding) await gate.promise
+      return entries
+    }
+    const index = createFileIndex(() => 0, { probe: reachable, readdir, readFile: async () => '', graceMs: 5 })
+    await index.search(ROOT, '', 10)
+    dirs[''] = [fileEntry('new.ts')]
+    holding = true
+    index.expire(ROOT)
+    expect(await index.lookup(ROOT, '', 10)).toEqual({ paths: ['old.ts'], indexing: false })
+    holding = false
+    gate.resolve()
+    expect(await index.search(ROOT, '', 10)).toEqual(['new.ts'])
+    expect(walks).toBe(2)
+  })
+
+  it('does nothing for a root it holds no list of', async () => {
+    const f = fakeFs({ '': [fileEntry('a.ts')] })
+    const index = createFileIndex(() => 0, { probe: reachable, readdir: f.readdir, readFile: f.readFile })
+    index.expire(ROOT)
+    expect(await index.search(ROOT, '', 10)).toEqual(['a.ts'])
+    expect(f.calls.filter((c) => c === '')).toHaveLength(1)
+  })
+})

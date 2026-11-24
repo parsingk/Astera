@@ -5723,7 +5723,7 @@ export function registerIpc(
   // Quick Open (spec W2): files under the explorer's project matching what was typed, from the same index as `@`, behind
   // the same path guard as every files IPC (main/quickOpen.ts).
   const quickOpen = createQuickOpen({ index: fileIndex, allowedRoot: assertAllowedPath })
-  ipcMain.handle('files.quickOpen', (_e, root: unknown, query: unknown) => quickOpen(root, query))
+  ipcMain.handle('files.quickOpen', (_e, root: unknown, query: unknown, refresh?: unknown) => quickOpen(root, query, refresh))
 
   // ---- git status. A path-to-state map for inline display in the tree.
   // --no-optional-locks is required: without it, status updates .git/index, which fires GitWatcher again

@@ -14,7 +14,9 @@ describe('Quick Open wiring', () => {
 
   it('answers files.quickOpen from the shared index, behind the files path guard', () => {
     expect(ipc).toContain('createQuickOpen({ index: fileIndex, allowedRoot: assertAllowedPath })')
-    expect(ipc).toContain("ipcMain.handle('files.quickOpen', (_e, root: unknown, query: unknown) => quickOpen(root, query))")
+    expect(ipc).toContain(
+      "ipcMain.handle('files.quickOpen', (_e, root: unknown, query: unknown, refresh?: unknown) => quickOpen(root, query, refresh))"
+    )
   })
 
   it('is on window.api.files', () => {

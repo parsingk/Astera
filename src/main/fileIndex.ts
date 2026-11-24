@@ -100,6 +100,9 @@ export interface FileIndex {
    *  it at once; any file or folder coming or going, or the root's .gitignore changing, makes the next ask of that root
    *  walk again. A content change alone changes no list. */
   noteChanges(changes: readonly FileChange[]): void
+  /** Makes the next ask of `root` walk again, its current list answering meanwhile. Quick Open asks for this as it opens:
+   *  the watcher runs only while the explorer is open, so what changed with the explorer closed reaches no list. */
+  expire(root: string): void
 }
 
 /** The walk could not start or could not read its root. */
@@ -286,6 +289,10 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
         // set, not keep: a change is not a search, so this root does not move up the most-recently-searched order
         cache.set(root, { ...e, paths, changed: true })
       }
+    },
+    expire(root) {
+      const e = cache.get(root)
+      if (e) cache.set(root, { ...e, changed: true })
     }
   }
 }

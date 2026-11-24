@@ -76,6 +76,13 @@ describe('the palette on files (Quick Open)', () => {
 })
 
 describe('useQuickOpenFiles', () => {
+  // The watcher runs only while the explorer is open, so the box's first ask walks the project again (main/quickOpen.ts).
+  it('asks for a fresh list on its first ask for a project, and not as the person types', () => {
+    expect(hook).toMatch(/let first = refreshedFor\.current !== root/)
+    expect(hook).toMatch(/window\.api\.files\.quickOpen\(root, text, first\)/)
+    expect(hook).toMatch(/first = false/)
+  })
+
   it('stops asking for a query once the box holds another', () => {
     expect(hook).toMatch(/return pollFileIndex\(/)
     expect(hook).toMatch(/\}, \[root, text, enabled\]\)/)

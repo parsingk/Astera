@@ -8,7 +8,17 @@ const OTHER = path.resolve('/worktree')
 
 /** An index holding one list per root, the way createFileIndex keys them. */
 function fakeIndex(lists: Record<string, FileIndexAnswer>) {
-  return { lookup: vi.fn(async (root: string) => lists[root] ?? { paths: [], indexing: false }) }
+  const calls: string[] = []
+  return {
+    calls,
+    lookup: vi.fn(async (root: string) => {
+      calls.push(`lookup ${root}`)
+      return lists[root] ?? { paths: [], indexing: false }
+    }),
+    expire: vi.fn((root: string) => {
+      calls.push(`expire ${root}`)
+    })
+  }
 }
 const allowAll = async (p: string): Promise<string> => p
 
@@ -21,8 +31,19 @@ describe('createQuickOpen', () => {
         throw new Error('not allowed')
       }
     })
-    await expect(ask(ROOT, 'a')).rejects.toThrow('not allowed')
+    await expect(ask(ROOT, 'a', true)).rejects.toThrow('not allowed')
     expect(index.lookup).not.toHaveBeenCalled()
+    expect(index.expire).not.toHaveBeenCalled()
+  })
+
+  // The box asks for a fresh list as it opens (the watcher runs only while the explorer is open); typing does not.
+  it('walks the project again when asked to refresh, before answering, and only then', async () => {
+    const index = fakeIndex({ [ROOT]: { paths: ['a.ts'], indexing: false } })
+    const ask = createQuickOpen({ index, allowedRoot: allowAll })
+    await ask(ROOT, '', true)
+    await ask(ROOT, 'a')
+    await ask(ROOT, 'a', 'yes')
+    expect(index.calls).toEqual([`expire ${ROOT}`, `lookup ${ROOT}`, `lookup ${ROOT}`, `lookup ${ROOT}`])
   })
 
   it('refuses arguments that are not a root and a query', async () => {
