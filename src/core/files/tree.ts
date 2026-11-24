@@ -165,15 +165,19 @@ const NEVER_SOURCE = [
  *  `bin/` folder stays findable, as the explorer shows it. Without one, the watcher's curated list stands in.
  *
  *  A root .ignore is the person's own exclusion (spec W2 "user exclusion"): the file ripgrep, fd and VS Code's search
- *  already read, so an agent searching with those skips the same folders. It only ever leaves more out, on top of
- *  either rule. */
+ *  already read, so an agent searching with those skips the same folders. It is read after either rule, so its `!`
+ *  lines bring back what they leave out, as ripgrep reads it; NEVER_SOURCE comes again last, so nothing brings back
+ *  `.git` (whose config can hold a token in a remote URL) or installed dependencies. */
 export function buildIndexIgnoreMatcher(gitignoreText: string | null, ignoreText: string | null = null): (relPath: string) => boolean {
   const ig = ignore()
   if (gitignoreText) {
     ig.add(NEVER_SOURCE)
     ig.add(gitignoreText)
   } else ig.add(CURATED_IGNORE)
-  if (ignoreText) ig.add(ignoreText)
+  if (ignoreText) {
+    ig.add(ignoreText)
+    ig.add(NEVER_SOURCE)
+  }
   return (relPath: string): boolean => {
     if (!relPath) return false // the root itself
     return ig.ignores(relPath.replace(/\\/g, '/'))
