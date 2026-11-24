@@ -62,14 +62,17 @@ describe('createActionRegistry', () => {
     expect(old).not.toHaveBeenCalled()
   })
 
-  it('disposes every entry of one owner and none of another', () => {
+  it('disposes every entry of one owner and none of another, and runs nothing it disposed', () => {
     const reg = createActionRegistry()
-    reg.register('example.plugin', 'session.new', { run: vi.fn() })
+    const pluginRun = vi.fn()
+    reg.register('example.plugin', 'session.new', { run: pluginRun })
     reg.register('example.plugin', 'job.new', { run: vi.fn() })
     reg.register('core', 'kube.open', { run: vi.fn() })
     reg.disposeOwner('example.plugin')
     expect(reg.state('session.new').ok).toBe(false)
     expect(reg.state('job.new').ok).toBe(false)
     expect(reg.state('kube.open').ok).toBe(true)
+    expect(reg.run('session.new')).toEqual({ ok: false, reason: 'action.blocked.noHandler' })
+    expect(pluginRun).not.toHaveBeenCalled()
   })
 })

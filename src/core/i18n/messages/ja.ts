@@ -1285,6 +1285,7 @@ export const ja: Catalog = {
   'action.blocked.noClosableTab': '閉じるファイルタブがありません',
   'action.blocked.notMarkdown': 'Markdown ファイルのタブでのみ使えます',
   'action.blocked.noCli': 'Claude Code も Codex もインストールされておらず、ペアリングした Runtime もありません',
+  'action.blocked.noLocalCli': 'このコンピューターでは Claude Code も Codex も実行できません',
   'action.blocked.noKubectl': 'kubectl が見つかりません',
   'palette.title': 'コマンドパレット',
   'palette.placeholder': '実行するコマンドを入力',

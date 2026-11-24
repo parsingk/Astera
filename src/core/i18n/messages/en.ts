@@ -1328,6 +1328,7 @@ export const en: Record<keyof typeof ko, string> = {
   'action.blocked.noClosableTab': 'No file tab to close',
   'action.blocked.notMarkdown': 'Only on a Markdown file tab',
   'action.blocked.noCli': 'Neither Claude Code nor Codex is installed, and no Runtime is paired',
+  'action.blocked.noLocalCli': 'Neither Claude Code nor Codex runs on this computer',
   'action.blocked.noKubectl': 'kubectl was not found',
   'palette.title': 'Command palette',
   'palette.placeholder': 'Type a command to run',

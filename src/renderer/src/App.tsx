@@ -97,7 +97,7 @@ import { toolbarState, upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type ActionId, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import { createActionRegistry, type ActionHandler } from './lib/actionRegistry'
-import { focusKeepsKey, keyFocusOf } from './lib/keyRouting'
+import { keyDecision, keyFocusOf } from './lib/keyRouting'
 import { paneKeyTarget } from './lib/paneKeys'
 import {
   MIN_CHECKING_MS,
@@ -1023,8 +1023,8 @@ export default function App(): React.JSX.Element {
       ? activeTabId
       : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
-   *  render-time values (via closeFileTab), so a key listener registered once that called a captured
-   *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
+   *  render-time values (via closeFileTab), so a subscription registered once (an agent tab closing when its
+   *  session ends) that called a captured stale closure would act on outdated tabs. */
   const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
@@ -1098,8 +1098,6 @@ export default function App(): React.JSX.Element {
       })
       .catch(() => {})
   }, [])
-  const cliRef = useRef(cli)
-  cliRef.current = cli
   // The install button on the toast is pressed later — it has to see the real number of running sessions at that moment
   const runningCountRef = useRef(0)
 
@@ -1469,15 +1467,15 @@ export default function App(): React.JSX.Element {
       if (!action) return
       if (modalOpenRef.current || isConfirmOpen()) return
       const spec = ACTIONS.find((a) => a.id === action)
-      if (!spec || focusKeepsKey(action, keyFocusOf(document.activeElement), spec.yieldsToTerminal)) return
-      const state = actionRegistry.state(action)
-      // Nothing to do: the key goes on to whatever has focus (Ctrl+Shift+arrow with no pane that way reaches the
-      // terminal), unless the action keeps it.
-      if (!state.ok && !spec.swallowsWhenBlocked) return
+      if (!spec) return
+      // pass: focus keeps the key, or the action has nothing to do and lets the key go on (Ctrl+Shift+arrow with no
+      // pane that way reaches the terminal). swallow: blocked, but the action keeps its key. See keyRouting.ts.
+      const decision = keyDecision(spec, keyFocusOf(document.activeElement), actionRegistry.state(action).ok)
+      if (decision === 'pass') return
       e.preventDefault()
       e.stopPropagation()
       if (e.repeat) return // holding the key would flap a sidebar or close tabs in a chain
-      if (state.ok) actionRegistry.run(action)
+      if (decision === 'run') actionRegistry.run(action)
     }
     window.addEventListener('keydown', onKey, true) // capture
     return () => window.removeEventListener('keydown', onKey, true)
@@ -2356,9 +2354,6 @@ export default function App(): React.JSX.Element {
     setLayout(res.root)
     setActivePaneId(res.paneId)
   }
-  // A ref so onKey (useEffect([])) can call the latest splitActive without a stale closure
-  const splitActiveRef = useRef(splitActive)
-  splitActiveRef.current = splitActive
 
   /** A drop aimed at a specific group's body (coming from PaneGrid). The tab id arrives as it is and goes
    *  straight to the tree, so which kind it is does not matter here.
@@ -3220,6 +3215,10 @@ export default function App(): React.JSX.Element {
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
   modalOpenRef.current = modalOpenRef.current || paletteOpen || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
+  // Three more dialogs with a backdrop, under the conditions they are drawn on below: the remote sessions dialog, a
+  // block-mode update campaign's gate, and the first-run question. Without them a shortcut or the palette acted on
+  // the workbench behind them, and Escape in the palette also dismissed the first-run question for good.
+  modalOpenRef.current = modalOpenRef.current || remoteDialog !== null || campaign?.mode === 'block' || (firstRunAsked === false && accounts.length > 0)
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -4298,13 +4297,13 @@ export default function App(): React.JSX.Element {
   const runStop = (runId: string): void => {
     void window.api.run.stop(runId)
   }
-  /** The selected run's own configuration, when the rail's ↻ would rerun it: none with no run selected, and none
-   *  when the configuration is gone (rerunGone; a run outlives its configuration when the manager deletes it or
-   *  the temporary cap evicts it), or the shortcut would send a dead id and the person would read a raw NO_CONFIG. */
-  const rerunConfigId = (): string | null => {
-    if (!selectedRunId) return null
-    const configId = runs.find((r) => r.runId === selectedRunId)?.configId
-    return configId && runConfigs.some((c) => c.id === configId) ? configId : null
+  /** Why the rail's ↻ would rerun nothing now: no run selected, or its configuration is gone (a run outlives its
+   *  configuration when the manager deletes it or the temporary cap evicts it), which the rail says in the same
+   *  words (rerunGone). Sending the dead id would show the person a raw NO_CONFIG. */
+  const rerunBlocked = (): MessageKey | null => {
+    const run = selectedRunId ? runs.find((r) => r.runId === selectedRunId) : undefined
+    if (!run) return 'action.blocked.noSelectedRun'
+    return runConfigs.some((c) => c.id === run.configId) ? null : 'run.rail.rerunGone'
   }
   /** The tab and pane keys (paneKeys.ts): cycle the active group's tabs or move to the neighbouring group. */
   const paneKeyAction = (id: ActionId): ActionHandler => ({
@@ -4323,11 +4322,12 @@ export default function App(): React.JSX.Element {
       const cur = layoutRef.current
       return cur && ((activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur))
     }
-    const cliReady = (): boolean => cliRef.current?.claude.ok === true || cliRef.current?.codex.ok === true
+    const cliReady = (): boolean => cli?.claude.ok === true || cli?.codex.ok === true
     const full = (): boolean => !!layoutRef.current && countLeaves(layoutRef.current) >= MAX_PANES
     return {
       // A full grid is not blocked: running it says so in a toast, as it always has.
-      blockedBy: () => (full() || (target()?.tabIds.length ?? 0) >= 2 || cliReady() ? null : 'action.blocked.noCli'),
+      // The CLI that runs here, not a paired Runtime: the new session it opens is a local one.
+      blockedBy: () => (full() || (target()?.tabIds.length ?? 0) >= 2 || cliReady() ? null : 'action.blocked.noLocalCli'),
       run: () => {
         if (full()) {
           toast.info(tRef.current('session.pane.maxReached'))
@@ -4337,7 +4337,7 @@ export default function App(): React.JSX.Element {
         // file on one side and a session on the other is the arrangement this exists for.
         const group = target()
         if (group && group.tabIds.length >= 2) {
-          splitActiveRef.current(dir, false, group.activeTabId)
+          splitActive(dir, false, group.activeTabId)
           return
         }
         // With only one tab, splitting would change nothing, so a new session is created first; cancelling leaves
@@ -4403,10 +4403,10 @@ export default function App(): React.JSX.Element {
     },
     // What the run list's ↻ does: restart the selected run's own configuration.
     'run.rerun': {
-      blockedBy: () => (rerunConfigId() ? null : 'action.blocked.noSelectedRun'),
+      blockedBy: rerunBlocked,
       run: () => {
-        const configId = rerunConfigId()
-        if (configId) runStart(configId)
+        const configId = runs.find((r) => r.runId === selectedRunId)?.configId
+        if (configId && rerunBlocked() === null) runStart(configId)
       }
     },
     // The toolbar and its menu exist only for an open project. Forcing the menu open with none would arm it to
@@ -4421,7 +4421,15 @@ export default function App(): React.JSX.Element {
     'job.new': { blockedBy: () => (currentProject ? null : 'action.blocked.noProject'), run: () => setNewRunOpen(true) },
     // The rail's Kubernetes icon, shown under the same condition.
     'kube.open': { blockedBy: () => (kubectlFound && bottomRoot ? null : 'action.blocked.noKubectl'), run: kubeRail },
-    'palette.open': { run: () => setPaletteOpen(true) }
+    // A menu left open (a tab's menu draws above the palette's backdrop) would stay on screen and keep acting on the
+    // workbench behind the palette, so opening the palette closes the two the keyboard can open.
+    'palette.open': {
+      run: () => {
+        setTabMenu(null)
+        setRunMenuOpen(false)
+        setPaletteOpen(true)
+      }
+    }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the

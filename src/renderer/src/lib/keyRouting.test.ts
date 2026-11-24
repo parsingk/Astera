@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { focusKeepsKey, keyFocusOf, type KeyFocus } from './keyRouting'
+import type { ActionId } from '../../../core/keys/binding'
+import { focusKeepsKey, keyDecision, keyFocusOf, type KeyFocus } from './keyRouting'
 
 const none: KeyFocus = { inXterm: false, inConversation: false, editable: false, inEditor: false }
 const terminal: KeyFocus = { ...none, inXterm: true }
@@ -62,5 +63,27 @@ describe('keyFocusOf', () => {
     expect(keyFocusOf(el('SELECT')).editable).toBe(true)
     expect(keyFocusOf(el('DIV', [], true)).editable).toBe(true)
     expect(keyFocusOf(el('BUTTON')).editable).toBe(false)
+  })
+})
+
+describe('keyDecision', () => {
+  const spec = (id: ActionId, swallowsWhenBlocked = false, yieldsToTerminal = false) => ({ id, swallowsWhenBlocked, yieldsToTerminal })
+
+  // Review focus 1: Ctrl+Shift+Down in a terminal with no pane below reaches the terminal.
+  it('passes the key on when the action has nothing to do and does not keep its key', () => {
+    expect(keyDecision(spec('pane.focusDown'), terminal, false)).toBe('pass')
+    expect(keyDecision(spec('explorer.closeFileTab'), none, false)).toBe('pass')
+  })
+
+  // Review focus 5: the run chords with nothing to run are still taken.
+  it('swallows the key of a blocked action that keeps its key', () => {
+    expect(keyDecision(spec('run.run', true), terminal, false)).toBe('swallow')
+    expect(keyDecision(spec('pane.splitRight', true), none, false)).toBe('swallow')
+  })
+
+  it('runs an action that can run, unless focus keeps the key', () => {
+    expect(keyDecision(spec('sidebar.jobs'), terminal, true)).toBe('run')
+    expect(keyDecision(spec('explorer.closeFileTab', false, true), terminal, true)).toBe('pass')
+    expect(keyDecision(spec('explorer.toggleMode'), field, true)).toBe('pass')
   })
 })

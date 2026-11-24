@@ -332,6 +332,7 @@ describe('action wording', () => {
       'action.blocked.noClosableTab',
       'action.blocked.notMarkdown',
       'action.blocked.noCli',
+      'action.blocked.noLocalCli',
       'action.blocked.noKubectl'
     ]
     for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {

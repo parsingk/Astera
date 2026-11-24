@@ -2,7 +2,7 @@
 // applied branch by branch before the action registry (ADR-007); they are about where focus is, not about whether
 // the action can run, so they stay with the listener while the actions themselves moved to the registry.
 
-import type { ActionId } from '../../../core/keys/binding'
+import type { ActionId, ActionSpec } from '../../../core/keys/binding'
 
 export type KeyFocus = {
   /** Focus is inside a terminal. */
@@ -48,4 +48,21 @@ export function focusKeepsKey(action: ActionId, focus: KeyFocus, yieldsToTermina
     return focus.editable && !focus.inXterm && !focus.inConversation && !(tabCycle && focus.inEditor)
   }
   return false
+}
+
+export type KeyDecision = 'pass' | 'swallow' | 'run'
+
+/**
+ * What the global listener does with a matched key. `pass`: leave it to whatever has focus (focus keeps it, or the
+ * action has nothing to do). `swallow`: take it and do nothing (a blocked action that keeps its key, see
+ * ActionSpec.swallowsWhenBlocked). `run`: take it and run the action.
+ */
+export function keyDecision(
+  spec: Pick<ActionSpec, 'id' | 'yieldsToTerminal' | 'swallowsWhenBlocked'>,
+  focus: KeyFocus,
+  runnable: boolean
+): KeyDecision {
+  if (focusKeepsKey(spec.id, focus, spec.yieldsToTerminal)) return 'pass'
+  if (runnable) return 'run'
+  return spec.swallowsWhenBlocked ? 'swallow' : 'pass'
 }
