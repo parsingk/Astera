@@ -216,7 +216,9 @@ export class SessionManager {
     private statusLineProvider?: StatusLineProvider,
     /** Directories every Claude session is given with --add-dir. Empty in the app and the Host: the screenshot folder
      *  is readable through a read rule in the settings file instead (previewShotsReadRule), because Claude Code asks
-     *  each session whether it trusts an added directory. */
+     *  each session whether it trusts an added directory. Kept on purpose (2026-11-24), with commands.ts's `addDirs`,
+     *  for a folder a session must also write to or run from, which a read rule cannot grant. If none has come by
+     *  the time this parameter is in the way, it and `addDirs` can go. */
     private sessionReadDirs: string[] = [],
     /** The environment every child env is built from. The app keeps process.env; the Host passes
      *  its own minus what its start added (hostWorkerBaseEnv, design D4), as a function read at each
