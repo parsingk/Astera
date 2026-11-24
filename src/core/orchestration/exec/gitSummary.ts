@@ -24,6 +24,13 @@ export interface GitSummaryDeps {
  *  에서도 `?? "with space.txt"` 로 나온다. unquotePath 가 계속 필요한 이유다. */
 const QUOTEPATH_OFF = ['-c', 'core.quotepath=false']
 
+/** 인덱스를 다시 쓰지 않게 하는 인자. 없으면 git 은 낡은 stat 정보를 고치려고 `.git/index.lock` 을 잡고
+ *  인덱스를 다시 쓴다. 이 요약은 작업자가 시작될 때 그 작업자의 폴더에서 읽히므로, 그 순간 작업자의
+ *  `git add` 가 "index.lock: File exists" 로 실패한다. status 는 `--no-optional-locks` 로 멈추지만 diff 는
+ *  그것을 무시하고(git 2.45 실측) `diff.autoRefreshIndex` 를 꺼야 멈춘다. 어느 쪽이든 내용을 비교하므로 답은 같다. */
+const STATUS_NO_INDEX_WRITE = ['--no-optional-locks']
+const DIFF_NO_INDEX_WRITE = ['-c', 'diff.autoRefreshIndex=false']
+
 /** 큰따옴표 한 쌍만 벗긴다 — 그 안의 백슬래시 이스케이프(제어문자·따옴표 자체가 이름에 든 경우)는
  *  풀지 않는다. git status --short(비 -z)는 공백이 든 이름을 큰따옴표로 감싼다 — core.quotePath
  *  문서가 말하는 "unusual byte(0x80 이상)" 대상이 아닌데도 실측상 그렇다(-z를 쓰지 않는 한 끌
@@ -84,12 +91,12 @@ export async function readGitSummary(
     run(['branch', '--show-current'], { cwd }),
     // porcelain: 상태 코드 두 글자가 앞쪽 공백일 수 있다(" M f.txt") — trim:true(기본값)면 그
     // 선행 공백이 통째로 날아가 changedPaths의 고정폭 slice(3)가 어긋난다.
-    run(QUOTEPATH_OFF.concat('status', '--short'), { cwd, trim: false }),
+    run(STATUS_NO_INDEX_WRITE.concat(QUOTEPATH_OFF, 'status', '--short'), { cwd, trim: false }),
     // `diff HEAD`: 인덱스와 워크트리를 **함께** 본다. 그냥 `diff` 는 인덱스를 무시하므로,
     // `git add -A` 와 `git commit` 사이에서 죽은 워커 — 즉 자기 커밋 의무의 두 단계 사이에서
     // 멈춘 워커 — 는 changed 에 파일이 있는데 diffstat 은 비는 모순된 브리핑을 만든다.
     // HEAD 가 있는 것은 위에서 이미 확인했다(rev-parse 가 성공했다).
-    run(QUOTEPATH_OFF.concat('diff', 'HEAD', '--stat'), { cwd })
+    run(DIFF_NO_INDEX_WRITE.concat(QUOTEPATH_OFF, 'diff', 'HEAD', '--stat'), { cwd })
   ])
 
   return {

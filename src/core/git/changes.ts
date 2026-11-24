@@ -204,9 +204,13 @@ export async function readFileDiff(
 export async function trackedTreeState(cwd: string): Promise<string | null> {
   const headRev = await git(['rev-parse', 'HEAD'], { cwd, timeoutMs: TIMEOUT_MS })
   if (!headRev.ok) return null
-  const status = await git(['status', '--porcelain', '--untracked-files=no'], { cwd, timeoutMs: TIMEOUT_MS, trim: false })
+  // Neither read rewrites the index. Otherwise git refreshes stale stat data under .git/index.lock, and a person or agent
+  // running `git add` in this folder at that moment fails with "index.lock: File exists". status stops on
+  // --no-optional-locks; diff ignores that (git 2.45, measured) and stops only on diff.autoRefreshIndex=false. The answer is
+  // the same either way: both compare contents, and the patch leaves out a file whose time alone moved.
+  const status = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], { cwd, timeoutMs: TIMEOUT_MS, trim: false })
   if (!status.ok) return null
-  const diff = await gitHashed(['diff', ...PLAIN, '--binary', '--end-of-options', 'HEAD', '--'], cwd)
+  const diff = await gitHashed(['-c', 'diff.autoRefreshIndex=false', 'diff', ...PLAIN, '--binary', '--end-of-options', 'HEAD', '--'], cwd)
   if (diff === null) return null
   return `${headRev.stdout}\n${status.stdout}\n${diff}`
 }
