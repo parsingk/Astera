@@ -198,6 +198,12 @@ describe('riskyReasonKey — 터미널에서 쓰이는 키 경고', () => {
     expect(riskyReasonKey(parseChord('Shift+Tab')!)).toBe('shortcut.risk.cliMode')
   })
 
+  // 셸의 이전·다음 명령 키. 빠른 열기의 Ctrl+P 는 터미널에 양보하지만, 다른 동작을 이 키에 묶으면 경고해야 한다
+  it('Ctrl+P·Ctrl+N 도 줄 편집 키로 경고한다', () => {
+    expect(riskyReasonKey(parseChord('Ctrl+P')!)).toBe('shortcut.risk.readline')
+    expect(riskyReasonKey(parseChord('Ctrl+N')!)).toBe('shortcut.risk.readline')
+  })
+
   it('무해한 키는 null', () => {
     expect(riskyReasonKey(parseChord('Ctrl+PageUp')!)).toBeNull()
     expect(riskyReasonKey(parseChord('F4')!)).toBeNull()
@@ -309,6 +315,27 @@ describe('actions with no default key, and the palette', () => {
     expect(win.yieldsToTerminal).toBe(false)
   })
 
+  // Ctrl+P is the shell's previous-history key, so with a terminal focused it stays the shell's on Windows and Linux.
+  // Cmd+P has no competitor in a terminal.
+  it('goes to a file with Ctrl+P, Cmd+P on macOS, and leaves Ctrl+P to a focused terminal', () => {
+    for (const platform of ['win32', 'linux']) {
+      const a = makeActions(platform).find((x) => x.id === 'file.quickOpen')
+      expect(a?.defaults, platform).toEqual(['Ctrl+P'])
+      expect(a?.yieldsToTerminal, platform).toBe(true)
+      expect(a?.swallowsWhenBlocked, platform).toBe(false)
+    }
+    const mac = makeActions('darwin').find((x) => x.id === 'file.quickOpen')
+    expect(mac?.defaults).toEqual(['Cmd+P'])
+    expect(mac?.yieldsToTerminal).toBe(false)
+  })
+
+  it('no two actions share a default key, on any platform', () => {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      const actions = makeActions(platform)
+      expect(findConflicts(resolveBindings({}, actions), actions), platform).toEqual([])
+    }
+  })
+
   // A blocked action normally lets its key go on to whatever has focus. These two families keep it: an
   // unclaimed F-key reaches a terminal as an escape sequence, and Ctrl+\ is SIGQUIT there.
   it('keeps the key for a blocked action only for the run and split chords', () => {
@@ -333,7 +360,11 @@ describe('action wording', () => {
       'action.blocked.notMarkdown',
       'action.blocked.noCli',
       'action.blocked.noLocalCli',
-      'action.blocked.noKubectl'
+      'action.blocked.noKubectl',
+      'quickOpen.placeholder',
+      'quickOpen.empty',
+      'quickOpen.indexing',
+      'quickOpen.unavailable'
     ]
     for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {
       for (const key of keys) expect((catalog as Record<string, string | undefined>)[key], `${lang} ${key}`).toBeTruthy()

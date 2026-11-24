@@ -711,7 +711,10 @@ export default function App(): React.JSX.Element {
   // delegate per action that reads it from there.
   const [actionRegistry] = useState(createActionRegistry)
   const actionImplRef = useRef<Record<ActionId, ActionHandler> | null>(null)
-  const [paletteOpen, setPaletteOpen] = useState(false)
+  // The palette box, open on actions ('>') or on files (''); null when closed (CommandPalette).
+  const [paletteOpen, setPaletteOpen] = useState<{ query: '>' | '' } | null>(null)
+  /** Where focus was before the palette opened (openPalette), given back when it closes. */
+  const paletteRestoreRef = useRef<HTMLElement | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
   const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
@@ -3214,7 +3217,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || paletteOpen || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
+  modalOpenRef.current = modalOpenRef.current || paletteOpen !== null || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
   // Three more dialogs with a backdrop, under the conditions they are drawn on below: the remote sessions dialog, a
   // block-mode update campaign's gate, and the first-run question. Without them a shortcut or the palette acted on
   // the workbench behind them, and Escape in the palette also dismissed the first-run question for good.
@@ -4356,6 +4359,16 @@ export default function App(): React.JSX.Element {
     const tab = id ? fileTabsRef.current.find((tb) => tb.id === id) : undefined
     return tab && isMarkdownPath(tab.path) ? tab.id : null
   }
+  /** Opens the palette box on actions or on files. A menu left open (a tab's menu draws above the palette's backdrop)
+   *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
+  const openPalette = (query: '>' | ''): void => {
+    // Where focus goes back on closing, read here, before the box takes it, and only from closed: an action chosen in
+    // the box that reopens it on the other list (going to a file) keeps the element focused before the first opening.
+    if (paletteOpen === null) paletteRestoreRef.current = document.activeElement as HTMLElement | null
+    setTabMenu(null)
+    setRunMenuOpen(false)
+    setPaletteOpen({ query })
+  }
   // What each action does, and when it cannot (ADR-007). Rebuilt every render, so a handler reads this render's
   // state; the registry's delegates read it from here. A Record over ActionId: an action added to ACTIONS without a
   // handler here does not compile.
@@ -4421,15 +4434,10 @@ export default function App(): React.JSX.Element {
     'job.new': { blockedBy: () => (currentProject ? null : 'action.blocked.noProject'), run: () => setNewRunOpen(true) },
     // The rail's Kubernetes icon, shown under the same condition.
     'kube.open': { blockedBy: () => (kubectlFound && bottomRoot ? null : 'action.blocked.noKubectl'), run: kubeRail },
-    // A menu left open (a tab's menu draws above the palette's backdrop) would stay on screen and keep acting on the
-    // workbench behind the palette, so opening the palette closes the two the keyboard can open.
-    'palette.open': {
-      run: () => {
-        setTabMenu(null)
-        setRunMenuOpen(false)
-        setPaletteOpen(true)
-      }
-    }
+    'palette.open': { run: () => openPalette('>') },
+    // The same box on files (spec W2), over the explorer's project. With no project it still opens: the box says why it is
+    // empty, where a key that did nothing would explain nothing.
+    'file.quickOpen': { run: () => openPalette('') }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -6308,20 +6316,30 @@ export default function App(): React.JSX.Element {
           }}
         />
       )}
-      {paletteOpen && (
+      {paletteOpen !== null && (
         // Every action but itself, with its first chord and whether it can run now, read from the registry as this
-        // render sees it. It closes before the action runs, so the action is not run behind a modal guard.
+        // render sees it. It closes before the action runs, so the action is not run behind a modal guard. The key
+        // remounts the box when an action reopens it on the other list (going to a file, chosen from the actions).
         <CommandPalette
+          key={paletteOpen.query}
+          initialQuery={paletteOpen.query}
+          projectRoot={currentProject}
+          restoreTo={paletteRestoreRef.current}
           entries={ACTIONS.filter((a) => a.id !== 'palette.open').map((a) => {
             const chord = bindingsRef.current[a.id]?.[0]
             const state = actionRegistry.state(a.id)
             return { id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }
           })}
           onRun={(id) => {
-            setPaletteOpen(false)
+            setPaletteOpen(null)
             actionRegistry.run(id)
           }}
-          onClose={() => setPaletteOpen(false)}
+          onOpenFile={(path) => {
+            setPaletteOpen(null)
+            // The explorer's opener: an image or a video goes to the media viewer, the rest to the editor
+            openProjectFile(path)
+          }}
+          onClose={() => setPaletteOpen(null)}
         />
       )}
       {sourceJobOpen !== null && (

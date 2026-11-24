@@ -239,6 +239,7 @@ import { buildResumeNote, buildResumePacket, buildTabResumeText } from '../core/
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
 import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
+import { createQuickOpen } from './quickOpen'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
@@ -5707,6 +5708,9 @@ export function registerIpc(
   // watching an arbitrary path is refused.
   const fileWatcher = new FileWatcher((batch) => {
     kubeService.invalidate(batch.changes)
+    // Quick Open and the composer's `@` answer from the file index: a deleted file leaves it now, a new one is found on
+    // the next ask (main/fileIndex.ts noteChanges).
+    fileIndex.noteChanges(batch.changes)
     send('files:changedBatch', batch)
   })
   ipcMain.handle('files.watch', async (_e, root: string) => {
@@ -5716,6 +5720,10 @@ export function registerIpc(
     await fileWatcher.watch(root)
   })
   ipcMain.handle('files.unwatch', () => fileWatcher.unwatch())
+  // Quick Open (spec W2): files under the explorer's project matching what was typed, from the same index as `@`, behind
+  // the same path guard as every files IPC (main/quickOpen.ts).
+  const quickOpen = createQuickOpen({ index: fileIndex, allowedRoot: assertAllowedPath })
+  ipcMain.handle('files.quickOpen', (_e, root: unknown, query: unknown, refresh?: unknown) => quickOpen(root, query, refresh))
 
   // ---- git status. A path-to-state map for inline display in the tree.
   // --no-optional-locks is required: without it, status updates .git/index, which fires GitWatcher again

@@ -18,4 +18,10 @@ describe('the READMEs and the command palette', () => {
     expect(text).toContain(`**${CATALOGS[lang].messages['palette.title']}:**`)
     expect(text).toContain('`Ctrl`/`Cmd`+`Shift`+`P`')
   })
+
+  it.each(READMES)('%s names going to a file as the app does, with its key', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.file.quickOpen']}:**`)
+    expect(text).toContain('`Ctrl`/`Cmd`+`P`')
+  })
 })

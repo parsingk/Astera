@@ -8,6 +8,7 @@ import {
   projectRootOf,
   resolveProjectRootFrom,
   buildIgnoreMatcher,
+  buildIndexIgnoreMatcher,
   type DirEntry
 } from './tree'
 import { absPath, foldsCaseHere } from '../testPaths'
@@ -300,5 +301,29 @@ describe('renamePlan — files.rename 이 대상을 어떻게 다루는가', () 
     for (const platform of ['linux', 'win32', 'darwin']) {
       expect(renamePlan(absPath('p', 'a.txt'), absPath('p', 'b.txt'), platform)).toBe('checkThenRename')
     }
+  })
+})
+
+// Quick Open 리뷰 I1: 파일 색인(빠른 열기와 `@`)은 탐색기가 보여 주는 추적 파일을 찾을 수 있어야 한다. 이 저장소의
+// build/installer.nsh 처럼 `build`·`bin`·`out` 이라는 이름의 폴더에도 프로젝트 파일이 있다.
+describe('buildIndexIgnoreMatcher', () => {
+  it('.gitignore 가 있으면 그것을 따르고, 소스일 리 없는 폴더만 늘 뺀다', () => {
+    const ig = buildIndexIgnoreMatcher('/dist\n*.log\n')
+    for (const p of ['build/installer.nsh', 'packages/sdk/build/client.d.ts', 'bin/run', 'out/x', 'target/y', 'vendor/z.go', 'coverage/a']) {
+      expect(ig(p), p).toBe(false)
+    }
+    for (const p of ['dist/app.js', 'a.log', '.git/HEAD', 'node_modules/x/y.js', 'sub/.venv/z', 'src/__pycache__/m.pyc', '.next/x', 'ios/Pods/x.h']) {
+      expect(ig(p), p).toBe(true)
+    }
+  })
+
+  it('.gitignore 가 없으면 감시와 같은 큐레이트 목록 전체를 쓴다', () => {
+    const ig = buildIndexIgnoreMatcher(null)
+    for (const p of ['build/x', 'dist/y', 'node_modules/z', 'coverage/a']) expect(ig(p), p).toBe(true)
+    expect(ig('src/index.ts')).toBe(false)
+  })
+
+  it('루트 경로("")는 제외하지 않는다', () => {
+    expect(buildIndexIgnoreMatcher('x\n')('')).toBe(false)
   })
 })

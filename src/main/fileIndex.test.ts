@@ -21,7 +21,8 @@ describe('createFileIndex', () => {
     await write('node_modules/pkg/index.js')
     await write('dist/bundle.js')
     await write('secret/keys.txt')
-    await write('.gitignore', 'secret/\n')
+    await write('build/installer.nsh')
+    await write('.gitignore', 'secret/\ndist/\n')
   })
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true }).catch(() => {})
@@ -36,6 +37,19 @@ describe('createFileIndex', () => {
     expect(all.some((p) => p.includes('node_modules'))).toBe(false)
     expect(all.some((p) => p.startsWith('dist/'))).toBe(false)
     expect(all.some((p) => p.startsWith('secret/'))).toBe(false)
+  })
+
+  // Quick Open review I1: a project keeps tracked files in folders named build, bin or out (this repository's
+  // build/installer.nsh), and the explorer shows them. With a .gitignore the project says what is its own.
+  it('keeps a build folder the project does not ignore, as the explorer shows it', async () => {
+    expect(await createFileIndex().search(root, 'installer', 10)).toEqual(['build/installer.nsh'])
+  })
+
+  it('leaves the curated folders out of a project with no .gitignore', async () => {
+    await fs.rm(path.join(root, '.gitignore'))
+    const all = await createFileIndex().search(root, '', 100)
+    expect(all.some((p) => p.startsWith('build/') || p.startsWith('dist/') || p.includes('node_modules'))).toBe(false)
+    expect(all).toContain('src/app.ts')
   })
 
   it('answers root-relative paths with forward slashes, whatever the platform writes', async () => {
@@ -195,11 +209,12 @@ describe('createFileIndex — one walk, never blocking', () => {
     dirs[''] = [fileEntry('old.ts'), fileEntry('new.ts')]
     clock += 60_000
     holding = true
-    expect(await index.lookup(ROOT, '', 10)).toEqual({ paths: ['old.ts'], indexing: false })
+    // refreshing: Quick Open keeps asking until the fresh list answers
+    expect(await index.lookup(ROOT, '', 10)).toEqual({ paths: ['old.ts'], indexing: false, refreshing: true })
     holding = false
     gate.resolve()
     await index.search(ROOT, '', 10)
-    expect((await index.lookup(ROOT, 'new', 10)).paths).toEqual(['new.ts'])
+    expect(await index.lookup(ROOT, 'new', 10)).toEqual({ paths: ['new.ts'], indexing: false })
   })
 
   it('a walk that throws answers empty and does not leave a rejection behind', async () => {
@@ -268,5 +283,215 @@ describe('createFileIndex — bounded', () => {
     expect(f.calls.filter((c) => c === `p${FILE_INDEX_ROOTS_KEPT}`)).toHaveLength(1)
     expect(await index.search(path.resolve('/fake/p0'), '', 10)).toEqual(['f0.ts'])
     expect(f.calls.filter((c) => c === 'p0')).toHaveLength(2)
+  })
+})
+
+// W2a: Quick Open answers from this list, and the explorer's watcher reports what came and went below the root. A deleted
+// file must not be offered even for one keystroke; a new one appears once the list has been walked again.
+describe('createFileIndex — noteChanges', () => {
+  const ROOT = path.resolve('/fake')
+  const at = (rel: string): string => path.join(ROOT, ...rel.split('/'))
+
+  /** A tree whose readdirs can be held open, counting the walks (reads of the root). A held readdir has already read
+   *  its entries, as a real one has by the time the watcher hears of a later change. */
+  function tree(dirs: Record<string, FakeEntry[]>) {
+    let gate = deferred()
+    let holding = false
+    let walks = 0
+    const readdir = async (abs: string): Promise<FakeEntry[]> => {
+      const rel = path.relative('/fake', abs).split(path.sep).join('/')
+      if (rel === '') walks++
+      const entries = dirs[rel]
+      if (holding) await gate.promise
+      if (!entries) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      return entries
+    }
+    return {
+      dirs,
+      index: createFileIndex(() => 0, { probe: reachable, readdir, readFile: async () => '', graceMs: 5 }),
+      hold: () => {
+        gate = deferred()
+        holding = true
+      },
+      release: () => {
+        holding = false
+        gate.resolve()
+      },
+      walks: () => walks
+    }
+  }
+
+  it('a deleted file leaves the list at once, before any re-walk', async () => {
+    const t = tree({ '': [dirEntry('a'), fileEntry('x.ts')], a: [fileEntry('x.ts')] })
+    await t.index.search(ROOT, '', 10)
+    t.dirs.a = []
+    t.hold()
+    t.index.noteChanges([{ path: at('a/x.ts'), kind: 'unlink' }])
+    expect(await t.index.lookup(ROOT, 'x', 10)).toEqual({ paths: ['x.ts'], indexing: false })
+    t.release()
+  })
+
+  it('a deleted folder takes every path under it, and nothing beside it', async () => {
+    const t = tree({
+      '': [dirEntry('a'), dirEntry('ab')],
+      a: [fileEntry('x.ts'), dirEntry('b')],
+      'a/b': [fileEntry('y.ts')],
+      ab: [fileEntry('z.ts')]
+    })
+    await t.index.search(ROOT, '', 10)
+    t.hold()
+    // A native watcher cannot tell what a renamed-away path was, so it reports both kinds (main/fileWatcher.ts)
+    t.index.noteChanges([
+      { path: at('a'), kind: 'unlinkDir' },
+      { path: at('a'), kind: 'unlink' }
+    ])
+    expect((await t.index.lookup(ROOT, '', 10)).paths).toEqual(['ab/z.ts'])
+    t.release()
+  })
+
+  // Review M9: expiring on every new file made each keystroke after a creation walk the whole project again.
+  it('a new file joins the list at once, without walking again', async () => {
+    const t = tree({ '': [fileEntry('old.ts')] })
+    await t.index.search(ROOT, '', 10)
+    t.index.noteChanges([
+      { path: at('new.ts'), kind: 'add' },
+      { path: at('old.ts'), kind: 'add' }, // an atomic save reported as a new file: not listed twice
+      { path: at('node_modules/x.js'), kind: 'add' } // what the walk leaves out stays out
+    ])
+    expect(await t.index.search(ROOT, '', 10)).toEqual(['old.ts', 'new.ts'])
+    expect(t.walks()).toBe(1)
+  })
+
+  // A folder moved in arrives as one addDir; what it holds is not reported file by file.
+  it('a new folder makes the next ask walk again', async () => {
+    const t = tree({ '': [fileEntry('old.ts')] })
+    await t.index.search(ROOT, '', 10)
+    t.dirs[''] = [fileEntry('old.ts'), dirEntry('moved')]
+    t.dirs.moved = [fileEntry('inside.ts')]
+    t.index.noteChanges([{ path: at('moved'), kind: 'addDir' }])
+    expect(await t.index.search(ROOT, 'inside', 10)).toEqual(['moved/inside.ts'])
+    expect(t.walks()).toBe(2)
+  })
+
+  it('a content change does not walk again, except to the root .gitignore', async () => {
+    const t = tree({ '': [fileEntry('x.ts'), dirEntry('a')], a: [fileEntry('y.ts')] })
+    await t.index.search(ROOT, '', 10)
+    t.index.noteChanges([
+      { path: at('x.ts'), kind: 'change' },
+      { path: at('a/.gitignore'), kind: 'change' }
+    ])
+    await t.index.search(ROOT, '', 10)
+    expect(t.walks()).toBe(1)
+    t.index.noteChanges([{ path: at('.gitignore'), kind: 'change' }])
+    await t.index.search(ROOT, '', 10)
+    expect(t.walks()).toBe(2)
+  })
+
+  it('a change outside every cached root changes nothing', async () => {
+    const t = tree({ '': [fileEntry('x.ts')] })
+    await t.index.search(ROOT, '', 10)
+    t.index.noteChanges([
+      { path: path.resolve('/elsewhere/x.ts'), kind: 'unlink' },
+      { path: path.resolve('/fake2/x.ts'), kind: 'unlink' } // a sibling whose name starts with the root's
+    ])
+    expect(await t.index.search(ROOT, '', 10)).toEqual(['x.ts'])
+    expect(t.walks()).toBe(1)
+  })
+
+  // Review M4: the walk may have read the folder before the change, so the change is applied to what it stores.
+  it('a file added or deleted during a walk is right in its result, with no second walk', async () => {
+    const t = tree({ '': [fileEntry('a.ts'), fileEntry('gone.ts')] })
+    t.hold()
+    const first = t.index.search(ROOT, '', 10)
+    await new Promise((r) => setTimeout(r, 5))
+    t.index.noteChanges([
+      { path: at('b.ts'), kind: 'add' },
+      { path: at('gone.ts'), kind: 'unlink' }
+    ])
+    t.release()
+    expect(await first).toEqual(['a.ts', 'b.ts'])
+    expect(await t.index.search(ROOT, '', 10)).toEqual(['a.ts', 'b.ts'])
+    expect(t.walks()).toBe(1)
+  })
+
+  it('what a first walk answers early leaves out a file deleted since it was found', async () => {
+    const gate = deferred()
+    const dirs: Record<string, FakeEntry[]> = { '': [fileEntry('top.ts'), dirEntry('deep')], deep: [fileEntry('low.ts')] }
+    const readdir = async (abs: string): Promise<FakeEntry[]> => {
+      const rel = path.relative('/fake', abs).split(path.sep).join('/')
+      if (rel === 'deep') await gate.promise
+      return dirs[rel]
+    }
+    const index = createFileIndex(() => 0, { probe: reachable, readdir, readFile: async () => '', graceMs: 5 })
+    expect(await index.lookup(ROOT, '', 10)).toEqual({ paths: ['top.ts'], indexing: true })
+    index.noteChanges([{ path: at('top.ts'), kind: 'unlink' }])
+    expect(await index.lookup(ROOT, '', 10)).toEqual({ paths: [], indexing: true })
+    gate.resolve()
+    expect(await index.search(ROOT, '', 10)).toEqual(['deep/low.ts'])
+  })
+
+  it('a folder added during a walk makes the next ask walk again', async () => {
+    const t = tree({ '': [fileEntry('a.ts')] })
+    t.hold()
+    const first = t.index.search(ROOT, '', 10)
+    await new Promise((r) => setTimeout(r, 5))
+    t.index.noteChanges([{ path: at('moved'), kind: 'addDir' }])
+    t.release()
+    await first
+    t.dirs[''] = [fileEntry('a.ts'), dirEntry('moved')]
+    t.dirs.moved = [fileEntry('m.ts')]
+    expect(await t.index.search(ROOT, 'm', 10)).toEqual(['moved/m.ts'])
+    expect(t.walks()).toBe(2)
+  })
+
+  // Review M6: a project past the cap is answered from its shallow part, and Quick Open says so.
+  it('says when the project holds more files than it lists', async () => {
+    const many: FakeEntry[] = []
+    for (let i = 0; i < 20_001; i++) many.push(fileEntry(`f${i}.ts`))
+    const t = tree({ '': many })
+    await t.index.search(ROOT, '', 1) // the whole walk, past the grace
+    const answer = await t.index.lookup(ROOT, 'f1', 5)
+    expect(answer.truncated).toBe(true)
+    const small = tree({ '': [fileEntry('a.ts')] })
+    await small.index.search(ROOT, '', 1)
+    expect((await small.index.lookup(ROOT, '', 5)).truncated).toBeUndefined()
+  })
+})
+
+// Quick Open asks for a fresh list each time it opens: the watcher runs only while the explorer is open, and a file an
+// agent deleted from a terminal with the explorer closed would otherwise be offered until the list went stale.
+describe('createFileIndex — expire', () => {
+  const ROOT = path.resolve('/fake')
+
+  it('makes the next ask walk again, the old list answering while it runs', async () => {
+    const dirs: Record<string, FakeEntry[]> = { '': [fileEntry('old.ts')] }
+    const gate = deferred()
+    let holding = false
+    let walks = 0
+    const readdir = async (abs: string): Promise<FakeEntry[]> => {
+      const rel = path.relative('/fake', abs).split(path.sep).join('/')
+      if (rel === '') walks++
+      const entries = dirs[rel]
+      if (holding) await gate.promise
+      return entries
+    }
+    const index = createFileIndex(() => 0, { probe: reachable, readdir, readFile: async () => '', graceMs: 5 })
+    await index.search(ROOT, '', 10)
+    dirs[''] = [fileEntry('new.ts')]
+    holding = true
+    index.expire(ROOT)
+    expect(await index.lookup(ROOT, '', 10)).toEqual({ paths: ['old.ts'], indexing: false, refreshing: true })
+    holding = false
+    gate.resolve()
+    expect(await index.search(ROOT, '', 10)).toEqual(['new.ts'])
+    expect(walks).toBe(2)
+  })
+
+  it('does nothing for a root it holds no list of', async () => {
+    const f = fakeFs({ '': [fileEntry('a.ts')] })
+    const index = createFileIndex(() => 0, { probe: reachable, readdir: f.readdir, readFile: f.readFile })
+    index.expire(ROOT)
+    expect(await index.search(ROOT, '', 10)).toEqual(['a.ts'])
+    expect(f.calls.filter((c) => c === '')).toHaveLength(1)
   })
 })

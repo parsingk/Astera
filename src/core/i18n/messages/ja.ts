@@ -1242,7 +1242,7 @@ export const ja: Catalog = {
   'shortcut.risk.eof':
     'ターミナルで CLI を終了するキーです。アプリが使うと、セッションで使えなくなります。',
   'shortcut.risk.readline':
-    'ターミナルの行編集に使うキーです (行頭・行末への移動、単語の削除など)。アプリが使うと、プロンプト入力中に使えなくなります。',
+    'ターミナルの行編集に使うキーです (行頭・行末への移動、単語の削除、前後のコマンドなど)。アプリが使うと、プロンプト入力中に使えなくなります。',
   'shortcut.risk.historySearch':
     'ターミナルの履歴検索に使うキーです。アプリが使うと、セッションで使えなくなります。',
   'shortcut.risk.clear':
@@ -1276,6 +1276,7 @@ export const ja: Catalog = {
   'shortcut.job.new': '新しい Job',
   'shortcut.kube.open': 'Kubernetes パネルの開閉',
   'shortcut.palette.open': 'コマンドパレット',
+  'shortcut.file.quickOpen': 'ファイルへ移動',
   'action.blocked.noHandler': 'まだ使えません',
   'action.blocked.noProject': '先にプロジェクトを開いてください',
   'action.blocked.noRunConfig': '実行構成が選択されていません',
@@ -1288,8 +1289,13 @@ export const ja: Catalog = {
   'action.blocked.noLocalCli': 'このコンピューターでは Claude Code も Codex も実行できません',
   'action.blocked.noKubectl': 'kubectl が見つかりません',
   'palette.title': 'コマンドパレット',
-  'palette.placeholder': '実行するコマンドを入力',
   'palette.empty': '一致するコマンドはありません',
+  'quickOpen.placeholder': 'ファイル名を入力 (コマンドは先に > を入力)',
+  'quickOpen.empty': '一致するファイルはありません',
+  'quickOpen.indexing': 'ファイル一覧を作成しています',
+  'quickOpen.unavailable': 'このフォルダのファイル一覧を読み取れませんでした',
+  'quickOpen.scope': '{name} の中を検索します',
+  'quickOpen.truncated': 'ファイルが多いため、浅いフォルダから一部だけを検索します',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',

@@ -13,6 +13,41 @@ const scripted = (answers: FileIndexAnswer[]) => {
 };
 
 describe("pollFileIndex", () => {
+  // Quick Open: when a re-walk outlasts main's grace, the held list answers with `refreshing`; asking again shows the
+  // fresh one. It is not "indexing": the box has a whole list to show meanwhile.
+  it("asks again while main says the held list is being refreshed, without calling it indexing", async () => {
+    vi.useFakeTimers();
+    const ask = scripted([
+      { paths: ["old"], indexing: false, refreshing: true },
+      { paths: ["new"], indexing: false },
+    ]);
+    const states: FileIndexState[] = [];
+    pollFileIndex(ask, (s) => states.push(s), () => {}, { pollMs: 400 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(states[0]).toEqual({ paths: ["old"], indexing: false, unavailable: false });
+    expect(states.at(-1)).toEqual({ paths: ["new"], indexing: false, unavailable: false });
+  });
+
+  it("stops asking after its poll cap when a refresh never ends, keeping the held list", async () => {
+    vi.useFakeTimers();
+    const ask = scripted([{ paths: ["old"], indexing: false, refreshing: true }]);
+    const states: FileIndexState[] = [];
+    pollFileIndex(ask, (s) => states.push(s), () => {}, { pollMs: 400, maxPolls: 3 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ask).toHaveBeenCalledTimes(4);
+    expect(states.at(-1)).toEqual({ paths: ["old"], indexing: false, unavailable: false });
+  });
+
+  it("passes on that the list was cut at the index's cap", async () => {
+    vi.useFakeTimers();
+    const ask = scripted([{ paths: ["a"], indexing: false, truncated: true }]);
+    const states: FileIndexState[] = [];
+    pollFileIndex(ask, (s) => states.push(s), () => {}, { pollMs: 400 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(states.at(-1)).toEqual({ paths: ["a"], indexing: false, unavailable: false, truncated: true });
+  });
+
   it("asks again while main says it is indexing, and stops once the list is whole", async () => {
     vi.useFakeTimers();
     const ask = scripted([

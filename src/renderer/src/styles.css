@@ -2188,6 +2188,11 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .palette-reason { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
 .palette-chord { flex: none; font-family: inherit; font-size: 11px; line-height: 1.4; color: var(--text-dim); background: var(--elevated); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); padding: 0 5px; white-space: nowrap; }
 .palette-row.selected .palette-chord { background: var(--panel); }
+/* A file row (Quick Open): the name keeps its width and the folder after it takes what is left, dimmed */
+.palette-row.file .palette-title { flex: none; max-width: 60%; }
+.palette-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
+/* Quick Open's search scope under the box: the project's folder name, and a note when a large one is cut */
+.palette-scope { flex: none; padding: 0 9px 4px; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-empty { padding: 10px 8px; font-size: 12px; color: var(--text-faint); }
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */

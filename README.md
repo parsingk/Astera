@@ -187,6 +187,9 @@ what to check when an explanation is missing.
   `Ctrl`/`Cmd`+`Shift`+`H` for How It Works
 - **Command palette:** `Ctrl`/`Cmd`+`Shift`+`P` lists every action with its key and runs the one you
   type, from inside a terminal too. An action that cannot run right now stays in the list and says why
+- **Go to file:** `Ctrl`/`Cmd`+`P` finds a file of the open project by part of its name and opens it.
+  Type `>` first and the same box becomes the command palette. With a terminal focused, `Ctrl`+`P` stays the
+  shell's
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,

@@ -70,3 +70,13 @@ describe('fileTokenAt', () => {
     expect(fileTokenAt('그냥 메시지', 6)).toBeNull()
   })
 })
+
+// Quick Open review I2: a Korean name written by macOS (Finder, a Mac-made zip) is stored decomposed (NFD); the IME types
+// composed syllables (NFC). They are the same name, and the path handed back must stay the one on disk (it keys the tab).
+describe('filterFilePaths — Unicode normalization', () => {
+  it('matches a decomposed name with a composed query, and returns the path as it is on disk', () => {
+    const onDisk = 'docs/메모.md'.normalize('NFD')
+    expect(filterFilePaths([onDisk, 'docs/other.md'], '메모'.normalize('NFC'), 10)).toEqual([onDisk])
+    expect(filterFilePaths(['docs/메모.md'.normalize('NFC')], '메모'.normalize('NFD'), 10)).toHaveLength(1)
+  })
+})

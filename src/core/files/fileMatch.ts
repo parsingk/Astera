@@ -19,13 +19,17 @@
  * Matching is case-insensitive and on plain substrings, not a fuzzy score. A fuzzy match earns its
  * keep when the list is long and the query is short, and it costs the person the ability to predict
  * what they will get; these lists are already narrowed by a project root and a cap.
+ *
+ * Both sides are compared in NFC. macOS writes a Korean name decomposed (NFD) while an IME types composed syllables, so
+ * without it a name made in Finder never matches what is typed. The paths handed back are the ones given: a path keys a
+ * tab, and the on-disk spelling must survive.
  */
 export function filterFilePaths(
   paths: readonly string[],
   query: string,
   limit: number
 ): string[] {
-  const needle = query.toLowerCase()
+  const needle = query.normalize('NFC').toLowerCase()
   if (needle === '') return paths.slice(0, limit)
 
   const exact: string[] = []
@@ -33,7 +37,7 @@ export function filterFilePaths(
   const nameContains: string[] = []
   const pathContains: string[] = []
   for (const p of paths) {
-    const lower = p.toLowerCase()
+    const lower = p.normalize('NFC').toLowerCase()
     const name = lower.slice(lower.lastIndexOf('/') + 1)
     const dot = name.lastIndexOf('.')
     const stem = dot === -1 ? name : name.slice(0, dot)

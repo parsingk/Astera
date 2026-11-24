@@ -172,6 +172,9 @@
 - **Paleta de comandos:** `Ctrl`/`Cmd`+`Shift`+`P` muestra todas las acciones con su atajo y ejecuta
   la que escribes, también desde dentro de una terminal. Una acción que ahora no puede ejecutarse sigue
   en la lista y dice por qué
+- **Ir a un archivo:** `Ctrl`/`Cmd`+`P` busca un archivo del proyecto abierto por parte de su nombre y lo
+  abre. Si escribes `>` primero, el mismo cuadro pasa a ser la paleta de comandos. Con una terminal
+  enfocada, `Ctrl`+`P` sigue siendo de la shell
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo

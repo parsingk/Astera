@@ -29,13 +29,34 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   })
 
   it('treats an open palette as a modal, and closes it before running the chosen action', () => {
-    expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen \|\|/)
-    expect(src).toMatch(/onRun=\{\(id\) => \{\s*setPaletteOpen\(false\)\s*actionRegistry\.run\(id\)/)
+    expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen !== null \|\|/)
+    expect(src).toMatch(/onRun=\{\(id\) => \{\s*setPaletteOpen\(null\)\s*actionRegistry\.run\(id\)/)
   })
 
   // A menu left open would stay drawn over the palette's backdrop (a tab's menu sits above it) and act on the workbench.
   it('closes the tab menu and the run configuration menu as the palette opens', () => {
-    expect(src).toMatch(/'palette\.open': \{\s*run: \(\) => \{\s*setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(true\)/)
+    expect(src).toMatch(/const openPalette = \(query: '>' \| ''\): void => \{[\s\S]*?setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(\{ query \}\)/)
+    expect(src).toMatch(/'palette\.open': \{ run: \(\) => openPalette\('>'\) \}/)
+  })
+
+  // W2a: Ctrl+P is the same box on the explorer's project's files. With no project it still opens, and the box says why it
+  // is empty (review M7): a key that does nothing explains nothing.
+  it('goes to a file through the palette opened on files, with or without a project', () => {
+    expect(src).toMatch(/'file\.quickOpen': \{ run: \(\) => openPalette\(''\) \}/)
+  })
+
+  // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.
+  it('reads where focus was as the palette opens from closed, and hands it to the box', () => {
+    expect(src).toMatch(/if \(paletteOpen === null\) paletteRestoreRef\.current = document\.activeElement as HTMLElement \| null/)
+    expect(src).toMatch(/restoreTo=\{paletteRestoreRef\.current\}/)
+  })
+
+  // The key remounts the box when it is reopened on the other list (going to a file chosen from the actions list).
+  it("gives the palette the query it opens with, the explorer's project, and a file opener that closes it first", () => {
+    expect(src).toMatch(/<CommandPalette\s+key=\{paletteOpen\.query\}\s+initialQuery=\{paletteOpen\.query\}\s+projectRoot=\{currentProject\}/)
+    // The explorer's own opener: an image or a video goes to the media viewer, as a click in the explorer sends it
+    expect(src).toMatch(/onOpenFile=\{\(path\) => \{\s*setPaletteOpen\(null\)\s*(?:\/\/[^\n]*\n\s*)?openProjectFile\(path\)/)
+    expect(src).toMatch(/const \[paletteOpen, setPaletteOpen\] = useState<\{ query: '>' \| '' \} \| null>\(null\)/)
   })
 
   // Every dialog with a backdrop holds the shortcuts and the palette off the workbench behind it. These three had been
