@@ -227,7 +227,7 @@ describe('mentions and long caveat text', () => {
     const kept = md.split('\n').filter((l) => l.startsWith('- Task T')).length
     expect(kept).toBeGreaterThan(0)
     expect(kept).toBeLessThan(200)
-    expect(md).toContain(`and ${200 - kept} more caveats; see the Run in Astera`)
+    expect(md).toContain(`and ${200 - kept} more caveat(s); see the Run in Astera`)
   })
 })
 
@@ -443,13 +443,13 @@ describe('a long Run', () => {
     for (const c of caveats) expect(md).toContain(caveatLine(c, 'en'))
     const rows = md.split('\n').filter((l) => l.startsWith('- Task number')).length
     expect(rows).toBeLessThan(300)
-    expect(md).toContain(`and ${300 - rows} more Tasks`)
+    expect(md).toContain(`and ${300 - rows} more Task(s)`)
   })
 
   it('cuts Task rows in Slack first, then caveats beyond ten', () => {
     const slack = reportSlack(report({ tasks, caveats }), 'en', {})
     expect(slack.length).toBeLessThanOrEqual(SLACK_POST_MAX)
-    expect(slack).toContain('and 300 more Tasks')
+    expect(slack).toContain('and 300 more Task(s)')
     expect(slack).toContain(caveatLine(caveats[9], 'en'))
     expect(slack).not.toContain(caveatLine(caveats[10], 'en'))
     expect(slack).toContain('and 2 more')
@@ -474,7 +474,7 @@ describe('a long Run', () => {
     const kept = slack.split('\n').filter((l) => l.startsWith('• Task ') && l.includes('Reason:')).length
     expect(kept).toBeGreaterThan(0)
     expect(kept).toBeLessThan(10)
-    expect(slack).toContain(`and ${10 - kept} more caveats`)
+    expect(slack).toContain(`and ${10 - kept} more caveat(s)`)
   })
 
   it('cuts only the Task rows when the caveats fit', () => {

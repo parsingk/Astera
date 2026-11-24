@@ -515,7 +515,7 @@ describe('createConversationSessions', () => {
     // Both parts, not only the one that changed — the text part unchanged, the tool part now resolved.
     expect(updated.parts).toEqual([
       { kind: 'text', text: 'Let me run the build.' },
-      { kind: 'tool', id: 'tool1', name: 'Bash', target: 'echo hi', outcome: { ok: true, detail: '1 lines' } }
+      { kind: 'tool', id: 'tool1', name: 'Bash', target: 'echo hi', outcome: { ok: true, detail: '1 line' } }
     ])
     sessions.closeAll()
   })
@@ -610,12 +610,12 @@ describe('createConversationSessions', () => {
     await appendFile(p, toolResultLine('tool2', 'bye\n'))
     await advance(POLL_MS)
     expect(sessions.retainedCount('s1')).toBe(1) // tool1 is still outstanding, on the same turn
-    expect(outcomes()).toEqual([null, '1 lines']) // tool2 answered, tool1 not
+    expect(outcomes()).toEqual([null, '1 line']) // tool2 answered, tool1 not
 
     await appendFile(p, toolResultLine('tool1', 'hi\n'))
     await advance(POLL_MS)
     expect(sessions.retainedCount('s1')).toBe(0) // nothing left unresolved — nothing left retained
-    expect(outcomes()).toEqual(['1 lines', '1 lines'])
+    expect(outcomes()).toEqual(['1 line', '1 line'])
     sessions.closeAll()
   })
 
@@ -686,7 +686,7 @@ describe('createConversationSessions', () => {
     const aCall = emit.mock.calls.find((c) => c[0] === 'a')
     expect(aCall).toBeDefined()
     const aTurn = (aCall![1] as { id: string; parts: { outcome: unknown }[] }[]).find((t) => t.id === 'a1')
-    expect(aTurn?.parts[0].outcome).toEqual({ ok: true, detail: '1 lines' }) // a's own call actually resolved
+    expect(aTurn?.parts[0].outcome).toEqual({ ok: true, detail: '1 line' }) // a's own call actually resolved
 
     expect(sessions.retainedCount('a')).toBe(0)
     expect(sessions.retainedCount('b')).toBe(1) // b's own call, same id, is untouched

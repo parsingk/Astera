@@ -86,13 +86,13 @@ function detailOf(name: string, result: Record<string, unknown>): string {
     case 'Read': {
       if (result.type === 'image') return '' // no count; the dimensions are not rendered here
       const file = isRecord(result.file) ? result.file : undefined
-      return typeof file?.numLines === 'number' ? `${file.numLines} lines` : ''
+      return typeof file?.numLines === 'number' ? `${file.numLines} line${file.numLines === 1 ? '' : 's'}` : ''
     }
     case 'Grep': {
       if (result.mode === 'files_with_matches') {
-        return typeof result.numFiles === 'number' ? `${result.numFiles} files` : ''
+        return typeof result.numFiles === 'number' ? `${result.numFiles} file${result.numFiles === 1 ? '' : 's'}` : ''
       }
-      return typeof result.numLines === 'number' ? `${result.numLines} matches` : ''
+      return typeof result.numLines === 'number' ? `${result.numLines} match${result.numLines === 1 ? '' : 'es'}` : ''
     }
     case 'Edit':
       return editDetail(result)
@@ -105,7 +105,7 @@ function detailOf(name: string, result: Record<string, unknown>): string {
       const stdout = result.stdout
       if (typeof stdout !== 'string') return ''
       const n = countLines(stdout)
-      return n === 0 ? '' : `${n} lines` // countLines already trims, so a lone '\n' is 0, not 1
+      return n === 0 ? '' : `${n} line${n === 1 ? '' : 's'}` // countLines already trims, so a lone '\n' is 0, not 1
     }
     default:
       return ''

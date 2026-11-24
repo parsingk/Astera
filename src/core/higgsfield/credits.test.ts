@@ -37,4 +37,13 @@ describe('credits', () => {
     expect(m).toContain('Ask the user which account to use')
     expect(m).toContain('astera higgsfield use --account <account>')
   })
+
+  it('says one credit in the singular', () => {
+    const m = shortCreditsMessage({
+      current: { label: 'A', email: 'a@x.com', credits: 1 }, need: 12,
+      others: [{ label: 'B', email: 'b@x.com', credits: 1 }]
+    })
+    expect(m).toContain('"A" (a@x.com) has 1 credit; this job needs 12')
+    expect(m).toContain('"B" (b@x.com, 1 credit)')
+  })
 })

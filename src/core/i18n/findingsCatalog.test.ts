@@ -194,7 +194,7 @@ describe('the findings catalog', () => {
     const copy: Record<string, [string, string]> = {
       'findings.observe.off': ['Usage findings need Observe on for 30 days. Observe is off.', '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금 Observe가 꺼져 있습니다.'],
       'findings.observe.days': [
-        'Usage findings need Observe on for 30 days. It has been on for {days} days.',
+        'Usage findings need Observe on for 30 days. It has been on for {days} day(s).',
         '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금까지 {days}일 켜져 있었습니다.'
       ],
       'findings.unread': ['Could not read: {sources}', '읽지 못한 것: {sources}'],
