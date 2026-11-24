@@ -1732,6 +1732,10 @@ export interface CoreApi {
     pathForFile(file: File): string
     reveal(path: string): Promise<void> // show in the OS file manager
     countEntries(path: string): Promise<number> // child count for the delete confirmation (stops at 9999)
+    /** Quick Open: files under `root` matching `query`, best first, as absolute paths named the way `list` names them.
+     *  `root` must pass the files path guard. `indexing` while the first walk of `root` runs (ask again to see more);
+     *  `unavailable` when it could not be read (main/quickOpen.ts). */
+    quickOpen(root: string, query: string): Promise<{ paths: string[]; indexing: boolean; unavailable?: true }>
     /** A session terminal's path link (or a SendUserFile row's path): `target` as it is when absolute,
      *  against `cwd` when relative; the absolute path only when a regular file is there. The one call
      *  here without the path guard — it reads nothing (main/run/resolveLink.ts resolveExistingFile).

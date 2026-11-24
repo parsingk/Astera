@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { buildIgnoreMatcher } from '../core/files/tree'
+import { buildIgnoreMatcher, isPathWithin } from '../core/files/tree'
 import { filterFilePaths } from '../core/files/fileMatch'
+import type { FileChange } from '../core/files/changeBatch'
 import { defaultCwdProbe, type Probe } from '../core/sessions/pathProbe'
 
 /** How many files one project's list holds. A repository larger than this is answered from the first
@@ -60,6 +61,9 @@ interface Entry {
   at: number
   /** The walk failed (the root did not answer, or could not be read): kept for UNAVAILABLE_TTL_MS. */
   unavailable: boolean
+  /** The watcher saw a file come or go below this root after the walk (noteChanges). The list, with what was deleted
+   *  already taken out, still answers while the next ask walks again. */
+  changed?: true
 }
 
 /** A walk under way: `found` grows as it goes (the partial list `lookup` answers with), `done` settles
@@ -92,13 +96,17 @@ export interface FileIndex {
    *  period, what it has found so far with `indexing` set; or `unavailable` when the walk failed or
    *  ran out of time. Never rejects. */
   lookup(root: string, query: string, limit: number): Promise<FileIndexAnswer>
+  /** What the explorer's file watcher saw (one batch, absolute paths). A deleted file or folder leaves every list below
+   *  it at once; any file or folder coming or going, or the root's .gitignore changing, makes the next ask of that root
+   *  walk again. A content change alone changes no list. */
+  noteChanges(changes: readonly FileChange[]): void
 }
 
 /** The walk could not start or could not read its root. */
 class IndexUnavailable extends Error {}
 
 /**
- * The list of files a project offers to `@`.
+ * The list of files a project offers to `@` and to Quick Open (main/quickOpen.ts).
  *
  * Walked breadth-first and filtered by the same matcher the file watcher uses — the curated list of
  * heavy directories plus the root .gitignore — so what is offered is what a person would call part of
@@ -116,6 +124,9 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
   const walkTimeoutMs = deps.walkTimeoutMs ?? WALK_TIMEOUT_MS
   const cache = new Map<string, Entry>()
   const inflight = new Map<string, Walk>()
+  /** Roots whose walk was under way when the watcher reported a change below them: that walk may have read the folder
+   *  before the change, so its list is stored already changed. */
+  const changedDuringWalk = new Set<string>()
   /** Into the cache as the most recently used, past FILE_INDEX_ROOTS_KEPT the oldest out. */
   const keep = (root: string, e: Entry): void => {
     cache.delete(root)
@@ -185,7 +196,9 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
       )
       .then((r) => {
         if (timer) clearTimeout(timer)
-        keep(root, { paths: r.paths, at: now(), unavailable: r.unavailable })
+        const changed = changedDuringWalk.has(root)
+        changedDuringWalk.delete(root)
+        keep(root, { paths: r.paths, at: now(), unavailable: r.unavailable, ...(changed ? { changed: true as const } : {}) })
         inflight.delete(root)
         return r
       })
@@ -204,7 +217,7 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
   const fresh = (root: string): Entry | null => {
     const cached = cache.get(root)
     if (!cached) return null
-    if (now() - cached.at >= (cached.unavailable ? UNAVAILABLE_TTL_MS : TTL_MS)) return null
+    if (cached.changed || now() - cached.at >= (cached.unavailable ? UNAVAILABLE_TTL_MS : TTL_MS)) return null
     keep(root, cached)
     return cached
   }
@@ -237,6 +250,42 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
       const stale = cache.get(root)
       if (stale && !stale.unavailable) return answer(stale.paths, query, limit, false)
       return { paths: filterFilePaths(w.found, query, limit), indexing: true }
+    },
+    noteChanges(changes) {
+      for (const root of new Set([...cache.keys(), ...inflight.keys()])) {
+        const gone = new Set<string>()
+        const goneDirs = new Set<string>()
+        let changed = false
+        for (const c of changes) {
+          if (!isPathWithin(root, c.path)) continue
+          const rel = path.relative(root, c.path).split(path.sep).join('/')
+          // A content change alters no list; the root's .gitignore decides what the walk leaves out
+          if (c.kind === 'change') {
+            if (rel === '.gitignore') changed = true
+            continue
+          }
+          changed = true
+          if (c.kind === 'unlink') gone.add(rel)
+          else if (c.kind === 'unlinkDir') goneDirs.add(rel)
+        }
+        if (!changed) continue
+        if (inflight.has(root)) changedDuringWalk.add(root)
+        const e = cache.get(root)
+        if (!e) continue
+        // One pass over the list, each path's folders looked up in a set: a checkout deleting a thousand folders costs
+        // the list's length times its depth, not times the thousand. '' is the root itself, deleted with everything.
+        const under = (p: string): boolean => {
+          if (goneDirs.has('')) return true
+          for (let i = p.indexOf('/'); i !== -1; i = p.indexOf('/', i + 1)) if (goneDirs.has(p.slice(0, i))) return true
+          return false
+        }
+        const paths =
+          gone.size > 0 || goneDirs.size > 0
+            ? e.paths.filter((p) => !gone.has(p) && !goneDirs.has(p) && !under(p))
+            : e.paths
+        // set, not keep: a change is not a search, so this root does not move up the most-recently-searched order
+        cache.set(root, { ...e, paths, changed: true })
+      }
     }
   }
 }

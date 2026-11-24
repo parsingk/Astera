@@ -305,6 +305,7 @@ const api = {
     pathForFile: (file: File) => webUtils.getPathForFile(file),
     reveal: invoke('files.reveal'),
     countEntries: invoke('files.countEntries'),
+    quickOpen: invoke('files.quickOpen'),
     resolveLink: invoke('files.resolveLink'),
     openFolder: invoke('files.openFolder'),
     admitMedia: invoke('files.admitMedia')
