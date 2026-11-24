@@ -31,4 +31,9 @@ describe('the READMEs and the command palette', () => {
     expect(text).toContain('`Ctrl`/`Cmd`+`Shift`+`F`')
     expect(text).toContain('`.ignore`')
   })
+
+  it.each(READMES)('%s names sending a selection to an agent as the app does', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.context.attachSelection']}:**`)
+  })
 })
