@@ -15,6 +15,7 @@ import type {
 import type { K8sObject } from './kube/objects'
 import type { CountInfo, Dependents, EditBase, ForwardMessage, ForwardSpec, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ManifestMatch, ObjectRef, Read, SecretValue, ShellMessage, ShellSpec, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
+import type { TextSearchAnswer } from './files/textMatch'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
@@ -1741,6 +1742,11 @@ export interface CoreApi {
       query: string,
       refresh?: boolean
     ): Promise<{ paths: string[]; indexing: boolean; unavailable?: true; refreshing?: true; truncated?: true }>
+    /** Text search: the lines of the files under `root` that hold `query` (any case, taken literally), as rows streaming
+     *  in: ask again while `searching`. One search per window; a different query stops the one under way, and an empty
+     *  one stops it and answers nothing (the box closing). `root` must pass the files path guard. `refresh` walks `root`
+     *  again first: the box's first ask (main/textSearch.ts). */
+    searchText(root: string, query: string, refresh?: boolean): Promise<TextSearchAnswer>
     /** A session terminal's path link (or a SendUserFile row's path): `target` as it is when absolute,
      *  against `cwd` when relative; the absolute path only when a regular file is there. The one call
      *  here without the path guard — it reads nothing (main/run/resolveLink.ts resolveExistingFile).
