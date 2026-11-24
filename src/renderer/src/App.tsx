@@ -32,6 +32,9 @@ import { RecordDetailHost } from './components/RecordDetail'
 import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { CommandPalette } from './components/CommandPalette'
+import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
+import { contentRevision, contextText, sessionFits, type ContextRef } from '../../core/context/contextRef'
+import { selectionContext } from './lib/contextSources'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -718,6 +721,17 @@ export default function App(): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)
+  /** A piece of the workbench on its way to an agent (spec W4), shown in ContextPreview until attached or dropped.
+   *  `fileTabId` is the editor tab a selection came from, whose saved text decides whether it changed meanwhile. */
+  const [contextPreview, setContextPreview] = useState<{
+    ref: ContextRef
+    text: string
+    masked: number
+    cut: boolean
+    dirty: boolean
+    sessions: Array<{ id: string; title: string }>
+    fileTabId?: string
+  } | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
   const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
@@ -3220,7 +3234,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || paletteOpen !== null || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
+  modalOpenRef.current = modalOpenRef.current || paletteOpen !== null || contextPreview !== null || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
   // Three more dialogs with a backdrop, under the conditions they are drawn on below: the remote sessions dialog, a
   // block-mode update campaign's gate, and the first-run question. Without them a shortcut or the palette acted on
   // the workbench behind them, and Escape in the palette also dismissed the first-run question for good.
@@ -4362,6 +4376,74 @@ export default function App(): React.JSX.Element {
     const tab = id ? fileTabsRef.current.find((tb) => tb.id === id) : undefined
     return tab && isMarkdownPath(tab.path) ? tab.id : null
   }
+  /** The active pane's editor and its file tab, when the editor holds a selection (W4's attach). The pane's one editor
+   *  (mdViews, by pane) shows the pane's active tab, so the two belong together whenever that tab is a file. */
+  const activeEditorSelection = (): { tab: (typeof fileTabs)[number]; view: EditorView } | null => {
+    const id = activeFileIdRef.current
+    const tab = id ? fileTabsRef.current.find((f) => f.id === id) : undefined
+    const paneId = activePaneIdRef.current
+    const view = paneId ? mdViews[paneId] : undefined
+    if (!tab || !view || view.state.selection.main.empty) return null
+    return { tab, view }
+  }
+  /** Opens the preview for a piece of context, offering the sessions that may receive it (sessionFits: local, alive,
+   *  in the piece's folder and holding its file). None: said, and nothing opens. */
+  const openContextPreview = (ref: ContextRef, made: { text: string; masked: number; cut: boolean }, dirty: boolean, fileTabId?: string): void => {
+    const fitting = sessionsRef.current.filter((s) => sessionFits(ref, { cwd: s.cwd, alive: s.status !== 'exited' }))
+    if (fitting.length === 0) {
+      toast.info(t('context.noSession'))
+      return
+    }
+    setContextPreview({
+      ref,
+      ...made,
+      dirty,
+      sessions: fitting.map((s) => ({ id: s.id, title: s.title })),
+      ...(fileTabId !== undefined ? { fileTabId } : {})
+    })
+  }
+  const openSelectionContext = (): void => {
+    const sel = activeEditorSelection()
+    if (!sel) return
+    const { from, to } = sel.view.state.selection.main
+    const made = selectionContext({
+      path: sel.tab.path,
+      root: sel.tab.projectRoot,
+      doc: sel.view.state.doc.toString(),
+      saved: fileBuffersRef.current[sel.tab.id]?.savedContent ?? '',
+      from,
+      to
+    })
+    if (!made.ok) {
+      toast.info(t(made.reason === 'credential' ? 'context.credential' : 'action.blocked.noSelection'))
+      return
+    }
+    openContextPreview(made.ref, contextText(made.ref, made.excerpt, made.language), made.dirty, sel.tab.id)
+  }
+  /** Puts the previewed text in a session's input, never submitting it (spec W4: attach by default). Checked first, in
+   *  this order: the file it came from has not changed since (else it is selected again), the session still fits, it
+   *  is not holding a dialog (a paste would answer it, as Design Mode found), and it can take a paste. Its tab comes
+   *  forward first, since a chat composer cannot take focus while hidden. */
+  const attachContext = (sessionId: string): AttachOutcome => {
+    const p = contextPreview
+    if (!p) return 'notReady'
+    if (p.fileTabId !== undefined) {
+      const buf = fileBuffersRef.current[p.fileTabId]
+      if (!buf || contentRevision(buf.savedContent) !== p.ref.revision) return 'changed'
+    }
+    const s = sessionsRef.current.find((x) => x.id === sessionId)
+    if (!s || !sessionFits(p.ref, { cwd: s.cwd, alive: s.status !== 'exited' })) return 'notReady'
+    const screen = sessionBus.screenOf(sessionId)
+    if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
+    if (!sessionBus.canPaste(sessionId)) return 'notReady'
+    selectWorkbenchTab(sessionTab(sessionId))
+    requestAnimationFrame(() => {
+      sessionBus.pasteInto(sessionId, p.text)
+    })
+    setContextPreview(null)
+    toast.info(t('context.preview.attached', { name: s.title }))
+    return 'sent'
+  }
   /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
   const openPalette = (query: PaletteStart): void => {
@@ -4442,7 +4524,12 @@ export default function App(): React.JSX.Element {
     // empty, where a key that did nothing would explain nothing.
     'file.quickOpen': { run: () => openPalette('') },
     // The same box on text in the project's files (spec W2), with or without a project for the same reason.
-    'search.text': { run: () => openPalette('%') }
+    'search.text': { run: () => openPalette('%') },
+    // The editor selection to an agent, after a preview (spec W4).
+    'context.attachSelection': {
+      blockedBy: () => (activeEditorSelection() ? null : 'action.blocked.noSelection'),
+      run: () => openSelectionContext()
+    }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -6350,6 +6437,18 @@ export default function App(): React.JSX.Element {
             openFile(path, at)
           }}
           onClose={() => setPaletteOpen(null)}
+        />
+      )}
+      {contextPreview !== null && (
+        <ContextPreview
+          label={contextPreview.ref.label}
+          text={contextPreview.text}
+          masked={contextPreview.masked}
+          cut={contextPreview.cut}
+          dirty={contextPreview.dirty}
+          sessions={contextPreview.sessions}
+          onAttach={attachContext}
+          onClose={() => setContextPreview(null)}
         />
       )}
       {sourceJobOpen !== null && (

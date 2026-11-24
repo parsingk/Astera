@@ -82,7 +82,7 @@ export function sessionFits(ref: ContextRef, session: { cwd: string; alive: bool
 }
 
 /** `path` relative to `root`, with forward slashes; the whole path when it is not below it. */
-function relative(root: string, path: string): string {
+export function relativeTo(root: string, path: string): string {
   if (!isUnder(root, path)) return path
   const r = path.replace(/\\/g, '/').replace(/\/+$/, '')
   const cut = root.replace(/\\/g, '/').replace(/\/+$/, '').length + 1
@@ -110,7 +110,7 @@ export function contextText(ref: ContextRef, excerpt: string, language = ''): { 
   const head: string[] = [`## Context from Astera: ${ref.kind}`]
   if (ref.path !== undefined) {
     const where = ref.range ? (ref.range.startLine === ref.range.endLine ? ` (line ${ref.range.startLine})` : ` (lines ${ref.range.startLine}-${ref.range.endLine})`) : ''
-    head.push(`**File:** ${relative(ref.root, ref.path)}${where}`)
+    head.push(`**File:** ${relativeTo(ref.root, ref.path)}${where}`)
   } else head.push(`**Source:** ${ref.label}`)
   if (ref.revision !== undefined) head.push(`**Revision:** ${ref.revision}`)
   const tail = cut ? [`(cut: the first ${lines.length} of ${all.length} lines, up to ${CONTEXT_EXCERPT_CHARS} characters, are shown)`] : []

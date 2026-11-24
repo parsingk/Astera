@@ -37,6 +37,7 @@ export type ActionId =
   | 'session.new'
   | 'job.new'
   | 'kube.open'
+  | 'context.attachSelection'
   | 'palette.open'
   | 'file.quickOpen'
   | 'search.text'
@@ -261,6 +262,15 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       id: 'kube.open',
       defaults: [],
       descKey: 'shortcut.kube.open',
+      yieldsToTerminal: false,
+      swallowsWhenBlocked: false
+    },
+    {
+      // W4: the editor selection to an agent, after a preview. No default key: Ctrl+Shift+K is the editor's delete line
+      // and Ctrl+Alt is AltGr on several layouts; the palette reaches it.
+      id: 'context.attachSelection',
+      defaults: [],
+      descKey: 'shortcut.context.attachSelection',
       yieldsToTerminal: false,
       swallowsWhenBlocked: false
     },

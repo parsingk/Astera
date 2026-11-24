@@ -56,6 +56,19 @@ describe('App.tsx runs shortcuts through the action registry', () => {
     expect(src).toMatch(/onOpenAt=\{\(path, at\) => \{\s*setPaletteOpen\(null\)\s*(?:\/\/[^\n]*\n\s*)?openFile\(path, at\)/)
   })
 
+  // W4: the active pane's editor selection goes to an agent after a preview, pasted into its input and never submitted.
+  it('sends the active editor selection through a preview, into a fitting session, unsubmitted', () => {
+    expect(src).toMatch(/'context\.attachSelection': \{\s*blockedBy: \(\) => \(activeEditorSelection\(\) \? null : 'action\.blocked\.noSelection'\),\s*run: \(\) => openSelectionContext\(\)/)
+    expect(src).toMatch(/const paneId = activePaneIdRef\.current\s*const view = paneId \? mdViews\[paneId\] : undefined/)
+    expect(src).toMatch(/sessionsRef\.current\.filter\(\(s\) => sessionFits\(ref, \{ cwd: s\.cwd, alive: s\.status !== 'exited' \}\)\)/)
+    const attach = src.slice(src.indexOf('const attachContext = '), src.indexOf('const attachContext = ') + 2500)
+    expect(attach).toMatch(/contentRevision\(buf\.savedContent\) !== p\.ref\.revision\) return 'changed'/)
+    expect(attach).toMatch(/isWaitingOnDialog\(screen\)\) return 'waiting'/)
+    expect(attach).toMatch(/sessionBus\.pasteInto\(sessionId, p\.text\)/)
+    expect(attach).not.toMatch(/pasteAndSubmit|submitInto/)
+    expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen !== null \|\| contextPreview !== null \|\|/)
+  })
+
   // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.
   it('reads where focus was as the palette opens from closed, and hands it to the box', () => {
     expect(src).toMatch(/if \(paletteOpen === null\) paletteRestoreRef\.current = document\.activeElement as HTMLElement \| null/)

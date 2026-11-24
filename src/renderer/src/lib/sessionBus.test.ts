@@ -228,3 +228,15 @@ describe('pasteAndSubmit', () => {
     expect(r.writes).toEqual([])
   })
 })
+
+// W4: whether a session can take a paste is asked before its tab is brought forward, so a refusal comes first and
+// nothing is shown for a paste that cannot land.
+describe('canPaste', () => {
+  it('is true only while a paste is registered for the session', () => {
+    expect(mod.canPaste('s9')).toBe(false)
+    const off = mod.registerPaste('s9', () => {})
+    expect(mod.canPaste('s9')).toBe(true)
+    off()
+    expect(mod.canPaste('s9')).toBe(false)
+  })
+})

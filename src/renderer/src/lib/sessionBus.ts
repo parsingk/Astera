@@ -182,6 +182,12 @@ export function registerPaste(sessionId: string, paste: (text: string) => void):
   }
 }
 
+/** Whether that session can take a paste now: a terminal (TerminalView) or a chat composer (ConversationPane) is
+ *  registered for it. Asked before anything is shown for a paste (W4's attach), so a refusal comes first. */
+export function canPaste(sessionId: string): boolean {
+  return pasters.has(sessionId)
+}
+
 /** Pastes into that session's terminal. false when no terminal is registered for the id — the tab is
  *  gone, or has not mounted yet. Session slots stay mounted off screen, so a live session always has one. */
 export function pasteInto(sessionId: string, text: string): boolean {
