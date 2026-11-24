@@ -1297,6 +1297,13 @@ describe('applyValidationResult — convergence', () => {
     expect(r.state.messages.at(-1)?.subject).toBe('All 2 checks passed')
   })
 
+  it('says the one check passed, not "All 1 checks"', () => {
+    const { s, taskId } = armed({ validateConfigIds: ['cfg1'] })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: [two(0, 0)[0]], repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('completed')
+    expect(r.state.messages.at(-1)?.subject).toBe('The check passed')
+  })
+
   it('하나가 실패하면 같은 세션에 repair Dispatch 를 열고 Task 는 dispatched 다 — failed 를 거치지 않는다', () => {
     const { s, taskId, dispatchId } = armed()
     const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)

@@ -1050,8 +1050,10 @@ export function applyValidationResult(
         // A check a person skipped did not pass (plugin Phase 5 C9; 5a final review M3): the coordinator reads this
         subject:
           skippedNames.length > 0
-            ? `${total - skippedNames.length} of ${total} checks passed, ${skippedNames.length} skipped by a person: ${skippedNames.join(', ')}`
-            : `All ${total} checks passed`,
+            ? `${total - skippedNames.length} of ${total} check${total === 1 ? '' : 's'} passed, ${skippedNames.length} skipped by a person: ${skippedNames.join(', ')}`
+            : total === 1
+              ? 'The check passed'
+              : `All ${total} checks passed`,
         body: `exitCode=0. ${reviewing ? 'The Task moved to reviewing — a reviewer on another provider now reads it.' : 'The Task moved to completed.'}`
       },
       now

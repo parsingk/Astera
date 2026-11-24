@@ -61,11 +61,11 @@ export const isBalanceQuery = (args: string[]): boolean => {
 export const SESSION_EXPIRED = /^Error: Session expired|^Hint: Run: hf auth login/im
 
 type Who = { label: string; email?: string; credits: number | null }
-const credits = (n: number | null) => (n === null ? 'credits unknown' : `${n} credits`)
+const credits = (n: number | null) => (n === null ? 'credits unknown' : `${n} credit${n === 1 ? '' : 's'}`)
 
 export function shortCreditsMessage(a: { current: Who; need: number | null; others: Who[] }): string {
   const cur = `Higgsfield account "${a.current.label}"${a.current.email ? ` (${a.current.email})` : ''} has ${
-    a.current.credits === null ? 'too few credits' : `${a.current.credits} credits`}`
+    a.current.credits === null ? 'too few credits' : credits(a.current.credits)}`
   const need = a.need === null ? '' : `; this job needs ${a.need}`
   const others = a.others.length
     ? ` Other accounts: ${a.others.map((o) => `"${o.label}" (${o.email ? `${o.email}, ` : ''}${credits(o.credits)})`).join(', ')}.`

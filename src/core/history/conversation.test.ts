@@ -258,6 +258,28 @@ describe('reduceTranscript — synthetic cases', () => {
     expect(write?.outcome).toEqual({ ok: true, detail: 'new file' })
   })
 
+  it('says one line, one file and one match in the singular', () => {
+    const call = (id: string, name: string): string =>
+      line({ type: 'assistant', uuid: `a-${id}`, message: { content: [{ type: 'tool_use', id, name, input: {} }] } })
+    const result = (id: string, toolUseResult: unknown): string =>
+      line({ type: 'user', uuid: `u-${id}`, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] }, toolUseResult })
+    const turns = reduceTranscript([
+      call('read', 'Read'),
+      call('files', 'Grep'),
+      call('matches', 'Grep'),
+      call('bash', 'Bash'),
+      result('read', { type: 'text', file: { filePath: '/a.ts', content: 'x', numLines: 1, startLine: 1, totalLines: 1 } }),
+      result('files', { mode: 'files_with_matches', numFiles: 1 }),
+      result('matches', { mode: 'content', numLines: 1 }),
+      result('bash', { stdout: 'done\n', stderr: '', interrupted: false })
+    ])
+    const outcome = (id: string) => turns.flatMap(toolParts).find((p) => p.id === id)?.outcome
+    expect(outcome('read')).toEqual({ ok: true, detail: '1 line' })
+    expect(outcome('files')).toEqual({ ok: true, detail: '1 file' })
+    expect(outcome('matches')).toEqual({ ok: true, detail: '1 match' })
+    expect(outcome('bash')).toEqual({ ok: true, detail: '1 line' })
+  })
+
   it('a call with no result yet leaves outcome null', () => {
     const turns = reduceTranscript([
       line({
