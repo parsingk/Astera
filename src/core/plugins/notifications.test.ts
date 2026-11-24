@@ -40,7 +40,7 @@ describe('notificationOf (plugin Phase 3 N10)', () => {
       title: 'Ship the release',
       body: 'Waiting for an answer: Which branch?'
     })
-    expect(word(ev('run.failed', RUN))).toMatchObject({ level: 'error', title: 'Ship the release', body: 'Run 2 failed (3 of 5 Tasks done).' })
+    expect(word(ev('run.failed', RUN))).toMatchObject({ level: 'error', title: 'Ship the release', body: 'Run 2 failed (3 of 5 Task(s) done).' })
     expect(word(ev('completion.exhausted', { taskId: 't1', title: 'Add tests' }))).toMatchObject({
       level: 'error',
       body: 'The completion checks of Add tests used every repair.'
