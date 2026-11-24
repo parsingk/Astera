@@ -69,8 +69,8 @@ function fakeGit(overrides: Record<string, GitResult> = {}): typeof git {
   const defaults: Record<string, GitResult> = {
     'rev-parse HEAD': { ok: true, stdout: 'abc123', stderr: '' },
     'branch --show-current': { ok: true, stdout: 'main', stderr: '' },
-    '-c core.quotepath=false status --short': { ok: true, stdout: '', stderr: '' },
-    '-c core.quotepath=false diff HEAD --stat': { ok: true, stdout: '', stderr: '' }
+    '--no-optional-locks -c core.quotepath=false status --short': { ok: true, stdout: '', stderr: '' },
+    '-c diff.autoRefreshIndex=false -c core.quotepath=false diff HEAD --stat': { ok: true, stdout: '', stderr: '' }
   }
   const table = { ...defaults, ...overrides }
   return (async (args: string[]) => {
@@ -280,7 +280,7 @@ describe('buildResumeNote', () => {
   const withChanges = (): typeof git =>
     fakeGit({
       'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
-      '-c core.quotepath=false status --short': {
+      '--no-optional-locks -c core.quotepath=false status --short': {
         ok: true,
         stdout: ' M src/a.ts\n?? src/b.ts\n',
         stderr: ''
@@ -340,7 +340,7 @@ describe('buildResumeNote', () => {
     const log = vi.fn()
     const gitWithAmpersand = fakeGit({
       'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
-      '-c core.quotepath=false status --short': {
+      '--no-optional-locks -c core.quotepath=false status --short': {
         ok: true,
         stdout: ' M "docs/R&D notes.md"\n?? src/b.ts\n',
         stderr: ''
@@ -495,7 +495,7 @@ describe('buildTabResumeText', () => {
       transcriptPath: '/fake/transcript.jsonl',
       git: fakeGit({
         'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
-        '-c core.quotepath=false status --short': { ok: true, stdout: ' M src/a.ts\n', stderr: '' }
+        '--no-optional-locks -c core.quotepath=false status --short': { ok: true, stdout: ' M src/a.ts\n', stderr: '' }
       }),
       readTranscript,
       dir: specDir
@@ -517,7 +517,7 @@ describe('buildTabResumeText', () => {
       transcriptPath: '/fake/transcript.jsonl',
       git: fakeGit({
         'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
-        '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/from-git.ts\n', stderr: '' }
+        '--no-optional-locks -c core.quotepath=false status --short': { ok: true, stdout: '?? src/from-git.ts\n', stderr: '' }
       }),
       readTranscript,
       dir: specDir
@@ -545,7 +545,7 @@ describe('buildTabResumeText', () => {
       transcriptPath: null,
       git: fakeGit({
         'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
-        '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/only-git.ts\n', stderr: '' }
+        '--no-optional-locks -c core.quotepath=false status --short': { ok: true, stdout: '?? src/only-git.ts\n', stderr: '' }
       }),
       readTranscript,
       log,

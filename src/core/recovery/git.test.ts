@@ -30,6 +30,19 @@ describe('readGitFacts', () => {
     expect((await readGitFacts(d)).dirty).toBe(true)
   })
 
+  // Recovery reads the folders of workers that may still be running. A status that rewrites the index holds
+  // .git/index.lock, and a worker's own `git add` at that moment fails with "index.lock: File exists".
+  it('reads without rewriting the index, so a running worker’s git does not meet a held index.lock', async () => {
+    const d = await repo()
+    // The content stays and only the time moves: the index's stat data is stale, which a plain status rewrites.
+    const later = new Date(Date.now() + 60_000)
+    await fs.utimes(path.join(d, 'f.txt'), later, later)
+    const index = path.join(d, '.git', 'index')
+    const before = await fs.readFile(index)
+    expect((await readGitFacts(d)).dirty).toBe(false)
+    expect((await fs.readFile(index)).equals(before)).toBe(true)
+  })
+
   it('an untracked file makes it dirty', async () => {
     const d = await repo()
     await fs.writeFile(path.join(d, 'new.txt'), 'x', 'utf8')
@@ -78,7 +91,7 @@ describe('readGitFacts', () => {
     const d = await repo()
     const { git } = await import('../worktrees/git')
     const failingGit = async (args: string[], opts?: { cwd?: string }) => {
-      if (args[0] === 'status') return { ok: false, stdout: '', stderr: 'boom' }
+      if (args.includes('status')) return { ok: false, stdout: '', stderr: 'boom' }
       return git(args, opts)
     }
     const facts = await readGitFacts(d, { git: failingGit })

@@ -62,8 +62,10 @@ export async function readGitFacts(cwd: string, deps: GitFactsDeps = {}): Promis
 
   const [head, status, branch] = await Promise.all([
     run(['rev-parse', 'HEAD'], { cwd }),
-    // trim: false preserves the leading space of fixed-width XY porcelain codes; whole-string trim corrupts them
-    run(['status', '--porcelain', '-uall'], { cwd, trim: false }),
+    // trim: false preserves the leading space of fixed-width XY porcelain codes; whole-string trim corrupts them.
+    // --no-optional-locks: without it status rewrites a stale index under .git/index.lock, and a worker still running
+    // in this folder fails its own `git add` with "index.lock: File exists" at that moment.
+    run(['--no-optional-locks', 'status', '--porcelain', '-uall'], { cwd, trim: false }),
     run(['branch', '--show-current'], { cwd })
   ])
   // A repository with no commit yet answers nothing for HEAD; that is a null head, not a failure.

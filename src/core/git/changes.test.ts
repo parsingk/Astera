@@ -239,6 +239,24 @@ describe('git reads are bounded and literal', { timeout: 60_000 }, () => {
 })
 
 describe('trackedTreeState', { timeout: 30_000 }, () => {
+  // It is read before and after an external review, in a folder a person or another git may be using. A status that
+  // rewrites the index holds .git/index.lock, and their `git add` at that moment fails with "index.lock: File exists".
+  it('reads without rewriting the index, so git run by someone else does not meet a held index.lock', async () => {
+    const repo = await makeRepo()
+    try {
+      const clean = await trackedTreeState(repo)
+      // The content stays and only the time moves: the index's stat data is stale, which a plain status rewrites.
+      const later = new Date(Date.now() + 60_000)
+      await fs.utimes(path.join(repo, 'f.txt'), later, later)
+      const index = path.join(repo, '.git', 'index')
+      const before = await fs.readFile(index)
+      expect(await trackedTreeState(repo)).toBe(clean)
+      expect((await fs.readFile(index)).equals(before)).toBe(true)
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+
   it('is null outside a repository', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-tts-'))
     try {
