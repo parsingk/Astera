@@ -35,7 +35,7 @@ describe('App.tsx runs shortcuts through the action registry', () => {
 
   // A menu left open would stay drawn over the palette's backdrop (a tab's menu sits above it) and act on the workbench.
   it('closes the tab menu and the run configuration menu as the palette opens', () => {
-    expect(src).toMatch(/const openPalette = \(query: '>' \| ''\): void => \{[\s\S]*?setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(\{ query \}\)/)
+    expect(src).toMatch(/const openPalette = \(query: PaletteStart\): void => \{[\s\S]*?setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(\{ query \}\)/)
     expect(src).toMatch(/'palette\.open': \{ run: \(\) => openPalette\('>'\) \}/)
   })
 
@@ -43,6 +43,17 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   // is empty (review M7): a key that does nothing explains nothing.
   it('goes to a file through the palette opened on files, with or without a project', () => {
     expect(src).toMatch(/'file\.quickOpen': \{ run: \(\) => openPalette\(''\) \}/)
+  })
+
+  // W2b: Ctrl+Shift+F is the same box on text in the project's files, behind a leading %.
+  it('finds in files through the palette opened on text', () => {
+    expect(src).toMatch(/'search\.text': \{ run: \(\) => openPalette\('%'\) \}/)
+    expect(src).toMatch(/const openPalette = \(query: PaletteStart\): void =>/)
+  })
+
+  // A line from text search opens in the editor at the match, whatever the file is (an SVG's text is what matched).
+  it('opens a chosen line in the editor at its line and column, closing the palette first', () => {
+    expect(src).toMatch(/onOpenAt=\{\(path, at\) => \{\s*setPaletteOpen\(null\)\s*(?:\/\/[^\n]*\n\s*)?openFile\(path, at\)/)
   })
 
   // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.
@@ -56,7 +67,8 @@ describe('App.tsx runs shortcuts through the action registry', () => {
     expect(src).toMatch(/<CommandPalette\s+key=\{paletteOpen\.query\}\s+initialQuery=\{paletteOpen\.query\}\s+projectRoot=\{currentProject\}/)
     // The explorer's own opener: an image or a video goes to the media viewer, as a click in the explorer sends it
     expect(src).toMatch(/onOpenFile=\{\(path\) => \{\s*setPaletteOpen\(null\)\s*(?:\/\/[^\n]*\n\s*)?openProjectFile\(path\)/)
-    expect(src).toMatch(/const \[paletteOpen, setPaletteOpen\] = useState<\{ query: '>' \| '' \} \| null>\(null\)/)
+    expect(src).toMatch(/const \[paletteOpen, setPaletteOpen\] = useState<\{ query: PaletteStart \} \| null>\(null\)/)
+    expect(src).toMatch(/type PaletteStart = '>' \| '' \| '%'/)
   })
 
   // Every dialog with a backdrop holds the shortcuts and the palette off the workbench behind it. These three had been

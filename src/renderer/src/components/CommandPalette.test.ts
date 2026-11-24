@@ -57,7 +57,7 @@ describe('the palette on files (Quick Open)', () => {
   // Rows answering an older query stay on screen while the newer one is asked; Enter on them would open a file the
   // person did not finish typing the name of.
   it('waits for the rows of what is typed before Enter opens one (lib/quickOpen.ts decides)', () => {
-    expect(src).toMatch(/filesWaiting\(\{ mode, current: files\.current, indexing: files\.indexing, rows: rows\.length \}\)/)
+    expect(src).toMatch(/rowsWaiting\(\{ mode, current: list\.current, busy: list\.busy, rows: rows\.length \}\)/)
     expect(src).toMatch(/enterAction\(waiting, cur\)/)
     expect(src).toMatch(/settleEnter\(waiting, rows\.length\)/)
   })
@@ -75,13 +75,74 @@ describe('the palette on files (Quick Open)', () => {
   })
 
   it('names the box after its mode, and gives the empty box the file hint', () => {
-    expect(src).toMatch(/mode === 'actions' \? t\('palette\.title'\) : t\('shortcut\.file\.quickOpen'\)/)
+    expect(src).toMatch(/mode === 'actions' \? t\('palette\.title'\) : mode === 'text' \? t\('shortcut\.search\.text'\) : t\('shortcut\.file\.quickOpen'\)/)
     expect(src).toContain("placeholder={t('quickOpen.placeholder')}")
   })
 
   // A path squeezed into an id character class collides (a-b.ts and a.b.ts); the row's place does not.
   it('gives each option an id by its place in the list', () => {
     expect(src).toMatch(/`\$\{listId\}-\$\{i\}`/)
+  })
+})
+
+const textHook = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../hooks/useTextSearch.ts'), 'utf8')
+
+// W2b: the same box finds text in the files (lib/quickOpen.ts decides the mode, main/textSearch.ts the lines).
+describe('the palette on text in files', () => {
+  it('searches only in text mode, under the project it was given', () => {
+    expect(src).toMatch(/useTextSearch\(projectRoot, text, mode === 'text'\)/)
+  })
+
+  // Enter lands on the line and column of the match, in the editor (not the media viewer: an SVG's text is what matched).
+  it('opens a chosen line at its line and column', () => {
+    expect(src).toMatch(/pick: \(\) => onOpenAt\(m\.path, \{ line: m\.line, col: m\.col \}\)/)
+    expect(src).toMatch(/onOpenAt: \(path: string, at: \{ line: number; col: number \}\) => void/)
+  })
+
+  it('draws the matches in a row marked, and the file and line beside it', () => {
+    expect(src).toMatch(/markSegments\(row\.title, row\.marks\)/)
+    expect(src).toMatch(/<mark key=\{j\} className="palette-mark">/)
+    expect(src).toMatch(/detail: `\$\{folder \? `\$\{folder\}\/` : ''\}\$\{name\}:\$\{m\.line\}`/)
+  })
+
+  // Review M1: the cut notices came after the fixed sentence, and the line's ellipsis hid them. They come first now, and
+  // the whole line is the tooltip.
+  it('says what was cut first, then which project it searches and what it leaves out, all of it on hover', () => {
+    expect(src).toMatch(/const textScope = \[\s*found\.truncated \? t\('textSearch\.truncated', \{ count: rows\.length \}\) : null,\s*found\.fileCut \? t\('textSearch\.fileCut', \{ count: TEXT_SEARCH_LINES_PER_FILE \}\) : null,\s*found\.partial \? t\('quickOpen\.truncated'\) : null,\s*t\('textSearch\.scope', \{ name: projectName \}\)\s*\]/)
+    expect(src).toMatch(/<div className="palette-scope" title=\{textScope\}>\s*\{textScope\}/)
+  })
+
+  it('says why there are no text rows, or that more are coming', () => {
+    for (const key of ['textSearch.hint', 'textSearch.searching', 'textSearch.empty']) expect(src).toContain(`t('${key}')`)
+  })
+
+  // Review M5: a pasted line over the cap read "No file contains this text", which was not true.
+  it('says the text is too long rather than that nothing matched', () => {
+    expect(src).toMatch(/text\.length > TEXT_SEARCH_MAX_QUERY\s*\? t\('textSearch\.tooLong', \{ max: TEXT_SEARCH_MAX_QUERY \}\)/)
+  })
+})
+
+describe('useTextSearch', () => {
+  it('asks for a fresh list on its first sent ask for a project, after the debounce', () => {
+    expect(textHook).toMatch(/let first = refreshedFor\.current !== root/)
+    expect(textHook).toMatch(/window\.api\.files\.searchText\(root, text, first\)/)
+    expect(textHook).toMatch(/if \(first\) refreshedFor\.current = root/)
+    expect(textHook).toMatch(/delayMs: DEBOUNCE_MS/)
+  })
+
+  it('counts rows as current only for the project and the query they answer; no query to search has nothing to wait for', () => {
+    expect(textHook).toMatch(/current: !enabled \|\| root === null \|\| !searchable\(text\) \|\| found\.answeredFor === answerKey\(root, text\)/)
+    expect(textHook).toMatch(/const searchable = \(text: string\): boolean => text !== '' && text\.length <= TEXT_SEARCH_MAX_QUERY/)
+  })
+
+  // Review I1, related: going back to a bare % left main reading for the query that was there.
+  it("stops main's search when the box is left with nothing to search", () => {
+    expect(textHook).toMatch(/if \(!searchable\(text\)\) \{\s*setFound\(NONE\)\s*(?:\/\/[^\n]*\n\s*)?void window\.api\.files\.searchText\(root, ''\)\.catch\(\(\) => \{\}\)/)
+  })
+
+  // Closing the box, leaving %, or moving to another project stops main reading files for a search nobody will see.
+  it("stops main's search when the box stops searching this project", () => {
+    expect(textHook).toMatch(/return \(\) => \{\s*void window\.api\.files\.searchText\(root, ''\)\.catch\(\(\) => \{\}\)\s*\}\s*\}, \[root, enabled\]\)/)
   })
 })
 

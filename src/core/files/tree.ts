@@ -160,14 +160,24 @@ const NEVER_SOURCE = [
   '.gradle', '.next', '.nuxt', '.svelte-kit', '.turbo', '.cache', '.idea', 'Pods', '.dart_tool'
 ]
 
-/** The file index's matcher (main/fileIndex.ts): what Quick Open and the composer's `@` leave out. With a root
- *  .gitignore the project says what is its own, so only NEVER_SOURCE is added to it, and a tracked `build/` or `bin/`
- *  folder stays findable, as the explorer shows it. Without one, the watcher's curated list stands in. */
-export function buildIndexIgnoreMatcher(gitignoreText: string | null): (relPath: string) => boolean {
-  if (!gitignoreText) return buildIgnoreMatcher(null)
+/** The file index's matcher (main/fileIndex.ts): what Quick Open, text search and the composer's `@` leave out. With a
+ *  root .gitignore the project says what is its own, so only NEVER_SOURCE is added to it, and a tracked `build/` or
+ *  `bin/` folder stays findable, as the explorer shows it. Without one, the watcher's curated list stands in.
+ *
+ *  A root .ignore is the person's own exclusion (spec W2 "user exclusion"): the file ripgrep, fd and VS Code's search
+ *  already read, so an agent searching with those skips the same folders. It is read after either rule, so its `!`
+ *  lines bring back what they leave out, as ripgrep reads it; NEVER_SOURCE comes again last, so nothing brings back
+ *  `.git` (whose config can hold a token in a remote URL) or installed dependencies. */
+export function buildIndexIgnoreMatcher(gitignoreText: string | null, ignoreText: string | null = null): (relPath: string) => boolean {
   const ig = ignore()
-  ig.add(NEVER_SOURCE)
-  ig.add(gitignoreText)
+  if (gitignoreText) {
+    ig.add(NEVER_SOURCE)
+    ig.add(gitignoreText)
+  } else ig.add(CURATED_IGNORE)
+  if (ignoreText) {
+    ig.add(ignoreText)
+    ig.add(NEVER_SOURCE)
+  }
   return (relPath: string): boolean => {
     if (!relPath) return false // the root itself
     return ig.ignores(relPath.replace(/\\/g, '/'))

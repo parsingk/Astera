@@ -329,6 +329,18 @@ describe('actions with no default key, and the palette', () => {
     expect(mac?.yieldsToTerminal).toBe(false)
   })
 
+  // What every editor binds to finding in files. Nothing in Astera takes it: the find bars are Ctrl+F without Shift, and
+  // so is the shell's forward-char, which a focused terminal keeps.
+  it('finds in files with Ctrl+Shift+F, Cmd+Shift+F on macOS, over a focused terminal too', () => {
+    for (const platform of ['win32', 'linux']) {
+      const a = makeActions(platform).find((x) => x.id === 'search.text')
+      expect(a?.defaults, platform).toEqual(['Ctrl+Shift+F'])
+      expect(a?.yieldsToTerminal, platform).toBe(false)
+      expect(a?.swallowsWhenBlocked, platform).toBe(false)
+    }
+    expect(makeActions('darwin').find((x) => x.id === 'search.text')?.defaults).toEqual(['Cmd+Shift+F'])
+  })
+
   it('no two actions share a default key, on any platform', () => {
     for (const platform of ['win32', 'linux', 'darwin']) {
       const actions = makeActions(platform)
@@ -364,10 +376,30 @@ describe('action wording', () => {
       'quickOpen.placeholder',
       'quickOpen.empty',
       'quickOpen.indexing',
-      'quickOpen.unavailable'
+      'quickOpen.unavailable',
+      'textSearch.hint',
+      'textSearch.searching',
+      'textSearch.empty',
+      'textSearch.scope',
+      'textSearch.truncated',
+      'textSearch.fileCut',
+      'textSearch.tooLong'
     ]
     for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {
       for (const key of keys) expect((catalog as Record<string, string | undefined>)[key], `${lang} ${key}`).toBeTruthy()
+    }
+  })
+
+  // The box's one line of help names its three lists: a file name, > for a command, % for text in files.
+  it('the palette placeholder names the > and % prefixes, and the scope lines take their values', () => {
+    for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {
+      const c = catalog as Record<string, string>
+      expect(c['quickOpen.placeholder'], lang).toContain('>')
+      expect(c['quickOpen.placeholder'], lang).toContain('%')
+      expect(c['textSearch.scope'], lang).toContain('{name}')
+      expect(c['textSearch.truncated'], lang).toContain('{count}')
+      expect(c['textSearch.fileCut'], lang).toContain('{count}')
+      expect(c['textSearch.tooLong'], lang).toContain('{max}')
     }
   })
 })

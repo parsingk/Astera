@@ -323,6 +323,28 @@ describe('buildIndexIgnoreMatcher', () => {
     expect(ig('src/index.ts')).toBe(false)
   })
 
+  // 리뷰 M7: ripgrep 처럼 .ignore 의 `!` 줄은 .gitignore 가 뺀 것을 되살릴 수 있다. 다만 소스일 리 없는 폴더(.git 은 원격 URL 에
+  // 토큰이 든 config 를 가질 수 있다)는 무엇으로도 되살아나지 않는다.
+  it('.ignore 의 ! 줄은 .gitignore 가 뺀 것은 되살리지만 소스일 리 없는 폴더는 되살리지 못한다', () => {
+    const ig = buildIndexIgnoreMatcher('/dist\n', '!dist\n!node_modules\n!.git\n')
+    expect(ig('dist/app.js')).toBe(false)
+    for (const p of ['node_modules/x/y.js', '.git/config']) expect(ig(p), p).toBe(true)
+    const noGit = buildIndexIgnoreMatcher(null, '!build\n!.venv\n')
+    expect(noGit('build/x')).toBe(false)
+    expect(noGit('.venv/lib/a.py')).toBe(true)
+  })
+
+  // W2b: 사람이 검색에서 빼고 싶은 것은 루트 .ignore 에 적는다. ripgrep·fd·VS Code 검색이 읽는 그 파일이라 에이전트의 검색도 같은
+  // 폴더를 건너뛴다. .gitignore 가 없을 때도 큐레이트 목록 위에 더한다.
+  it('루트 .ignore 에 적은 것은 .gitignore 가 있든 없든 더 뺀다', () => {
+    const withGit = buildIndexIgnoreMatcher('/dist\n', 'fixtures/\n*.snap\n')
+    for (const p of ['fixtures/big.json', 'src/a.snap', 'dist/x.js', 'node_modules/y']) expect(withGit(p), p).toBe(true)
+    for (const p of ['src/a.ts', 'build/installer.nsh']) expect(withGit(p), p).toBe(false)
+    const without = buildIndexIgnoreMatcher(null, 'fixtures/\n')
+    for (const p of ['fixtures/big.json', 'build/x', 'node_modules/z']) expect(without(p), p).toBe(true)
+    expect(without('src/index.ts')).toBe(false)
+  })
+
   it('루트 경로("")는 제외하지 않는다', () => {
     expect(buildIndexIgnoreMatcher('x\n')('')).toBe(false)
   })

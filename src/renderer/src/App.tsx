@@ -505,6 +505,9 @@ function UsageChip({
  *  not one — it is mapped back to null on the way out. Same convention as TerminalFontSettings. */
 const SYSTEM_LANG = ''
 
+/** What the palette box opens with: `>` on actions, nothing on files, `%` on text in files (lib/quickOpen.ts paletteMode). */
+type PaletteStart = '>' | '' | '%'
+
 export default function App(): React.JSX.Element {
   const { t, lang, storedLang, systemLang, setLang } = useI18n()
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -711,8 +714,8 @@ export default function App(): React.JSX.Element {
   // delegate per action that reads it from there.
   const [actionRegistry] = useState(createActionRegistry)
   const actionImplRef = useRef<Record<ActionId, ActionHandler> | null>(null)
-  // The palette box, open on actions ('>') or on files (''); null when closed (CommandPalette).
-  const [paletteOpen, setPaletteOpen] = useState<{ query: '>' | '' } | null>(null)
+  // The palette box, open on actions ('>'), on files ('') or on text in files ('%'); null when closed (CommandPalette).
+  const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
@@ -4359,9 +4362,9 @@ export default function App(): React.JSX.Element {
     const tab = id ? fileTabsRef.current.find((tb) => tb.id === id) : undefined
     return tab && isMarkdownPath(tab.path) ? tab.id : null
   }
-  /** Opens the palette box on actions or on files. A menu left open (a tab's menu draws above the palette's backdrop)
+  /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
-  const openPalette = (query: '>' | ''): void => {
+  const openPalette = (query: PaletteStart): void => {
     // Where focus goes back on closing, read here, before the box takes it, and only from closed: an action chosen in
     // the box that reopens it on the other list (going to a file) keeps the element focused before the first opening.
     if (paletteOpen === null) paletteRestoreRef.current = document.activeElement as HTMLElement | null
@@ -4437,7 +4440,9 @@ export default function App(): React.JSX.Element {
     'palette.open': { run: () => openPalette('>') },
     // The same box on files (spec W2), over the explorer's project. With no project it still opens: the box says why it is
     // empty, where a key that did nothing would explain nothing.
-    'file.quickOpen': { run: () => openPalette('') }
+    'file.quickOpen': { run: () => openPalette('') },
+    // The same box on text in the project's files (spec W2), with or without a project for the same reason.
+    'search.text': { run: () => openPalette('%') }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -6338,6 +6343,11 @@ export default function App(): React.JSX.Element {
             setPaletteOpen(null)
             // The explorer's opener: an image or a video goes to the media viewer, the rest to the editor
             openProjectFile(path)
+          }}
+          onOpenAt={(path, at) => {
+            setPaletteOpen(null)
+            // A line that matched: the editor at the match, an SVG too, since its text is what matched
+            openFile(path, at)
           }}
           onClose={() => setPaletteOpen(null)}
         />

@@ -24,4 +24,11 @@ describe('the READMEs and the command palette', () => {
     expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.file.quickOpen']}:**`)
     expect(text).toContain('`Ctrl`/`Cmd`+`P`')
   })
+
+  it.each(READMES)('%s names finding in files as the app does, with its key and what it leaves out', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.search.text']}:**`)
+    expect(text).toContain('`Ctrl`/`Cmd`+`Shift`+`F`')
+    expect(text).toContain('`.ignore`')
+  })
 })

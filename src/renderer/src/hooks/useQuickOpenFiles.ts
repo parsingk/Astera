@@ -13,7 +13,7 @@ type Answered = FileIndexState & {
 export type QuickOpenFiles = FileIndexState & {
   /** The rows answer the project and the query the box holds now. Rows answering an older query, or the project the box
    *  was on before, are still shown while the new answer is asked for, so the list does not flash empty on every
-   *  keystroke; Enter waits until they are current (lib/quickOpen.ts filesWaiting). */
+   *  keystroke; Enter waits until they are current (lib/quickOpen.ts rowsWaiting). */
   current: boolean
 }
 
