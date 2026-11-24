@@ -16,7 +16,6 @@ import { STARTER_POLICY, writeAuditPolicy } from '../core/audit/policy'
 import type { AgentProfile } from '../core/agentProfiles/types'
 import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
-import { previewShotsDir } from '../core/preview/shotsDir'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 import { gitLayoutOf } from '../core/sandbox/gitLayout'
@@ -288,7 +287,7 @@ describe('createHostSpawner', () => {
     const app: Array<{ file: string; args: string[] | string; env: Record<string, string | undefined>; meta: unknown }> = []
     const sl = new StatusLineManager(profile)
     const m = new SessionManager((file, args, opts) => { app.push({ file, args, env: opts.env, meta: opts.meta }); return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} } },
-      makeDescriptors(process.platform), undefined, undefined, path.join(dir, 'home'), (id, a, o) => sl.spawnConfig(id, a, o), [previewShotsDir(profile)], hostEnv())
+      makeDescriptors(process.platform), undefined, undefined, path.join(dir, 'home'), (id, a, o) => sl.spawnConfig(id, a, o), [], hostEnv())
     const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
     const initialPrompt = (h.spawned[0].args as string[]).at(-1)
     const info = m.spawn({ account, cwd: repo, bypassPermissions: true, initialPrompt, title: 'Write hello', rollAccountIds: ['acc1'],

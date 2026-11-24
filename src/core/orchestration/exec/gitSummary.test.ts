@@ -39,8 +39,8 @@ function fakeGit(overrides: Record<string, GitResult>): typeof git {
   const defaults: Record<string, GitResult> = {
     'rev-parse HEAD': { ok: true, stdout: 'abc123', stderr: '' },
     'branch --show-current': { ok: true, stdout: 'main', stderr: '' },
-    '-c core.quotepath=false status --short': { ok: true, stdout: '', stderr: '' },
-    '-c core.quotepath=false diff HEAD --stat': { ok: true, stdout: '', stderr: '' }
+    '--no-optional-locks -c core.quotepath=false status --short': { ok: true, stdout: '', stderr: '' },
+    '-c diff.autoRefreshIndex=false -c core.quotepath=false diff HEAD --stat': { ok: true, stdout: '', stderr: '' }
   }
   const table = { ...defaults, ...overrides }
   return (async (args: string[]) => {
@@ -174,6 +174,24 @@ describe('readGitSummary', () => {
 
     expect(summary?.diffstat).toBeNull()
   })
+
+  // 작업자가 시작되면 Host 의 기록 장치가 그 폴더의 요약을 읽는다. 그때 status 가 인덱스를 고쳐 쓰면
+  // .git/index.lock 을 잡고, 같은 순간 작업자의 `git add` 가 "index.lock: File exists" 로 실패한다
+  // (develop CI 45336329738 의 lifecycle.integration.test.ts 가 그렇게 실패했다).
+  it('요약을 읽어도 인덱스를 고쳐 쓰지 않는다: 작업자의 git 과 lock 이 겹치지 않게', async () => {
+    dir = await makeRepo()
+    // 내용은 그대로 두고 시각만 바꾼다. 인덱스의 stat 정보가 낡아서, 보통의 status 라면 인덱스를 고쳐 쓴다.
+    const later = new Date(Date.now() + 60_000)
+    await fs.utimes(path.join(dir, 'f.txt'), later, later)
+    const index = path.join(dir, '.git', 'index')
+    const before = await fs.readFile(index)
+
+    const summary = await readGitSummary(dir)
+
+    expect(summary?.changed).toEqual([])
+    expect(summary?.diffstat).toBeNull()
+    expect((await fs.readFile(index)).equals(before)).toBe(true)
+  })
 })
 
 // fix round 1 — Finding 1: rev-parse HEAD가 성공한 뒤로는 나머지 세 호출이 필드 단위로만 실패를
@@ -195,7 +213,7 @@ describe('필드 단위 실패 흡수 (rev-parse HEAD 성공 뒤)', () => {
   // changedUnknown 이 그 빈 배열을 "모른다"로 표시한다.
   it('status 조회가 exit 실패(부분 stdout 포함)면 changed는 비고 changedUnknown 이 켜진다, 나머지는 정상', async () => {
     const summary = await readGitSummary('/fake/cwd', {
-      git: fakeGit({ '-c core.quotepath=false status --short': { ok: false, stdout: 'partial', stderr: 'boom' } })
+      git: fakeGit({ '--no-optional-locks -c core.quotepath=false status --short': { ok: false, stdout: 'partial', stderr: 'boom' } })
     })
 
     expect(summary?.changed).toEqual([])
@@ -212,7 +230,7 @@ describe('필드 단위 실패 흡수 (rev-parse HEAD 성공 뒤)', () => {
 
   it('diffstat 조회가 exit 실패(부분 stdout 포함)여도 diffstat만 null, 나머지는 정상', async () => {
     const summary = await readGitSummary('/fake/cwd', {
-      git: fakeGit({ '-c core.quotepath=false diff HEAD --stat': { ok: false, stdout: 'partial', stderr: 'boom' } })
+      git: fakeGit({ '-c diff.autoRefreshIndex=false -c core.quotepath=false diff HEAD --stat': { ok: false, stdout: 'partial', stderr: 'boom' } })
     })
 
     expect(summary?.diffstat).toBeNull()

@@ -305,7 +305,7 @@ describe('Claude’s shell on Windows borrows the default Codex account, in the 
     expect(b).toMatch(/shellCodex: \(\) =>\s+shellCodexOf\(\{\s+accounts: accounts\.list\(\),\s+loggedIn: \(a\) => accounts\.loginStatus\(a\.id\),\s+envOf: \(a\) => cliEnvFor\(\{ base: process\.env, account: a, descriptor: descriptorOf\(descriptors, a\), homeDir: os\.homedir\(\) \}\)\s+\}\)/)
     expect(b).toMatch(/\n    codexReady: askCodexWindowsReady,\n    codexVersion: cliVersions,\n    codexExe: \(\) => resolveWindowsExecutable\('codex'\),\n    codexExcludes,\n    appKeyFile,\n    readOnly,\n    agentLogins$/)
     // The SessionManager's own environment is built from process.env too (cliEnvFor, its baseEnv)
-    expect(core).toMatch(/\[previewShotsDir\(userDataDir\)\],\n    process\.env,/)
+    expect(core).toMatch(/\n    \[\],\n    process\.env,/)
     // The chat manager finds the Git Bash its shell route wraps with the process's one resolver
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
     expect(chat).toMatch(/\n    gitBash: defaultSpawnChecks\(sessionsLog\)\.gitBash,\n/)

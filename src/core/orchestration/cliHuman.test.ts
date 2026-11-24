@@ -999,7 +999,7 @@ describe('humanFor — agent-profiles audit', () => {
 
   it('says how many days Observe has been on while under 30, and nothing once it has had them', () => {
     expect(humanFor('agent-profiles-audit', report({ observe: { on: true, days: 12 } }))).toBe(
-      ['Usage findings need Observe on for 30 days. It has been on for 12 days.', '', 'No findings.'].join('\n')
+      ['Usage findings need Observe on for 30 days. It has been on for 12 day(s).', '', 'No findings.'].join('\n')
     )
     expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
   })

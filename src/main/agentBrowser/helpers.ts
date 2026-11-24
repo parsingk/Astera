@@ -75,8 +75,8 @@ export interface HelperDeps {
    *  server has booted, which is after the wiring runs, so a value captured there would be `''`
    *  forever. */
   guide: string
-  /** Where screenshot() writes — the same folder the Claude session was spawned with --add-dir for,
-   *  so the path it returns opens without a permission prompt. */
+  /** Where screenshot() writes — the folder every Claude session's settings file has a read rule for
+   *  (previewShotsReadRule), so the path it returns opens without a permission prompt. */
   shotsDir: string
 }
 

@@ -1482,7 +1482,7 @@ command and agent findings. Their history counts from when observe or enforce wa
 the size limit. When the records pass the size limit and their oldest days are dropped, the history counts from the
 day after the last one dropped. Until it has 30 days, none of them is raised and `observe` says so:
 `{"on":false,"days":0}` while observe is off, or how many whole `days` it has had, which `--human` prints first as
-"Usage findings need Observe on for 30 days. It has been on for 12 days." (or "Observe is off."). Something shared,
+"Usage findings need Observe on for 30 days. It has been on for 12 day(s)." (or "Observe is off."). Something shared,
 turned on or made within the 30 days is not judged either. `failing-profile` and `token-spike` read Dispatch outcomes
 and token totals, which are kept whatever the mode, so they do not wait. A skill Codex can use too is never a finding,
 since Codex does not report which skills it used: when Claude reported no use of it, `info` says so and that Codex

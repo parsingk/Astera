@@ -333,7 +333,7 @@ describe('the Discord notifier sample', () => {
     ring.append([{ type: 'run.failed', jobId: 'job_1', runId: 'run_1', payload: { ...RUN, outcome: 'failed' } }], at)
     await until(() => expect(hook.bodies).toHaveLength(1))
     expect(hook.bodies[0]).toEqual({
-      embeds: [{ title: 'Ship it', description: 'Run 1 failed (2 of 2 Tasks done).', color: 0xef4444, timestamp: at, footer: { text: 'run.failed' } }],
+      embeds: [{ title: 'Ship it', description: 'Run 1 failed (2 of 2 Task(s) done).', color: 0xef4444, timestamp: at, footer: { text: 'run.failed' } }],
       allowed_mentions: { parse: [] }
     })
     await until(() => expect(discordLog(r)).toContain('posted run.failed ev_aaaaaaaaaaaa_1'))

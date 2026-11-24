@@ -20,6 +20,7 @@ import type { GitLayout } from '../sandbox/gitLayout'
 import { SHELL_BOOT_FILE, SHELL_BOOT_SCRIPT, SHELL_WRAP_FILE, shellWrapScript, type ClaudeShellPlan } from '../sandbox/claudeShell'
 import { WIN32_PROCESS_LINE_MAX, windowsCommandLineLength } from './windowsExecutable'
 import { namedPaths, profileReadOnly, type DenyEntry, type LinkLook } from '../sandbox/locations'
+import { previewShotsDir, previewShotsReadRule } from '../preview/shotsDir'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -718,7 +719,11 @@ export class StatusLineManager {
         command: captureCommand(this.nodePath, this.capturePath),
         padding: 0
       },
-      hooks: everySessionHooks
+      hooks: everySessionHooks,
+      // The screenshots Design Mode and the agent browser hand a session open without a permission question. A read
+      // rule rather than --add-dir, which Claude Code turns into a trust question every session (previewShotsReadRule).
+      // Every other file here is built from this one, so the hook, observe and sandbox files carry it too.
+      permissions: { allow: [previewShotsReadRule(previewShotsDir(this.userDataDir), this.platform)] }
     }
     // Through writeScript like the scripts: the app and the Host both write these files, and a
     // session starting mid-write would read half a settings file.

@@ -254,7 +254,7 @@ sentences:
 |---|---|---|---|
 | `question.created` | `action` | the Job's objective | Waiting for an answer: {question} |
 | `session.input_needed` | `action` | the session's title | Waiting for permission. / Waiting for an answer to a question. / Waiting for input. |
-| `run.failed` | `error` | the Job's objective | Run {ordinal} failed ({done} of {total} Tasks done). |
+| `run.failed` | `error` | the Job's objective | Run {ordinal} failed ({done} of {total} Task(s) done). |
 | `completion.exhausted` | `error` | the Job's objective | The completion checks of {task} used every repair. |
 | `session.limit_waiting` | `warning` | the session's title | Stopped at a usage limit; trying again at {time}. / Stopped at a usage limit. |
 | `run.completed` | `info` | the Job's objective | Run {ordinal} finished. |
