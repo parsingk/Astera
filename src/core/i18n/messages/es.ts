@@ -1254,7 +1254,7 @@ export const es: Catalog = {
   'shortcut.risk.eof':
     'Esta tecla cierra el CLI en el terminal. Si la toma la aplicación, no podrás usarla en una sesión.',
   'shortcut.risk.readline':
-    'Esta tecla sirve para editar la línea en el terminal (ir al inicio o al final, borrar una palabra, etc.). Si la toma la aplicación, no podrás usarla mientras escribes.',
+    'Esta tecla sirve para editar la línea en el terminal (ir al inicio o al final, borrar una palabra, el comando anterior o el siguiente, etc.). Si la toma la aplicación, no podrás usarla mientras escribes.',
   'shortcut.risk.historySearch':
     'Esta tecla busca en el historial del terminal. Si la toma la aplicación, no podrás usarla en una sesión.',
   'shortcut.risk.clear':

@@ -446,6 +446,8 @@ export function riskyReasonKey(chord: Chord): string | null {
     case 'KeyW':
     case 'KeyB':
     case 'KeyF':
+    case 'KeyP':
+    case 'KeyN':
       return 'shortcut.risk.readline'
     case 'KeyR':
       return 'shortcut.risk.historySearch'

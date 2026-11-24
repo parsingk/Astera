@@ -198,6 +198,12 @@ describe('riskyReasonKey — 터미널에서 쓰이는 키 경고', () => {
     expect(riskyReasonKey(parseChord('Shift+Tab')!)).toBe('shortcut.risk.cliMode')
   })
 
+  // 셸의 이전·다음 명령 키. 빠른 열기의 Ctrl+P 는 터미널에 양보하지만, 다른 동작을 이 키에 묶으면 경고해야 한다
+  it('Ctrl+P·Ctrl+N 도 줄 편집 키로 경고한다', () => {
+    expect(riskyReasonKey(parseChord('Ctrl+P')!)).toBe('shortcut.risk.readline')
+    expect(riskyReasonKey(parseChord('Ctrl+N')!)).toBe('shortcut.risk.readline')
+  })
+
   it('무해한 키는 null', () => {
     expect(riskyReasonKey(parseChord('Ctrl+PageUp')!)).toBeNull()
     expect(riskyReasonKey(parseChord('F4')!)).toBeNull()

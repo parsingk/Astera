@@ -1371,7 +1371,7 @@ export const ko = {
   'shortcut.riskConfirm': '그래도 지정',
   'shortcut.risk.interrupt': '터미널에서 실행 중인 작업을 중단하는 키입니다. 앱이 가져가면 세션에서 중단할 수 없습니다.',
   'shortcut.risk.eof': '터미널에서 CLI를 종료하는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
-  'shortcut.risk.readline': '터미널 줄 편집에 쓰이는 키입니다(줄 처음·끝 이동, 단어 삭제 등). 앱이 가져가면 프롬프트 입력 중에 쓸 수 없습니다.',
+  'shortcut.risk.readline': '터미널 줄 편집에 쓰이는 키입니다(줄 처음·끝 이동, 단어 삭제, 이전·다음 명령 등). 앱이 가져가면 프롬프트 입력 중에 쓸 수 없습니다.',
   'shortcut.risk.historySearch': '터미널 히스토리 검색에 쓰이는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
   'shortcut.risk.clear': '터미널 화면을 지우는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
   'shortcut.risk.newline': 'Codex에서 줄바꿈에 쓰이는 키입니다. 앱이 가져가면 여러 줄 입력이 막힙니다.',

@@ -1289,7 +1289,7 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.riskConfirm': 'Assign anyway',
   'shortcut.risk.interrupt': 'This key interrupts the running task in the terminal. If the app takes it, you cannot interrupt from a session.',
   'shortcut.risk.eof': 'This key exits the CLI in the terminal. If the app takes it, you cannot use it in a session.',
-  'shortcut.risk.readline': 'This key is used for terminal line editing (start/end of line, delete word, …). If the app takes it, you cannot use it while typing a prompt.',
+  'shortcut.risk.readline': 'This key is used for terminal line editing (start/end of line, delete word, previous/next command, …). If the app takes it, you cannot use it while typing a prompt.',
   'shortcut.risk.historySearch': 'This key searches terminal history. If the app takes it, you cannot use it in a session.',
   'shortcut.risk.clear': 'This key clears the terminal screen. If the app takes it, you cannot use it in a session.',
   'shortcut.risk.newline': 'Codex uses this key for newline. If the app takes it, multi-line input breaks.',
