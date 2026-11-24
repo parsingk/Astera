@@ -38,6 +38,7 @@ export type ActionId =
   | 'job.new'
   | 'kube.open'
   | 'palette.open'
+  | 'file.quickOpen'
 
 export type ActionSpec = {
   id: ActionId
@@ -269,6 +270,15 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       defaults: [`${M}+Shift+P`],
       descKey: 'shortcut.palette.open',
       yieldsToTerminal: false,
+      swallowsWhenBlocked: false
+    },
+    {
+      id: 'file.quickOpen',
+      // What every editor binds to going to a file by name. Ctrl+P is also the shell's previous-history key, so on
+      // win32 and linux a focused terminal keeps it, as Ctrl+W does; Cmd+P has no competitor there.
+      defaults: [`${M}+P`],
+      descKey: 'shortcut.file.quickOpen',
+      yieldsToTerminal: !mac,
       swallowsWhenBlocked: false
     }
   ]

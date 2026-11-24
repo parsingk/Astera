@@ -1288,6 +1288,7 @@ export const es: Catalog = {
   'shortcut.job.new': 'Nuevo Job',
   'shortcut.kube.open': 'Mostrar u ocultar el panel de Kubernetes',
   'shortcut.palette.open': 'Paleta de comandos',
+  'shortcut.file.quickOpen': 'Ir a un archivo',
   'action.blocked.noHandler': 'Todavía no está disponible',
   'action.blocked.noProject': 'Abre primero un proyecto',
   'action.blocked.noRunConfig': 'No hay ninguna configuración de ejecución seleccionada',
@@ -1302,6 +1303,10 @@ export const es: Catalog = {
   'palette.title': 'Paleta de comandos',
   'palette.placeholder': 'Escribe un comando para ejecutar',
   'palette.empty': 'Ningún comando coincide',
+  'quickOpen.placeholder': 'Escribe el nombre de un archivo, o > para buscar un comando',
+  'quickOpen.empty': 'Ningún archivo coincide',
+  'quickOpen.indexing': 'Listando los archivos',
+  'quickOpen.unavailable': 'No se pudo listar los archivos de esta carpeta',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',

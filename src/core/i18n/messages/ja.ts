@@ -1276,6 +1276,7 @@ export const ja: Catalog = {
   'shortcut.job.new': '新しい Job',
   'shortcut.kube.open': 'Kubernetes パネルの開閉',
   'shortcut.palette.open': 'コマンドパレット',
+  'shortcut.file.quickOpen': 'ファイルへ移動',
   'action.blocked.noHandler': 'まだ使えません',
   'action.blocked.noProject': '先にプロジェクトを開いてください',
   'action.blocked.noRunConfig': '実行構成が選択されていません',
@@ -1290,6 +1291,10 @@ export const ja: Catalog = {
   'palette.title': 'コマンドパレット',
   'palette.placeholder': '実行するコマンドを入力',
   'palette.empty': '一致するコマンドはありません',
+  'quickOpen.placeholder': 'ファイル名を入力 (コマンドは先に > を入力)',
+  'quickOpen.empty': '一致するファイルはありません',
+  'quickOpen.indexing': 'ファイル一覧を作成しています',
+  'quickOpen.unavailable': 'このフォルダのファイル一覧を読み取れませんでした',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',

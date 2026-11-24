@@ -309,6 +309,27 @@ describe('actions with no default key, and the palette', () => {
     expect(win.yieldsToTerminal).toBe(false)
   })
 
+  // Ctrl+P is the shell's previous-history key, so with a terminal focused it stays the shell's on Windows and Linux.
+  // Cmd+P has no competitor in a terminal.
+  it('goes to a file with Ctrl+P, Cmd+P on macOS, and leaves Ctrl+P to a focused terminal', () => {
+    for (const platform of ['win32', 'linux']) {
+      const a = makeActions(platform).find((x) => x.id === 'file.quickOpen')
+      expect(a?.defaults, platform).toEqual(['Ctrl+P'])
+      expect(a?.yieldsToTerminal, platform).toBe(true)
+      expect(a?.swallowsWhenBlocked, platform).toBe(false)
+    }
+    const mac = makeActions('darwin').find((x) => x.id === 'file.quickOpen')
+    expect(mac?.defaults).toEqual(['Cmd+P'])
+    expect(mac?.yieldsToTerminal).toBe(false)
+  })
+
+  it('no two actions share a default key, on any platform', () => {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      const actions = makeActions(platform)
+      expect(findConflicts(resolveBindings({}, actions), actions), platform).toEqual([])
+    }
+  })
+
   // A blocked action normally lets its key go on to whatever has focus. These two families keep it: an
   // unclaimed F-key reaches a terminal as an escape sequence, and Ctrl+\ is SIGQUIT there.
   it('keeps the key for a blocked action only for the run and split chords', () => {
@@ -333,7 +354,11 @@ describe('action wording', () => {
       'action.blocked.notMarkdown',
       'action.blocked.noCli',
       'action.blocked.noLocalCli',
-      'action.blocked.noKubectl'
+      'action.blocked.noKubectl',
+      'quickOpen.placeholder',
+      'quickOpen.empty',
+      'quickOpen.indexing',
+      'quickOpen.unavailable'
     ]
     for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {
       for (const key of keys) expect((catalog as Record<string, string | undefined>)[key], `${lang} ${key}`).toBeTruthy()

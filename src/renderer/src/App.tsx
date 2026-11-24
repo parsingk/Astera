@@ -4429,6 +4429,15 @@ export default function App(): React.JSX.Element {
         setRunMenuOpen(false)
         setPaletteOpen(true)
       }
+    },
+    // Going to a file by name searches the explorer's project, so without one there is nothing to search.
+    'file.quickOpen': {
+      blockedBy: () => (currentProject ? null : 'action.blocked.noProject'),
+      run: () => {
+        setTabMenu(null)
+        setRunMenuOpen(false)
+        setPaletteOpen(true)
+      }
     }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list

@@ -1401,6 +1401,7 @@ export const ko = {
   'shortcut.job.new': '새 Job',
   'shortcut.kube.open': 'Kubernetes 패널 열기/닫기',
   'shortcut.palette.open': '명령 팔레트',
+  'shortcut.file.quickOpen': '파일로 이동',
   'action.blocked.noHandler': '아직 쓸 수 없습니다',
   'action.blocked.noProject': '프로젝트를 먼저 여세요',
   'action.blocked.noRunConfig': '선택한 실행 구성이 없습니다',
@@ -1415,6 +1416,10 @@ export const ko = {
   'palette.title': '명령 팔레트',
   'palette.placeholder': '실행할 명령을 입력하세요',
   'palette.empty': '맞는 명령이 없습니다',
+  'quickOpen.placeholder': '파일 이름을 입력하세요. 명령을 찾으려면 > 부터 입력하세요',
+  'quickOpen.empty': '맞는 파일이 없습니다',
+  'quickOpen.indexing': '파일 목록을 만드는 중입니다',
+  'quickOpen.unavailable': '이 폴더의 파일 목록을 읽지 못했습니다',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',
