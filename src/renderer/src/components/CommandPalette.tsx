@@ -5,10 +5,11 @@ import { useI18n } from '../i18n/I18nProvider'
 import { backdropProps } from '../lib/backdrop'
 import { paletteKey } from '../lib/paletteKey'
 import { rankActions } from '../lib/paletteMatch'
-import { displayPath, enterAction, filesWaiting, paletteMode, settleEnter } from '../lib/quickOpen'
+import { displayPath, enterAction, markSegments, paletteMode, rowsWaiting, settleEnter } from '../lib/quickOpen'
 import { readRecentActions, rememberAction } from '../lib/recentActions'
 import { toast } from '../lib/toast'
 import { useQuickOpenFiles } from '../hooks/useQuickOpenFiles'
+import { useTextSearch } from '../hooks/useTextSearch'
 
 export type PaletteEntry = {
   id: ActionId
@@ -20,11 +21,13 @@ export type PaletteEntry = {
   blocked: MessageKey | null
 }
 
-/** One row of either list: an action, or a file under the project. */
+/** One row of any list: an action, a file under the project, or a line in one. */
 type Row = {
   key: string
   title: string
-  /** A file's folder relative to the project, dimmed after its name. */
+  /** Where the matches fall in `title`, for a line of text: drawn marked. */
+  marks?: Array<[number, number]>
+  /** A file's folder relative to the project, or a line's file and line number, dimmed after the title. */
   detail?: string
   chord?: string
   blocked: MessageKey | null
@@ -32,11 +35,12 @@ type Row = {
 }
 
 /**
- * The command palette and Quick Open: one box, two lists (knowledge/decisions/ADR-007, spec W2). A leading `>` lists
- * every action the person can take, with its key; anything else lists the files under the explorer's project whose names
- * hold what was typed (lib/quickOpen.ts). Ctrl+Shift+P opens it on actions, Ctrl+P on files. What an action does and
- * whether it can run now belong to the action registry, which the caller reads into `entries`; which files match belongs
- * to main (main/quickOpen.ts).
+ * The command palette, Quick Open and text search: one box, three lists (knowledge/decisions/ADR-007, spec W2). A leading
+ * `>` lists every action the person can take, with its key; a leading `%` lists the lines of the explorer's project's
+ * files that hold what was typed; anything else lists the files whose names hold it (lib/quickOpen.ts). Ctrl+Shift+P
+ * opens it on actions, Ctrl+Shift+F on text, Ctrl+P on files. What an action does and whether it can run now belong to
+ * the action registry, which the caller reads into `entries`; which files and lines match belongs to main
+ * (main/quickOpen.ts, main/textSearch.ts).
  *
  * Keyboard only is enough: the box keeps focus, ↑/↓ move, Enter picks, Escape closes (lib/paletteKey.ts). A blocked
  * action is listed with its reason rather than hidden, and Enter on it says the reason instead of doing nothing.
@@ -49,16 +53,19 @@ export function CommandPalette({
   initialQuery,
   projectRoot,
   onOpenFile,
+  onOpenAt,
   restoreTo
 }: {
   entries: readonly PaletteEntry[]
   onRun: (id: ActionId) => void
   onClose: () => void
-  /** `'>'` to open on actions, `''` to open on files. */
+  /** `'>'` to open on actions, `''` on files, `'%'` on text in files. */
   initialQuery: string
-  /** The explorer's project, whose files the file list searches; null when none is open. */
+  /** The explorer's project, whose files the file and text lists search; null when none is open. */
   projectRoot: string | null
   onOpenFile: (path: string) => void
+  /** A line chosen from the text list: its file in the editor, at the match. */
+  onOpenAt: (path: string, at: { line: number; col: number }) => void
   /** Where focus was before the palette opened, read by the caller as it opened (an event handler, not this box's
    *  render or effects: React.StrictMode runs those twice, and a box remounted on the other list would read the old
    *  box's input). Closing gives focus back to it. */
@@ -76,6 +83,8 @@ export function CommandPalette({
   const pendingEnter = useRef(false)
   const { mode, text } = paletteMode(query)
   const files = useQuickOpenFiles(projectRoot, text, mode === 'files')
+  const found = useTextSearch(projectRoot, text, mode === 'text')
+  const projectName = projectRoot ? projectRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || projectRoot : ''
 
   useEffect(() => {
     const box = inputRef.current
@@ -105,14 +114,29 @@ export function CommandPalette({
             onRun(r.id)
           }
         }))
-      : files.paths.map((p) => {
-          const { name, folder } = displayPath(projectRoot ?? '', p)
-          return { key: p, title: name, detail: folder, blocked: null, pick: () => onOpenFile(p) }
-        })
+      : mode === 'files'
+        ? files.paths.map((p) => {
+            const { name, folder } = displayPath(projectRoot ?? '', p)
+            return { key: p, title: name, detail: folder, blocked: null, pick: () => onOpenFile(p) }
+          })
+        : found.matches.map((m) => {
+            const { name, folder } = displayPath(projectRoot ?? '', m.path)
+            return {
+              key: `${m.path}\n${m.line}`,
+              title: m.preview,
+              marks: m.ranges,
+              detail: `${folder ? `${folder}/` : ''}${name}:${m.line}`,
+              blocked: null,
+              pick: () => onOpenAt(m.path, { line: m.line, col: m.col })
+            }
+          })
   const at = rows.length === 0 ? -1 : Math.min(selected, rows.length - 1)
   const optionId = (i: number): string => `${listId}-${i}`
-  /** Enter waits: the file rows on screen answer an older query or project, or a first walk has found nothing yet. */
-  const waiting = filesWaiting({ mode, current: files.current, indexing: files.indexing, rows: rows.length })
+  /** Whether the rows on screen answer what is typed, and whether the work behind them (a first walk, or files still
+   *  being read for text) is under way. */
+  const list = mode === 'text' ? { current: found.current, busy: found.searching } : { current: files.current, busy: files.indexing }
+  /** Enter waits: the rows on screen answer an older query or project, or the work behind them has found nothing yet. */
+  const waiting = rowsWaiting({ mode, current: list.current, busy: list.busy, rows: rows.length })
 
   useEffect(() => {
     if (at < 0) return
@@ -162,7 +186,7 @@ export function CommandPalette({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
-  const title = mode === 'actions' ? t('palette.title') : t('shortcut.file.quickOpen')
+  const title = mode === 'actions' ? t('palette.title') : mode === 'text' ? t('shortcut.search.text') : t('shortcut.file.quickOpen')
   /** Below the rows, or in their place: why there are no file rows, or that more are coming. */
   const fileNote =
     mode !== 'files'
@@ -176,7 +200,22 @@ export function CommandPalette({
             : files.current && rows.length === 0
               ? t('quickOpen.empty')
               : null
-  const note = mode === 'actions' ? (rows.length === 0 ? t('palette.empty') : null) : fileNote
+  /** The same for lines of text. Until the rows answer what is typed (the debounce, the first answer), it is searching. */
+  const textNote =
+    mode !== 'text'
+      ? null
+      : !projectRoot
+        ? t('action.blocked.noProject')
+        : text === ''
+          ? t('textSearch.hint')
+          : found.unavailable
+            ? t('quickOpen.unavailable')
+            : !found.current || found.searching
+              ? t('textSearch.searching')
+              : rows.length === 0
+                ? t('textSearch.empty')
+                : null
+  const note = mode === 'actions' ? (rows.length === 0 ? t('palette.empty') : null) : mode === 'text' ? textNote : fileNote
 
   return (
     <div className="modal-backdrop palette-backdrop" {...backdropProps(onClose)}>
@@ -210,8 +249,16 @@ export function CommandPalette({
         {mode === 'files' && projectRoot && (
           // Spec W2's search scope: which project is searched, and whether a large one is searched only in part
           <div className="palette-scope">
-            {t('quickOpen.scope', { name: projectRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || projectRoot })}
+            {t('quickOpen.scope', { name: projectName })}
             {files.truncated && ` · ${t('quickOpen.truncated')}`}
+          </div>
+        )}
+        {mode === 'text' && projectRoot && (
+          // The same for text: which project, what is never read, and whether the rows or the files were cut
+          <div className="palette-scope" title={t('textSearch.scope', { name: projectName })}>
+            {t('textSearch.scope', { name: projectName })}
+            {found.partial && ` · ${t('quickOpen.truncated')}`}
+            {found.truncated && ` · ${t('textSearch.truncated', { count: rows.length })}`}
           </div>
         )}
         <ul className="palette-list" role="listbox" id={listId} ref={listRef} aria-label={title}>
@@ -222,11 +269,23 @@ export function CommandPalette({
               role="option"
               aria-selected={i === at}
               aria-disabled={row.blocked ? true : undefined}
-              className={`palette-row${i === at ? ' selected' : ''}${row.blocked ? ' blocked' : ''}${row.detail !== undefined ? ' file' : ''}`}
+              className={`palette-row${i === at ? ' selected' : ''}${row.blocked ? ' blocked' : ''}${row.marks ? ' text' : row.detail !== undefined ? ' file' : ''}`}
               onMouseMove={() => i !== at && setSelected(i)}
               onClick={() => choose(row)}
             >
-              <span className="palette-title">{row.title}</span>
+              <span className="palette-title">
+                {row.marks
+                  ? markSegments(row.title, row.marks).map((part, j) =>
+                      part.mark ? (
+                        <mark key={j} className="palette-mark">
+                          {part.text}
+                        </mark>
+                      ) : (
+                        part.text
+                      )
+                    )
+                  : row.title}
+              </span>
               {row.detail && <span className="palette-detail">{row.detail}</span>}
               {row.blocked && <span className="palette-reason" title={t(row.blocked)}>{t(row.blocked)}</span>}
               {row.chord && <kbd className="palette-chord">{row.chord}</kbd>}

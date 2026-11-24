@@ -51,6 +51,11 @@ describe('App.tsx runs shortcuts through the action registry', () => {
     expect(src).toMatch(/const openPalette = \(query: PaletteStart\): void =>/)
   })
 
+  // A line from text search opens in the editor at the match, whatever the file is (an SVG's text is what matched).
+  it('opens a chosen line in the editor at its line and column, closing the palette first', () => {
+    expect(src).toMatch(/onOpenAt=\{\(path, at\) => \{\s*setPaletteOpen\(null\)\s*(?:\/\/[^\n]*\n\s*)?openFile\(path, at\)/)
+  })
+
   // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.
   it('reads where focus was as the palette opens from closed, and hands it to the box', () => {
     expect(src).toMatch(/if \(paletteOpen === null\) paletteRestoreRef\.current = document\.activeElement as HTMLElement \| null/)

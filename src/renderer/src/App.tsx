@@ -6344,6 +6344,11 @@ export default function App(): React.JSX.Element {
             // The explorer's opener: an image or a video goes to the media viewer, the rest to the editor
             openProjectFile(path)
           }}
+          onOpenAt={(path, at) => {
+            setPaletteOpen(null)
+            // A line that matched: the editor at the match, an SVG too, since its text is what matched
+            openFile(path, at)
+          }}
           onClose={() => setPaletteOpen(null)}
         />
       )}

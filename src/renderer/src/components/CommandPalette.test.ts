@@ -57,7 +57,7 @@ describe('the palette on files (Quick Open)', () => {
   // Rows answering an older query stay on screen while the newer one is asked; Enter on them would open a file the
   // person did not finish typing the name of.
   it('waits for the rows of what is typed before Enter opens one (lib/quickOpen.ts decides)', () => {
-    expect(src).toMatch(/filesWaiting\(\{ mode, current: files\.current, indexing: files\.indexing, rows: rows\.length \}\)/)
+    expect(src).toMatch(/rowsWaiting\(\{ mode, current: list\.current, busy: list\.busy, rows: rows\.length \}\)/)
     expect(src).toMatch(/enterAction\(waiting, cur\)/)
     expect(src).toMatch(/settleEnter\(waiting, rows\.length\)/)
   })
@@ -75,13 +75,62 @@ describe('the palette on files (Quick Open)', () => {
   })
 
   it('names the box after its mode, and gives the empty box the file hint', () => {
-    expect(src).toMatch(/mode === 'actions' \? t\('palette\.title'\) : t\('shortcut\.file\.quickOpen'\)/)
+    expect(src).toMatch(/mode === 'actions' \? t\('palette\.title'\) : mode === 'text' \? t\('shortcut\.search\.text'\) : t\('shortcut\.file\.quickOpen'\)/)
     expect(src).toContain("placeholder={t('quickOpen.placeholder')}")
   })
 
   // A path squeezed into an id character class collides (a-b.ts and a.b.ts); the row's place does not.
   it('gives each option an id by its place in the list', () => {
     expect(src).toMatch(/`\$\{listId\}-\$\{i\}`/)
+  })
+})
+
+const textHook = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../hooks/useTextSearch.ts'), 'utf8')
+
+// W2b: the same box finds text in the files (lib/quickOpen.ts decides the mode, main/textSearch.ts the lines).
+describe('the palette on text in files', () => {
+  it('searches only in text mode, under the project it was given', () => {
+    expect(src).toMatch(/useTextSearch\(projectRoot, text, mode === 'text'\)/)
+  })
+
+  // Enter lands on the line and column of the match, in the editor (not the media viewer: an SVG's text is what matched).
+  it('opens a chosen line at its line and column', () => {
+    expect(src).toMatch(/pick: \(\) => onOpenAt\(m\.path, \{ line: m\.line, col: m\.col \}\)/)
+    expect(src).toMatch(/onOpenAt: \(path: string, at: \{ line: number; col: number \}\) => void/)
+  })
+
+  it('draws the matches in a row marked, and the file and line beside it', () => {
+    expect(src).toMatch(/markSegments\(row\.title, row\.marks\)/)
+    expect(src).toMatch(/<mark key=\{j\} className="palette-mark">/)
+    expect(src).toMatch(/detail: `\$\{folder \? `\$\{folder\}\/` : ''\}\$\{name\}:\$\{m\.line\}`/)
+  })
+
+  it('says which project it searches, what it leaves out, and when the rows or the files were cut', () => {
+    expect(src).toMatch(/t\('textSearch\.scope', \{ name: projectName \}\)/)
+    expect(src).toMatch(/t\('textSearch\.truncated', \{ count: rows\.length \}\)/)
+    expect(src).toMatch(/found\.partial && ` · \$\{t\('quickOpen\.truncated'\)\}`/)
+  })
+
+  it('says why there are no text rows, or that more are coming', () => {
+    for (const key of ['textSearch.hint', 'textSearch.searching', 'textSearch.empty']) expect(src).toContain(`t('${key}')`)
+  })
+})
+
+describe('useTextSearch', () => {
+  it('asks for a fresh list on its first sent ask for a project, after the debounce', () => {
+    expect(textHook).toMatch(/let first = refreshedFor\.current !== root/)
+    expect(textHook).toMatch(/window\.api\.files\.searchText\(root, text, first\)/)
+    expect(textHook).toMatch(/if \(first\) refreshedFor\.current = root/)
+    expect(textHook).toMatch(/delayMs: DEBOUNCE_MS/)
+  })
+
+  it('counts rows as current only for the project and the query they answer; an empty query has nothing to wait for', () => {
+    expect(textHook).toMatch(/current: !enabled \|\| root === null \|\| text === '' \|\| found\.answeredFor === answerKey\(root, text\)/)
+  })
+
+  // Closing the box, leaving %, or moving to another project stops main reading files for a search nobody will see.
+  it("stops main's search when the box stops searching this project", () => {
+    expect(textHook).toMatch(/return \(\) => \{\s*void window\.api\.files\.searchText\(root, ''\)\.catch\(\(\) => \{\}\)\s*\}\s*\}, \[root, enabled\]\)/)
   })
 })
 

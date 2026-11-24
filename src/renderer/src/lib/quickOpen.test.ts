@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { displayPath, enterAction, filesWaiting, paletteMode, settleEnter } from './quickOpen'
+import { displayPath, enterAction, markSegments, paletteMode, rowsWaiting, settleEnter } from './quickOpen'
 
 describe('paletteMode', () => {
   it('reads a leading > as the actions list, and the rest as what to look for', () => {
@@ -11,6 +11,14 @@ describe('paletteMode', () => {
   // Review M5: a path as a Windows terminal prints it.
   it('reads backslashes in a file name as the slashes the list uses', () => {
     expect(paletteMode('src\\main\\ipc')).toEqual({ mode: 'files', text: 'src/main/ipc' })
+  })
+
+  // W2b: a leading % searches text in the files. The text is kept as typed after the spaces that follow the %, backslashes
+  // included: code has them.
+  it('reads a leading % as text to find in the files', () => {
+    expect(paletteMode('%useState')).toEqual({ mode: 'text', text: 'useState' })
+    expect(paletteMode('%  a\\b ')).toEqual({ mode: 'text', text: 'a\\b ' })
+    expect(paletteMode('%')).toEqual({ mode: 'text', text: '' })
   })
 
   it('reads anything else as a file name, without the spaces around it', () => {
@@ -45,20 +53,47 @@ describe('displayPath', () => {
   })
 })
 
-describe('filesWaiting', () => {
+describe('rowsWaiting', () => {
   it('waits while the file rows answer an older query or another project', () => {
-    expect(filesWaiting({ mode: 'files', current: false, indexing: false, rows: 3 })).toBe(true)
+    expect(rowsWaiting({ mode: 'files', current: false, busy: false, rows: 3 })).toBe(true)
   })
 
   // Review M2: during a first walk an Enter on no rows yet would otherwise be spent on nothing.
   it('waits while a first walk has found nothing yet', () => {
-    expect(filesWaiting({ mode: 'files', current: true, indexing: true, rows: 0 })).toBe(true)
-    expect(filesWaiting({ mode: 'files', current: true, indexing: true, rows: 2 })).toBe(false)
+    expect(rowsWaiting({ mode: 'files', current: true, busy: true, rows: 0 })).toBe(true)
+    expect(rowsWaiting({ mode: 'files', current: true, busy: true, rows: 2 })).toBe(false)
   })
 
   it('does not wait on a current answer, or on the actions list', () => {
-    expect(filesWaiting({ mode: 'files', current: true, indexing: false, rows: 0 })).toBe(false)
-    expect(filesWaiting({ mode: 'actions', current: false, indexing: true, rows: 0 })).toBe(false)
+    expect(rowsWaiting({ mode: 'files', current: true, busy: false, rows: 0 })).toBe(false)
+    expect(rowsWaiting({ mode: 'actions', current: false, busy: true, rows: 0 })).toBe(false)
+  })
+
+  // W2b: the same rule for lines of text: rows of an older query, or none yet while files are still being read.
+  it('waits on text rows the same way, a search under way standing for a walk', () => {
+    expect(rowsWaiting({ mode: 'text', current: false, busy: false, rows: 5 })).toBe(true)
+    expect(rowsWaiting({ mode: 'text', current: true, busy: true, rows: 0 })).toBe(true)
+    expect(rowsWaiting({ mode: 'text', current: true, busy: true, rows: 1 })).toBe(false)
+    expect(rowsWaiting({ mode: 'text', current: true, busy: false, rows: 0 })).toBe(false)
+  })
+})
+
+describe('markSegments', () => {
+  it('cuts a line into the plain and the matched parts, in order', () => {
+    expect(markSegments('foo bar foo', [[0, 3], [8, 11]])).toEqual([
+      { text: 'foo', mark: true },
+      { text: ' bar ', mark: false },
+      { text: 'foo', mark: true }
+    ])
+  })
+
+  it('gives the whole line unmarked when nothing is marked, and ignores marks out of range or overlapping', () => {
+    expect(markSegments('abc', [])).toEqual([{ text: 'abc', mark: false }])
+    expect(markSegments('abcdef', [[1, 3], [2, 4], [9, 12]])).toEqual([
+      { text: 'a', mark: false },
+      { text: 'bc', mark: true },
+      { text: 'def', mark: false }
+    ])
   })
 })
 

@@ -1,24 +1,26 @@
 /**
- * What the palette box is asked for, and how a file row reads (spec W2: one entry point, result kinds told apart).
+ * What the palette box is asked for, and how a row reads (spec W2: one entry point, result kinds told apart).
  *
- * The box is one entry point for two lists. A leading `>` asks for an action, the convention people bring from other
- * editors, and is what Ctrl+Shift+P opens with; anything else is a file name under the explorer's project, which is what
- * Ctrl+P opens with. Deleting the `>` turns one into the other without closing the box. A file name's backslashes read
- * as the slashes the list is written with, so a path copied from a Windows terminal finds its file.
+ * The box is one entry point for three lists. A leading `>` asks for an action, the convention people bring from other
+ * editors, and is what Ctrl+Shift+P opens with; a leading `%` asks for text in the project's files, as VS Code's quick
+ * search reads it, and is what Ctrl+Shift+F opens with; anything else is a file name under the explorer's project, which
+ * is what Ctrl+P opens with. Deleting the prefix turns one into another without closing the box. A file name's
+ * backslashes read as the slashes the list is written with, so a path copied from a Windows terminal finds its file;
+ * text keeps them, since code has them, and keeps its trailing spaces.
  */
-export function paletteMode(query: string): { mode: 'actions' | 'files'; text: string } {
-  return query.startsWith('>')
-    ? { mode: 'actions', text: query.slice(1).trimStart() }
-    : { mode: 'files', text: query.trim().replace(/\\/g, '/') }
+export function paletteMode(query: string): { mode: 'actions' | 'files' | 'text'; text: string } {
+  if (query.startsWith('>')) return { mode: 'actions', text: query.slice(1).trimStart() }
+  if (query.startsWith('%')) return { mode: 'text', text: query.slice(1).trimStart() }
+  return { mode: 'files', text: query.trim().replace(/\\/g, '/') }
 }
 
 /**
- * Whether Enter has to wait for the file rows: they answer an older query or another project (`current` false), or the
- * first walk of the project has found nothing yet. Rows on screen that answer what is typed, even while a walk goes on,
- * are what the person is choosing from.
+ * Whether Enter has to wait for the file or text rows: they answer an older query or another project (`current` false),
+ * or the work behind them (`busy`: the project's first walk, or the files still being read for text) has found nothing
+ * yet. Rows on screen that answer what is typed, even while that work goes on, are what the person is choosing from.
  */
-export function filesWaiting(s: { mode: 'actions' | 'files'; current: boolean; indexing: boolean; rows: number }): boolean {
-  return s.mode === 'files' && (!s.current || (s.indexing && s.rows === 0))
+export function rowsWaiting(s: { mode: 'actions' | 'files' | 'text'; current: boolean; busy: boolean; rows: number }): boolean {
+  return s.mode !== 'actions' && (!s.current || (s.busy && s.rows === 0))
 }
 
 /** What Enter does: wait for the rows of what is typed, pick the selected row, or nothing on an empty list. */
@@ -52,4 +54,19 @@ export function displayPath(root: string, abs: string): { name: string; folder: 
   const prefix = `${base}/`
   if (dir.length > prefix.length && same(dir.slice(0, prefix.length), prefix)) return { name, folder: dir.slice(prefix.length) }
   return { name, folder: folderAbs }
+}
+
+/** A text row's line cut into its plain and matched parts, for the matches to be drawn marked. Marks out of range, or
+ *  overlapping one already taken, are left out rather than drawing a part twice. */
+export function markSegments(text: string, ranges: ReadonlyArray<readonly [number, number]>): Array<{ text: string; mark: boolean }> {
+  const out: Array<{ text: string; mark: boolean }> = []
+  let at = 0
+  for (const [s, e] of [...ranges].sort((a, b) => a[0] - b[0])) {
+    if (s < at || e <= s || e > text.length) continue
+    if (s > at) out.push({ text: text.slice(at, s), mark: false })
+    out.push({ text: text.slice(s, e), mark: true })
+    at = e
+  }
+  if (at < text.length || out.length === 0) out.push({ text: text.slice(at), mark: false })
+  return out
 }
