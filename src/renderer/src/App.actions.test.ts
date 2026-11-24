@@ -29,13 +29,26 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   })
 
   it('treats an open palette as a modal, and closes it before running the chosen action', () => {
-    expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen \|\|/)
-    expect(src).toMatch(/onRun=\{\(id\) => \{\s*setPaletteOpen\(false\)\s*actionRegistry\.run\(id\)/)
+    expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen !== null \|\|/)
+    expect(src).toMatch(/onRun=\{\(id\) => \{\s*setPaletteOpen\(null\)\s*actionRegistry\.run\(id\)/)
   })
 
   // A menu left open would stay drawn over the palette's backdrop (a tab's menu sits above it) and act on the workbench.
   it('closes the tab menu and the run configuration menu as the palette opens', () => {
-    expect(src).toMatch(/'palette\.open': \{\s*run: \(\) => \{\s*setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(true\)/)
+    expect(src).toMatch(/const openPalette = \(query: '>' \| ''\): void => \{\s*setTabMenu\(null\)\s*setRunMenuOpen\(false\)\s*setPaletteOpen\(\{ query \}\)/)
+    expect(src).toMatch(/'palette\.open': \{ run: \(\) => openPalette\('>'\) \}/)
+  })
+
+  // W2a: Ctrl+P is the same box on the explorer's project's files, so it needs a project.
+  it('goes to a file through the palette opened on files, only with a project open', () => {
+    expect(src).toMatch(/'file\.quickOpen': \{\s*blockedBy: \(\) => \(currentProject \? null : 'action\.blocked\.noProject'\),\s*run: \(\) => openPalette\(''\)/)
+  })
+
+  // The key remounts the box when it is reopened on the other list (going to a file chosen from the actions list).
+  it("gives the palette the query it opens with, the explorer's project, and a file opener that closes it first", () => {
+    expect(src).toMatch(/<CommandPalette\s+key=\{paletteOpen\.query\}\s+initialQuery=\{paletteOpen\.query\}\s+projectRoot=\{currentProject\}/)
+    expect(src).toMatch(/onOpenFile=\{\(path\) => \{\s*setPaletteOpen\(null\)\s*openFile\(path\)/)
+    expect(src).toMatch(/const \[paletteOpen, setPaletteOpen\] = useState<\{ query: '>' \| '' \} \| null>\(null\)/)
   })
 
   // Every dialog with a backdrop holds the shortcuts and the palette off the workbench behind it. These three had been

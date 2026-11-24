@@ -1301,7 +1301,6 @@ export const es: Catalog = {
   'action.blocked.noLocalCli': 'Ni Claude Code ni Codex se pueden ejecutar en este equipo',
   'action.blocked.noKubectl': 'No se encontró kubectl',
   'palette.title': 'Paleta de comandos',
-  'palette.placeholder': 'Escribe un comando para ejecutar',
   'palette.empty': 'Ningún comando coincide',
   'quickOpen.placeholder': 'Escribe el nombre de un archivo, o > para buscar un comando',
   'quickOpen.empty': 'Ningún archivo coincide',

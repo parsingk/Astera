@@ -1332,7 +1332,6 @@ export const en: Record<keyof typeof ko, string> = {
   'action.blocked.noLocalCli': 'Neither Claude Code nor Codex runs on this computer',
   'action.blocked.noKubectl': 'kubectl was not found',
   'palette.title': 'Command palette',
-  'palette.placeholder': 'Type a command to run',
   'palette.empty': 'No matching command',
   'quickOpen.placeholder': 'Type a file name, or > to find a command',
   'quickOpen.empty': 'No matching file',
