@@ -1345,6 +1345,8 @@ export const en: Record<keyof typeof ko, string> = {
   'textSearch.empty': 'No file contains this text',
   'textSearch.scope': 'Searching in {name}, except binaries, files over 1 MB and credential files',
   'textSearch.truncated': 'Too many matching lines: showing the first {count}',
+  'textSearch.fileCut': 'Up to {count} lines from each file',
+  'textSearch.tooLong': 'The text is too long to search: keep it to {max} characters',
   'files.action.delete': 'Delete',
   'files.action.duplicate': 'Duplicate',
   'files.action.move': 'Move',

@@ -36,14 +36,14 @@ describe('pollTextSearch', () => {
     const ask = scripted([
       { matches: [], searching: true },
       { matches: [row(1)], searching: true },
-      { matches: [row(1), row(2)], searching: false, truncated: true, partial: true }
+      { matches: [row(1), row(2)], searching: false, truncated: true, fileCut: true, partial: true }
     ])
     const states: TextSearchState[] = []
     pollTextSearch(ask, (s) => states.push(s), () => {}, { delayMs: 0, pollMs: 100 })
     await vi.advanceTimersByTimeAsync(5_000)
     expect(ask).toHaveBeenCalledTimes(3)
     expect(states.map((s) => s.matches.length)).toEqual([0, 1, 2])
-    expect(states.at(-1)).toEqual({ matches: [row(1), row(2)], searching: false, unavailable: false, truncated: true, partial: true })
+    expect(states.at(-1)).toEqual({ matches: [row(1), row(2)], searching: false, unavailable: false, truncated: true, fileCut: true, partial: true })
   })
 
   it('says when the project could not be listed', async () => {

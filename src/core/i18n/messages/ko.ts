@@ -1427,6 +1427,8 @@ export const ko = {
   'textSearch.empty': '이 내용이 든 파일이 없습니다',
   'textSearch.scope': '{name} 안에서 찾습니다. 바이너리, 1MB 넘는 파일, 자격증명 파일은 빼고 찾습니다',
   'textSearch.truncated': '맞는 줄이 많아 처음 {count}개만 보여 줍니다',
+  'textSearch.fileCut': '한 파일에서는 처음 {count}줄까지만 보여 줍니다',
+  'textSearch.tooLong': '찾을 내용이 너무 깁니다. {max}자 이내로 줄여 주세요',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',

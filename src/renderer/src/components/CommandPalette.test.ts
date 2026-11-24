@@ -105,14 +105,20 @@ describe('the palette on text in files', () => {
     expect(src).toMatch(/detail: `\$\{folder \? `\$\{folder\}\/` : ''\}\$\{name\}:\$\{m\.line\}`/)
   })
 
-  it('says which project it searches, what it leaves out, and when the rows or the files were cut', () => {
-    expect(src).toMatch(/t\('textSearch\.scope', \{ name: projectName \}\)/)
-    expect(src).toMatch(/t\('textSearch\.truncated', \{ count: rows\.length \}\)/)
-    expect(src).toMatch(/found\.partial && ` · \$\{t\('quickOpen\.truncated'\)\}`/)
+  // Review M1: the cut notices came after the fixed sentence, and the line's ellipsis hid them. They come first now, and
+  // the whole line is the tooltip.
+  it('says what was cut first, then which project it searches and what it leaves out, all of it on hover', () => {
+    expect(src).toMatch(/const textScope = \[\s*found\.truncated \? t\('textSearch\.truncated', \{ count: rows\.length \}\) : null,\s*found\.fileCut \? t\('textSearch\.fileCut', \{ count: TEXT_SEARCH_LINES_PER_FILE \}\) : null,\s*found\.partial \? t\('quickOpen\.truncated'\) : null,\s*t\('textSearch\.scope', \{ name: projectName \}\)\s*\]/)
+    expect(src).toMatch(/<div className="palette-scope" title=\{textScope\}>\s*\{textScope\}/)
   })
 
   it('says why there are no text rows, or that more are coming', () => {
     for (const key of ['textSearch.hint', 'textSearch.searching', 'textSearch.empty']) expect(src).toContain(`t('${key}')`)
+  })
+
+  // Review M5: a pasted line over the cap read "No file contains this text", which was not true.
+  it('says the text is too long rather than that nothing matched', () => {
+    expect(src).toMatch(/text\.length > TEXT_SEARCH_MAX_QUERY\s*\? t\('textSearch\.tooLong', \{ max: TEXT_SEARCH_MAX_QUERY \}\)/)
   })
 })
 
@@ -124,8 +130,14 @@ describe('useTextSearch', () => {
     expect(textHook).toMatch(/delayMs: DEBOUNCE_MS/)
   })
 
-  it('counts rows as current only for the project and the query they answer; an empty query has nothing to wait for', () => {
-    expect(textHook).toMatch(/current: !enabled \|\| root === null \|\| text === '' \|\| found\.answeredFor === answerKey\(root, text\)/)
+  it('counts rows as current only for the project and the query they answer; no query to search has nothing to wait for', () => {
+    expect(textHook).toMatch(/current: !enabled \|\| root === null \|\| !searchable\(text\) \|\| found\.answeredFor === answerKey\(root, text\)/)
+    expect(textHook).toMatch(/const searchable = \(text: string\): boolean => text !== '' && text\.length <= TEXT_SEARCH_MAX_QUERY/)
+  })
+
+  // Review I1, related: going back to a bare % left main reading for the query that was there.
+  it("stops main's search when the box is left with nothing to search", () => {
+    expect(textHook).toMatch(/if \(!searchable\(text\)\) \{\s*setFound\(NONE\)\s*(?:\/\/[^\n]*\n\s*)?void window\.api\.files\.searchText\(root, ''\)\.catch\(\(\) => \{\}\)/)
   })
 
   // Closing the box, leaving %, or moving to another project stops main reading files for a search nobody will see.

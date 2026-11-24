@@ -1314,6 +1314,8 @@ export const es: Catalog = {
   'textSearch.empty': 'Ningún archivo contiene este texto',
   'textSearch.scope': 'Buscando en {name}, salvo binarios, archivos de más de 1 MB y archivos de credenciales',
   'textSearch.truncated': 'Hay demasiadas líneas que coinciden: se muestran las primeras {count}',
+  'textSearch.fileCut': 'Hasta {count} líneas de cada archivo',
+  'textSearch.tooLong': 'El texto es demasiado largo para buscarlo: usa {max} caracteres como máximo',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',

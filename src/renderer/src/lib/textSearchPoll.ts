@@ -9,6 +9,8 @@ export interface TextSearchState {
   unavailable: boolean
   /** More lines match than are listed (main's row cap). */
   truncated?: true
+  /** A file held more matching lines than one file gives (TEXT_SEARCH_LINES_PER_FILE). */
+  fileCut?: true
   /** Only the shallow part of a large project was searched (the index's cap). */
   partial?: true
 }
@@ -47,7 +49,7 @@ export function pollTextSearch(
     timer = null
     asked++
     ask().then(
-      ({ matches, searching, unavailable, truncated, partial }) => {
+      ({ matches, searching, unavailable, truncated, fileCut, partial }) => {
         if (stopped) return
         const more = searching && asked <= maxPolls
         onState({
@@ -55,6 +57,7 @@ export function pollTextSearch(
           searching: more,
           unavailable: unavailable === true,
           ...(truncated === true ? { truncated: true as const } : {}),
+          ...(fileCut === true ? { fileCut: true as const } : {}),
           ...(partial === true ? { partial: true as const } : {})
         })
         if (more) timer = setTimer(once, opts.pollMs)

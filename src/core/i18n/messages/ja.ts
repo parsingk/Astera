@@ -1302,6 +1302,8 @@ export const ja: Catalog = {
   'textSearch.empty': 'この文字列を含むファイルはありません',
   'textSearch.scope': '{name} の中を検索します (バイナリ、1MB を超えるファイル、認証情報のファイルは除きます)',
   'textSearch.truncated': '一致する行が多いため、最初の {count} 行だけを表示します',
+  'textSearch.fileCut': '1 つのファイルからは最初の {count} 行までを表示します',
+  'textSearch.tooLong': '検索する文字列が長すぎます。{max} 文字以内にしてください',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',

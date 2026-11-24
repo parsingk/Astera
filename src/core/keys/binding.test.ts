@@ -381,7 +381,9 @@ describe('action wording', () => {
       'textSearch.searching',
       'textSearch.empty',
       'textSearch.scope',
-      'textSearch.truncated'
+      'textSearch.truncated',
+      'textSearch.fileCut',
+      'textSearch.tooLong'
     ]
     for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {
       for (const key of keys) expect((catalog as Record<string, string | undefined>)[key], `${lang} ${key}`).toBeTruthy()
@@ -396,6 +398,8 @@ describe('action wording', () => {
       expect(c['quickOpen.placeholder'], lang).toContain('%')
       expect(c['textSearch.scope'], lang).toContain('{name}')
       expect(c['textSearch.truncated'], lang).toContain('{count}')
+      expect(c['textSearch.fileCut'], lang).toContain('{count}')
+      expect(c['textSearch.tooLong'], lang).toContain('{max}')
     }
   })
 })

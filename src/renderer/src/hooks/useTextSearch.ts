@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { TEXT_SEARCH_MAX_QUERY } from '../../../core/files/textMatch'
 import { pollTextSearch, type TextSearchState } from '../lib/textSearchPoll'
 
 /** How long typing has to pause before a search is asked for (spec W2 input debounce). A file name is matched in a couple
@@ -15,15 +16,18 @@ type Answered = TextSearchState & {
 }
 
 export type TextSearch = TextSearchState & {
-  /** The rows answer the project and the query the box holds now (or there is nothing to answer: no query). Rows of an
-   *  older query stay on screen while the newer one is asked for; Enter waits until they are current
-   *  (lib/quickOpen.ts rowsWaiting). */
+  /** The rows answer the project and the query the box holds now (or there is nothing to answer: no query, or one too
+   *  long to search). Rows of an older query stay on screen while the newer one is asked for; Enter waits until they
+   *  are current (lib/quickOpen.ts rowsWaiting). */
   current: boolean
 }
 
 const NONE: Answered = { matches: [], searching: false, unavailable: false, answeredFor: null }
 
 const answerKey = (root: string, text: string): string => `${root}\n${text}`
+
+/** Whether there is something to search: not nothing, and not longer than main searches (the box says so instead). */
+const searchable = (text: string): boolean => text !== '' && text.length <= TEXT_SEARCH_MAX_QUERY
 
 /**
  * The palette's text search: the lines of the files under `root` holding `text` (main/textSearch.ts), asked for once
@@ -43,8 +47,14 @@ export function useTextSearch(root: string | null, text: string, enabled: boolea
    *  starts it: an ask the debounce drops has refreshed nothing. */
   const refreshedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (!enabled || !root || text === '') {
+    if (!enabled || !root) {
       setFound(NONE)
+      return
+    }
+    if (!searchable(text)) {
+      setFound(NONE)
+      // Back to a bare %: main stops reading for the query that was there
+      void window.api.files.searchText(root, '').catch(() => {})
       return
     }
     let first = refreshedFor.current !== root
@@ -72,7 +82,8 @@ export function useTextSearch(root: string | null, text: string, enabled: boolea
     searching: found.searching,
     unavailable: found.unavailable,
     ...(found.truncated ? { truncated: true as const } : {}),
+    ...(found.fileCut ? { fileCut: true as const } : {}),
     ...(found.partial ? { partial: true as const } : {}),
-    current: !enabled || root === null || text === '' || found.answeredFor === answerKey(root, text)
+    current: !enabled || root === null || !searchable(text) || found.answeredFor === answerKey(root, text)
   }
 }

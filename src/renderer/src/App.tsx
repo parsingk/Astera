@@ -714,7 +714,7 @@ export default function App(): React.JSX.Element {
   // delegate per action that reads it from there.
   const [actionRegistry] = useState(createActionRegistry)
   const actionImplRef = useRef<Record<ActionId, ActionHandler> | null>(null)
-  // The palette box, open on actions ('>') or on files (''); null when closed (CommandPalette).
+  // The palette box, open on actions ('>'), on files ('') or on text in files ('%'); null when closed (CommandPalette).
   const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)

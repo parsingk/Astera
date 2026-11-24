@@ -10,6 +10,7 @@ import { readRecentActions, rememberAction } from '../lib/recentActions'
 import { toast } from '../lib/toast'
 import { useQuickOpenFiles } from '../hooks/useQuickOpenFiles'
 import { useTextSearch } from '../hooks/useTextSearch'
+import { TEXT_SEARCH_LINES_PER_FILE, TEXT_SEARCH_MAX_QUERY } from '../../../core/files/textMatch'
 
 export type PaletteEntry = {
   id: ActionId
@@ -79,7 +80,8 @@ export function CommandPalette({
   const [recent] = useState(() => readRecentActions(known))
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
-  /** Enter was pressed while the file rows were not yet those of what is typed; the first current row is opened. */
+  /** Enter was pressed while the file or text rows were not yet those of what is typed; the first current row is
+   *  opened. */
   const pendingEnter = useRef(false)
   const { mode, text } = paletteMode(query)
   const files = useQuickOpenFiles(projectRoot, text, mode === 'files')
@@ -208,14 +210,26 @@ export function CommandPalette({
         ? t('action.blocked.noProject')
         : text === ''
           ? t('textSearch.hint')
-          : found.unavailable
-            ? t('quickOpen.unavailable')
-            : !found.current || found.searching
-              ? t('textSearch.searching')
-              : rows.length === 0
-                ? t('textSearch.empty')
-                : null
+          : text.length > TEXT_SEARCH_MAX_QUERY
+            ? t('textSearch.tooLong', { max: TEXT_SEARCH_MAX_QUERY })
+            : found.unavailable
+              ? t('quickOpen.unavailable')
+              : !found.current || found.searching
+                ? t('textSearch.searching')
+                : rows.length === 0
+                  ? t('textSearch.empty')
+                  : null
   const note = mode === 'actions' ? (rows.length === 0 ? t('palette.empty') : null) : mode === 'text' ? textNote : fileNote
+  /** Text search's scope line: what was cut first, since the line ends in an ellipsis when it runs long, then which
+   *  project is searched and what is never read. The whole line is its tooltip. */
+  const textScope = [
+    found.truncated ? t('textSearch.truncated', { count: rows.length }) : null,
+    found.fileCut ? t('textSearch.fileCut', { count: TEXT_SEARCH_LINES_PER_FILE }) : null,
+    found.partial ? t('quickOpen.truncated') : null,
+    t('textSearch.scope', { name: projectName })
+  ]
+    .filter((part) => part !== null)
+    .join(' · ')
 
   return (
     <div className="modal-backdrop palette-backdrop" {...backdropProps(onClose)}>
@@ -254,11 +268,9 @@ export function CommandPalette({
           </div>
         )}
         {mode === 'text' && projectRoot && (
-          // The same for text: which project, what is never read, and whether the rows or the files were cut
-          <div className="palette-scope" title={t('textSearch.scope', { name: projectName })}>
-            {t('textSearch.scope', { name: projectName })}
-            {found.partial && ` · ${t('quickOpen.truncated')}`}
-            {found.truncated && ` · ${t('textSearch.truncated', { count: rows.length })}`}
+          // The same for text: whether the rows or the files were cut, which project, and what is never read
+          <div className="palette-scope" title={textScope}>
+            {textScope}
           </div>
         )}
         <ul className="palette-list" role="listbox" id={listId} ref={listRef} aria-label={title}>
