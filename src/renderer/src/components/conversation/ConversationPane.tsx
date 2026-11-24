@@ -48,6 +48,7 @@ import type { PermissionModeChoice, UnattendedPermission } from "../../../../cor
 import type { MessageKey } from "../../../../core/i18n";
 import { useChatState } from "../../hooks/useChatState";
 import { toast } from "../../lib/toast";
+import * as sessionBus from "../../lib/sessionBus";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { RollStateEvent, SandboxStartWarning, SchedStateEvent } from "../../../../core/types";
@@ -966,6 +967,9 @@ export function ConversationPane({
     input.focus();
     document.execCommand("insertText", false, text);
   }, []);
+  // Context handed to this session (spec W4, App's attach) lands here as a terminal session's lands in its xterm: in the
+  // composer, unsent, for the person to read and send (sessionBus.pasteInto). A chat session has no terminal registered.
+  useEffect(() => sessionBus.registerPaste(sessionId, insertIntoComposer), [sessionId, insertIntoComposer]);
 
   /**
    * A file dropped on this pane, or an image pasted into it, becomes a path in the message.

@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import type { ModelDescriptor } from '../../../../core/models/types'
 import type { AppendMessage } from '@assistant-ui/react'
 import {
@@ -408,5 +411,14 @@ describe('toThreadMessages — unchanged turns keep their message', () => {
     const f = { id: 'f', role: 'assistant' as const, parts: [{ kind: 'failure' as const, message: 'boom' }] }
     expect(toThreadMessages([f], (m) => `one ${m}`)[0].content).toEqual([{ type: 'text', text: 'one boom' }])
     expect(toThreadMessages([f], (m) => `two ${m}`)[0].content).toEqual([{ type: 'text', text: 'two boom' }])
+  })
+})
+
+// W4: context reaches a chat session the way it reaches a terminal one, through the session bus, into the composer and
+// unsent (the person sends it). A terminal session's TerminalView registers its paste; a chat session has none.
+describe('a chat session takes a paste from the session bus', () => {
+  const paneSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ConversationPane.tsx'), 'utf8')
+  it('registers its composer insert for its session, and lets go on unmount', () => {
+    expect(paneSrc).toMatch(/useEffect\(\(\) => sessionBus\.registerPaste\(sessionId, insertIntoComposer\), \[sessionId, insertIntoComposer\]\)/)
   })
 })
