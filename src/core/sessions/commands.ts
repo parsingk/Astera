@@ -15,9 +15,9 @@ export type CommandBuilder = (opts: {
   resumeSessionId?: string
   settingsFile?: string
   bypassPermissions?: boolean
-  /** Extra directories a session may read without a prompt (Claude's --add-dir). Design Mode writes
-   *  its screenshots outside every project, so a session handed one of those paths would otherwise
-   *  hit "read outside the working directories". Claude only — Codex reads them without asking. */
+  /** Extra working directories for the session (Claude's --add-dir). Claude only. Claude Code asks each session whether
+   *  it trusts an added directory, so the screenshot folder Design Mode writes to is not given this way any more: it is
+   *  readable through a read rule in the settings file (previewShotsReadRule). */
   addDirs?: string[]
   resumePrompt?: string // codex only — the carry-on-working phrase appended after resume
   /** The initial prompt for an interactive session. Carried as the last positional argument.
@@ -43,8 +43,7 @@ export function buildClaudeCommand(platform: NodeJS.Platform, resolve: ResolveEx
     if (settingsFile) args.push('--settings', settingsFile)
     // Shared extensions, ahead of the variadic --add-dir so nothing reads them as one more directory
     if (extraArgs && extraArgs.length > 0) args.push(...extraArgs)
-    // Read access to the app's screenshot folder, so the paths Design Mode puts in a prompt open
-    // without the "read outside the working directories" question. --add-dir is variadic.
+    // --add-dir is variadic.
     if (addDirs && addDirs.length > 0) args.push('--add-dir', ...addDirs)
     if (resumeSessionId) args.push('--resume', resumeSessionId)
     // Starts without permission prompts

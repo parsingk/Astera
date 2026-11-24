@@ -57,7 +57,6 @@ import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { StatusLineManager, resolveNodePath, withUseReports } from '../core/sessions/statusline'
 import { BusyScanner } from '../core/terminal/busy'
-import { previewShotsDir } from '../core/preview/shotsDir'
 import type { Account, SessionInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
 import type { HostRollSpawner, RollSpawnOpts } from './rolling'
@@ -535,7 +534,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
     // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
     (id, account, o) => statusLine.spawnConfig(id, account, withUseReports(o, () => cliVersions.cached('claude'))),
-    [previewShotsDir(profileDir)],
+    // No --add-dir: the screenshot folder is readable through the read rule in the session's settings file
+    // (previewShotsReadRule), since Claude Code asks each session whether it trusts an added directory.
+    [],
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
