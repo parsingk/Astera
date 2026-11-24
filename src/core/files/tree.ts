@@ -151,6 +151,29 @@ const CURATED_IGNORE = [
   'Pods', '.dart_tool', 'coverage'
 ]
 
+/** The part of CURATED_IGNORE that is never a project's own files, whatever its .gitignore says: version control,
+ *  installed dependencies, interpreter and tool caches. `build`, `bin`, `out`, `target`, `vendor`, `dist`, `obj` and
+ *  `coverage` are not here: some projects keep sources or tracked files in folders with those names. */
+const NEVER_SOURCE = [
+  '.git', '.hg', '.svn',
+  'node_modules', '.venv', 'venv', '__pycache__', '.mypy_cache', '.pytest_cache', '.tox', '.ruff_cache',
+  '.gradle', '.next', '.nuxt', '.svelte-kit', '.turbo', '.cache', '.idea', 'Pods', '.dart_tool'
+]
+
+/** The file index's matcher (main/fileIndex.ts): what Quick Open and the composer's `@` leave out. With a root
+ *  .gitignore the project says what is its own, so only NEVER_SOURCE is added to it, and a tracked `build/` or `bin/`
+ *  folder stays findable, as the explorer shows it. Without one, the watcher's curated list stands in. */
+export function buildIndexIgnoreMatcher(gitignoreText: string | null): (relPath: string) => boolean {
+  if (!gitignoreText) return buildIgnoreMatcher(null)
+  const ig = ignore()
+  ig.add(NEVER_SOURCE)
+  ig.add(gitignoreText)
+  return (relPath: string): boolean => {
+    if (!relPath) return false // the root itself
+    return ig.ignores(relPath.replace(/\\/g, '/'))
+  }
+}
+
 /** The watcher's ignore matcher. Combines the curated list with the root .gitignore (when there is
  *  one) and reports whether a root-relative path is excluded. The exclusion is watcher-only — it has
  *  no effect on what the tree displays. */

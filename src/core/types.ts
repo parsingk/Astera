@@ -1736,7 +1736,11 @@ export interface CoreApi {
      *  `root` must pass the files path guard. `indexing` while the first walk of `root` runs (ask again to see more);
      *  `unavailable` when it could not be read (main/quickOpen.ts). `refresh` walks `root` again first: the box's
      *  first ask as it opens. */
-    quickOpen(root: string, query: string, refresh?: boolean): Promise<{ paths: string[]; indexing: boolean; unavailable?: true }>
+    quickOpen(
+      root: string,
+      query: string,
+      refresh?: boolean
+    ): Promise<{ paths: string[]; indexing: boolean; unavailable?: true; refreshing?: true; truncated?: true }>
     /** A session terminal's path link (or a SendUserFile row's path): `target` as it is when absolute,
      *  against `cwd` when relative; the absolute path only when a regular file is there. The one call
      *  here without the path guard — it reads nothing (main/run/resolveLink.ts resolveExistingFile).

@@ -52,8 +52,25 @@ describe('createQuickOpen', () => {
     await expect(ask(42, 'a')).rejects.toThrow()
     await expect(ask('', 'a')).rejects.toThrow()
     await expect(ask(ROOT, null)).rejects.toThrow()
-    await expect(ask(ROOT, 'x'.repeat(257))).rejects.toThrow()
     expect(index.lookup).not.toHaveBeenCalled()
+  })
+
+  // Review: a pasted wall of text read as "Could not list this folder's files". No file name is that long, so the honest
+  // answer is no match.
+  it('answers no match for a query longer than any file name, without asking the index', async () => {
+    const index = fakeIndex({ [ROOT]: { paths: ['a.ts'], indexing: false } })
+    const ask = createQuickOpen({ index, allowedRoot: allowAll })
+    expect(await ask(ROOT, 'x'.repeat(257))).toEqual({ paths: [], indexing: false })
+    expect(index.lookup).not.toHaveBeenCalled()
+  })
+
+  // The box keeps asking while the held list answers during a re-walk, and says when a large project was cut.
+  it('passes on that the list is being refreshed, or was cut at the cap', async () => {
+    const ask = createQuickOpen({
+      index: fakeIndex({ [ROOT]: { paths: ['a.ts'], indexing: false, refreshing: true, truncated: true } }),
+      allowedRoot: allowAll
+    })
+    expect(await ask(ROOT, '')).toEqual({ paths: [path.join(ROOT, 'a.ts')], indexing: false, refreshing: true, truncated: true })
   })
 
   // The explorer names a file path.join(folder, name) in main (files.list), and a tab is keyed by that exact string, so

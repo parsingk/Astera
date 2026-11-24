@@ -5,7 +5,8 @@ import type { FileIndex } from './fileIndex'
  *  a file, not a hint beside a sentence. Past a screen of rows a person types another letter rather than scrolls. */
 export const QUICK_OPEN_MATCHES = 50
 
-/** The longest query answered. File names are far shorter; anything longer is not someone typing. */
+/** The longest query looked up. File names are far shorter, so anything longer matches nothing and is answered so
+ *  without walking a list. */
 const MAX_QUERY = 256
 
 export interface QuickOpenAnswer {
@@ -15,6 +16,10 @@ export interface QuickOpenAnswer {
   indexing: boolean
   /** The root did not answer or could not be read: there is no list to wait for. */
   unavailable?: true
+  /** The rows come from the list held while the project is walked again: ask again shortly for the fresh one. */
+  refreshing?: true
+  /** The project holds more files than the index lists: the rows come from its shallow part only. */
+  truncated?: true
 }
 
 export interface QuickOpenDeps {
@@ -40,13 +45,19 @@ export function createQuickOpen(
   deps: QuickOpenDeps
 ): (root: unknown, query: unknown, refresh?: unknown) => Promise<QuickOpenAnswer> {
   return async (root, query, refresh) => {
-    if (typeof root !== 'string' || root === '' || typeof query !== 'string' || query.length > MAX_QUERY) {
-      throw new Error('files.quickOpen takes a project folder and a query of at most 256 characters')
+    if (typeof root !== 'string' || root === '' || typeof query !== 'string') {
+      throw new Error('files.quickOpen takes a project folder and a query')
     }
     await deps.allowedRoot(root)
+    if (query.length > MAX_QUERY) return { paths: [], indexing: false }
     if (refresh === true) deps.index.expire(root)
     const found = await deps.index.lookup(root, query, QUICK_OPEN_MATCHES)
-    const paths = found.paths.map((rel) => path.join(root, ...rel.split('/')))
-    return found.unavailable === true ? { paths, indexing: found.indexing, unavailable: true } : { paths, indexing: found.indexing }
+    return {
+      paths: found.paths.map((rel) => path.join(root, ...rel.split('/'))),
+      indexing: found.indexing,
+      ...(found.unavailable === true ? { unavailable: true as const } : {}),
+      ...(found.refreshing === true ? { refreshing: true as const } : {}),
+      ...(found.truncated === true ? { truncated: true as const } : {})
+    }
   }
 }
