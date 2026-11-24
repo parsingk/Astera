@@ -10,6 +10,7 @@ import {
   resolveBindings,
   riskyReasonKey
 } from './binding'
+import { CATALOGS } from '../i18n'
 
 // binding.ts exposes makeActions(platform) rather than a ready-made list precisely so a test can pin the
 // platform (see the note in renderer/src/lib/actions.ts) — the defaults differ per OS, and asserting on
@@ -282,6 +283,59 @@ describe('run shortcuts', () => {
   it('never yields to the terminal', () => {
     for (const a of makeActions('win32').filter((x) => RUN_IDS.includes(x.id as typeof RUN_IDS[number]))) {
       expect(a.yieldsToTerminal, a.id).toBe(false)
+    }
+  })
+})
+
+describe('actions with no default key, and the palette', () => {
+  it('new session, new Job and Kubernetes are actions with no default key', () => {
+    for (const platform of ['win32', 'darwin']) {
+      const actions = makeActions(platform)
+      for (const id of ['session.new', 'job.new', 'kube.open']) {
+        const a = actions.find((x) => x.id === id)
+        expect(a, `${platform} ${id}`).toBeDefined()
+        expect(a!.defaults, `${platform} ${id}`).toEqual([])
+      }
+    }
+  })
+
+  // Ctrl+Shift+P is what every editor with a palette binds; Astera binds nothing to it, and the shell's
+  // previous-history key is Ctrl+P without Shift.
+  it('opens the palette with Ctrl+Shift+P, Cmd+Shift+P on macOS, over a focused terminal too', () => {
+    const win = makeActions('win32').find((a) => a.id === 'palette.open')!
+    const mac = makeActions('darwin').find((a) => a.id === 'palette.open')!
+    expect(win.defaults).toEqual(['Ctrl+Shift+P'])
+    expect(mac.defaults).toEqual(['Cmd+Shift+P'])
+    expect(win.yieldsToTerminal).toBe(false)
+  })
+
+  // A blocked action normally lets its key go on to whatever has focus. These two families keep it: an
+  // unclaimed F-key reaches a terminal as an escape sequence, and Ctrl+\ is SIGQUIT there.
+  it('keeps the key for a blocked action only for the run and split chords', () => {
+    const swallowing = makeActions('win32').filter((a) => a.swallowsWhenBlocked).map((a) => a.id)
+    expect(swallowing.sort()).toEqual(
+      ['pane.splitDown', 'pane.splitRight', 'run.rerun', 'run.run', 'run.selectConfig', 'run.stop'].sort()
+    )
+  })
+})
+
+describe('action wording', () => {
+  it('every action and every blocked reason is worded in every language', () => {
+    const keys = [
+      ...makeActions('win32').map((a) => a.descKey),
+      'action.blocked.noHandler',
+      'action.blocked.noProject',
+      'action.blocked.noRunConfig',
+      'action.blocked.nothingRunning',
+      'action.blocked.noSelectedRun',
+      'action.blocked.noTarget',
+      'action.blocked.noClosableTab',
+      'action.blocked.notMarkdown',
+      'action.blocked.noCli',
+      'action.blocked.noKubectl'
+    ]
+    for (const [lang, { messages: catalog }] of Object.entries(CATALOGS)) {
+      for (const key of keys) expect((catalog as Record<string, string | undefined>)[key], `${lang} ${key}`).toBeTruthy()
     }
   })
 })
