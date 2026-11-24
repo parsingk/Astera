@@ -1411,6 +1411,9 @@ export const ko = {
   'action.blocked.notMarkdown': '마크다운 파일 탭에서만 쓸 수 있습니다',
   'action.blocked.noCli': 'Claude Code 나 Codex 가 설치되어 있지 않고, 연결한 Runtime 도 없습니다',
   'action.blocked.noKubectl': 'kubectl 을 찾지 못했습니다',
+  'palette.title': '명령 팔레트',
+  'palette.placeholder': '실행할 명령을 입력하세요',
+  'palette.empty': '맞는 명령이 없습니다',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',

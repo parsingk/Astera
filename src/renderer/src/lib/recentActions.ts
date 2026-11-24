@@ -1,0 +1,28 @@
+// The actions a person ran from the command palette lately, most recent first, so the palette can offer them first.
+// A convenience for this window only: kept in localStorage like the other cm.* keys, and forgotten rather than
+// thrown when storage is off or full.
+
+import type { ActionId } from '../../../core/keys/binding'
+
+const KEY = 'cm.recentActions'
+const MAX = 8
+
+export function readRecentActions(known: readonly ActionId[]): ActionId[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(KEY) ?? '[]')
+    if (!Array.isArray(parsed)) return []
+    // An id this version does not know (an action that was removed, or a plugin's that is gone) is dropped.
+    return parsed.filter((id): id is ActionId => typeof id === 'string' && known.includes(id as ActionId)).slice(0, MAX)
+  } catch {
+    return []
+  }
+}
+
+export function rememberAction(id: ActionId, known: readonly ActionId[]): void {
+  const next = [id, ...readRecentActions(known).filter((x) => x !== id)].slice(0, MAX)
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next))
+  } catch {
+    // Storage off or full: the palette simply has no recent list next time.
+  }
+}

@@ -1286,6 +1286,9 @@ export const ja: Catalog = {
   'action.blocked.notMarkdown': 'Markdown ファイルのタブでのみ使えます',
   'action.blocked.noCli': 'Claude Code も Codex もインストールされておらず、ペアリングした Runtime もありません',
   'action.blocked.noKubectl': 'kubectl が見つかりません',
+  'palette.title': 'コマンドパレット',
+  'palette.placeholder': '実行するコマンドを入力',
+  'palette.empty': '一致するコマンドはありません',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',

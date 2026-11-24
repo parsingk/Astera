@@ -1298,6 +1298,9 @@ export const es: Catalog = {
   'action.blocked.notMarkdown': 'Solo en una pestaña de archivo Markdown',
   'action.blocked.noCli': 'No está instalado Claude Code ni Codex, y no hay ningún Runtime emparejado',
   'action.blocked.noKubectl': 'No se encontró kubectl',
+  'palette.title': 'Paleta de comandos',
+  'palette.placeholder': 'Escribe un comando para ejecutar',
+  'palette.empty': 'Ningún comando coincide',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',
