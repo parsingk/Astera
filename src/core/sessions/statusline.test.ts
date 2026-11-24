@@ -18,6 +18,7 @@ import {
   withUseReports,
   type SandboxScope
 } from './statusline'
+import { previewShotsDir, previewShotsReadRule } from '../preview/shotsDir'
 import enforceHookSource from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
 import { dirIdentity } from '../files/watchedDir'
@@ -58,6 +59,17 @@ describe('StatusLineManager 훅 주입', () => {
     expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
     expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
     expect((await fs.stat(mgr.hookEventsDir)).isDirectory()).toBe(true)
+  })
+
+  // Design Mode and the agent browser save screenshots in the app's own folder and hand Claude their paths. A read rule
+  // for exactly that folder lets them open without "read outside the working directories", the way --add-dir did, but
+  // without making it a working directory: Claude Code asks every session whether it trusts an added one.
+  it('every session settings file lets Claude read the screenshot folder, and nothing more, without a question', async () => {
+    const rule = previewShotsReadRule(previewShotsDir(dir), process.platform)
+    for (const file of ['astera-statusline-settings.json', 'astera-hooks-settings.json']) {
+      const settings = JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'))
+      expect(settings.permissions).toEqual({ allow: [rule] })
+    }
   })
 
   // PreToolUse로 캡처한 대기 내용을 확정 무효화하는 짝이다 — 없으면 서브에이전트가 실행한 도구가
@@ -512,8 +524,9 @@ describe('StatusLineManager observe mode', () => {
 
   const hookCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-capture.cjs'))
   const auditCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-audit-capture.cjs'))
-  /** The two settings files as they were before observe mode, byte for byte. This literal passes against the code
-   *  before observe mode was added too, which is what makes it the proof that compatibility is unchanged. */
+  /** The two settings files as they were before observe mode, byte for byte, plus the read rule for the screenshot
+   *  folder that later took --add-dir's place. Without that rule this literal passes against the code before observe
+   *  mode was added too, which is what makes it the proof that compatibility is unchanged. */
   const before = (): { base: string; wider: string } => {
     const hook = hookCmd()
     const every = {
@@ -527,7 +540,8 @@ describe('StatusLineManager observe mode', () => {
     }
     const settings = {
       statusLine: { type: 'command', command: captureCommand('node', path.join(dir, 'astera-statusline-capture.cjs')), padding: 0 },
-      hooks: every
+      hooks: every,
+      permissions: { allow: [previewShotsReadRule(previewShotsDir(dir), process.platform)] }
     }
     const tools = 'AskUserQuestion|Bash|PowerShell|Write|Edit|NotebookEdit'
     const wider = {
@@ -1088,9 +1102,11 @@ describe('StatusLineManager sandbox', () => {
       const a = JSON.parse(await read(plain.settingsFile))
       const b = JSON.parse(await read(boxed.settingsFile))
       expect(b.sandbox).toEqual(want.sandbox)
-      expect(b.permissions).toEqual({ deny: want.permissions.deny })
+      // The plain file's permissions (the screenshot folder's read rule) stay, and the deny rules join them
+      expect(b.permissions).toEqual({ ...a.permissions, deny: want.permissions.deny })
       delete b.sandbox
       delete b.permissions
+      delete a.permissions
       expect(b).toEqual(a)
     }
     // Ten files, in one folder: plain, hooks, and observe and enforce each without and with the use hooks, plain and hooks
@@ -1522,11 +1538,12 @@ describe('StatusLineManager sandbox', () => {
       expect(folderOf(c.settingsFile)).toBe(folder)
       const twin = JSON.parse(await read(c.settingsFile))
       expect(twin.env, JSON.stringify(o)).toEqual(claudeShellEnv(wrap))
-      expect(twin.permissions).toEqual({ deny: want.permissions.deny })
-      // The rest is the file it is a twin of
+      // The rest is the file it is a twin of, whose permissions it keeps and adds the deny rules to
       const plain = JSON.parse(await read(mgr.spawnConfig('s1', account, o).settingsFile))
+      expect(twin.permissions).toEqual({ ...plain.permissions, deny: want.permissions.deny })
       delete twin.env
       delete twin.permissions
+      delete plain.permissions
       expect(twin).toEqual(plain)
     }
     for (const enforce of [false, true]) {

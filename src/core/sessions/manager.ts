@@ -214,7 +214,9 @@ export class SessionManager {
     private lowWater = 20_000,
     private homeDir: string = os.homedir(),
     private statusLineProvider?: StatusLineProvider,
-    /** Directories every Claude session may read without a prompt — the app's screenshot folder. */
+    /** Directories every Claude session is given with --add-dir. Empty in the app and the Host: the screenshot folder
+     *  is readable through a read rule in the settings file instead (previewShotsReadRule), because Claude Code asks
+     *  each session whether it trusts an added directory. */
     private sessionReadDirs: string[] = [],
     /** The environment every child env is built from. The app keeps process.env; the Host passes
      *  its own minus what its start added (hostWorkerBaseEnv, design D4), as a function read at each

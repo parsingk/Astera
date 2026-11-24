@@ -38,7 +38,6 @@ import { suggestableCandidates } from '../core/accounts/suggest'
 import { AppSettingsStore } from './appSettingsStore'
 import { KeybindingsStore } from './keybindingsStore'
 import { pickInitialLang } from '../core/i18n/locale'
-import { previewShotsDir } from './preview/shots'
 import { setPseudoLocalization } from '../core/i18n/pseudo'
 import type { Lang, Message } from '../core/i18n'
 import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
@@ -340,9 +339,9 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
     // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
     (id, account, opts) => statusLine.spawnConfig(id, account, withUseReports(opts, () => cliVersions.cached('claude'))),
-    // A Claude session may read the app's screenshot folder without a prompt — that is where Design
-    // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
-    [previewShotsDir(userDataDir)],
+    // No --add-dir: the screenshot folder Design Mode writes to is readable through the read rule in every session's
+    // settings file (previewShotsReadRule), since Claude Code asks each session whether it trusts an added directory.
+    [],
     process.env,
     // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
     { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes }
