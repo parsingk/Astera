@@ -3,12 +3,19 @@
  * never read for it. main/textSearch.ts does the reading.
  *
  * Positions follow the editor, so Enter lands on the match: a file is the text Buffer#toString makes of it (files.read
- * does the same, keeping a BOM as line 1's first character), lines end at `\n`, and a column is 1-based in UTF-16 units,
- * which is what FileEditor's reveal counts.
+ * does the same, keeping a BOM as line 1's first character), a line ends at `\r\n`, a lone `\r` or `\n` (the editor's
+ * buffer is toLf of the file, core/files/edit.ts), and a column is 1-based in UTF-16 units, which is what FileEditor's
+ * reveal counts.
  */
 
 /** How much of a line a row shows. A minified bundle is one line of hundreds of kilobytes; the row is a window onto it. */
 export const TEXT_PREVIEW_CHARS = 200
+/** The longest query searched. Longer pasted text is said to be too long rather than answered as no match. */
+export const TEXT_SEARCH_MAX_QUERY = 256
+/** How many lines one file gives. Files are read shallowest first, and without this a root lockfile filled the whole
+ *  list (`%react` in this repository listed 298 lines of package-lock.json and none of `src/`); the rest of a file is
+ *  the editor's find away. */
+export const TEXT_SEARCH_LINES_PER_FILE = 20
 /** How much of a long line is kept before its first match, so the match reads in its context. */
 const LEAD_CHARS = 40
 
@@ -35,6 +42,8 @@ export type TextSearchAnswer = {
   unavailable?: true
   /** More lines match than are listed: the search stopped at its cap. */
   truncated?: true
+  /** A file held more matching lines than TEXT_SEARCH_LINES_PER_FILE: only its first ones are listed. */
+  fileCut?: true
   /** The project holds more files than its index lists: only its shallow part was searched. */
   partial?: true
 }
@@ -47,8 +56,7 @@ export function textSearchPattern(query: string): RegExp {
 type OpenRow = { line: number; start: number; end: number; hits: Array<[number, number]> }
 
 function toRow(text: string, row: OpenRow): Omit<TextMatch, 'path'> {
-  let lineText = text.slice(row.start, row.end)
-  if (lineText.endsWith('\r')) lineText = lineText.slice(0, -1)
+  const lineText = text.slice(row.start, row.end)
   const first = row.hits[0][0]
   // trimStart also takes a BOM, which the editor holds as a character but nobody wants to read
   const shown = Math.min(lineText.length - lineText.trimStart().length, first)
@@ -76,26 +84,35 @@ function toRow(text: string, row: OpenRow): Omit<TextMatch, 'path'> {
 export function matchLines(text: string, pattern: RegExp, room: number): Array<Omit<TextMatch, 'path'>> {
   const out: Array<Omit<TextMatch, 'path'>> = []
   if (room <= 0) return out
+  // The line breaks the editor's toLf knows: `\r\n` as one, then a lone `\r` or `\n`
+  const breaks = /\r\n?|\n/g
+  let brk = breaks.exec(text)
   let line = 1
   let lineStart = 0
-  let nextNl = text.indexOf('\n')
   let row: OpenRow | null = null
   pattern.lastIndex = 0
   for (let m = pattern.exec(text); m !== null; m = pattern.exec(text)) {
     const at = m.index
-    while (nextNl !== -1 && nextNl < at) {
+    while (brk !== null && brk.index < at) {
       line++
-      lineStart = nextNl + 1
-      nextNl = text.indexOf('\n', lineStart)
+      lineStart = brk.index + brk[0].length
+      brk = breaks.exec(text)
     }
     if (row === null || row.line !== line) {
       if (row !== null) {
         out.push(toRow(text, row))
         if (out.length >= room) return out
       }
-      row = { line, start: lineStart, end: nextNl === -1 ? text.length : nextNl, hits: [] }
+      row = { line, start: lineStart, end: brk === null ? text.length : brk.index, hits: [] }
     }
-    row.hits.push([at - lineStart, at - lineStart + m[0].length])
+    const s = at - lineStart
+    // The window a row shows ends no later than this past its first match (toRow): a match beyond it is not shown, so
+    // the rest of the line is skipped rather than collected, which on a minified line is tens of thousands of matches
+    if (row.hits.length > 0 && s >= row.hits[0][0] + TEXT_PREVIEW_CHARS) {
+      pattern.lastIndex = Math.max(pattern.lastIndex, row.end)
+      continue
+    }
+    row.hits.push([s, s + m[0].length])
   }
   if (row !== null) out.push(toRow(text, row))
   return out
@@ -114,7 +131,15 @@ const CREDENTIAL_NAMES = new Set([
 /** Key stores and private keys. A certificate (`.crt`, `.cer`) is public and stays searchable. */
 const CREDENTIAL_EXTS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.kdbx', '.ppk'])
 /** Folders that hold nothing but keys and logins. */
-const CREDENTIAL_DIRS = new Set(['.ssh', '.gnupg', '.aws'])
+const CREDENTIAL_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.kube'])
+/** Login files whose names are too common to refuse anywhere, by the folder each tool keeps them in: Codex's login
+ *  (core/sandbox/locations.ts AGENT_LOGIN_FILE names it too), Docker's registry logins, the GitHub CLI's tokens. They are
+ *  in reach when the explorer's project is the home folder. */
+const CREDENTIAL_IN_DIR: ReadonlyArray<readonly [dir: string, name: string]> = [
+  ['.codex', 'auth.json'],
+  ['.docker', 'config.json'],
+  ['gh', 'hosts.yml']
+]
 /** `.env.example` and its kind are committed on purpose, with placeholders instead of values. */
 const ENV_TEMPLATE = /\.(example|sample|template|dist|defaults)$/
 
@@ -127,6 +152,8 @@ export function isCredentialFile(relPath: string): boolean {
   const name = parts[parts.length - 1]
   if (parts.slice(0, -1).some((p) => CREDENTIAL_DIRS.has(p))) return true
   if (CREDENTIAL_NAMES.has(name)) return true
+  const dir = parts.length > 1 ? parts[parts.length - 2] : ''
+  if (CREDENTIAL_IN_DIR.some(([d, n]) => d === dir && n === name)) return true
   if (name.startsWith('.env.')) return !ENV_TEMPLATE.test(name)
   const dot = name.lastIndexOf('.')
   return dot > 0 && CREDENTIAL_EXTS.has(name.slice(dot))

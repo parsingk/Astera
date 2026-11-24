@@ -15,6 +15,33 @@ describe('matchLines', () => {
     ])
   })
 
+  // The editor's buffer is toLf(content) (core/files/edit.ts): `\r\n`, a lone `\r` and `\n` each end a line. A file
+  // converted to CRLF twice (`\r\r\n`) is a real artifact of autocrlf and an editor, and Enter must land on its line.
+  it('ends a line at a lone CR as the editor does, as well as at CRLF and LF', () => {
+    expect(rows('a\r\r\nb\r\r\nc hit', 'hit')).toEqual([{ line: 5, col: 3, preview: 'c hit', ranges: [[2, 5]] }])
+    expect(rows('one\r\rtwo\r\r\nthree hit', 'hit')).toEqual([{ line: 5, col: 7, preview: 'three hit', ranges: [[6, 9]] }])
+    expect(rows('x\ry hit\nz hit', 'hit').map((r) => r.line)).toEqual([2, 3])
+  })
+
+  // Review M3: a minified line with tens of thousands of matches built tuples that the window then threw away, all on
+  // main's thread. Matches past the window are not collected, and the next line is still found.
+  it('stops collecting a line\'s matches past its window, and still finds the lines after it', () => {
+    /** The pattern textSearchPattern makes, counting how often it is run. */
+    class Counting extends RegExp {
+      calls = 0
+      exec(s: string): RegExpExecArray | null {
+        this.calls++
+        return super.exec(s)
+      }
+    }
+    const pattern = new Counting(textSearchPattern('e').source, 'giu')
+    const found = matchLines(`${'e'.repeat(300_000)}\nnext e`, pattern, 10)
+    expect(found).toHaveLength(2)
+    expect(found[0].ranges.length).toBeLessThanOrEqual(TEXT_PREVIEW_CHARS)
+    expect(found[1]).toEqual({ line: 2, col: 2, preview: 'next e', ranges: [[1, 2], [5, 6]] })
+    expect(pattern.calls).toBeLessThan(TEXT_PREVIEW_CHARS * 2)
+  })
+
   // The editor reads a file with Buffer#toString, which keeps a BOM as the first character of line 1 (files.read), so the
   // column counts it; the preview does not show it.
   it('counts a BOM in the column, as the editor holds it, and does not show it', () => {
@@ -85,7 +112,9 @@ describe('isCredentialFile', () => {
       '.env', 'app/.env.local', '.env.production', '.envrc', '.npmrc', '.netrc', '_netrc', '.pypirc', '.pgpass', '.htpasswd',
       '.git-credentials', 'credentials.json', '.credentials.json', 'aws/credentials', 'id_rsa', 'keys/id_ed25519',
       'certs/server.pem', 'tls.key', 'store.p12', 'cert.PFX', 'release.jks', 'app.keystore', 'vault.kdbx', 'putty.ppk',
-      'home/.ssh/config', '.gnupg/pubring.kbx', '.aws/config'
+      'home/.ssh/config', '.gnupg/pubring.kbx', '.aws/config',
+      // Logins of the tools an Astera user has, found when the explorer's project is the home folder (review M8)
+      '.codex/auth.json', '.kube/config', '.kube/cache/discovery/x.json', '.docker/config.json', '.config/gh/hosts.yml'
     ]) {
       expect(isCredentialFile(p), p).toBe(true)
     }
@@ -94,7 +123,8 @@ describe('isCredentialFile', () => {
   it('leaves templates and ordinary files alone', () => {
     for (const p of [
       '.env.example', '.env.sample', 'web/.env.template', '.env.dist', '.env.defaults', 'id_rsa.pub', 'src/keys.ts',
-      'docs/credentials.md', 'src/core/credentials/store.ts', 'environment.ts', 'monkey.ts', 'README.md', 'cert.crt'
+      'docs/credentials.md', 'src/core/credentials/store.ts', 'environment.ts', 'monkey.ts', 'README.md', 'cert.crt',
+      'src/auth.json', '.docker/nginx/default.conf', 'docker/config.json', 'gh/hosts.ts'
     ]) {
       expect(isCredentialFile(p), p).toBe(false)
     }
