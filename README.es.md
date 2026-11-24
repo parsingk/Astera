@@ -175,6 +175,10 @@
 - **Ir a un archivo:** `Ctrl`/`Cmd`+`P` busca un archivo del proyecto abierto por parte de su nombre y lo
   abre. Si escribes `>` primero, el mismo cuadro pasa a ser la paleta de comandos. Con una terminal
   enfocada, `Ctrl`+`P` sigue siendo de la shell
+- **Buscar en los archivos:** `Ctrl`/`Cmd`+`Shift`+`F` (o `%` en el mismo cuadro) busca texto en los archivos del
+  proyecto abierto y abre el archivo en la línea que coincide. Deja fuera los binarios, los archivos de más de 1 MB
+  y los archivos de credenciales como `.env`; para dejar fuera algo más, escríbelo en un archivo `.ignore` en la raíz
+  del proyecto, el mismo que leen ripgrep y VS Code
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo

@@ -190,6 +190,9 @@ what to check when an explanation is missing.
 - **Go to file:** `Ctrl`/`Cmd`+`P` finds a file of the open project by part of its name and opens it.
   Type `>` first and the same box becomes the command palette. With a terminal focused, `Ctrl`+`P` stays the
   shell's
+- **Find in files:** `Ctrl`/`Cmd`+`Shift`+`F` (or `%` in the same box) finds text in the open project's files and
+  opens the file at the matching line. Binaries, files over 1 MB and credential files such as `.env` are left out;
+  to leave out more, name it in a `.ignore` file at the project root, the file ripgrep and VS Code also read
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
