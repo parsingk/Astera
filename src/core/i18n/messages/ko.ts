@@ -1443,6 +1443,8 @@ export const ko = {
   'context.preview.attached': '{name} 세션의 입력창에 붙였습니다',
   'context.noSession': '이것을 받을 세션이 없습니다. 이 프로젝트에서 세션을 시작하세요',
   'context.credential': '자격증명 파일의 내용은 에이전트에게 보내지 않습니다',
+  'context.run.send': '에이전트에게 보내기 (선택한 부분, 없으면 로그 끝부분)',
+  'context.run.empty': '보낼 로그가 없습니다',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',

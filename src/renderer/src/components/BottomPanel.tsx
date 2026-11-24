@@ -36,6 +36,7 @@ export function BottomPanel({
   onOpenFolder,
   onOpenUrl,
   onOpenPreview,
+  onSendRunLog,
   terminals,
   terminalCwd,
   activeTab,
@@ -86,6 +87,8 @@ export function BottomPanel({
   onOpenUrl: (url: string, ev: MouseEvent) => void
   /** Open a running server's address in a preview tab — the run tab's globe button. */
   onOpenPreview: (url: string) => void
+  /** The rail's send-to-agent for a run (spec W4): App opens the context preview from what its console holds. */
+  onSendRunLog: (runId: string) => void
   terminals: TerminalBuffer[]
   /** The folder the terminals were opened in — a relative path link in one resolves against it */
   terminalCwd: string | null
@@ -332,6 +335,7 @@ export function BottomPanel({
               onScrollToEnd={() => selectedRunId && bump(setScrollNonces, selectedRunId)}
               onClear={() => selectedRunId && bump(setClearNonces, selectedRunId)}
               onToggleFind={() => selectedRunId && setFindOpen((prev) => ({ ...prev, [selectedRunId]: !prev[selectedRunId] }))}
+              onSendToAgent={onSendRunLog}
             />
             <div className="run-main">
               <RunTabStrip runs={runs} selectedId={selectedRunId} now={now} onSelect={onSelectRun} onDismiss={onDismissRun} onOpenPreview={onOpenPreview} />

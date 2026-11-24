@@ -1318,6 +1318,8 @@ export const ja: Catalog = {
   'context.preview.attached': '{name} セッションの入力欄に貼り付けました',
   'context.noSession': 'これを受け取れるセッションがありません。このプロジェクトでセッションを始めてください',
   'context.credential': '認証情報ファイルの内容はエージェントに送りません',
+  'context.run.send': 'エージェントに送る (選択した部分、なければログの末尾)',
+  'context.run.empty': '送るログがありません',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',

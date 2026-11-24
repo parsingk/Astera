@@ -1,6 +1,24 @@
 import { contentRevision, relativeTo, type ContextRef } from '../../../core/context/contextRef'
 import { isCredentialFile } from '../../../core/files/textMatch'
 
+/**
+ * A run's log as a piece of context (spec W4 "log → context preview"): what is selected in its console, or, with nothing
+ * selected, the end of its log, which is what a person sending a failing run means. Its folder is the run's project.
+ */
+export function logContext(input: {
+  run: { runId: string; projectPath: string; configName: string }
+  selection: string
+  tail: readonly string[]
+}): { ok: true; ref: ContextRef; excerpt: string } | { ok: false; reason: 'empty' } {
+  const excerpt = input.selection.trim() !== '' ? input.selection : input.tail.join('\n').replace(/\s+$/, '')
+  if (excerpt.trim() === '') return { ok: false, reason: 'empty' }
+  return {
+    ok: true,
+    ref: { schemaVersion: 1, kind: 'log', root: input.run.projectPath, sourceId: input.run.runId, label: `Run: ${input.run.configName}` },
+    excerpt
+  }
+}
+
 /** How many line breaks come before `at` in `text`. */
 const breaksBefore = (text: string, at: number): number => {
   let n = 0

@@ -1330,6 +1330,8 @@ export const es: Catalog = {
   'context.preview.attached': 'Se puso en la entrada de {name}',
   'context.noSession': 'Ninguna sesión puede recibirlo. Inicia una sesión en este proyecto',
   'context.credential': 'El contenido de un archivo de credenciales no se envía a un agente',
+  'context.run.send': 'Enviar a un agente (la selección o el final del registro)',
+  'context.run.empty': 'No hay registro que enviar',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',

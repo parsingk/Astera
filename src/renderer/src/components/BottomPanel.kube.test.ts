@@ -71,6 +71,7 @@ const render = ({
       onOpenFile: noop,
       onOpenUrl: noop,
       onOpenPreview: noop,
+      onSendRunLog: noop,
       terminals,
       terminalCwd: null,
       activeTab,

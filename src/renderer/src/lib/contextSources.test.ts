@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectionContext } from './contextSources'
+import { logContext, selectionContext } from './contextSources'
 import { contentRevision } from '../../../core/context/contextRef'
 
 const DOC = 'line one\nline two\nline three\nline four\n'
@@ -58,5 +58,27 @@ describe('selectionContext', () => {
   it('gives a file with no extension no fence language', () => {
     const r = selectionContext({ ...base, path: 'D:\\repo\\Makefile', from: 0, to: 4 })
     expect(r.ok && r.language).toBe('')
+  })
+})
+
+describe('logContext', () => {
+  const run = { runId: 'run-7', projectPath: 'D:\\repo', configName: 'npm run dev' }
+
+  it('takes what is selected in the console when there is a selection', () => {
+    expect(logContext({ run, selection: 'Error: boom\n  at x', tail: ['a', 'b'] })).toEqual({
+      ok: true,
+      ref: { schemaVersion: 1, kind: 'log', root: 'D:\\repo', sourceId: 'run-7', label: 'Run: npm run dev' },
+      excerpt: 'Error: boom\n  at x'
+    })
+  })
+
+  // Spec W4 "log → context preview": with nothing selected, the end of the log is what a person means.
+  it('takes the end of the log, without trailing blank lines, when nothing is selected', () => {
+    const r = logContext({ run, selection: '', tail: ['one', 'two', '', '  '] })
+    expect(r.ok && r.excerpt).toBe('one\ntwo')
+  })
+
+  it('refuses a log with nothing in it', () => {
+    expect(logContext({ run, selection: '  ', tail: ['', ' '] })).toEqual({ ok: false, reason: 'empty' })
   })
 })

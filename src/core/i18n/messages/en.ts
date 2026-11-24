@@ -1361,6 +1361,8 @@ export const en: Record<keyof typeof ko, string> = {
   'context.preview.attached': "Put in {name}'s input",
   'context.noSession': 'No session can take this. Start a session in this project',
   'context.credential': "A credential file's content is not sent to an agent",
+  'context.run.send': 'Send to an agent (the selection, or the end of the log)',
+  'context.run.empty': 'There is no log to send',
   'files.action.delete': 'Delete',
   'files.action.duplicate': 'Duplicate',
   'files.action.move': 'Move',

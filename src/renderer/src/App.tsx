@@ -34,7 +34,8 @@ import { NewRunModal } from './components/NewRunModal'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
 import { contentRevision, contextText, sessionFits, type ContextRef } from '../../core/context/contextRef'
-import { selectionContext } from './lib/contextSources'
+import { logContext, selectionContext } from './lib/contextSources'
+import { readRunConsole } from './lib/runConsoleText'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -5377,6 +5378,18 @@ export default function App(): React.JSX.Element {
                     onOpenFolder={openLinkedFolder}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
+                    onSendRunLog={(runId) => {
+                      // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
+                      const run = runs.find((r) => r.runId === runId)
+                      const read = readRunConsole(runId)
+                      if (!run || !read) return
+                      const made = logContext({ run, selection: read.selection, tail: read.tail })
+                      if (!made.ok) {
+                        toast.info(t('context.run.empty'))
+                        return
+                      }
+                      openContextPreview(made.ref, contextText(made.ref, made.excerpt), false)
+                    }}
                     terminals={terminals}
                     terminalCwd={bottomRoot}
                     activeTab={bottomTabShown}
