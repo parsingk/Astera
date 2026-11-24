@@ -1445,6 +1445,8 @@ export const ko = {
   'context.credential': '자격증명 파일의 내용은 에이전트에게 보내지 않습니다',
   'context.run.send': '에이전트에게 보내기 (선택한 부분, 없으면 로그 끝부분)',
   'context.run.empty': '보낼 로그가 없습니다',
+  'context.diff.draft': '이 부분 고치기 Job 초안',
+  'context.diff.otherProject': '이 Job 의 프로젝트를 탐색기에서 연 뒤 초안을 만드세요',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',

@@ -1332,6 +1332,8 @@ export const es: Catalog = {
   'context.credential': 'El contenido de un archivo de credenciales no se envía a un agente',
   'context.run.send': 'Enviar a un agente (la selección o el final del registro)',
   'context.run.empty': 'No hay registro que enviar',
+  'context.diff.draft': 'Borrador de un Job para corregir esto',
+  'context.diff.otherProject': 'Abre el proyecto de este Job en el explorador para crear el borrador',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',

@@ -2749,6 +2749,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .diff-add { background: rgba(63, 185, 80, 0.15); }
 .diff-del { background: rgba(248, 81, 73, 0.15); }
 .diff-hunk td { color: var(--accent); background: var(--elevated); }
+/* A hunk header's repair draft (spec W4): small, at the row's end, in the sans face so it reads as a control, not code */
+.diff-draft { float: right; margin-left: 8px; padding: 0 6px; font-family: var(--sans); font-size: 11px; line-height: 1.5; white-space: nowrap; }
 .diff-meta td { color: var(--text-dim); }
 .detail-completion-checks, .detail-completion-issues, .detail-completion-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .detail-completion-checks > li, .detail-completion-issues > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }

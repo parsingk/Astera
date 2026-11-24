@@ -1363,6 +1363,8 @@ export const en: Record<keyof typeof ko, string> = {
   'context.credential': "A credential file's content is not sent to an agent",
   'context.run.send': 'Send to an agent (the selection, or the end of the log)',
   'context.run.empty': 'There is no log to send',
+  'context.diff.draft': 'Draft a Job to fix this',
+  'context.diff.otherProject': "Open this Job's project in the explorer to draft from it",
   'files.action.delete': 'Delete',
   'files.action.duplicate': 'Duplicate',
   'files.action.move': 'Move',

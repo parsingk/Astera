@@ -33,9 +33,11 @@ import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
-import { contentRevision, contextText, sessionFits, type ContextRef } from '../../core/context/contextRef'
+import { contentRevision, contextText, isUnder, sessionFits, type ContextRef } from '../../core/context/contextRef'
 import { logContext, selectionContext } from './lib/contextSources'
 import { readRunConsole } from './lib/runConsoleText'
+import { hunkAt, repairObjective } from './lib/hunks'
+import { diffLines } from './lib/diffLines'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -3025,6 +3027,8 @@ export default function App(): React.JSX.Element {
    *  돌아가지 않는다"는 이유로 도달 불가능이라 판단했지만, 새로 설치한 상태의 stickyRoot 는
    *  처음부터 비어 있어 정확히 그 경로에 닿았다 — 그 판단은 틀렸다. */
   const [newRunOpen, setNewRunOpen] = useState(false)
+  /** What the new Job form's objective starts as: a repair Job drafted from a diff hunk (spec W4), null for an empty form. */
+  const [newRunDraft, setNewRunDraft] = useState<string | null>(null)
   /** The "+ From a source" window (plugin Phase 4 J20): the project it was opened in, this machine's only, or null.
    *  The project is kept rather than read live, so a tab change while it is open does not move the Job elsewhere (4c
    *  final review M17). */
@@ -4444,6 +4448,20 @@ export default function App(): React.JSX.Element {
     setContextPreview(null)
     toast.info(t('context.preview.attached', { name: s.title }))
     return 'sent'
+  }
+  /** A hunk of a Job's diff to a repair Job draft (spec W4): the detail closes and the new Job form opens with the
+   *  objective filled in; nothing is created until the person presses Create there. The form makes a Job in the
+   *  explorer's project, so a Run of another project drafts nothing and says to open that project first. */
+  const openRepairDraft = (run: { projectPath: string; runId: string }, file: string, diff: string, rowIndex: number): void => {
+    const hunk = hunkAt(diffLines(diff), rowIndex)
+    if (!hunk) return
+    if (!currentProject || !isUnder(currentProject, run.projectPath) || !isUnder(run.projectPath, currentProject)) {
+      toast.info(t('context.diff.otherProject'))
+      return
+    }
+    setOpenRun(null)
+    setNewRunDraft(repairObjective({ file, hunk, projectPath: run.projectPath, runId: run.runId }))
+    setNewRunOpen(true)
   }
   /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
@@ -6378,7 +6396,9 @@ export default function App(): React.JSX.Element {
                   setAuditRun(focus)
                   setSettingsTab('security')
                   setShowSettings(true)
-                }
+                },
+                // A hunk of its diff to a repair Job draft (spec W4): this computer's Runs only, as the form is local
+                onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
               }
             : {})}
         />
@@ -6413,9 +6433,14 @@ export default function App(): React.JSX.Element {
           // 아직 안 왔으면 거짓 — 없는 것을 경고하는 것보다 낫다
           projectFolderBusy={orchSnapshot?.projectFolderBusy ?? false}
           accounts={accounts}
-          onClose={() => setNewRunOpen(false)}
+          initialObjective={newRunDraft ?? undefined}
+          onClose={() => {
+            setNewRunOpen(false)
+            setNewRunDraft(null)
+          }}
           onCreated={(runId) => {
             setNewRunOpen(false)
+            setNewRunDraft(null)
             // 만들자마자 상세 창을 열어 Task 를 짤 수 있게 한다 — onOpenRun 이 하는 것과 같은 짝
             setOpenRun({ projectPath: currentProject, runId })
           }}

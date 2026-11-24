@@ -5,7 +5,18 @@ import { useMemo, useState } from 'react'
 import { DIFF_ROWS_STEP, diffLines } from '../lib/diffLines'
 import { useI18n } from '../i18n/I18nProvider'
 
-export function DiffView({ diff, truncated, binary }: { diff: string; truncated: boolean; binary: boolean }): React.JSX.Element {
+export function DiffView({
+  diff,
+  truncated,
+  binary,
+  onDraftRepair
+}: {
+  diff: string
+  truncated: boolean
+  binary: boolean
+  /** A hunk header row's draft button (spec W4): a repair Job drafted from the hunk at that row. Absent: no buttons. */
+  onDraftRepair?: (rowIndex: number) => void
+}): React.JSX.Element {
   const { t } = useI18n()
   const rows = useMemo(() => diffLines(diff), [diff])
   const [shown, setShown] = useState(DIFF_ROWS_STEP)
@@ -19,7 +30,14 @@ export function DiffView({ diff, truncated, binary }: { diff: string; truncated:
             <tr key={i} className={`diff-row diff-${r.kind}`}>
               <td className="diff-no">{r.oldNo ?? ''}</td>
               <td className="diff-no">{r.newNo ?? ''}</td>
-              <td className="diff-text">{r.text}</td>
+              <td className="diff-text">
+                {r.text}
+                {r.kind === 'hunk' && onDraftRepair && (
+                  <button type="button" className="diff-draft" onClick={() => onDraftRepair(i)}>
+                    {t('context.diff.draft')}
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

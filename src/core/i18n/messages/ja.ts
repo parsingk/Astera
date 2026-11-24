@@ -1320,6 +1320,8 @@ export const ja: Catalog = {
   'context.credential': '認証情報ファイルの内容はエージェントに送りません',
   'context.run.send': 'エージェントに送る (選択した部分、なければログの末尾)',
   'context.run.empty': '送るログがありません',
+  'context.diff.draft': 'ここを直す Job の下書き',
+  'context.diff.otherProject': 'この Job のプロジェクトをエクスプローラーで開いてから下書きを作ってください',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',
