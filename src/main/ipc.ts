@@ -1,4 +1,6 @@
-import { ipcMain, dialog, app, shell, session, webContents, clipboard, type BrowserWindow, type WebContents } from 'electron'
+import { dialog, app, shell, session, webContents, clipboard, type BrowserWindow, type WebContents } from 'electron'
+// Every handler here answers only the app's own window (ipcGuard.ts)
+import { ipcMain } from './ipcGuard'
 import { killProcessTree } from '../core/run/kill'
 import { cachedByStamp } from '../core/stampCache'
 import fsSync, { promises as fs, existsSync, readFileSync } from 'node:fs'
