@@ -1,0 +1,16 @@
+{
+  "name": "astera-hello-panel",
+  "version": "0.1.0",
+  "displayName": "Hello panel",
+  "description": "A UI-only plugin: one panel that greets you and names the project it was opened in.",
+  "license": "Apache-2.0",
+  "astera": {
+    "apiVersion": "2",
+    "ui": "ui/index.html",
+    "permissions": ["commands.register", "panels.register", "workspace.read"],
+    "contributes": {
+      "panels": [{ "id": "hello", "title": "Hello" }],
+      "commands": [{ "id": "open", "title": "Open Hello panel", "panel": "hello" }]
+    }
+  }
+}

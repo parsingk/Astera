@@ -70,6 +70,9 @@ Measured again in the app and in harnesses when main took it up (2026-11-25, the
   builds the guest in that one: such an attach is refused before either rule, and a plugin guest's preferences are
   rebuilt from Astera's own.
 - `close()` on a guest leaves its page drawn with its scripts running; ending its renderer first stops them.
+- That ending reaches the `<webview>` element as `close` and `destroyed`, never `render-process-gone` (the workbench
+  tab, 2026-11-25): a tab that waits only for a crash keeps a dead element on screen. An attach main refuses (a
+  prepared page used twice) reaches it as `destroyed` alone, so the same listener covers it.
 - A session without the plugin scheme's handler hands an `astera-plugin://` URL to the operating system (Windows
   offered a Store app for it on the person's screen during the review). The app's own session and the preview sessions
   refuse `openExternal`; links leave the app only through main's own checks.

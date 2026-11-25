@@ -2,7 +2,8 @@ import { dialog, app, shell, session, webContents, clipboard, type BrowserWindow
 // Every handler here answers only the app's own window (ipcGuard.ts)
 import { ipcMain, trustPluginGuest, untrustPluginGuest } from './ipcGuard'
 import { randomBytes } from 'node:crypto'
-import { createPanelGuests, pluginRowsOf, type PanelGuests } from './plugins/panelGuests'
+import { createPanelGuests, type PanelGuests } from './plugins/panelGuests'
+import { pluginRowsOf } from '../core/plugins/pluginRows'
 import { killProcessTree } from '../core/run/kill'
 import { cachedByStamp } from '../core/stampCache'
 import fsSync, { promises as fs, existsSync, readFileSync } from 'node:fs'
@@ -5145,7 +5146,7 @@ export function registerIpc(
   ipcMain.handle('plugins.preparePanel', (_e, pluginId: unknown, panelId: unknown, projectRoot: unknown) =>
     typeof pluginId === 'string' && typeof panelId === 'string'
       ? panelGuests.prepare(pluginId, panelId, typeof projectRoot === 'string' && path.isAbsolute(projectRoot) ? projectRoot : null)
-      : { ok: false, reason: 'plugins.preparePanel needs a plugin id and a panel id' }
+      : { ok: false, code: 'invalid', reason: 'plugins.preparePanel needs a plugin id and a panel id' }
   )
   ipcMain.handleGuest('plugin-ui.call', (e, _guest, method: unknown, payload: unknown) => panelGuests.call(e.sender.id, method, payload))
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))

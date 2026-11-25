@@ -730,8 +730,29 @@ A plugin with an `astera.entry` is trusted code, as every API 1 plugin is. A plu
 permissions. Astera lists it as `ready` once it is enabled with what it needs granted, and its install prompt says it
 starts no program instead of the trusted code warning.
 
-Its panels are not shown yet: the app opens them in a later version. Until then a Plugin API 2 plugin is checked,
-installed and listed.
+### Panels
+
+A contributed command is listed in the app's command palette, after Astera's own actions and named by its plugin, while
+the plugin is enabled and ready. Running it opens its panel as a tab in the workbench, or brings that tab forward when it
+is already open; the tab comes back after a restart, loaded when it is selected, unless the plugin was removed or no
+longer contributes the panel.
+
+The panel's page runs in a sandboxed guest of its own, never in Astera's window, with a session of its own that keeps
+nothing after the app quits:
+
+- It loads only files inside the plugin's folder, from `astera-plugin://<plugin>/`. Its Content-Security-Policy allows
+  its own scripts, styles, images and fonts, inline styles, and `data:` images and fonts; an inline `<script>`, an
+  inline handler such as `onclick`, a frame, and every request to the network are refused.
+- It has no Node, opens no window, navigates nowhere outside its own pages, downloads nothing, and gets no permission
+  (camera, notifications, devices and the rest).
+- `window.astera.context()` answers `{ plugin, panel, project }`, with `project` (`{ root, name }`) only when the plugin
+  has `workspace.read` and a project was open when the panel opened. It is the bridge's one method for now, answered at
+  most 20 times a second.
+- Every Astera theme is dark, and the page does not follow it on its own: a page that follows the system's light mode
+  stands white beside the app. Declaring `color-scheme: dark`, as the sample does, keeps it dark.
+
+Turning the plugin off, removing it or installing it again from the app closes its open panels; their tabs say so and
+offer to open the panel again. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
 
 ## Not yet
 

@@ -16,18 +16,7 @@ import {
   type PreparedPanel
 } from '../../core/plugins/panelGuest'
 import { contributionKey, pluginSchemeHost } from '../../core/plugins/manifest'
-
-/** One installed plugin as the Host lists it, the fields a panel needs. */
-export interface PluginRow {
-  id: string
-  enabled: boolean
-  status: string
-  ui?: string
-  dir: string
-  /** What the person granted. */
-  permissions: string[]
-  contributes?: { commands: { id: string; title: string; panel: string }[]; panels: { id: string; title: string }[] }
-}
+import { unusablePlugin, type PanelRefusalCode, type PluginRow } from '../../core/plugins/pluginRows'
 
 type SessionLike = {
   protocol: { handle: (scheme: string, handler: (req: { url: string }) => Promise<Response>) => void }
@@ -67,30 +56,6 @@ const TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.txt': 'text/plain; charset=utf-8'
-}
-
-/** The rows of the Host's `plugins-list` answer a panel needs; a malformed row is left out. */
-export function pluginRowsOf(body: unknown): PluginRow[] {
-  const list = typeof body === 'object' && body !== null ? (body as { plugins?: unknown }).plugins : undefined
-  if (!Array.isArray(list)) return []
-  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
-  const rows: PluginRow[] = []
-  for (const r of list) {
-    if (typeof r !== 'object' || r === null) continue
-    const o = r as Record<string, unknown>
-    if (typeof o.id !== 'string' || typeof o.dir !== 'string' || typeof o.status !== 'string') continue
-    const c = o.contributes as PluginRow['contributes'] | undefined
-    rows.push({
-      id: o.id,
-      enabled: o.enabled === true,
-      status: o.status,
-      dir: o.dir,
-      permissions: strings(o.permissions),
-      ...(typeof o.ui === 'string' ? { ui: o.ui } : {}),
-      ...(c && Array.isArray(c.panels) && Array.isArray(c.commands) ? { contributes: c } : {})
-    })
-  }
-  return rows
 }
 
 export type PanelGuests = ReturnType<typeof createPanelGuests>
@@ -177,15 +142,6 @@ export function createPanelGuests(d: {
     }
   }
 
-  /** Why a plugin cannot show a panel now, or null. */
-  const unusable = (pluginId: string, p: PluginRow | undefined): string | null => {
-    if (!p) return `no plugin ${pluginId} is installed`
-    if (!p.enabled) return `${pluginId} is disabled`
-    if (p.status !== 'ready' && p.status !== 'running') return `${pluginId} is ${p.status}`
-    if (p.ui === undefined) return `${pluginId} has no ui page`
-    return null
-  }
-
   async function setUpSession(partition: string, host: string): Promise<void> {
     if (setUp.has(partition)) return
     setUp.add(partition)
@@ -213,21 +169,22 @@ export function createPanelGuests(d: {
       pluginId: string,
       panelId: string,
       projectRoot: string | null
-    ): Promise<{ ok: true; url: string; partition: string } | { ok: false; reason: string }> {
+    ): Promise<{ ok: true; url: string; partition: string } | { ok: false; code: PanelRefusalCode; reason: string }> {
       const list = await listPlugins()
       // A Host that cannot answer says nothing about the plugin: nothing is forgotten (review M3)
-      if (list === null) return { ok: false, reason: 'the Host’s plugin list could not be read' }
+      if (list === null) return { ok: false, code: 'host', reason: 'the Host’s plugin list could not be read' }
       const p = list.find((r) => r.id === pluginId)
-      const why = unusable(pluginId, p)
+      const why = unusablePlugin(pluginId, p)
       if (why !== null || !p) {
         forget(pluginId)
-        return { ok: false, reason: why ?? `no plugin ${pluginId} is installed` }
+        return { ok: false, ...(why ?? { code: 'missing', reason: `no plugin ${pluginId} is installed` }) }
       }
       // An unknown panel of a usable plugin is refused alone: its other panels and its files stay as they were
-      if (!p.contributes?.panels.some((x) => x.id === panelId)) return { ok: false, reason: `${pluginId} contributes no panel ${panelId}` }
+      if (!p.contributes?.panels.some((x) => x.id === panelId))
+        return { ok: false, code: 'noPanel', reason: `${pluginId} contributes no panel ${panelId}` }
       const host = pluginSchemeHost(pluginId)
       const addressProblem = pluginHostProblem(pluginId)
-      if (addressProblem !== null) return { ok: false, reason: addressProblem }
+      if (addressProblem !== null) return { ok: false, code: 'address', reason: addressProblem }
       const partition = pluginPartition(pluginId)
       const url = pluginPageUrl(pluginId, p.ui as string, panelId, d.token())
       roots.set(host, p.dir)
@@ -332,7 +289,7 @@ export function createPanelGuests(d: {
       for (const p of prepared.values()) watched.add(p.pluginId)
       for (const p of list) if (roots.has(pluginSchemeHost(p.id))) watched.add(p.id)
       for (const host of roots.keys()) if (!list.some((p) => pluginSchemeHost(p.id) === host)) roots.delete(host)
-      for (const id of watched) if (unusable(id, list.find((r) => r.id === id)) !== null) forget(id)
+      for (const id of watched) if (unusablePlugin(id, list.find((r) => r.id === id)) !== null) forget(id)
     }
   }
 }

@@ -19,7 +19,13 @@ function layout(tabs: string[]): SavedLayout {
         'file:/p/b.ts': { path: '/p/secret.ts', projectRoot: '/p' }
       },
       records: { 'record:r1': { recordId: 'r1', title: 'R', projectRoot: '/p' }, 'record:r2': { recordId: 'r2', title: 'R2', projectRoot: '/gone' } },
-      browsers: { 'browser:b1': { url: 'http://localhost:5173/', title: '', projectRoot: '/p' } }
+      browsers: { 'browser:b1': { url: 'http://localhost:5173/', title: '', projectRoot: '/p' } },
+      plugins: {
+        'plugin:hello-panel:hello': { title: 'Hello', pluginName: 'Hello', projectRoot: '/p' },
+        'plugin:off:main': { title: 'Off', pluginName: 'Off', projectRoot: '' },
+        'plugin:gone:main': { title: 'Gone', pluginName: 'Gone', projectRoot: '' },
+        'plugin:hello-panel:dropped': { title: 'Dropped', pluginName: 'Hello', projectRoot: '' }
+      }
     }
   }
 }
@@ -72,5 +78,51 @@ describe('what a saved layout can bring back', () => {
     const keep = keepSavedTab(saved, new Set(['file:/p/a.ts', 'media:/p/i.png', 'record:r1']), new Set(['s1']))
     expect(['session:s1', 'file:/p/a.ts', 'media:/p/i.png', 'record:r1', 'browser:b1', kube].every(keep)).toBe(true)
     expect(['session:s2', 'file:/p/gone.ts', 'media:/p/x.png', 'record:r2', 'browser:b2', 'kube:broken', 'app:s1', 'plugin:x'].some(keep)).toBe(false)
+  })
+})
+
+// Phase 2 step 3: a plugin's panel tab comes back while its plugin is installed and still contributes that panel, held
+// until loaded; turned off, it still comes back and says so when loaded. The Host is asked once for all of them.
+describe('plugin panel tabs in a saved layout', () => {
+  const plugins = ['plugin:hello-panel:hello', 'plugin:off:main', 'plugin:gone:main', 'plugin:hello-panel:dropped', 'plugin:noinfo:main']
+  const listed = {
+    ok: true,
+    body: {
+      plugins: [
+        { id: 'hello-panel', enabled: true, status: 'ready', dir: '/i/h', ui: 'ui/index.html', permissions: [], contributes: { commands: [], panels: [{ id: 'hello', title: 'Hello' }] } },
+        { id: 'off', enabled: false, status: 'disabled', dir: '/i/o', ui: 'ui/index.html', permissions: [], contributes: { commands: [], panels: [{ id: 'main', title: 'Off' }] } },
+        { id: 'noinfo', enabled: true, status: 'ready', dir: '/i/n', ui: 'ui/index.html', permissions: [], contributes: { commands: [], panels: [{ id: 'main', title: 'N' }] } }
+      ]
+    }
+  }
+  const stubPlugins = (list: () => Promise<unknown>) => {
+    const fn = vi.fn(list)
+    vi.stubGlobal('window', { api: { files: { exists: vi.fn(), resolveLink: vi.fn() }, plugins: { list: fn } } })
+    return fn
+  }
+
+  it('keeps the panels still installed, turned off or not, and drops a removed plugin’s or a panel no longer contributed', async () => {
+    const list = stubPlugins(async () => listed)
+    expect([...(await checkSavedTabs(layout(plugins)))]).toEqual(['plugin:hello-panel:hello', 'plugin:off:main'])
+    // One question for every plugin tab, and none for a tab whose record was not saved beside it
+    expect(list).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps them when the Host does not answer, or answers late: the tab says what it finds once loaded', async () => {
+    stubPlugins(async () => ({ ok: false, code: 'HOST_UNAVAILABLE', message: 'down' }))
+    expect([...(await checkSavedTabs(layout(['plugin:gone:main'])))]).toEqual(['plugin:gone:main'])
+    stubPlugins(() => Promise.reject(new Error('ipc')))
+    expect([...(await checkSavedTabs(layout(['plugin:gone:main'])))]).toEqual(['plugin:gone:main'])
+    vi.useFakeTimers()
+    stubPlugins(() => new Promise(() => {}))
+    const pending = checkSavedTabs(layout(['plugin:gone:main']))
+    await vi.advanceTimersByTimeAsync(CHECK_WAIT_MS)
+    expect([...(await pending)]).toEqual(['plugin:gone:main'])
+  })
+
+  it('brings back a plugin tab only when it was checked', () => {
+    const keep = keepSavedTab(layout([]), new Set(['plugin:hello-panel:hello']), new Set())
+    expect(keep('plugin:hello-panel:hello')).toBe(true)
+    expect(keep('plugin:gone:main')).toBe(false)
   })
 })

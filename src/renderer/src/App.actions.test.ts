@@ -108,4 +108,61 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   it('keeps no ref that existed only for the old listener', () => {
     expect(src).not.toMatch(/(splitActiveRef|cliRef|runStartRef|runStopSelectionRef|runRerunSelectedRef)/)
   })
+
+  // Phase 2 step 3 (ADR-007, ADR-008): a plugin's commands are read from the Host's list each time the palette opens,
+  // registered under the plugin as owner and their contribution key as id, listed beside the core actions with the
+  // plugin's name, and run through the registry like them.
+  it('lists and runs the commands plugins contribute through the registry', () => {
+    const load = src.slice(src.indexOf('// The commands plugins contribute, read each time the palette opens'))
+    expect(load).toMatch(/if \(paletteOpen === null\) return[\s\S]*?window\.api\.plugins\s*\.list\(\)[\s\S]*?if \(current\) applyPluginCommands\(r\.ok \? panelCommands\(pluginRowsOf\(r\.body\)\) : \[\]\)/)
+    // Screen check: registered in an effect, after the render that drew the palette's rows, every plugin row read the
+    // registry before its handler was there and stayed blocked. The registry has them before the rows are drawn.
+    expect(src).toMatch(
+      /const applyPluginCommands = \(cmds: PanelCommand\[\]\): void => \{\s*for \(const dispose of pluginDisposersRef\.current\) dispose\(\)\s*pluginDisposersRef\.current = cmds\.map\(\(c\) =>\s*actionRegistry\.register\(c\.pluginId, c\.key, \{ run: \(\) => openPluginPanelRef\.current\(c\) \}\)\s*\)\s*setPluginCommands\(cmds\)/
+    )
+    expect(src).not.toMatch(/pluginCommands\.map\(\(c\) =>\s*actionRegistry\.register/)
+    expect(src).toMatch(/actionIds=\{\[\.\.\.ACTIONS\.map\(\(a\) => a\.id\), \.\.\.pluginCommands\.map\(\(c\) => c\.key\)\]\}/)
+    expect(src).toMatch(/\.\.\.pluginCommands\.map\(\(c\) => \{\s*const state = actionRegistry\.state\(c\.key\)\s*return \{ id: c\.key, title: c\.title, source: c\.pluginName, blocked: state\.ok \? null : state\.reason \}/)
+  })
+
+  // A plugin tab is never a session: closing it drops its record and its tab, before the session fallthrough
+  it('closes a plugin panel tab without reaching closeSession', () => {
+    const close = src.slice(src.indexOf('const closeWorkbenchTab = (tabId: string): void => {'), src.indexOf('closeWorkbenchTabRef.current = closeWorkbenchTab'))
+    expect(close).toMatch(/if \(ref\.kind === 'plugin'\) \{\s*(?:\/\/[^\n]*\n\s*)*setPluginTabs\(\(prev\) => prev\.filter\(\(x\) => x\.id !== tabId\)\)\s*setPluginNonces\([^\n]*\)\s*dropTabFromTree\(tabId\)\s*return\s*\}/)
+    expect(close.indexOf("ref.kind === 'plugin'")).toBeLessThan(close.indexOf('closeSession(ref.id)'))
+  })
+
+  it('opens a plugin panel in its tab, recorded with the project it was opened in', () => {
+    expect(src).toMatch(/const openPluginPanel = \(c: \{ pluginId: string; panelId: string; panelTitle: string; pluginName: string \}\): void => \{\s*const id = pluginTab\(c\.pluginId, c\.panelId\)\s*releaseTab\(id\)/)
+    // Screen check: the tab took the command's title; it is the panel's
+    expect(src).toMatch(/\{ id, pluginId: c\.pluginId, panelId: c\.panelId, title: c\.panelTitle, pluginName: c\.pluginName, projectRoot: currentProject \?\? '' \}/)
+    expect(src).toMatch(/placePluginTab\(layoutRef\.current, c\.pluginId, c\.panelId, \{ activePaneId: activePaneIdRef\.current \}\)/)
+    expect(src).toMatch(/projectRoot: currentProject \?\? ''/)
+    expect(src).toMatch(/openPluginPanelRef\.current = openPluginPanel/)
+  })
+})
+
+// Final review fixes for plugin commands and tabs
+describe('plugin commands and tabs, final review', () => {
+  // I1, M4: running the command again retries a tab that is not showing its page, and brings its record up to date
+  it('bumps the tab’s retry nonce and refreshes its record when the command runs again', () => {
+    const open = src.slice(src.indexOf('const openPluginPanel = '), src.indexOf('openPluginPanelRef.current = openPluginPanel'))
+    expect(open).toMatch(/setPluginNonces\(\(prev\) => \(\{ \.\.\.prev, \[id\]: \(prev\[id\] \?\? 0\) \+ 1 \}\)\)/)
+    expect(open).toMatch(/\{ \.\.\.x, title: c\.panelTitle, pluginName: c\.pluginName, projectRoot: x\.projectRoot \|\| \(currentProject \?\? ''\) \}/)
+    const close = src.slice(src.indexOf("if (ref.kind === 'plugin') {"), src.indexOf('if (isRemoteSessionKey(ref.id)) {'))
+    expect(close).toMatch(/setPluginNonces\(\(\{ \[tabId\]: _n, \.\.\.rest \}\) => rest\)/)
+    expect(src).toMatch(/pluginNonces=\{pluginNonces\}/)
+  })
+
+  // M1: Ctrl+W closes a plugin's panel tab, a page as a browser tab is
+  it('lets Ctrl+W close a plugin tab', () => {
+    expect(src).toMatch(/activeTab\?\.kind === 'kube' \|\| activeTab\?\.kind === 'plugin'\s*\? activeTabId/)
+  })
+
+  // M3: a list that cannot be read (the Host stopped, or did not answer) takes the plugins' commands down with it
+  it('drops the plugin commands when the Host cannot list plugins', () => {
+    const load = src.slice(src.indexOf('// The commands plugins contribute, read each time the palette opens'))
+    expect(load).toMatch(/if \(current\) applyPluginCommands\(r\.ok \? panelCommands\(pluginRowsOf\(r\.body\)\) : \[\]\)/)
+    expect(load).toMatch(/\.catch\(\(\) => \{\s*if \(current\) applyPluginCommands\(\[\]\)\s*\}\)/)
+  })
 })

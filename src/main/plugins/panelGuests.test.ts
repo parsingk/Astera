@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createPanelGuests, pluginRowsOf, type PluginRow } from './panelGuests'
+import { createPanelGuests } from './panelGuests'
+import type { PluginRow } from '../../core/plugins/pluginRows'
 import { PLUGIN_UI_CSP } from '../../core/plugins/panelGuest'
 
 // ADR-008 in main: a prepared panel, the plugin's session and files, how its guest attaches, and its bridge
@@ -101,14 +102,15 @@ describe('prepare', () => {
   })
 
   it('refuses a plugin that is missing, disabled, not ready, has no page, or does not contribute the panel', async () => {
-    const cases: [PluginRow[], string, string][] = [
-      [[], 'hello-panel', 'no plugin hello-panel is installed'],
-      [[row({ enabled: false })], 'hello-panel', 'hello-panel is disabled'],
-      [[row({ status: 'incompatible' })], 'hello-panel', 'hello-panel is incompatible'],
-      [[row({ ui: undefined })], 'hello-panel', 'hello-panel has no ui page'],
-      [[row({ contributes: { commands: [], panels: [] } })], 'hello-panel', 'hello-panel contributes no panel main']
+    const cases: [PluginRow[], string, string, string][] = [
+      [[], 'hello-panel', 'missing', 'no plugin hello-panel is installed'],
+      [[row({ enabled: false })], 'hello-panel', 'disabled', 'hello-panel is disabled'],
+      [[row({ status: 'incompatible' })], 'hello-panel', 'notReady', 'hello-panel is incompatible'],
+      [[row({ ui: undefined })], 'hello-panel', 'noUi', 'hello-panel has no ui page'],
+      [[row({ contributes: { commands: [], panels: [] } })], 'hello-panel', 'noPanel', 'hello-panel contributes no panel main']
     ]
-    for (const [rows, id, reason] of cases) expect(await make(rows).guests.prepare(id, 'main', null), reason).toEqual({ ok: false, reason })
+    // The code is what the renderer words in the person's language; the reason stays for logs
+    for (const [rows, id, code, reason] of cases) expect(await make(rows).guests.prepare(id, 'main', null), reason).toEqual({ ok: false, code, reason })
   })
 })
 
@@ -146,7 +148,7 @@ describe('the plugin’s files', () => {
     const m = make(rows)
     await m.guests.prepare('hello-panel', 'main', null)
     rows[0] = row({ enabled: false })
-    expect(await m.guests.prepare('hello-panel', 'main', null)).toEqual({ ok: false, reason: 'hello-panel is disabled' })
+    expect(await m.guests.prepare('hello-panel', 'main', null)).toEqual({ ok: false, code: 'disabled', reason: 'hello-panel is disabled' })
     expect((await m.sessions.handlers.get('plugin-hello-panel')!({ url: 'astera-plugin://hello-panel/dist/ui/index.html' })).status).toBe(403)
   })
 })
@@ -227,32 +229,13 @@ describe('attaching and the bridge', () => {
   })
 })
 
-describe('pluginRowsOf', () => {
-  it('reads the rows a panel needs from the Host’s list, leaving out a malformed one', () => {
-    expect(
-      pluginRowsOf({
-        plugins: [
-          { id: 'hello-panel', enabled: true, status: 'ready', dir: '/p/hello', ui: 'dist/ui/index.html', permissions: ['panels.register', 7], contributes: { commands: [], panels: [{ id: 'main', title: 'Hello' }] } },
-          { id: 'old', enabled: true, status: 'running', dir: '/p/old', permissions: [] },
-          { id: 'broken', status: 'ready' },
-          'junk'
-        ]
-      })
-    ).toEqual([
-      { id: 'hello-panel', enabled: true, status: 'ready', dir: '/p/hello', ui: 'dist/ui/index.html', permissions: ['panels.register'], contributes: { commands: [], panels: [{ id: 'main', title: 'Hello' }] } },
-      { id: 'old', enabled: true, status: 'running', dir: '/p/old', permissions: [] }
-    ])
-    expect(pluginRowsOf(null)).toEqual([])
-  })
-})
-
 // Screen check: a refused panel of a ready plugin took the plugin's other panels and files with it
 describe('a refused panel of a usable plugin', () => {
   it('leaves the plugin’s prepared panels and files as they were', async () => {
     const m = make([row()])
     const p = await m.guests.prepare('hello-panel', 'main', null)
     if (!p.ok) throw new Error(p.reason)
-    expect(await m.guests.prepare('hello-panel', 'side', null)).toEqual({ ok: false, reason: 'hello-panel contributes no panel side' })
+    expect(await m.guests.prepare('hello-panel', 'side', null)).toEqual({ ok: false, code: 'noPanel', reason: 'hello-panel contributes no panel side' })
     expect((await m.sessions.handlers.get('plugin-hello-panel')!({ url: p.url })).status).toBe(200)
     expect(m.guests.decideAttach({ partition: p.partition, src: p.url }, {})).toBe('plugin')
   })
@@ -361,7 +344,7 @@ describe('final review fixes', () => {
     const live = make([row()])
     await open(live, 7)
     live.guests.listFrom(async () => null)
-    expect(await live.guests.prepare('hello-panel', 'main', null)).toEqual({ ok: false, reason: 'the Host’s plugin list could not be read' })
+    expect(await live.guests.prepare('hello-panel', 'main', null)).toEqual({ ok: false, code: 'host', reason: 'the Host’s plugin list could not be read' })
     await live.guests.refresh()
     expect(await live.guests.call(7, 'context', null)).toEqual({ plugin: 'hello-panel', panel: 'main' })
   })
@@ -369,7 +352,7 @@ describe('final review fixes', () => {
   // M4: a plugin id that reads as an address is refused with a reason
   it('refuses a plugin whose id reads as an address', async () => {
     const m = make([row({ id: '123' })])
-    expect(await m.guests.prepare('123', 'main', null)).toEqual({ ok: false, reason: '123 reads as an address, so its panels cannot be shown; rename the plugin' })
+    expect(await m.guests.prepare('123', 'main', null)).toEqual({ ok: false, code: 'address', reason: '123 reads as an address, so its panels cannot be shown; rename the plugin' })
   })
 
   // I4, I5, I6: a plugin session sends nothing past the page, downloads nothing, pairs with nothing; its guests pick no device

@@ -50,4 +50,16 @@ describe('recent actions', () => {
     expect(readRecentActions(known)).toEqual([])
     expect(() => rememberAction('run.run', known)).not.toThrow()
   })
+
+  // A plugin's command is kept while its plugin is not listed (final review M2): the palette's first opening after a
+  // start draws before the Host's list arrives, and a plugin turned off for a while comes back with its place
+  it('keeps a plugin command’s key whether or not the palette lists it now', () => {
+    vi.stubGlobal('localStorage', memoryStorage())
+    const withPlugin = [...known, 'hello-panel:open'] as const
+    rememberAction('hello-panel:open', withPlugin)
+    expect(readRecentActions(withPlugin)[0]).toBe('hello-panel:open')
+    expect(readRecentActions(known)[0]).toBe('hello-panel:open')
+    rememberAction('run.run', known)
+    expect(readRecentActions(known)).toEqual(['run.run', 'hello-panel:open'])
+  })
 })

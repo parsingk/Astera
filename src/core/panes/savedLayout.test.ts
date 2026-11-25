@@ -3,7 +3,7 @@ import { addTab, createGroup, leaves, splitAndMove, type PaneNode } from './tree
 import { mergeTabs, readSaved, restoreTree, toSaved, type SavedNode, type SavedPanels, type SavedTabs } from './savedLayout'
 
 const panels: SavedPanels = { sidebar: { open: true, view: 'explorer' }, bottom: { open: true, tab: 'problems' } }
-const noTabs: SavedTabs = { files: {}, records: {}, browsers: {} }
+const noTabs: SavedTabs = { files: {}, records: {}, browsers: {}, plugins: {} }
 const keepAll = (): boolean => true
 /** Each group's tabs and active tab, in leaf order. */
 const shape = (root: PaneNode): Array<[string[], string]> => leaves(root).map((l) => [l.tabIds, l.activeTabId])
@@ -42,14 +42,14 @@ describe('saved layout', () => {
       kind: 'split',
       dir: 'row',
       ratio: 0.3,
-      a: leaf(['plugin:x', 'session:dead']),
+      a: leaf(['widget:x', 'session:dead']),
       b: leaf(['session:s1', 'nonsense'])
     }
     const back = restoreTree(tree, 1, (id) => id !== 'session:dead')!
     expect(back.root.kind).toBe('leaf')
     expect(shape(back.root)).toEqual([[['session:s1'], 'session:s1']])
     expect(back.activePaneId).toBe(leaves(back.root)[0].id)
-    expect(restoreTree(leaf(['plugin:x']), 0, keepAll)).toBeNull()
+    expect(restoreTree(leaf(['widget:x']), 0, keepAll)).toBeNull()
     expect(restoreTree(null, -1, keepAll)).toBeNull()
   })
 
@@ -105,6 +105,7 @@ describe('saved layout', () => {
     expect(readSaved(stored({ kind: 'split', dir: 'up', ratio: 0.5, a: leaf(['session:s1']), b: leaf(['session:s2']) }))).toBeNull()
     expect(readSaved(stored({ kind: 'leaf', tabs: [], active: '' }))).toBeNull()
     expect(readSaved(stored(leaf(['session:s1']), { tabs: { files: { 'file:/a': { path: 1 } }, records: {}, browsers: {} } }))).toBeNull()
+    expect(readSaved(stored(leaf(['session:s1']), { tabs: { ...noTabs, plugins: { 'plugin:a:b': { title: 'B', pluginName: 7, projectRoot: '' } } } }))).toBeNull()
   })
 
   it('reads a panel value it does not know as the default, so a newer version does not lose the record', () => {
@@ -168,5 +169,19 @@ describe('saved layout', () => {
     expect(saved.tree).toEqual({ kind: 'leaf', tabs: ['session:s1'], active: 'session:s1' })
     expect(saved.tabs.files).toEqual({})
     expect(toSaved(null, null, panels, noTabs)).toMatchObject({ v: 1, tree: null, active: -1 })
+  })
+
+  // Phase 2 step 3: a plugin panel tab keeps its title, its plugin's name and its project beside its id
+  it('keeps a plugin panel tab’s record, and reads a record an older app wrote without plugins', () => {
+    const g = createGroup('session:s1')
+    const root = addTab(g, g.id, 'plugin:hello-panel:hello')
+    const tabs: SavedTabs = {
+      ...noTabs,
+      plugins: { 'plugin:hello-panel:hello': { title: 'Hello', pluginName: 'Hello', projectRoot: '/p' }, 'plugin:gone:x': { title: 'X', pluginName: 'gone', projectRoot: '' } }
+    }
+    const saved = readSaved(JSON.stringify(toSaved(root, g.id, panels, tabs)))!
+    expect(saved.tabs.plugins).toEqual({ 'plugin:hello-panel:hello': { title: 'Hello', pluginName: 'Hello', projectRoot: '/p' } })
+    const older = readSaved(stored(leaf(['session:s1']), { tabs: { files: {}, records: {}, browsers: {} } }))!
+    expect(older.tabs.plugins).toEqual({})
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import type { ActionId } from '../../../core/keys/binding'
 import type { MessageKey } from '../../../core/i18n'
+import type { RegistryId } from '../lib/actionRegistry'
 import { useI18n } from '../i18n/I18nProvider'
 import { backdropProps } from '../lib/backdrop'
 import { paletteKey } from '../lib/paletteKey'
@@ -13,9 +13,12 @@ import { useTextSearch } from '../hooks/useTextSearch'
 import { TEXT_SEARCH_LINES_PER_FILE, TEXT_SEARCH_MAX_QUERY } from '../../../core/files/textMatch'
 
 export type PaletteEntry = {
-  id: ActionId
-  /** The action's wording, the same key Shortcut settings shows. */
-  descKey: string
+  id: RegistryId
+  /** The action's wording: a core action's text in the person's language (the key Shortcut settings shows), a plugin
+   *  command's title as its manifest wrote it. */
+  title: string
+  /** Whose command it is, drawn dimmed after the title: a plugin's name. Absent for a core action. */
+  source?: string
   /** The first chord bound to it, already formatted; absent when it has none. */
   chord?: string
   /** Why it cannot run right now, or null. A blocked row stays in the list and says why. */
@@ -30,6 +33,8 @@ type Row = {
   marks?: Array<[number, number]>
   /** A file's folder relative to the project, or a line's file and line number, dimmed after the title. */
   detail?: string
+  /** A plugin command's plugin, dimmed after the title. */
+  source?: string
   chord?: string
   blocked: MessageKey | null
   pick: () => void
@@ -62,8 +67,8 @@ export function CommandPalette({
   entries: readonly PaletteEntry[]
   /** Every action this version knows, shown or not: the recent list is kept against it, so an action hidden while its
    *  feature is turned off keeps its place for when it is back. */
-  actionIds: readonly ActionId[]
-  onRun: (id: ActionId) => void
+  actionIds: readonly RegistryId[]
+  onRun: (id: RegistryId) => void
   onClose: () => void
   /** `'>'` to open on actions, `''` on files, `'%'` on text in files. */
   initialQuery: string
@@ -107,13 +112,10 @@ export function CommandPalette({
 
   const rows: Row[] =
     mode === 'actions'
-      ? rankActions(
-          entries.map((e) => ({ ...e, title: t(e.descKey as MessageKey) })),
-          text,
-          recent
-        ).map((r) => ({
+      ? rankActions(entries, text, recent).map((r) => ({
           key: r.id,
           title: r.title,
+          source: r.source,
           chord: r.chord,
           blocked: r.blocked,
           pick: () => {
@@ -303,6 +305,7 @@ export function CommandPalette({
                     )
                   : row.title}
               </span>
+              {row.source && <span className="palette-source">{row.source}</span>}
               {row.detail && <span className="palette-detail">{row.detail}</span>}
               {row.blocked && <span className="palette-reason" title={t(row.blocked)}>{t(row.blocked)}</span>}
               {row.chord && <kbd className="palette-chord">{row.chord}</kbd>}
