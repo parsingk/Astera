@@ -47,4 +47,10 @@ describe('the Hello panel sample', () => {
     expect(script).toContain('window.astera.context()')
     expect(script).not.toMatch(/innerHTML|insertAdjacentHTML|document\.write/)
   })
+
+  // Screen check: every Astera theme is dark (main/startup.ts), and a page that follows the system's light mode stood
+  // white beside it
+  it('draws dark, as every Astera theme is', () => {
+    expect(read('ui/panel.css')).toMatch(/color-scheme: dark;/)
+  })
 })

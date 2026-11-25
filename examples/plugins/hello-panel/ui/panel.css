@@ -1,5 +1,6 @@
+/* Every Astera theme is dark: a page that follows the system's light mode stands white beside the app */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   font: 13px/1.5 system-ui, sans-serif;
 }
 body {

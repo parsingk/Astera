@@ -748,6 +748,8 @@ nothing after the app quits:
 - `window.astera.context()` answers `{ plugin, panel, project }`, with `project` (`{ root, name }`) only when the plugin
   has `workspace.read` and a project was open when the panel opened. It is the bridge's one method for now, answered at
   most 20 times a second.
+- Every Astera theme is dark, and the page does not follow it on its own: a page that follows the system's light mode
+  stands white beside the app. Declaring `color-scheme: dark`, as the sample does, keeps it dark.
 
 Turning the plugin off, removing it or installing it again from the app closes its open panels; their tabs say so and
 offer to open the panel again. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
