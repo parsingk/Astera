@@ -71,6 +71,16 @@ describe('pluginsCommand', () => {
     expect(await run({ cmd: 'plugins-list', manager: undefined }).answer).toEqual({ status: 501, body: { error: 'this Host does not run plugins' } })
   })
 
+  // Phase 2 step 4a: a package file is a third source
+  it('hands a package file to inspect and install', async () => {
+    const manager = fake()
+    const call = (cmd: string, args: Record<string, unknown>) => pluginsCommand({ manager, cmd, args, role: 'cli', marks: { effects: 0 } })
+    await call('plugins-inspect', { file: '/p/x-1.0.0.tgz' })
+    await call('plugins-install', { file: '/p/x-1.0.0.tgz', grant: [], expect: { name: 'x', version: '1.0.0', sha256: 'ab' } })
+    expect(manager.inspect).toHaveBeenCalledWith({ file: '/p/x-1.0.0.tgz' })
+    expect(manager.install).toHaveBeenCalledWith({ file: '/p/x-1.0.0.tgz', grant: [], expect: { name: 'x', version: '1.0.0', sha256: 'ab' } })
+  })
+
   it('hands each command its arguments', async () => {
     const manager = fake()
     const marks = { effects: 0 }

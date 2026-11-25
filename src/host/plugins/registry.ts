@@ -16,9 +16,9 @@ export interface PluginRecord {
   /** What the person approved: a subset of what the plugin asks for (spec §11); a Plugin API 2 plugin's UI permissions too. */
   granted: (PluginPermission | PluginUiPermission)[]
   installedAt: number
-  /** Where it was installed from: a folder, or an npm package by the spec the person gave and the version it was
-   *  (plugins 2e). */
-  source: { kind: 'folder'; path: string } | { kind: 'npm'; spec: string; version: string }
+  /** Where it was installed from: a folder, an npm package by the spec the person gave and the version it was
+   *  (plugins 2e), or a package file (`plugins pack`, Phase 2 step 4a) by its path and the sha256 of the bytes installed. */
+  source: { kind: 'folder'; path: string } | { kind: 'npm'; spec: string; version: string } | { kind: 'file'; path: string; sha256: string }
 }
 
 const FILE = 'plugins.json'
@@ -49,7 +49,8 @@ const isRecord = (v: unknown): v is PluginRecord =>
   typeof v.installedAt === 'number' &&
   isObject(v.source) &&
   ((v.source.kind === 'folder' && typeof v.source.path === 'string') ||
-    (v.source.kind === 'npm' && typeof v.source.spec === 'string' && typeof v.source.version === 'string'))
+    (v.source.kind === 'npm' && typeof v.source.spec === 'string' && typeof v.source.version === 'string') ||
+    (v.source.kind === 'file' && typeof v.source.path === 'string' && typeof v.source.sha256 === 'string'))
 
 export async function readRegistry(root: string): Promise<PluginRecord[]> {
   const file = path.join(root, FILE)

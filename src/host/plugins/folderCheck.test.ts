@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -110,8 +110,20 @@ describe('checkPluginFolder', () => {
     expect(r.problems).toEqual([])
     expect(r.copy).toBe(keep)
     expect(await fs.readFile(path.join(keep, 'ui', 'index.html'), 'utf8')).toBe('<!doctype html>')
-    const before = await fs.readdir(os.tmpdir())
-    await checkPluginFolder(f, host)
-    expect((await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('astera-plugin-check-') && !before.includes(n))).toEqual([])
+    // The temporary folder this call makes, and only it: other test files check folders at the same time
+    const made: string[] = []
+    const real = fs.mkdtemp.bind(fs)
+    const spy = vi.spyOn(fs, 'mkdtemp').mockImplementation(async (prefix: string) => {
+      const at = await real(prefix)
+      made.push(at)
+      return at
+    })
+    try {
+      await checkPluginFolder(f, host)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(made.filter((p) => path.basename(p).startsWith('astera-plugin-check-'))).toHaveLength(1)
+    for (const p of made) expect(await fs.stat(p).then(() => 'there', () => 'gone')).toBe('gone')
   })
 })

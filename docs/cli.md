@@ -609,6 +609,7 @@ astera plugins install --path ./my-plugin            shows what it is and asks f
 astera plugins install --path ./my-plugin --yes      approves what it asks for and installs it
 astera plugins install --path ./my-plugin --grant jobs.read   approves only jobs.read
 astera plugins install --npm @acme/astera-jira --yes            the same, for a plugin published on npm
+astera plugins install --file ./my-plugin-0.1.0.tgz --yes        the same, for a package plugins pack made
 astera plugins list                                  what is installed, its status, what it was granted and what it offers
 astera plugins disable --id <pluginId>               keep it installed but do not run it
 astera plugins remove --id <pluginId>                uninstall it and delete its copy
@@ -761,7 +762,7 @@ astera runtimes expect --id <runtimeId|name> [--add <ids>] [--remove <ids>]
 
 astera plugins list
 astera plugins get     --id <pluginId>
-astera plugins install [--path <folder>] [--npm <package>] [--yes] [--grant <list>]
+astera plugins install [--path <folder>] [--npm <package>] [--file <package.tgz>] [--yes] [--grant <list>]
 astera plugins enable  --id <pluginId>
 astera plugins disable --id <pluginId>
 astera plugins remove  --id <pluginId>

@@ -2,7 +2,7 @@
 // `<profile>/plugins`, and the changes a person makes to it. Every change runs after the one before it finished, so two
 // installs never write the registry over each other. 2a runs no plugin: an enabled, compatible plugin is `stopped`.
 import { promises as fs } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginCapability, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
@@ -10,7 +10,7 @@ import { readPackage } from './packageFile'
 import { parseNpmSpec } from '../../core/plugins/npmSpec'
 import { NpmFailed, NpmMissing, createNpm, installDependencies, packAndExtract, type NpmRun, type NpmRunner } from './npm'
 import { NpmUnavailable } from './ownNpm'
-import { PackageRefused } from './tarball'
+import { PackageRefused, extractPackage } from './tarball'
 import { RegistryUnreadable, pluginsRoot, readRegistry, writeRegistry, type PluginRecord } from './registry'
 import { moveRetrying, type Rename } from './moves'
 import { REDACT_MIN, pluginLogFile, type PluginLaunch, type PluginRuntime } from './runtime'
@@ -28,9 +28,9 @@ export interface PluginsAnswer {
 
 export interface PluginManager {
   /** What a folder (`path`) or an npm package (`npm`, plugins 2e) holds, before it is approved. */
-  inspect(a: { path?: unknown; npm?: unknown }): Promise<PluginsAnswer>
+  inspect(a: { path?: unknown; npm?: unknown; file?: unknown }): Promise<PluginsAnswer>
   /** From a folder (`path`) or an npm package (`npm`, plugins 2e); an npm install needs `expect`. */
-  install(a: { path?: unknown; npm?: unknown; grant: unknown; expect?: unknown }): Promise<PluginsAnswer>
+  install(a: { path?: unknown; npm?: unknown; file?: unknown; grant: unknown; expect?: unknown }): Promise<PluginsAnswer>
   list(): Promise<PluginsAnswer>
   /** What `list` answers, read beside a change in progress rather than after it: a person picking a job source's item
    *  must not wait for an npm install (plugin Phase 4, 4a final review I4). It changes nothing, so it needs no turn. */
@@ -330,16 +330,26 @@ export function createPluginManager(d: {
     return r
   }
 
-  /** Where an install comes from: a folder on this machine, or a package on npm (plugins 2e). */
-  async function sourceOf(cmd: string, a: { path?: unknown; npm?: unknown }): Promise<{ kind: 'folder'; folder: string } | { kind: 'npm'; spec: string; name: string }> {
-    if (a.path !== undefined && a.npm !== undefined) throw new Refused(400, `${cmd} takes --path or --npm, not both`)
+  /** Where an install comes from: a folder on this machine, a package on npm (plugins 2e), or a package file on this
+   *  machine (`plugins pack`, Phase 2 step 4a). */
+  async function sourceOf(
+    cmd: string,
+    a: { path?: unknown; npm?: unknown; file?: unknown }
+  ): Promise<{ kind: 'folder'; folder: string } | { kind: 'npm'; spec: string; name: string } | { kind: 'file'; file: string }> {
+    if ([a.path, a.npm, a.file].filter((v) => v !== undefined).length > 1) throw new Refused(400, `${cmd} takes one of --path, --npm and --file`)
+    if (a.file !== undefined) {
+      if (typeof a.file !== 'string' || !path.isAbsolute(a.file)) throw new Refused(400, `${cmd}: ${String(a.file)} is not an absolute path`)
+      const isFile = await fs.stat(a.file).then((s) => s.isFile(), () => false)
+      if (!isFile) throw new Refused(400, `${cmd}: ${a.file} is not a file`)
+      return { kind: 'file', file: a.file }
+    }
     if (a.npm !== undefined) {
       // Checked before npm runs: only a registry name and a version ever reach it (design P14).
       const spec = parseNpmSpec(a.npm)
       if (!spec.ok) throw new Refused(400, spec.problem)
       return { kind: 'npm', spec: a.npm as string, name: spec.name }
     }
-    if (a.path === undefined) throw new Refused(400, `${cmd} needs --path <folder> or --npm <package>`)
+    if (a.path === undefined) throw new Refused(400, `${cmd} needs --path <folder>, --npm <package> or --file <package.tgz>`)
     return { kind: 'folder', folder: await folderOf(cmd, a.path) }
   }
 
@@ -374,9 +384,36 @@ export function createPluginManager(d: {
     }
   }
 
-  async function inspect(a: { path?: unknown; npm?: unknown }): Promise<PluginsAnswer> {
+  /** Reads the package file once, into a staging folder of its own: its sha256 is of the bytes that are then extracted,
+   *  with the npm path's own extractor and limits, so a file changed meanwhile cannot slip in. `use` gets the extracted
+   *  package; the folder goes when `use` is done. */
+  async function fromFile<T>(file: string, use: (folder: string, sha256: string) => Promise<T>): Promise<T> {
+    await fs.mkdir(installed, { recursive: true })
+    const staging = path.join(installed, `.staging-file-${hex()}`)
+    await fs.mkdir(staging)
+    try {
+      const bytes = await fs.readFile(file)
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const copy = path.join(staging, 'package.tgz')
+      await fs.writeFile(copy, bytes)
+      const folder = path.join(staging, 'package')
+      try {
+        await extractPackage(copy, folder)
+      } catch (e) {
+        if (e instanceof PackageRefused) throw new Refused(400, `cannot install from ${file}: ${e.message}`)
+        throw e
+      }
+      return await use(folder, sha256)
+    } finally {
+      await discard(staging)
+    }
+  }
+
+  async function inspect(a: { path?: unknown; npm?: unknown; file?: unknown }): Promise<PluginsAnswer> {
     const source = await sourceOf('plugins-inspect', a)
     if (source.kind === 'folder') return { status: 200, body: await inspection(source.folder, source.folder) }
+    if (source.kind === 'file')
+      return fromFile(source.file, async (folder, sha256) => ({ status: 200, body: { ...(await inspection(folder, source.file)), source: { file: source.file, sha256 } } }))
     return fromNpm(source.spec, async (folder, got) => {
       if (got.name !== source.name) throw new Refused(400, `npm answered ${source.spec} with a package that says it is ${got.name}@${got.version}`)
       return { status: 200, body: { ...(await inspection(folder, `${source.spec} from npm`)), source: { npm: source.spec, version: got.version } } }
@@ -445,7 +482,7 @@ export function createPluginManager(d: {
     return { manifest: m, granted }
   }
 
-  async function install(a: { path?: unknown; npm?: unknown; grant: unknown; expect?: unknown }): Promise<PluginsAnswer> {
+  async function install(a: { path?: unknown; npm?: unknown; file?: unknown; grant: unknown; expect?: unknown }): Promise<PluginsAnswer> {
     const source = await sourceOf('plugins-install', a)
     const grant = a.grant
     if (!Array.isArray(grant) || !grant.every((g) => typeof g === 'string'))
@@ -467,6 +504,18 @@ export function createPluginManager(d: {
       // again, because the copy is what will run (design P6).
       await installable(source.folder, source.folder, grant as string[], expected)
       return place(source.folder, source.folder, grant as string[], expected, records, { kind: 'folder', path: source.folder })
+    }
+    if (source.kind === 'file') {
+      // Exactly the bytes that were shown: the sha256 the inspect answered, checked against the copy that is extracted
+      const sha256 = (want as Record<string, unknown> | undefined)?.sha256
+      if (expected === undefined || typeof sha256 !== 'string')
+        throw new Refused(400, 'plugins-install --file needs expect: the { name, version, sha256 } its inspect showed')
+      const records = await readRegistry(root)
+      return fromFile(source.file, async (folder, got) => {
+        if (got !== sha256) throw new Refused(409, `${source.file} changed after it was shown; run the install again`)
+        await installable(folder, source.file, grant as string[], expected)
+        return place(folder, source.file, grant as string[], expected, records, { kind: 'file', path: source.file, sha256: got })
+      })
     }
     // From npm, exactly the version that was shown: an npm version never changes, so the code installed is the code
     // approved (design P14).

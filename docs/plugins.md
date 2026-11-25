@@ -615,6 +615,24 @@ move, or bundle. Keep the package small with `files` in `package.json`. Astera r
 scopes, tokens) applies; without it, Astera fetches an npm of its own ([the `astera` command](cli.md#plugins) says
 how).
 
+### From a package file
+
+`astera plugins pack --path <folder>` makes a package of a folder that validates: npm's layout and file name
+(`<name>-<version>.tgz`, beside the folder unless `--out` says where), the same bytes each time it is packed, and its
+sha256 and npm integrity in the answer, to publish beside it. It leaves out, and names, a `.git` folder, `.DS_Store`,
+`Thumbs.db` and `npm-debug.log` anywhere, and outside `node_modules` files that look like secrets (`.env` files but
+`.env.example`, `.npmrc`, `.git-credentials`, keys and certificates, SSH keys) and an old package at the top.
+`node_modules` goes in as a folder install copies it, so the package runs as the folder did.
+
+```sh
+astera plugins pack --path ./my-plugin
+astera plugins install --file ./my-plugin-0.1.0.tgz --yes
+```
+
+Installing from the file reads it once: the Host extracts that copy with the limits an npm package has (no entry that
+leaves the package, no link or device, at most 20,000 entries and 256 MiB), shows what it holds with its sha256, and
+installs only those bytes. No npm runs and no dependency is fetched.
+
 ### TypeScript, and bundling
 
 Install the plugin SDK for its types, as a dev dependency. npm installs `@astera-app/client` beside it, whose types

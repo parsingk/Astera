@@ -84,13 +84,33 @@ describe('installPlugin', () => {
     const h = host()
     expect(await installPlugin({ args: { yes: true }, cwd: CWD, request: undefined, call: h.call })).toEqual({
       status: 400,
-      body: { error: 'plugins install needs --path <folder> or --npm <package>' }
+      body: { error: 'plugins install needs --path <folder>, --npm <package> or --file <package.tgz>' }
     })
     expect(await installPlugin({ args: { path: 'jira', npm: '@acme/astera-jira', yes: true }, cwd: CWD, request: undefined, call: h.call })).toEqual({
       status: 400,
-      body: { error: 'plugins install takes --path or --npm, not both' }
+      body: { error: 'plugins install takes one of --path, --npm and --file' }
+    })
+    expect(await installPlugin({ args: { path: 'jira', file: 'jira.tgz', yes: true }, cwd: CWD, request: undefined, call: h.call })).toEqual({
+      status: 400,
+      body: { error: 'plugins install takes one of --path, --npm and --file' }
     })
     expect(h.calls).toEqual([])
+  })
+
+  // Phase 2 step 4a: a package `plugins pack` made, by its file, resolved against the shell's folder; the sha256 shown is
+  // the one installed
+  it('inspects and installs a package file, pinning the sha256 it showed', async () => {
+    const h = host({ status: 200, body: { ...INSPECTION, trust: 'trusted', source: { file: path.join(CWD, 'jira.tgz'), sha256: 'ab12' } } })
+    const r = await installPlugin({ args: { file: 'jira.tgz', yes: true }, cwd: CWD, request: 'req-1', call: h.call })
+    expect(r).toEqual({ status: 200, body: { id: '@acme/astera-jira', installed: true } })
+    expect(h.calls).toEqual([
+      { cmd: 'plugins-inspect', args: { file: path.join(CWD, 'jira.tgz') }, request: undefined },
+      {
+        cmd: 'plugins-install',
+        args: { file: path.join(CWD, 'jira.tgz'), grant: ['jobs.read', 'jobs.create'], expect: { name: '@acme/astera-jira', version: '1.0.0', trust: 'trusted', sha256: 'ab12' } },
+        request: 'req-1'
+      }
+    ])
   })
 
   // Plugins 2e (spec §12): a plugin published on npm, inspected and approved as a folder is.

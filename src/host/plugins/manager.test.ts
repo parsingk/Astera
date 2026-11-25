@@ -1097,8 +1097,8 @@ describe('installing from npm', () => {
       status: 400,
       body: { error: 'https://example.com/x.tgz is not an npm package: give a package name, with @version or @tag if you like' }
     })
-    expect(await m.inspect({ npm: ID, path: dir })).toEqual({ status: 400, body: { error: 'plugins-inspect takes --path or --npm, not both' } })
-    expect(await m.inspect({})).toEqual({ status: 400, body: { error: 'plugins-inspect needs --path <folder> or --npm <package>' } })
+    expect(await m.inspect({ npm: ID, path: dir })).toEqual({ status: 400, body: { error: 'plugins-inspect takes one of --path, --npm and --file' } })
+    expect(await m.inspect({})).toEqual({ status: 400, body: { error: 'plugins-inspect needs --path <folder>, --npm <package> or --file <package.tgz>' } })
     expect(npm.calls).toEqual([])
   })
 
@@ -1282,5 +1282,72 @@ describe('a UI-only plugin: final review fixes', () => {
       status: 'stopped',
       reason: 'contributing panels needs the panels.register permission, which it was not granted: install it again and grant it'
     })
+  })
+})
+
+// Phase 2 step 4a: a package `astera plugins pack` made, installed from its file. The archive is read once: its sha256 is
+// of the bytes that are extracted, and an install must name the sha256 its inspect showed.
+describe('install from a package file', () => {
+  const packOf = async (src: string, file: string): Promise<string> => {
+    const { packFolder } = await import('./pack')
+    const out = path.join(dir, file)
+    await fs.writeFile(out, (await packFolder(src)).tgz)
+    return out
+  }
+  const sha256Of = async (file: string): Promise<string> => {
+    const { createHash } = await import('node:crypto')
+    return createHash('sha256').update(await fs.readFile(file)).digest('hex')
+  }
+
+  it('shows what the package holds and asks for, with its sha256', async () => {
+    const file = await packOf(await plugin(FOLDER), 'jira-1.0.0.tgz')
+    const r = await manager.inspect({ file })
+    expect(r.status).toBe(200)
+    expect(body(r)).toMatchObject({ id: '@acme/astera-jira', version: '1.0.0', permissions: ['jobs.read', 'jobs.create'], source: { file, sha256: await sha256Of(file) } })
+    expect(await leftovers()).toEqual([])
+  })
+
+  it('installs the package it was shown, recording the file and its sha256', async () => {
+    const file = await packOf(await plugin(FOLDER), 'jira-1.0.0.tgz')
+    const sha256 = await sha256Of(file)
+    const r = await manager.install({ file, grant: ['jobs.read'], expect: { name: '@acme/astera-jira', version: '1.0.0', trust: 'trusted', sha256 } })
+    expect(r.status).toBe(200)
+    expect(body(r)).toMatchObject({ id: '@acme/astera-jira', permissions: ['jobs.read'], source: { kind: 'file', path: file, sha256 } })
+    expect(await fs.readFile(path.join(installed(), '@acme+astera-jira', 'dist', 'plugin.js'), 'utf8')).toBe('export default {}')
+    expect((await readRegistry(pluginsRoot(profile)))[0].source).toEqual({ kind: 'file', path: file, sha256 })
+    expect(await leftovers()).toEqual([])
+  })
+
+  it('refuses a package that changed after it was shown, and an install that names no sha256', async () => {
+    const file = await packOf(await plugin(FOLDER), 'jira-1.0.0.tgz')
+    const shown = await sha256Of(file)
+    await packOf(await plugin('other', { permissions: ['jobs.read'] }), 'jira-1.0.0.tgz')
+    const changed = await manager.install({ file, grant: ['jobs.read'], expect: { name: '@acme/astera-jira', version: '1.0.0', sha256: shown } })
+    expect(changed).toMatchObject({ status: 409, body: { error: expect.stringMatching(/changed after it was shown/) } })
+    const none = await manager.install({ file, grant: ['jobs.read'], expect: { name: '@acme/astera-jira', version: '1.0.0' } })
+    expect(none).toMatchObject({ status: 400, body: { error: 'plugins-install --file needs expect: the { name, version, sha256 } its inspect showed' } })
+    expect(await listed()).toEqual([])
+    expect(await leftovers()).toEqual([])
+  })
+
+  it('refuses --file beside --path or --npm, a relative path and a file that is not there', async () => {
+    const file = await packOf(await plugin(FOLDER), 'jira-1.0.0.tgz')
+    expect((await manager.inspect({ file, path: dir })).status).toBe(400)
+    expect((await manager.inspect({ file, npm: 'x' })).status).toBe(400)
+    expect(await manager.inspect({ file: 'jira-1.0.0.tgz' })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/not an absolute path/) } })
+    expect(await manager.inspect({ file: path.join(dir, 'none.tgz') })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/is not a file/) } })
+  })
+
+  it('refuses an archive whose entry leaves the package, or holds a link, before anything is installed', async () => {
+    const pkg = JSON.stringify({ name: 'evil', version: '1.0.0', astera: { apiVersion: '1', entry: 'index.js', permissions: [] } })
+    const escape = path.join(dir, 'escape.tgz')
+    await fs.writeFile(escape, tgzOf([{ name: 'package/package.json', body: pkg }, { name: 'package/../../evil.js', body: 'x' }]))
+    expect(await manager.inspect({ file: escape })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/^cannot install from .*escape\.tgz: the package has an entry that leaves the package/) } })
+    const link = path.join(dir, 'link.tgz')
+    await fs.writeFile(link, tgzOf([{ name: 'package/package.json', body: pkg }, { name: 'package/index.js', type: '2', linkname: '/etc/passwd' }]))
+    expect(await manager.inspect({ file: link })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/holds a link or a device/) } })
+    expect(existsSync(path.join(dir, 'evil.js'))).toBe(false)
+    expect(await listed()).toEqual([])
+    expect(await leftovers()).toEqual([])
   })
 })

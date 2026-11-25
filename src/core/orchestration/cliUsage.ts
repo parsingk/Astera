@@ -285,12 +285,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     ]
   },
   'plugins-install': {
-    summary: 'install a plugin from a folder or from npm, after you approve what it asks for',
+    summary: 'install a plugin from a folder, from npm or from a package file, after you approve what it asks for',
     detail:
-      'Shows the plugin, its version and the permissions it asks for, and installs nothing until you approve: --yes grants what it asks for, --grant names exactly what to grant (--grant "" grants none). Exits 2 until you approve. A plugin with a host entry runs trusted code on this machine: it can do anything you can, and its permissions limit only what it asks Astera for; a restricted UI plugin (Plugin API 2, only a ui page) starts no program. The folder is copied into this profile; installing the same plugin again replaces it and asks again. From npm, your npm fetches the package, or on a computer without Node.js an npm Astera fetches once from registry.npmjs.org; no install script runs, and the version installed is the one shown. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+      'Shows the plugin, its version and the permissions it asks for, and installs nothing until you approve: --yes grants what it asks for, --grant names exactly what to grant (--grant "" grants none). Exits 2 until you approve. A plugin with a host entry runs trusted code on this machine: it can do anything you can, and its permissions limit only what it asks Astera for; a restricted UI plugin (Plugin API 2, only a ui page) starts no program. The folder is copied into this profile; installing the same plugin again replaces it and asks again. From npm, your npm fetches the package, or on a computer without Node.js an npm Astera fetches once from registry.npmjs.org; no install script runs, and the version installed is the one shown. From a package file (`plugins pack`), the file is read once and installed as it was shown, by its sha256. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
     flags: [
       { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json' },
       { name: 'npm', value: '<package>', about: 'a plugin published on npm: its name, with @version, @tag or a ^ or ~ range if you like' },
+      { name: 'file', value: '<package.tgz>', about: 'a package `plugins pack` made' },
       { name: 'yes', about: 'approve the permissions the plugin asks for' },
       { name: 'grant', value: '<list>', about: 'approve exactly these permissions, comma separated (empty grants none)' }
     ]
