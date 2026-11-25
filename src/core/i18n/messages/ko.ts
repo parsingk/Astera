@@ -1310,6 +1310,14 @@ export const ko = {
   'update.manual.failed': '설치 파일을 준비하지 못했습니다: {message}',
   'update.manual.noFile': '내려받은 설치 파일이 없습니다',
   'update.manual.quit': '종료하고 옮기기',
+  // 직접 설치 창이 Finder 로 보여 준 복사본을 그 자리에서 더블클릭해, 새 버전이 업데이트 캐시에서 돌고 있을 때
+  // (src/main/manualInstall.ts 의 manualInstallCopyOf). 응용 프로그램 폴더에는 이전 버전이 남아 있다.
+  'update.copy.running': 'Astera 가 업데이트 캐시 폴더에서 실행 중입니다',
+  'update.copy.move': '응용 프로그램 폴더로 옮기기',
+  'update.copy.confirmBody':
+    '지금 열린 Astera 는 직접 설치 때 업데이트 캐시에 풀어 둔 복사본입니다. Dock, Launchpad, Spotlight 는 응용 프로그램 폴더의 Astera 를 열기 때문에, 이대로 두면 다음에는 이전 버전이 열릴 수 있습니다.\n\n옮기면 이 버전을 응용 프로그램 폴더에 설치하고 다시 시작합니다. 응용 프로그램 폴더에 있던 Astera 는 휴지통으로 갑니다.',
+  'update.copy.confirm': '옮기고 다시 시작',
+  'update.copy.failed': '응용 프로그램 폴더로 옮기지 못했습니다: {message}',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': '새 버전 v{version}이 나왔습니다',
   'update.toast.download': '다운로드',

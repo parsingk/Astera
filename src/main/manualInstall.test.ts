@@ -9,9 +9,12 @@ import { promisify } from 'node:util'
 import {
   NOTHING_STAGED,
   extractForManualInstall,
+  installCopyToApplications,
   installRoute,
+  manualInstallCopyOf,
   manualInstallDir,
   reduceStaging,
+  type CopyInstallIO,
   type ManualInstallIO
 } from './manualInstall'
 
@@ -198,3 +201,90 @@ describe.runIf(process.platform === 'darwin' && electronBinary !== null)(
     })
   }
 )
+
+// 직접 설치 창이 Finder 로 보여 주는 것은 업데이트 캐시 안의 복사본이다. 응용 프로그램 폴더로 끌어다 놓는 대신
+// 그 자리에서 더블클릭하면 새 버전이 캐시에서 돌고, 응용 프로그램 폴더에는 이전 버전이 남는다 — Dock 과 Spotlight 가
+// 다음에 여는 것은 그 이전 버전이다(1.5.5 에서 실제로 일어남: /Applications 는 1.4.16 이었다).
+describe('manualInstallCopyOf — 업데이트 캐시의 복사본에서 돌고 있는가', () => {
+  const exe = (bundle: string): string => path.join(bundle, 'Contents', 'MacOS', 'Astera')
+
+  it('astera-updater/manual/<version> 안의 앱이면 그 앱 번들을 돌려준다', () => {
+    const bundle = path.join('/Users/me/Library/Caches', 'astera-updater', 'manual', '1.5.5', 'Astera.app')
+    expect(manualInstallCopyOf(exe(bundle), 'astera-updater')).toBe(bundle)
+  })
+
+  it('응용 프로그램 폴더의 앱은 아니다', () => {
+    expect(manualInstallCopyOf(exe('/Applications/Astera.app'), 'astera-updater')).toBeNull()
+  })
+
+  it('업데이터 캐시가 아닌 manual 폴더는 아니다', () => {
+    expect(manualInstallCopyOf(exe(path.join('/Users/me/Downloads', 'manual', '1.5.5', 'Astera.app')), 'astera-updater')).toBeNull()
+  })
+
+  it('앱 번들 밖의 실행 파일(개발용 Electron 등)은 아니다', () => {
+    expect(manualInstallCopyOf('/Users/me/astera-updater/manual/1.5.5/node_modules/.bin/electron', 'astera-updater')).toBeNull()
+  })
+})
+
+function recordingCopyIO(existing: string[]): { calls: string[]; io: CopyInstallIO } {
+  const calls: string[] = []
+  return {
+    calls,
+    io: {
+      exists: async (p) => existing.includes(p),
+      trash: async (p) => void calls.push(`trash ${p}`),
+      run: async (file, args) => void calls.push(`${file} ${args.join(' ')}`)
+    }
+  }
+}
+
+describe('installCopyToApplications — 복사본을 응용 프로그램 폴더에 설치한다', () => {
+  const bundle = path.join('/c', 'astera-updater', 'manual', '1.5.5', 'Astera.app')
+  const target = path.join('/Apps', 'Astera.app')
+
+  it('있던 앱은 휴지통으로 보내고, 복사하고, quarantine 을 뗀다', async () => {
+    const { calls, io } = recordingCopyIO([target])
+    expect(await installCopyToApplications({ bundle, applicationsDir: '/Apps', io })).toBe(target)
+    expect(calls).toEqual([`trash ${target}`, `ditto ${bundle} ${target}`, `xattr -dr com.apple.quarantine ${target}`])
+  })
+
+  it('있던 앱이 없으면 휴지통에 보낼 것도 없다', async () => {
+    const { calls, io } = recordingCopyIO([])
+    await installCopyToApplications({ bundle, applicationsDir: '/Apps', io })
+    expect(calls[0]).toBe(`ditto ${bundle} ${target}`)
+  })
+})
+
+// 진짜 ditto 로 한 번. 옮기지 않고 복사하는 것이 요점이다: 이 복사본에서 띄운 Host 가 아직 그 경로에서 돌고 있다.
+describe.runIf(process.platform === 'darwin')('installCopyToApplications — 진짜 폴더를 상대로', () => {
+  it('새 앱으로 바꾸고, 캐시의 복사본은 그대로 둔다', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-copy-install-'))
+    try {
+      const bundle = path.join(root, 'astera-updater', 'manual', '9.9.9', 'Astera.app')
+      await fs.mkdir(path.join(bundle, 'Contents', 'MacOS'), { recursive: true })
+      await fs.writeFile(path.join(bundle, 'Contents', 'MacOS', 'Astera'), 'new')
+      const apps = path.join(root, 'Applications')
+      await fs.mkdir(path.join(apps, 'Astera.app', 'Contents', 'MacOS'), { recursive: true })
+      await fs.writeFile(path.join(apps, 'Astera.app', 'Contents', 'MacOS', 'Astera'), 'old')
+      await fs.writeFile(path.join(apps, 'Astera.app', 'Contents', 'old-only'), 'x')
+      const trashed: string[] = []
+      const io: CopyInstallIO = {
+        exists: (p) => fs.access(p).then(() => true, () => false),
+        trash: async (p) => {
+          trashed.push(p)
+          await fs.rm(p, { recursive: true })
+        },
+        run: async (file, args) => void (await execFileAsync(file, args))
+      }
+
+      const installed = await installCopyToApplications({ bundle, applicationsDir: apps, io })
+
+      expect(trashed).toEqual([path.join(apps, 'Astera.app')])
+      expect(await fs.readFile(path.join(installed, 'Contents', 'MacOS', 'Astera'), 'utf8')).toBe('new')
+      await expect(fs.stat(path.join(installed, 'Contents', 'old-only'))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await fs.readFile(path.join(bundle, 'Contents', 'MacOS', 'Astera'), 'utf8')).toBe('new')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+})

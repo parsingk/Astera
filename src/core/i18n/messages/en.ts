@@ -1243,6 +1243,12 @@ export const en: Record<keyof typeof ko, string> = {
   'update.manual.failed': 'Could not prepare the installer: {message}',
   'update.manual.noFile': 'No downloaded installer to use',
   'update.manual.quit': 'Quit and move it',
+  'update.copy.running': 'Astera is running from the update cache folder',
+  'update.copy.move': 'Move to Applications',
+  'update.copy.confirmBody':
+    'This Astera is the copy the manual install unpacked into the update cache. The Dock, Launchpad and Spotlight open the Astera in your Applications folder, so an older version may open next time.\n\nMoving installs this version into your Applications folder and restarts it. The Astera already there goes to the Trash.',
+  'update.copy.confirm': 'Move and restart',
+  'update.copy.failed': "Couldn't move it to the Applications folder: {message}",
   'update.toast.available': 'Version v{version} is available',
   'update.toast.download': 'Download',
   'update.toast.ready': 'Update v{version} is ready',

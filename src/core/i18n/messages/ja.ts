@@ -1190,6 +1190,12 @@ export const ja: Catalog = {
   'update.manual.failed': 'インストーラーを準備できませんでした: {message}',
   'update.manual.noFile': 'ダウンロード済みのインストーラーがありません',
   'update.manual.quit': '終了して移動する',
+  'update.copy.running': 'Astera がアップデートのキャッシュフォルダから実行されています',
+  'update.copy.move': 'アプリケーションフォルダへ移動',
+  'update.copy.confirmBody':
+    'いま開いている Astera は、手動インストールでアップデートのキャッシュに展開したコピーです。Dock、Launchpad、Spotlight はアプリケーションフォルダの Astera を開くため、このままだと次回は古いバージョンが開くことがあります。\n\n移動すると、このバージョンをアプリケーションフォルダにインストールして再起動します。アプリケーションフォルダにあった Astera はゴミ箱に移ります。',
+  'update.copy.confirm': '移動して再起動',
+  'update.copy.failed': 'アプリケーションフォルダへ移動できませんでした: {message}',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': '新しいバージョン v{version} が公開されました',
   'update.toast.download': 'ダウンロード',
