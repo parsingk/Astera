@@ -19,6 +19,7 @@ import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
 import { KubeObjectTab, type KubeTabHost } from './kube/cluster/KubeObjectTab'
+import { HeldTab } from './HeldTab'
 import { useDocumentShown } from '../hooks/useDocumentShown'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
@@ -57,22 +58,6 @@ import {
  *  the one editor and lets App's EditorStateCache carry undo and scroll across. */
 /** A remote session tab's underline: no local account colours it, since its account is the Runtime's. */
 const REMOTE_TAB_COLOR = '#8a8f98'
-
-/** A restored preview or cluster object tab that has read nothing yet (spec W3): what it is, and a button that loads
- *  it. Selecting the tab loads it too (App's selectWorkbenchTab), so this is seen only on a tab that was on screen when
- *  the window opened. */
-function HeldTab({ name, onLoad }: { name: string; onLoad: () => void }): React.JSX.Element {
-  const { t } = useI18n()
-  return (
-    <div className="held-tab">
-      <p className="held-tab-note">{t('layout.held.title')}</p>
-      <p className="held-tab-name">{name}</p>
-      <button type="button" className="primary" onClick={onLoad}>
-        {t('layout.held.load')}
-      </button>
-    </div>
-  )
-}
 
 export function PaneGrid({
   layout,

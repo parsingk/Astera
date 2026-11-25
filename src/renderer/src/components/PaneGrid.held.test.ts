@@ -7,6 +7,8 @@ import path from 'node:path'
 // restored (App.tsx, lib/restoreLayout.ts).
 const here = path.dirname(fileURLToPath(import.meta.url))
 const grid = readFileSync(path.join(here, 'PaneGrid.tsx'), 'utf8')
+// The placeholder itself, shared with the bottom panel's held cluster view (final review I5)
+const held = readFileSync(path.join(here, 'HeldTab.tsx'), 'utf8')
 const app = readFileSync(path.join(here, '../App.tsx'), 'utf8')
 const catalog = (lang: string): string => readFileSync(path.join(here, `../../../core/i18n/messages/${lang}.ts`), 'utf8')
 
@@ -20,9 +22,10 @@ describe('held preview and cluster tabs (spec W3)', () => {
   })
 
   it('says why and offers to load it', () => {
-    expect(grid).toMatch(/t\('layout\.held\.title'\)/)
+    expect(grid).toMatch(/import \{ HeldTab \} from '\.\/HeldTab'/)
+    expect(held).toMatch(/t\('layout\.held\.title'\)/)
     // Screen check: the kube toolbar's 26px icon button wrapped the word over two lines; the app's own button shape
-    expect(grid).toMatch(/<button type="button" className="primary" onClick=\{onLoad\}>\s*\{t\('layout\.held\.load'\)\}/)
+    expect(held).toMatch(/<button type="button" className="primary" onClick=\{onLoad\}>\s*\{t\('layout\.held\.load'\)\}/)
     for (const lang of ['ko', 'en', 'ja', 'es']) {
       expect(catalog(lang)).toMatch(/'layout\.held\.title':/)
       expect(catalog(lang)).toMatch(/'layout\.held\.load':/)

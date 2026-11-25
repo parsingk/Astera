@@ -59,7 +59,8 @@ export function LayoutPresetsDialog({
                 setFull(false)
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') save()
+                // Enter that commits an IME composition (Korean, Japanese) is not a save
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) save()
               }}
             />
             <button className="primary" disabled={trimmed === ''} onClick={save}>

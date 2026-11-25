@@ -13,7 +13,8 @@ describe('the saved layout presets dialog (spec W3)', () => {
   it('names the current layout, with a bound on the name and no blank save', () => {
     expect(src).toMatch(/maxLength=\{MAX_PRESET_NAME\}/)
     expect(src).toMatch(/disabled=\{trimmed === ''\}/)
-    expect(src).toMatch(/if \(e\.key === 'Enter'\) save\(\)/)
+    // Final review M6: Enter that commits a Korean or Japanese composition does not save
+    expect(src).toMatch(/if \(e\.key === 'Enter' && !e\.nativeEvent\.isComposing\) save\(\)/)
   })
 
   it('says when there is no room for one more, and that a same name is replaced', () => {
