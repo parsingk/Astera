@@ -285,12 +285,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     ]
   },
   'plugins-install': {
-    summary: 'install a plugin from a folder or from npm, after you approve what it asks for',
+    summary: 'install a plugin from a folder, from npm or from a package file, after you approve what it asks for',
     detail:
-      'Shows the plugin, its version and the permissions it asks for, and installs nothing until you approve: --yes grants what it asks for, --grant names exactly what to grant (--grant "" grants none). Exits 2 until you approve. A plugin with a host entry runs trusted code on this machine: it can do anything you can, and its permissions limit only what it asks Astera for; a restricted UI plugin (Plugin API 2, only a ui page) starts no program. The folder is copied into this profile; installing the same plugin again replaces it and asks again. From npm, your npm fetches the package, or on a computer without Node.js an npm Astera fetches once from registry.npmjs.org; no install script runs, and the version installed is the one shown. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+      'Shows the plugin, its version and the permissions it asks for, and installs nothing until you approve: --yes grants what it asks for, --grant names exactly what to grant (--grant "" grants none). Exits 2 until you approve. A plugin with a host entry runs trusted code on this machine: it can do anything you can, and its permissions limit only what it asks Astera for; a restricted UI plugin (Plugin API 2, only a ui page) starts no program. The folder is copied into this profile; installing the same plugin again replaces it and asks again. From npm, your npm fetches the package, or on a computer without Node.js an npm Astera fetches once from registry.npmjs.org; no install script runs, and the version installed is the one shown. From a package file (`plugins pack`), the file is read once and installed as it was shown, by its sha256. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
     flags: [
       { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json' },
       { name: 'npm', value: '<package>', about: 'a plugin published on npm: its name, with @version, @tag or a ^ or ~ range if you like' },
+      { name: 'file', value: '<package.tgz>', about: 'a package `plugins pack` made' },
       { name: 'yes', about: 'approve the permissions the plugin asks for' },
       { name: 'grant', value: '<list>', about: 'approve exactly these permissions, comma separated (empty grants none)' }
     ]
@@ -317,6 +318,28 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'set', value: '<key=value>', about: 'set a setting; repeat for more' },
       { name: 'unset', value: '<key>', about: 'go back to the default; repeat for more' },
       { name: 'stdin', value: '<key>', about: 'set that setting to what standard input holds (one trailing newline dropped)' }
+    ]
+  },
+  'plugins-validate': {
+    summary: 'check a plugin folder the way an install would, naming each problem by its code',
+    detail:
+      'Starts no Host and changes nothing: it reads the folder, checks its package.json, its links and node_modules layout, and that its entry and ui are files in it. Exits 0 when it would install (with a warning when this Astera would not run it), 1 naming each problem (code, the manifest field it is about, the sentence) with the problems in the details, 2 when the folder is not there.',
+    flags: [{ name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true }]
+  },
+  'plugins-init': {
+    summary: 'start a plugin: a new folder from a template, UI only, a Host plugin, a completion check or a job source',
+    detail:
+      'Starts no Host and installs nothing: it writes the folder <name> (the last part of a scoped name) where you run it, with a package.json named <name>, the template\'s files and a README, in plain JavaScript with no dependency. A folder that already holds files is 6 and nothing is written.',
+    operand: { name: 'name', value: '<name>', about: 'the plugin\'s npm name, as its package.json will hold it' },
+    flags: [{ name: 'template', value: '<kind>', about: 'ui, host, check or source', required: true }]
+  },
+  'plugins-pack': {
+    summary: 'make a package of a plugin folder that validates: the same bytes every time, with its checksums',
+    detail:
+      'Starts no Host and installs nothing. Refused with 1, as validate refuses, when the folder would not install, when install --file would refuse the package it made (it is read back first), or when a dependency would not be in it. What goes in follows npm: `files` chooses the files (package.json, a README, a LICENSE, the entry and the ui always), and node_modules stays out but for what bundleDependencies names, with what those need. Writes <name>-<version>.tgz beside the folder (npm\'s layout and file name), or where --out says, never inside the folder; the same Astera packing the same files gives the same bytes. Leaves out, and names, a .git folder and OS junk, credentials anywhere (.env files but .env.example, .envrc, .npmrc, .netrc, .pypirc, .yarnrc.yml, .git-credentials, SSH keys, .ssh and .aws), and outside node_modules keys, certificates and an old package at the top. Answers its sha256 and its npm integrity (sha512). `plugins install --file` installs it.',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'out', value: '<file>', about: 'where to write the package (default: beside the folder)' }
     ]
   },
   'plugins-doctor': {

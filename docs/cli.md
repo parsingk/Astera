@@ -609,6 +609,7 @@ astera plugins install --path ./my-plugin            shows what it is and asks f
 astera plugins install --path ./my-plugin --yes      approves what it asks for and installs it
 astera plugins install --path ./my-plugin --grant jobs.read   approves only jobs.read
 astera plugins install --npm @acme/astera-jira --yes            the same, for a plugin published on npm
+astera plugins install --file ./my-plugin-0.1.0.tgz --yes        the same, for a package plugins pack made
 astera plugins list                                  what is installed, its status, what it was granted and what it offers
 astera plugins disable --id <pluginId>               keep it installed but do not run it
 astera plugins remove --id <pluginId>                uninstall it and delete its copy
@@ -617,7 +618,29 @@ astera plugins doctor --id <pluginId>                what could keep it from run
 astera plugins settings --id <pluginId>              its settings; a secret one only as set or not
 astera plugins configure --id <pluginId> --set baseUrl=https://jira.example.com
 printf %s "$TOKEN" | astera plugins configure --id <pluginId> --stdin token   a secret, off the command line
+astera plugins validate --path ./my-plugin           checks the folder as an install would; exit 1 naming each problem
+astera plugins init my-plugin --template ui          writes ./my-plugin: ui, host, check or source
+astera plugins pack --path ./my-plugin               writes my-plugin-0.1.0.tgz beside it, with its sha256
 ```
+
+`plugins validate`, `plugins init` and `plugins pack` are for whoever writes a plugin: they start no Host and change
+nothing in Astera, so they work without the app and inside an agent session.
+
+`validate` names each problem by a code (`MANIFEST_INVALID`, `ENTRY_MISSING`, `UI_MISSING`, `COPY_REFUSED`,
+`LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), the manifest field it is about when there is one, and the sentence an install
+would give. A plugin this Astera would not run, which an install still takes, is a warning (`INCOMPATIBLE`), not a
+problem.
+
+`init` writes a new folder from a template (`ui`, a panel; `host`, a plugin Astera runs; `check`, a completion check;
+`source`, a job source) and refuses a folder that already holds files.
+
+`pack` makes a package of a folder that validates: the same bytes each time the same Astera packs it (npm's layout,
+entries in order, one fixed time). What goes in follows npm: `files` in package.json chooses the files (package.json, a
+README, a LICENSE and the entry and ui always go in), and `node_modules` stays out but for what `bundleDependencies`
+names. A dependency the package would not carry is refused (`DEPENDENCIES_NOT_PACKED`), since `install --file` fetches
+nothing. It reads the package back as `install --file` will before writing it, leaves out and names `.git`, OS junk and
+credentials anywhere (`.env` but `.env.example`, `.npmrc`, `.netrc`, SSH keys and the like) and, outside bundled
+packages, keys and certificates, and answers its sha256 and npm integrity.
 
 **A plugin with a host entry runs trusted code on this machine.** It can do anything you can, and its permissions
 limit only what it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program. A
@@ -749,7 +772,7 @@ astera runtimes expect --id <runtimeId|name> [--add <ids>] [--remove <ids>]
 
 astera plugins list
 astera plugins get     --id <pluginId>
-astera plugins install [--path <folder>] [--npm <package>] [--yes] [--grant <list>]
+astera plugins install [--path <folder>] [--npm <package>] [--file <package.tgz>] [--yes] [--grant <list>]
 astera plugins enable  --id <pluginId>
 astera plugins disable --id <pluginId>
 astera plugins remove  --id <pluginId>
@@ -757,6 +780,9 @@ astera plugins logs    --id <pluginId> [--lines <n>]
 astera plugins doctor  --id <pluginId>
 astera plugins settings  --id <pluginId>
 astera plugins configure --id <pluginId> [--set <key=value>] [--unset <key>] [--stdin <key>]
+astera plugins validate --path <folder>
+astera plugins init <name> --template <kind>
+astera plugins pack --path <folder> [--out <file>]
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

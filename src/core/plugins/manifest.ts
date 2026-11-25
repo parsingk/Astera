@@ -12,6 +12,10 @@ export const PLUGIN_API_VERSIONS = ['1', '2'] as const
 /** Spec §10's P0 capability types. Which of them this Astera serves is the Host's to say (design P8). */
 export const PLUGIN_CAPABILITIES = ['event', 'job-source', 'completion-check', 'notification'] as const
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number]
+/** The plugin capabilities this Astera serves (design P8): `event` and `notification` from plugin Phase 3, `job-source`
+ *  from Phase 4, `completion-check` from Phase 5. A plugin that names another one installs and does not run;
+ *  docs/plugins.md names each of those as not yet (pluginsDoc.test.ts). */
+export const PLUGIN_SERVED_CAPABILITIES: readonly PluginCapability[] = ['event', 'notification', 'job-source', 'completion-check']
 
 /** Spec §11's permissions, completed so that every SDK command has exactly one (design §2). */
 export const PLUGIN_PERMISSIONS = [

@@ -38,7 +38,7 @@ export async function pluginsCommand(a: {
   let answer: PluginsAnswer
   switch (cmd) {
     case 'plugins-inspect':
-      return manager.inspect({ path: args.path, npm: args.npm })
+      return manager.inspect({ path: args.path, npm: args.npm, ...(args.file !== undefined ? { file: args.file } : {}) })
     case 'plugins-list':
       return manager.list()
     case 'plugins-get':
@@ -56,6 +56,7 @@ export async function pluginsCommand(a: {
       answer = await manager.install({
         ...(args.path !== undefined ? { path: args.path } : {}),
         ...(args.npm !== undefined ? { npm: args.npm } : {}),
+        ...(args.file !== undefined ? { file: args.file } : {}),
         grant: args.grant,
         ...(args.expect !== undefined ? { expect: args.expect } : {})
       })

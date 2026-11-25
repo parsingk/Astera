@@ -181,6 +181,35 @@ describe('humanFor', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')
   })
 
+  // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted
+  it('plugins validate names the plugin, its version and trust when nothing is wrong', () => {
+    expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'hello', name: 'hello', version: '0.1.0', trust: 'restricted-ui' }, problems: [] })).toBe(
+      'hello 0.1.0, restricted UI: no problem found'
+    )
+    expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'run', name: 'run', version: '1.0.0', trust: 'trusted' }, problems: [] })).toBe(
+      'run 1.0.0, trusted code: no problem found'
+    )
+    // What an install takes but this Astera would not run is a warning line under it
+    expect(
+      humanFor('plugins-validate', { valid: true, plugin: { id: 'run', version: '1.0.0', trust: 'trusted' }, problems: [], warnings: [{ code: 'INCOMPATIBLE', message: 'the plugin needs Astera >=9.0.0; this is 1.6.0' }] })
+    ).toBe(['run 1.0.0, trusted code: no problem found', 'warning INCOMPATIBLE: the plugin needs Astera >=9.0.0; this is 1.6.0'].join(String.fromCharCode(10)))
+  })
+
+  it('plugins init says where it wrote the plugin, then what to run next', () => {
+    expect(humanFor('plugins-init', { folder: '/w/my-plugin', template: 'ui', files: [], next: ['astera plugins validate --path /w/my-plugin', 'astera plugins install --path /w/my-plugin'] })).toBe(
+      ['wrote /w/my-plugin (ui)', 'next: astera plugins validate --path /w/my-plugin', 'next: astera plugins install --path /w/my-plugin'].join(String.fromCharCode(10))
+    )
+  })
+
+  it('plugins pack says where the package is, its checksum, and what it left out', () => {
+    expect(humanFor('plugins-pack', { file: '/w/a-0.1.0.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: ['.env'] })).toBe(
+      ['wrote /w/a-0.1.0.tgz (4 files, 900 bytes)', 'sha256 ab12', 'left out: .env'].join(String.fromCharCode(10))
+    )
+    expect(humanFor('plugins-pack', { file: '/w/a-0.1.0.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [] })).not.toContain('left out')
+    expect(humanFor('plugins-pack', { file: '/w/a.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [], skipped: 1 })).toContain('not packed: 1 file outside files or in node_modules')
+    expect(humanFor('plugins-pack', { file: '/w/a.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [], skipped: 3 })).toContain('not packed: 3 files outside files or in node_modules')
+  })
+
   it('plugins doctor prints one line per check, a failure in capitals', () => {
     expect(
       humanFor('plugins-doctor', {

@@ -388,7 +388,10 @@ const STEPS: Record<
             // ends on its own after the grace, so read the Run; end the coordinator now if it must go.
             cmd === 'runs-stop' && typeof details.runId === 'string'
             ? ['astera runs get --id <runId>', 'astera run-coordinator-stop --run <runId>']
-            : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
+            : // `plugins init` refused a folder that holds files: another name or folder fixes it, no command does
+              cmd === 'plugins-init'
+              ? []
+              : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).
   //

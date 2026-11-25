@@ -181,7 +181,8 @@ export const NOUNS = {
   runtimes: ['add', 'list', 'remove', 'get', 'ping', 'expect'],
   // **Answered by the Host's plugin manager** (plugin runtime design P5): this machine's app and CLI install, list and
   // switch plugins. `install` asks the Host to inspect the folder first and needs --yes or --grant (cli/plugins.ts).
-  plugins: ['install', 'list', 'get', 'enable', 'disable', 'remove', 'logs', 'doctor', 'settings', 'configure'],
+  // `validate`, `init` and `pack` are the plugin author's, answered in the CLI process without a Host (cli/pluginDev.ts).
+  plugins: ['install', 'list', 'get', 'enable', 'disable', 'remove', 'logs', 'doctor', 'settings', 'configure', 'validate', 'init', 'pack'],
   // **The job sources** (plugin Phase 4 J21): GitHub issues and the job-source plugins, a page of a source's items, one
   // item read whole. Answered by the Host before handleCommand's switch (src/core/orchestration/commandSources.ts).
   sources: ['list', 'items', 'show']
@@ -192,7 +193,8 @@ export const NOUNS = {
  *  refused as before. cliUsage.ts prints it in the usage line, and cliUsage.test.ts holds the two to the same names. */
 export const OPERANDS: Readonly<Record<string, string>> = {
   'agent-profiles-audit-ignore': 'key',
-  'agent-profiles-audit-unignore': 'key'
+  'agent-profiles-audit-unignore': 'key',
+  'plugins-init': 'name'
 }
 
 /** The argument `cmd` takes as its one loose word, or undefined. Guarded like `verbsOf`: the name is whatever was typed. */

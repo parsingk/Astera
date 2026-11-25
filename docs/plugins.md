@@ -615,6 +615,33 @@ move, or bundle. Keep the package small with `files` in `package.json`. Astera r
 scopes, tokens) applies; without it, Astera fetches an npm of its own ([the `astera` command](cli.md#plugins) says
 how).
 
+### From a package file
+
+`astera plugins pack --path <folder>` makes a package of a folder that validates: npm's rules for what goes in, npm's
+layout and file name
+(`<name>-<version>.tgz`, beside the folder unless `--out` says where), the same bytes each time the same Astera packs
+it, and its sha256 and npm integrity in the answer, to publish beside it. It reads the package back as `install --file`
+will before writing it, so a package it writes is one Astera installs. It leaves out, and names, a `.git` folder and OS
+junk (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._` files, `npm-debug.log`), credentials anywhere (`.env` files but
+`.env.example`, `.envrc`, `.npmrc`, `.netrc`, `.pypirc`, `.yarnrc.yml`, `.git-credentials`, SSH keys, whatever is under
+`.ssh` or `.aws`), and outside `node_modules` keys and certificates and an old package at the top.
+What goes in follows npm. `files` in package.json chooses the files, as npm reads it (a folder, a glob, a later `!`
+taking files back out), and package.json, a README, a LICENSE and the `astera` entry and ui always go in; list a ui's
+folder in `files` so its scripts and styles go with its page. `node_modules` stays out but for the packages
+`bundleDependencies` names (or every dependency for `"bundleDependencies": true`) and the packages those need. Since
+installing from the file fetches nothing, a package missing one of its `dependencies` is refused
+(`DEPENDENCIES_NOT_PACKED`): bundle the plugin into its entry (see below) and keep what the bundle holds in
+`devDependencies`, or list the dependency in `bundleDependencies`.
+
+```sh
+astera plugins pack --path ./my-plugin
+astera plugins install --file ./my-plugin-0.1.0.tgz --yes
+```
+
+Installing from the file reads it once: the Host extracts that copy with the limits an npm package has (no entry that
+leaves the package, no link or device, at most 20,000 entries and 256 MiB), shows what it holds with its sha256, and
+installs only those bytes. No npm runs and no dependency is fetched.
+
 ### TypeScript, and bundling
 
 Install the plugin SDK for its types, as a dev dependency. npm installs `@astera-app/client` beside it, whose types
@@ -663,7 +690,20 @@ Bundle to CommonJS, as here, and point `astera.entry` at `dist/index.cjs`. Many 
 
 ## Developing a plugin
 
-Edit, install again, read the log:
+`astera plugins init <name> --template <kind>` writes a starting folder: `ui` (a panel, Plugin API 2), `host` (a
+plugin Astera runs), `check` (a completion check) or `source` (a job source), each the smallest that installs, in plain
+JavaScript with no dependency. `astera plugins validate --path <folder>` checks a folder the way an install would and
+names each problem by a code (`MANIFEST_INVALID` with the field it is about, `ENTRY_MISSING`, `UI_MISSING`,
+`COPY_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), exit 1 when there is one; that this Astera would not run it is
+a warning (`INCOMPATIBLE`), since an install still takes it. Neither starts a Host
+or changes anything in Astera.
+
+```sh
+astera plugins init my-plugin --template host
+astera plugins validate --path ./my-plugin
+```
+
+Then edit, install again, read the log:
 
 ```sh
 astera plugins install --path . --yes

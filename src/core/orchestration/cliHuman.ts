@@ -462,6 +462,10 @@ function runtimeDetailText(d: RuntimeDetail): string {
 /** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
  *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
  *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
+/** A plugin check's warnings, one line each: what an install takes but this Astera would not run. */
+const warningLines = (data: Record<string, unknown>): string[] =>
+  (Array.isArray(data.warnings) ? (data.warnings as Record<string, unknown>[]) : []).map((w) => `warning ${String(w.code)}: ${String(w.message)}`)
+
 export function humanFor(
   cmd: string,
   data: Record<string, unknown>,
@@ -609,6 +613,20 @@ export function humanFor(
       const reason = typeof data.reason === 'string' ? `: ${data.reason}` : ''
       const next = data.status === 'failed' ? `; start it again with astera plugins enable --id ${str(data.id)}` : ''
       return `${rows}\n(${data.status}${reason}${next})`
+    }
+    // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted; problems are the error's
+    case 'plugins-validate': {
+      const p = (typeof data.plugin === 'object' && data.plugin !== null ? data.plugin : {}) as Record<string, unknown>
+      return [`${str(p.id)} ${str(p.version)}, ${p.trust === 'trusted' ? 'trusted code' : 'restricted UI'}: no problem found`, ...warningLines(data)].join('\n')
+    }
+    // A new plugin folder: where it is, then what to run next
+    case 'plugins-init':
+      return [`wrote ${str(data.folder)} (${str(data.template)})`, ...(Array.isArray(data.next) ? (data.next as unknown[]).map((l) => `next: ${str(l)}`) : [])].join('\n')
+    // A package: where it is, its checksum, and what was left out of it
+    case 'plugins-pack': {
+      const left = Array.isArray(data.leftOut) ? (data.leftOut as unknown[]).map(str) : []
+      const skipped = typeof data.skipped === 'number' && data.skipped > 0 ? [`not packed: ${data.skipped} ${data.skipped === 1 ? 'file' : 'files'} outside files or in node_modules`] : []
+      return [`wrote ${str(data.file)} (${str(data.files)} files, ${str(data.bytes)} bytes)`, `sha256 ${str(data.sha256)}`, ...(left.length > 0 ? [`left out: ${left.join(', ')}`] : []), ...skipped, ...warningLines(data)].join('\n')
     }
     case 'plugins-doctor':
       return columns(

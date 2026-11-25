@@ -23,6 +23,7 @@ import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProto
 import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
+import { pluginDevCommand } from './pluginDev'
 import { agentProfilesCommand } from './agentProfiles'
 import { auditCommand, policiesCommand } from './audit'
 import { readExtensionRegistry } from '../core/extensions/registry'
@@ -80,6 +81,8 @@ import { helloLine, verboseLog, type VerboseLog } from '../core/orchestration/cl
 /** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
 const CLI_VERSION = typeof __ASTERA_VERSION__ === 'string' ? __ASTERA_VERSION__ : '0.0.0'
+/** The plugin author's commands, answered in this process without a Host (cli/pluginDev.ts). */
+const PLUGIN_DEV_COMMANDS: readonly string[] = ['plugins-validate', 'plugins-init', 'plugins-pack']
 import {
   DEFAULT_WAIT_TIMEOUT_MS
 } from '../core/orchestration/types'
@@ -1453,6 +1456,19 @@ export async function main(): Promise<void> {
         message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
       })
     const done = await extensionsCommand({ cmd: parsed.cmd, profileDir })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
+    process.exit(0)
+  }
+
+  // The plugin author's commands are answered here too, from the author's folder (cli/pluginDev.ts), no Host.
+  if (PLUGIN_DEV_COMMANDS.includes(parsed.cmd)) {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await pluginDevCommand({ cmd: parsed.cmd, args, cwd: process.cwd(), version: CLI_VERSION })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
     process.exit(0)
