@@ -50,4 +50,13 @@ describe('recent actions', () => {
     expect(readRecentActions(known)).toEqual([])
     expect(() => rememberAction('run.run', known)).not.toThrow()
   })
+
+  // A plugin's command is remembered while the palette knows it, and dropped once its plugin is gone
+  it('keeps a plugin command’s key while it is known', () => {
+    vi.stubGlobal('localStorage', memoryStorage())
+    const withPlugin = [...known, 'hello-panel:open'] as const
+    rememberAction('hello-panel:open', withPlugin)
+    expect(readRecentActions(withPlugin)[0]).toBe('hello-panel:open')
+    expect(readRecentActions(known)).not.toContain('hello-panel:open')
+  })
 })

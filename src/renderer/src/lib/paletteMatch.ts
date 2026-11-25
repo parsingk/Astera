@@ -10,14 +10,12 @@
 // Within a tier, recent actions come first (most recent first), then the list's own order. A recent action never
 // jumps a better tier. An empty query lists everything the same way.
 
-import type { ActionId } from '../../../core/keys/binding'
-
 const WORD_SPLIT = /[\s/·()\-,]+/
 
-export function rankActions<T extends { id: ActionId; title: string }>(
+export function rankActions<T extends { id: string; title: string }>(
   rows: readonly T[],
   query: string,
-  recent: readonly ActionId[]
+  recent: readonly string[]
 ): T[] {
   const needle = query.trim().toLowerCase()
   const tiers: T[][] = [[], [], [], []]
@@ -31,7 +29,7 @@ export function rankActions<T extends { id: ActionId; title: string }>(
     else continue
     tiers[tier].push(row)
   }
-  const rank = (id: ActionId): number => {
+  const rank = (id: string): number => {
     const at = recent.indexOf(id)
     return at < 0 ? recent.length : at
   }

@@ -75,4 +75,19 @@ describe('createActionRegistry', () => {
     expect(reg.run('session.new')).toEqual({ ok: false, reason: 'action.blocked.noHandler' })
     expect(pluginRun).not.toHaveBeenCalled()
   })
+
+  // Phase 2 step 3 (ADR-007, ADR-008): a plugin's command is registered under its contribution key, owned by the plugin
+  it('holds a plugin’s command under its contribution key, and drops only that plugin’s on disposeOwner', () => {
+    const reg = createActionRegistry()
+    const open = vi.fn()
+    reg.register('core', 'sidebar.jobs', { run: vi.fn() })
+    reg.register('hello-panel', 'hello-panel:open', { run: open })
+    reg.register('other', 'other:open', { run: vi.fn() })
+    expect(reg.run('hello-panel:open')).toEqual({ ok: true })
+    expect(open).toHaveBeenCalledTimes(1)
+    reg.disposeOwner('hello-panel')
+    expect(reg.state('hello-panel:open')).toEqual({ ok: false, reason: 'action.blocked.noHandler' })
+    expect(reg.state('other:open')).toEqual({ ok: true })
+    expect(reg.state('sidebar.jobs')).toEqual({ ok: true })
+  })
 })

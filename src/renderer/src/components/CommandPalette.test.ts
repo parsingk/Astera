@@ -169,8 +169,19 @@ describe('useQuickOpenFiles', () => {
 describe('the recent list and hidden actions', () => {
   const app = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../App.tsx'), 'utf8')
   it('remembers against every action, not only those shown', () => {
-    expect(src).toMatch(/actionIds: readonly ActionId\[\]/)
+    expect(src).toMatch(/actionIds: readonly RegistryId\[\]/)
     expect(src).toMatch(/const known = actionIds/)
-    expect(app).toMatch(/actionIds=\{ACTIONS\.map\(\(a\) => a\.id\)\}/)
+    // Every core action, and the plugin commands last read (Phase 2 step 3)
+    expect(app).toMatch(/actionIds=\{\[\.\.\.ACTIONS\.map\(\(a\) => a\.id\), \.\.\.pluginCommands\.map\(\(c\) => c\.key\)\]\}/)
+  })
+})
+
+// Phase 2 step 3: an entry carries its title as the caller worded it (a core action's i18n text, a plugin command's
+// manifest title) and, for a plugin's command, the plugin's name, drawn dimmed after the title.
+describe('the palette with plugin commands', () => {
+  it('ranks the titles it is given and draws a plugin row’s source', () => {
+    expect(src).toMatch(/rankActions\(entries, text, recent\)/)
+    expect(src).not.toContain('t(e.descKey')
+    expect(src).toMatch(/\{row\.source && <span className="palette-source">\{row\.source\}<\/span>\}/)
   })
 })

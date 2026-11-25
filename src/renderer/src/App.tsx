@@ -10,7 +10,7 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { type BrowserTab, type FileTab, type RecordTab } from './components/WorkbenchTabs'
+import { type BrowserTab, type FileTab, type PluginPanelTabInfo, type RecordTab } from './components/WorkbenchTabs'
 import { BrowserPane, type BrowserStatePatch } from './components/BrowserPane'
 import { AppMirrorPane } from './components/AppMirrorPane'
 import type { AgentPointerState } from './components/agentOverlay'
@@ -157,10 +157,11 @@ import {
   type PaneLeaf,
   type PaneNode
 } from '../../core/panes/tree'
-import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, pluginTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { panelCommands, pluginRowsOf, type PanelCommand } from '../../core/plugins/pluginRows'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
-import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
+import { mediaTabsUnder, placeKubeTab, placeMediaTab, placePluginTab, placeTab } from '../../core/panes/place'
 import { asBottomTab, mergeTabs, restoreTree, toSaved, type SavedPanels } from '../../core/panes/savedLayout'
 import { applySaved, presetPanels, presetTree, withPreset, withoutPreset, type PresetId, type SavedPreset } from '../../core/panes/presets'
 import { clearLayout, readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
@@ -754,6 +755,10 @@ export default function App(): React.JSX.Element {
   const actionImplRef = useRef<Record<ActionId, ActionHandler> | null>(null)
   // The palette box, open on actions ('>'), on files ('') or on text in files ('%'); null when closed (CommandPalette).
   const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
+  /** The commands plugins contribute, as the Host last listed them (read each time the palette opens). */
+  const [pluginCommands, setPluginCommands] = useState<PanelCommand[]>([])
+  /** openPluginPanel as of the latest render, for the registry's plugin delegates registered by an effect. */
+  const openPluginPanelRef = useRef<(c: PanelCommand) => void>(() => {})
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)
   /** A piece of the workbench on its way to an agent (spec W4), shown in ContextPreview until attached or dropped. A
@@ -985,6 +990,9 @@ export default function App(): React.JSX.Element {
   const [mediaNonces, setMediaNonces] = useState<Record<string, number>>({})
   /** Preview (browser) tabs. Renderer-only, like fileTabs; the page state lives in the mounted webview */
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([])
+  /** Plugin panel tabs (Phase 2 step 3): what each draws while held and the project its panel was opened in. The page
+   *  lives in the panel's guest, which main hosts (main/plugins/panelGuests.ts). */
+  const [pluginTabs, setPluginTabs] = useState<PluginPanelTabInfo[]>([])
   const browserTabsRef = useRef(browserTabs)
   browserTabsRef.current = browserTabs
   /** Browser tab id → loading. Chip state, not tab identity */
@@ -1675,6 +1683,32 @@ export default function App(): React.JSX.Element {
     return () => disposers.forEach((dispose) => dispose())
   }, [actionRegistry])
 
+  // The commands plugins contribute, read each time the palette opens (Phase 2 step 3): the Host's plugin list has no
+  // change event, and the palette is where they are offered. An answer that arrives after the palette closed or opened
+  // again is dropped; a list that cannot be read keeps the last one.
+  useEffect(() => {
+    if (paletteOpen === null) return
+    let current = true
+    void window.api.plugins
+      .list()
+      .then((r) => {
+        if (current && r.ok) setPluginCommands(panelCommands(pluginRowsOf(r.body)))
+      })
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [paletteOpen])
+
+  // Each plugin command in the registry under its plugin as owner and its contribution key as id (ADR-007, ADR-008),
+  // registered again whenever the list changes: a plugin turned off or removed loses its commands.
+  useEffect(() => {
+    const disposers = pluginCommands.map((c) =>
+      actionRegistry.register(c.pluginId, c.key, { run: () => openPluginPanelRef.current(c) })
+    )
+    return () => disposers.forEach((dispose) => dispose())
+  }, [actionRegistry, pluginCommands])
+
   useEffect(() => {
     // Rolling: swap the session in place in the same tab, plus the progress banner state
     const offRolled = window.api.on('session:rolled', ({ oldSessionId, info }) => {
@@ -2042,6 +2076,23 @@ export default function App(): React.JSX.Element {
     if (placed.paneId) setActivePaneId(placed.paneId)
   }
 
+  /** Opens a plugin's panel in its tab, or focuses the tab already showing it (placePluginTab; Phase 2 step 3). The
+   *  tab keeps the project open now: its page may ask which project it was opened in (main/plugins/panelGuests.ts).
+   *  Running the command is the person asking for it, so a held tab of it loads. */
+  const openPluginPanel = (c: { pluginId: string; panelId: string; title: string; pluginName: string }): void => {
+    const id = pluginTab(c.pluginId, c.panelId)
+    releaseTab(id)
+    setPluginTabs((prev) =>
+      prev.some((x) => x.id === id)
+        ? prev
+        : [...prev, { id, pluginId: c.pluginId, panelId: c.panelId, title: c.title, pluginName: c.pluginName, projectRoot: currentProject ?? '' }]
+    )
+    const placed = placePluginTab(layoutRef.current, c.pluginId, c.panelId, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+  openPluginPanelRef.current = openPluginPanel
+
   /** A resolved path link (a console, a terminal, a SendUserFile row): media goes to the viewer, any
    *  other file to an ordinary file tab at the line the output named. */
   const openLinkedPath = (path: string, at?: { line?: number; col?: number }): void => {
@@ -2255,6 +2306,12 @@ export default function App(): React.JSX.Element {
         setKubeEditAsks(({ [tabId]: _n, ...rest }) => rest)
         dropTabFromTree(tabId)
       })()
+      return
+    }
+    if (ref.kind === 'plugin') {
+      // A page in its guest, not a process: dropping the tab unmounts its webview, which ends the guest (ADR-008 §6)
+      setPluginTabs((prev) => prev.filter((x) => x.id !== tabId))
+      dropTabFromTree(tabId)
       return
     }
     if (ref.kind === 'app') {
@@ -6904,14 +6961,21 @@ export default function App(): React.JSX.Element {
           initialQuery={paletteOpen.query}
           projectRoot={currentProject}
           restoreTo={paletteRestoreRef.current}
-          actionIds={ACTIONS.map((a) => a.id)}
-          entries={ACTIONS.filter((a) => a.id !== 'palette.open').flatMap((a) => {
-            const state = actionRegistry.state(a.id)
-            // A feature turned off in Settings > General (Phase 1 gate) is not offered, rather than offered as blocked
-            if (!state.ok && state.reason === 'action.blocked.featureOff') return []
-            const chord = bindingsRef.current[a.id]?.[0]
-            return [{ id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }]
-          })}
+          actionIds={[...ACTIONS.map((a) => a.id), ...pluginCommands.map((c) => c.key)]}
+          entries={[
+            ...ACTIONS.filter((a) => a.id !== 'palette.open').flatMap((a) => {
+              const state = actionRegistry.state(a.id)
+              // A feature turned off in Settings > General (Phase 1 gate) is not offered, rather than offered as blocked
+              if (!state.ok && state.reason === 'action.blocked.featureOff') return []
+              const chord = bindingsRef.current[a.id]?.[0]
+              return [{ id: a.id, title: t(a.descKey as MessageKey), chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }]
+            }),
+            // The plugins' commands, after the core actions and named by their plugin (Phase 2 step 3)
+            ...pluginCommands.map((c) => {
+              const state = actionRegistry.state(c.key)
+              return { id: c.key, title: c.title, source: c.pluginName, blocked: state.ok ? null : state.reason }
+            })
+          ]}
           onRun={(id) => {
             setPaletteOpen(null)
             actionRegistry.run(id)

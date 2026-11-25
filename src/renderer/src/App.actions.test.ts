@@ -108,4 +108,29 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   it('keeps no ref that existed only for the old listener', () => {
     expect(src).not.toMatch(/(splitActiveRef|cliRef|runStartRef|runStopSelectionRef|runRerunSelectedRef)/)
   })
+
+  // Phase 2 step 3 (ADR-007, ADR-008): a plugin's commands are read from the Host's list each time the palette opens,
+  // registered under the plugin as owner and their contribution key as id, listed beside the core actions with the
+  // plugin's name, and run through the registry like them.
+  it('lists and runs the commands plugins contribute through the registry', () => {
+    const load = src.slice(src.indexOf('// The commands plugins contribute, read each time the palette opens'))
+    expect(load).toMatch(/if \(paletteOpen === null\) return[\s\S]*?window\.api\.plugins\s*\.list\(\)[\s\S]*?if \(current && r\.ok\) setPluginCommands\(panelCommands\(pluginRowsOf\(r\.body\)\)\)/)
+    expect(src).toMatch(/pluginCommands\.map\(\(c\) =>\s*actionRegistry\.register\(c\.pluginId, c\.key, \{ run: \(\) => openPluginPanelRef\.current\(c\) \}\)\s*\)/)
+    expect(src).toMatch(/actionIds=\{\[\.\.\.ACTIONS\.map\(\(a\) => a\.id\), \.\.\.pluginCommands\.map\(\(c\) => c\.key\)\]\}/)
+    expect(src).toMatch(/\.\.\.pluginCommands\.map\(\(c\) => \{\s*const state = actionRegistry\.state\(c\.key\)\s*return \{ id: c\.key, title: c\.title, source: c\.pluginName, blocked: state\.ok \? null : state\.reason \}/)
+  })
+
+  // A plugin tab is never a session: closing it drops its record and its tab, before the session fallthrough
+  it('closes a plugin panel tab without reaching closeSession', () => {
+    const close = src.slice(src.indexOf('const closeWorkbenchTab = (tabId: string): void => {'), src.indexOf('closeWorkbenchTabRef.current = closeWorkbenchTab'))
+    expect(close).toMatch(/if \(ref\.kind === 'plugin'\) \{\s*(?:\/\/[^\n]*\n\s*)*setPluginTabs\(\(prev\) => prev\.filter\(\(x\) => x\.id !== tabId\)\)\s*dropTabFromTree\(tabId\)\s*return\s*\}/)
+    expect(close.indexOf("ref.kind === 'plugin'")).toBeLessThan(close.indexOf('closeSession(ref.id)'))
+  })
+
+  it('opens a plugin panel in its tab, recorded with the project it was opened in', () => {
+    expect(src).toMatch(/const openPluginPanel = \(c: \{ pluginId: string; panelId: string; title: string; pluginName: string \}\): void => \{\s*const id = pluginTab\(c\.pluginId, c\.panelId\)\s*releaseTab\(id\)/)
+    expect(src).toMatch(/placePluginTab\(layoutRef\.current, c\.pluginId, c\.panelId, \{ activePaneId: activePaneIdRef\.current \}\)/)
+    expect(src).toMatch(/projectRoot: currentProject \?\? ''/)
+    expect(src).toMatch(/openPluginPanelRef\.current = openPluginPanel/)
+  })
 })

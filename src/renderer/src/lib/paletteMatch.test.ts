@@ -48,4 +48,12 @@ describe('rankActions', () => {
   it('returns nothing for a query nothing contains', () => {
     expect(rankActions(rows, 'zzz', [])).toEqual([])
   })
+
+  // A plugin's command (Phase 2 step 3) is ranked by its title like any action, and by its key as the id tier
+  it('ranks a plugin command by its title, then by its contribution key', () => {
+    const mixed = [...rows, { id: 'hello-panel:open', title: 'Open Hello panel' }]
+    expect(rankActions(mixed, 'hello', []).map((r) => r.id)).toEqual(['hello-panel:open'])
+    expect(rankActions(mixed, 'panel:op', []).map((r) => r.id)).toEqual(['hello-panel:open'])
+    expect(rankActions(mixed, 'open', ['hello-panel:open'])[0].id).toBe('hello-panel:open')
+  })
 })

@@ -56,6 +56,20 @@ export interface BrowserTab {
   partition?: string
 }
 
+/** A plugin's panel tab (Phase 2 step 3). Renderer-only, like BrowserTab; `id` is `plugin:<pluginId>:<panelId>`
+ *  (core/panes/tabId's pluginTab), which names the panel but not how to draw it while it is held, nor its project. */
+export interface PluginPanelTabInfo {
+  id: string
+  pluginId: string
+  panelId: string
+  /** The panel's title as the plugin's manifest wrote it. */
+  title: string
+  /** The plugin's display name, or its id. */
+  pluginName: string
+  /** The project the panel was opened in, which its page may ask for; `''` for none. */
+  projectRoot: string
+}
+
 /** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
  *
  *  Each kind marks itself differently — a session tab carries the account color, a busy spinner and a
