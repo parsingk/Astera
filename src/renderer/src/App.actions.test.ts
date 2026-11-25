@@ -77,6 +77,7 @@ describe('App.tsx runs shortcuts through the action registry', () => {
     // Final review M7: a session an agent or Astera started is offered last and marked, never the default
     expect(src).toMatch(/\.sort\(\(a, b\) => Number\(a\.startedBy === 'agent'\) - Number\(b\.startedBy === 'agent'\)\)/)
     expect(src).toMatch(/agent: s\.startedBy === 'agent'/)
+    expect(src).toMatch(/chat: sessionKindOf\(s\) === 'chat'/)
     // Final review M8: the agent is told of unsaved edits, and the person that only the main selection goes
     expect(src).toMatch(/contextText\(made\.ref, made\.excerpt, made\.language, \{ dirty: made\.dirty \}\)/)
     expect(src).toMatch(/mainOnly: sel\.view\.state\.selection\.ranges\.length > 1/)

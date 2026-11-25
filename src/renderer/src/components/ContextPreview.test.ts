@@ -11,7 +11,7 @@ describe('ContextPreview', () => {
   it('shows the exact text that will be pasted, and offers only the sessions it was given', () => {
     expect(src).toMatch(/<pre className="context-preview-text">\{text\}<\/pre>/)
     // Screen check: two sessions in one folder are both named after it; the account tells them apart
-    expect(src).toMatch(/items=\{sessions\.map\(\(s\) => \(\{ value: s\.id, label: `\$\{s\.title\} · \$\{s\.account\}\$\{s\.agent \? ` · \$\{t\('context\.preview\.agentSession'\)\}` : ''\}` \}\)\)\}/)
+    expect(src).toMatch(/items=\{sessions\.map\(\(s\) => \(\{ value: s\.id, label: `\$\{s\.title\} · \$\{s\.account\}\$\{s\.chat \? ` · \$\{t\('context\.preview\.chatSession'\)\}` : ''\}\$\{s\.agent \? ` · \$\{t\('context\.preview\.agentSession'\)\}` : ''\}` \}\)\)\}/)
   })
 
   it('says what was masked or cut, and warns of unsaved edits', () => {

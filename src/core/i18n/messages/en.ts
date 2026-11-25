@@ -1364,6 +1364,7 @@ export const en: Record<keyof typeof ko, string> = {
   'context.preview.mainOnly': 'Several places are selected: only the main selection is put in',
   'context.preview.notPasted': "Could not put it in {name}'s input",
   'context.preview.agentSession': 'started by an agent',
+  'context.preview.chatSession': 'chat',
   'context.noSession': 'No session can take this. Start a session in this project',
   'context.credential': "A credential file's content is not sent to an agent",
   'context.run.send': 'Send to an agent (the selection, or the end of the log)',

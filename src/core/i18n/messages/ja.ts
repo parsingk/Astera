@@ -1321,6 +1321,7 @@ export const ja: Catalog = {
   'context.preview.mainOnly': '複数の場所が選択されていますが、主な選択だけを貼り付けます',
   'context.preview.notPasted': '{name} セッションの入力欄に貼り付けられませんでした',
   'context.preview.agentSession': 'エージェントが開始',
+  'context.preview.chatSession': 'チャット',
   'context.noSession': 'これを受け取れるセッションがありません。このプロジェクトでセッションを始めてください',
   'context.credential': '認証情報ファイルの内容はエージェントに送りません',
   'context.run.send': 'エージェントに送る (選択した部分、なければログの末尾)',

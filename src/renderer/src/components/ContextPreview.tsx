@@ -43,8 +43,9 @@ export function ContextPreview({
   /** Several ranges were selected; only the main one goes. */
   mainOnly: boolean
   /** The sessions that may receive it (sessionFits), the first chosen, each named with its account (sessions in one
-   *  folder are all named after it) and marked when an agent or Astera started it. Never empty. */
-  sessions: ReadonlyArray<{ id: string; title: string; account: string; agent: boolean }>
+   *  folder are all named after it), marked when it is a chat session and when an agent or Astera started it. Never
+   *  empty. */
+  sessions: ReadonlyArray<{ id: string; title: string; account: string; chat: boolean; agent: boolean }>
   onAttach: (sessionId: string) => Promise<AttachOutcome>
   onClose: () => void
 }): React.JSX.Element {
@@ -90,7 +91,7 @@ export function ContextPreview({
           <label>{t('context.preview.session')}</label>
           <Select
             // The account in the label itself: the closed picker shows the label only, and that is the choice that counts
-            items={sessions.map((s) => ({ value: s.id, label: `${s.title} · ${s.account}${s.agent ? ` · ${t('context.preview.agentSession')}` : ''}` }))}
+            items={sessions.map((s) => ({ value: s.id, label: `${s.title} · ${s.account}${s.chat ? ` · ${t('context.preview.chatSession')}` : ''}${s.agent ? ` · ${t('context.preview.agentSession')}` : ''}` }))}
             value={target}
             onChange={(v) => {
               setTarget(v)

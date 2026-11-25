@@ -1333,6 +1333,7 @@ export const es: Catalog = {
   'context.preview.mainOnly': 'Hay varios lugares seleccionados: solo se pone la selección principal',
   'context.preview.notPasted': 'No se pudo poner en la entrada de {name}',
   'context.preview.agentSession': 'iniciada por un agente',
+  'context.preview.chatSession': 'chat',
   'context.noSession': 'Ninguna sesión puede recibirlo. Inicia una sesión en este proyecto',
   'context.credential': 'El contenido de un archivo de credenciales no se envía a un agente',
   'context.run.send': 'Enviar a un agente (la selección o el final del registro)',

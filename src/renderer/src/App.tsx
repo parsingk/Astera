@@ -734,7 +734,7 @@ export default function App(): React.JSX.Element {
     stripped: number
     dirty: boolean
     mainOnly: boolean
-    sessions: Array<{ id: string; title: string; account: string; agent: boolean }>
+    sessions: Array<{ id: string; title: string; account: string; chat: boolean; agent: boolean }>
   } | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
@@ -4420,6 +4420,7 @@ export default function App(): React.JSX.Element {
         id: s.id,
         title: s.title,
         account: accounts.find((a) => a.id === s.accountId)?.label ?? s.accountId,
+        chat: sessionKindOf(s) === 'chat',
         agent: s.startedBy === 'agent'
       }))
     })

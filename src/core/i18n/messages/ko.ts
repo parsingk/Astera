@@ -1446,6 +1446,7 @@ export const ko = {
   'context.preview.mainOnly': '여러 곳을 선택했지만 주 선택 하나만 붙입니다',
   'context.preview.notPasted': '{name} 세션의 입력창에 붙이지 못했습니다',
   'context.preview.agentSession': '에이전트가 시작함',
+  'context.preview.chatSession': '대화창',
   'context.noSession': '이것을 받을 세션이 없습니다. 이 프로젝트에서 세션을 시작하세요',
   'context.credential': '자격증명 파일의 내용은 에이전트에게 보내지 않습니다',
   'context.run.send': '에이전트에게 보내기 (선택한 부분, 없으면 로그 끝부분)',
