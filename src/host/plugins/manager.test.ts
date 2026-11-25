@@ -77,6 +77,7 @@ describe('inspect', () => {
       displayName: 'Jira',
       version: '1.0.0',
       apiVersion: '1',
+      trust: 'trusted',
       entry: './dist/plugin.js',
       capabilities: [],
       permissions: ['jobs.read', 'jobs.create'],
@@ -143,6 +144,7 @@ describe('install', () => {
       version: '1.0.0',
       enabled: true,
       status: 'stopped',
+      trust: 'trusted',
       capabilities: [],
       permissions: ['jobs.read', 'jobs.create'],
       requested: ['jobs.read', 'jobs.create'],
@@ -287,8 +289,8 @@ describe('install', () => {
       status: 200,
       body: { status: 'incompatible', reason: 'the plugin needs Astera 1.10.0 or newer; this is 1.5.0' }
     })
-    const api2 = await plugin('api two', { name: 'api-two', astera: { apiVersion: '2' } })
-    expect(body(await manager.install({ path: api2, grant: [] }))).toMatchObject({ status: 'incompatible', reason: 'this Astera speaks Plugin API 1; the plugin needs 2' })
+    const api3 = await plugin('api three', { name: 'api-three', astera: { apiVersion: '3' } })
+    expect(body(await manager.install({ path: api3, grant: [] }))).toMatchObject({ status: 'incompatible', reason: 'this Astera speaks Plugin API 1, 2; the plugin needs 3' })
   })
 
   it('finishes two installs started together, keeping both', async () => {
@@ -1168,5 +1170,80 @@ describe('installing from npm', () => {
     expect(r.status).toBe(400)
     expect(body(r).error).toContain('@acme/astera-jira from npm')
     expect(body(r).error).not.toContain('.staging-')
+  })
+})
+
+// Plugin API 2 (ADR-008): a plugin with a UI page and no host entry runs no program; it is installed, listed and checked
+describe('a UI-only plugin', () => {
+  const UI_PERMS = ['commands.register', 'panels.register']
+  const contributes = { commands: [{ id: 'open', title: 'Open Hello', panel: 'main' }], panels: [{ id: 'main', title: 'Hello' }] }
+  /** A Plugin API 2 folder with dist/ui/index.html; `entry` adds a host entry beside the UI. */
+  const uiPlugin = async (folder: string, o: { entry?: boolean; page?: boolean; permissions?: string[] } = {}): Promise<string> => {
+    const at = await plugin(folder, {
+      name: 'hello-panel',
+      permissions: o.permissions ?? UI_PERMS,
+      astera: { apiVersion: '2', entry: o.entry ? './dist/plugin.js' : undefined, ui: 'dist/ui/index.html', contributes }
+    })
+    if (o.page !== false) {
+      await fs.mkdir(path.join(at, 'dist', 'ui'), { recursive: true })
+      await fs.writeFile(path.join(at, 'dist', 'ui', 'index.html'), '<!doctype html><title>hello</title>')
+    }
+    return at
+  }
+
+  it('shows its trust level, page and contributions before it is installed', async () => {
+    const r = body(await manager.inspect({ path: await uiPlugin('hello') }))
+    expect(r).toMatchObject({ id: 'hello-panel', apiVersion: '2', trust: 'restricted-ui', ui: 'dist/ui/index.html', contributes, compatible: true })
+    expect(r.entry).toBeUndefined()
+  })
+
+  it('installs, and is ready rather than stopped, with nothing handed to the runtime', async () => {
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    const r = body(await m.install({ path: await uiPlugin('hello'), grant: UI_PERMS }))
+    expect(r).toMatchObject({ id: 'hello-panel', enabled: true, status: 'ready', trust: 'restricted-ui', ui: 'dist/ui/index.html', contributes })
+    expect(rt.calls).toEqual([])
+    await m.setEnabled('hello-panel', false)
+    await m.setEnabled('hello-panel', true)
+    // Disabling asks the runtime to stop it, which runs nothing for it; nothing is ever started
+    expect(rt.calls.filter((c) => !c.startsWith('stop '))).toEqual([])
+    expect(body(await m.get('hello-panel'))).toMatchObject({ status: 'ready' })
+  })
+
+  it('refuses a page that is not a file in the plugin', async () => {
+    const r = await manager.install({ path: await uiPlugin('hello', { page: false }), grant: UI_PERMS })
+    expect(r.status).toBe(400)
+    expect(body(r).error).toBe('the ui dist/ui/index.html is not a file in the plugin')
+  })
+
+  it('refuses an install whose grant leaves out what its contributions need, before anything is copied', async () => {
+    const r = await manager.install({ path: await uiPlugin('hello'), grant: ['commands.register'] })
+    expect(r.status).toBe(400)
+    expect(body(r).error).toBe('contributing panels needs the panels.register permission')
+    expect(await listed()).toEqual([])
+  })
+
+  it('is checked for its page and has no program to run', async () => {
+    await manager.install({ path: await uiPlugin('hello'), grant: UI_PERMS })
+    const checks = body(await manager.doctor('hello-panel')).checks as { name: string; ok: boolean; detail: string }[]
+    expect(checks.find((c) => c.name === 'ui')).toEqual({ name: 'ui', ok: true, detail: 'dist/ui/index.html' })
+    expect(checks.find((c) => c.name === 'entry')).toBeUndefined()
+    expect(checks.find((c) => c.name === 'runtime')).toEqual({ name: 'runtime', ok: true, detail: 'none: a UI-only plugin starts no program' })
+  })
+
+  it('with a host entry too, is trusted, needs both files and runs its entry', async () => {
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    const both = await uiPlugin('both', { entry: true })
+    expect(body(await m.inspect({ path: both }))).toMatchObject({ trust: 'trusted', entry: './dist/plugin.js', ui: 'dist/ui/index.html' })
+    expect(body(await m.install({ path: both, grant: UI_PERMS }))).toMatchObject({ trust: 'trusted', status: 'running' })
+    expect(rt.calls).toEqual(['start hello-panel'])
+    const checks = body(await m.doctor('hello-panel')).checks as { name: string }[]
+    expect(checks.map((c) => c.name)).toEqual(expect.arrayContaining(['entry', 'ui']))
+  })
+
+  it('lists an API 1 plugin as trusted, as it always was', async () => {
+    await manager.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    expect((await listed())[0]).toMatchObject({ trust: 'trusted', status: 'stopped' })
   })
 })

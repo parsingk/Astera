@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   PLUGIN_API_VERSIONS,
   PLUGIN_PERMISSIONS,
+  PLUGIN_RESTRICTED_UI_NOTICE,
   PLUGIN_TRUST_WARNING,
+  PLUGIN_UI_PERMISSIONS,
   incompatibility,
   parseManifest,
   pluginFolderName,
+  satisfiesRange,
   type PluginManifest
 } from './manifest'
 
@@ -39,7 +42,9 @@ describe('parseManifest', () => {
       entry: './dist/plugin.js',
       capabilities: [],
       permissions: [],
-      settings: []
+      settings: [],
+      contributes: { commands: [], panels: [] },
+      trust: 'trusted'
     })
   })
 
@@ -206,7 +211,7 @@ describe('incompatibility', () => {
     expect(incompatibility(manifestOf(valid({ minAsteraVersion: '1.4.99' })), host)).toBeNull()
   })
   it('names a Plugin API this Astera does not speak', () => {
-    expect(incompatibility(manifestOf(valid({ apiVersion: '2' })), host)).toBe('this Astera speaks Plugin API 1; the plugin needs 2')
+    expect(incompatibility(manifestOf(valid({ apiVersion: '3' })), host)).toBe('this Astera speaks Plugin API 1, 2; the plugin needs 3')
   })
   it('names a newer Astera the plugin needs', () => {
     expect(incompatibility(manifestOf(valid({ minAsteraVersion: '1.10.0' })), host)).toBe(
@@ -235,5 +240,120 @@ describe('the plugin SDK', () => {
   it('is written for a Plugin API this Astera speaks', async () => {
     const { PLUGIN_API_VERSION } = await import('../../../packages/plugin-sdk/src/index.js')
     expect((PLUGIN_API_VERSIONS as readonly string[]).includes(PLUGIN_API_VERSION)).toBe(true)
+  })
+})
+
+// Plugin API 2 (spec E2, ADR-008): an optional host entry, a UI page, contributed commands and panels, an engines range
+describe('Plugin API 2', () => {
+  const v2 = (astera: Record<string, unknown> = {}, top: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'hello-panel',
+    version: '0.1.0',
+    astera: {
+      apiVersion: '2',
+      ui: 'dist/ui/index.html',
+      permissions: ['commands.register', 'panels.register'],
+      contributes: {
+        commands: [{ id: 'open', title: 'Open Hello', panel: 'main' }],
+        panels: [{ id: 'main', title: 'Hello' }]
+      },
+      ...astera
+    },
+    ...top
+  })
+
+  it('speaks API 1 and 2, and keeps the UI permissions apart from the Host command ones', () => {
+    expect([...PLUGIN_API_VERSIONS]).toEqual(['1', '2'])
+    expect([...PLUGIN_UI_PERMISSIONS]).toEqual(['commands.register', 'panels.register', 'workspace.read'])
+    for (const p of PLUGIN_UI_PERMISSIONS) expect((PLUGIN_PERMISSIONS as readonly string[]).includes(p)).toBe(false)
+  })
+
+  it('reads a UI-only plugin as restricted UI, with its page and contributions', () => {
+    const m = manifestOf(v2())
+    expect(m.trust).toBe('restricted-ui')
+    expect(m.entry).toBeUndefined()
+    expect(m.ui).toBe('dist/ui/index.html')
+    expect(m.contributes).toEqual({ commands: [{ id: 'open', title: 'Open Hello', panel: 'main' }], panels: [{ id: 'main', title: 'Hello' }] })
+    expect(m.permissions).toEqual(['commands.register', 'panels.register'])
+  })
+
+  it('reads a plugin with a host entry as trusted, whether or not it has a UI', () => {
+    expect(manifestOf(v2({ entry: 'dist/host.js' })).trust).toBe('trusted')
+    expect(manifestOf(v2({ entry: 'dist/host.js', ui: undefined, contributes: undefined, permissions: [] })).trust).toBe('trusted')
+  })
+
+  it('needs an entry, a UI or both', () => {
+    expect(problemsOf(v2({ ui: undefined, contributes: undefined, permissions: [] }))).toContain(
+      'astera needs an entry, a ui or both: the Node file Astera starts, the page its panels show'
+    )
+  })
+
+  it('refuses a UI page that is not a relative .html file inside the plugin', () => {
+    for (const ui of ['https://x.example/ui.html', '//host/ui.html', 'file:///C:/ui.html', '../ui.html', 'C:\\ui.html', '/ui.html', 'dist/ui.js']) {
+      expect(problemsOf(v2({ ui })).some((p) => p.startsWith(`astera.ui ${ui}`)), ui).toBe(true)
+    }
+    // A host entry that names a URL is refused as well
+    expect(problemsOf(v2({ entry: 'https://x.example/plugin.js' })).some((p) => p.startsWith('astera.entry https://x.example/plugin.js'))).toBe(true)
+  })
+
+  it('needs the UI for contributions, and the permission for each kind', () => {
+    expect(problemsOf(v2({ ui: undefined, entry: 'dist/host.js' }))).toContain('astera.contributes needs astera.ui: a panel is a page of the plugin’s UI')
+    expect(problemsOf(v2({ permissions: ['panels.register'] }))).toContain('contributing commands needs the commands.register permission')
+    expect(problemsOf(v2({ permissions: ['commands.register'] }))).toContain('contributing panels needs the panels.register permission')
+  })
+
+  it('refuses a bad id, a repeated id, a long or control-holding title, and a command whose panel is not contributed', () => {
+    const c = (commands: unknown[], panels: unknown[] = [{ id: 'main', title: 'Hello' }]): Record<string, unknown> => v2({ contributes: { commands, panels } })
+    expect(problemsOf(c([{ id: 'Open', title: 'x', panel: 'main' }]))).toContain('astera.contributes.commands: Open is not an id of lower-case letters, digits and . _ - (at most 64)')
+    expect(problemsOf(c([{ id: 'open', title: 'x', panel: 'main' }, { id: 'open', title: 'y', panel: 'main' }]))).toContain('astera.contributes.commands names open twice')
+    expect(problemsOf(c([{ id: 'open', title: 'x'.repeat(65), panel: 'main' }]))).toContain('astera.contributes.commands: open needs a title of 1 to 64 characters')
+    expect(problemsOf(c([{ id: 'open', title: 'a\nb', panel: 'main' }]))).toContain('astera.contributes.commands: open’s title holds a control character')
+    expect(problemsOf(c([{ id: 'open', title: 'x', panel: 'side' }]))).toContain('astera.contributes.commands: open opens side, which is not a contributed panel')
+    expect(problemsOf(c([{ id: 'open', title: 'x' }]))).toContain('astera.contributes.commands: open opens side, which is not a contributed panel'.replace('opens side, which is not a contributed panel', 'names no panel to open'))
+  })
+
+  it('takes at most 50 commands and 20 panels', () => {
+    const panels = Array.from({ length: 21 }, (_, i) => ({ id: `p${i}`, title: `P${i}` }))
+    expect(problemsOf(v2({ contributes: { commands: [], panels } }))).toContain('astera.contributes.panels lists 21; at most 20')
+    const commands = Array.from({ length: 51 }, (_, i) => ({ id: `c${i}`, title: `C${i}`, panel: 'main' }))
+    expect(problemsOf(v2({ contributes: { commands, panels: [{ id: 'main', title: 'M' }] } }))).toContain('astera.contributes.commands lists 51; at most 50')
+  })
+
+  it('takes the UI permissions in API 2 only', () => {
+    expect(problemsOf(valid({ permissions: ['panels.register'] }))).toContain('astera.permissions: panels.register needs Plugin API 2')
+    expect(manifestOf(v2({ permissions: ['commands.register', 'panels.register', 'workspace.read', 'jobs.read'] })).permissions).toEqual([
+      'commands.register',
+      'panels.register',
+      'workspace.read',
+      'jobs.read'
+    ])
+  })
+
+  it('reads engines.astera from the top of the package, and refuses a range it does not understand', () => {
+    expect(manifestOf(v2({}, { engines: { astera: '>=1.7.0 <2.0.0', node: '>=20' } })).engines).toBe('>=1.7.0 <2.0.0')
+    for (const range of ['^1.7.0', '~1.7.0', '1.x', '>=1.7.0 || >=2.0.0', '>=1.7', 'latest', '']) {
+      expect(problemsOf(v2({}, { engines: { astera: range } })), range).toContain(
+        `engines.astera ${JSON.stringify(range)} is not a range Astera reads: use comparators such as ">=1.7.0 <2.0.0" (>=, >, <=, <, = or a bare version, all of them must hold)`
+      )
+    }
+  })
+
+  it('says why this Astera does not satisfy the plugin’s engines range', () => {
+    const host = { version: '1.6.0', capabilities: [] as string[] }
+    expect(incompatibility(manifestOf(v2({}, { engines: { astera: '>=1.6.0 <2.0.0' } })), host)).toBeNull()
+    expect(incompatibility(manifestOf(v2({}, { engines: { astera: '>=1.7.0' } })), host)).toBe('the plugin needs Astera >=1.7.0; this is 1.6.0')
+  })
+
+  it('compares versions by their release, a prerelease host as its release', () => {
+    expect(satisfiesRange('1.7.0', '>=1.7.0 <2.0.0')).toBe(true)
+    expect(satisfiesRange('2.0.0', '>=1.7.0 <2.0.0')).toBe(false)
+    expect(satisfiesRange('1.7.0-beta.1', '>=1.7.0')).toBe(true)
+    expect(satisfiesRange('1.6.9', '1.6.9')).toBe(true)
+    expect(satisfiesRange('1.6.9', '=1.7.0')).toBe(false)
+    expect(satisfiesRange('1.7.0', '^1.7.0')).toBeNull()
+  })
+
+  it('has a notice for a UI-only plugin that never calls it trusted code', () => {
+    expect(PLUGIN_RESTRICTED_UI_NOTICE).not.toContain(PLUGIN_TRUST_WARNING)
+    expect(PLUGIN_RESTRICTED_UI_NOTICE).toMatch(/panel/i)
   })
 })

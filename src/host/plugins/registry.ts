@@ -3,7 +3,7 @@
 import { promises as fs } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import type { PluginPermission } from '../../core/plugins/manifest'
+import type { PluginPermission, PluginUiPermission } from '../../core/plugins/manifest'
 import { moveRetrying, type Rename } from './moves'
 
 export interface PluginRecord {
@@ -13,8 +13,8 @@ export interface PluginRecord {
   /** The folder under `<profile>/plugins/installed` (`pluginFolderName`). */
   folder: string
   enabled: boolean
-  /** What the person approved: a subset of what the plugin asks for (spec §11). */
-  granted: PluginPermission[]
+  /** What the person approved: a subset of what the plugin asks for (spec §11); a Plugin API 2 plugin's UI permissions too. */
+  granted: (PluginPermission | PluginUiPermission)[]
   installedAt: number
   /** Where it was installed from: a folder, or an npm package by the spec the person gave and the version it was
    *  (plugins 2e). */
