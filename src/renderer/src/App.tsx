@@ -3964,11 +3964,14 @@ export default function App(): React.JSX.Element {
    *  window comes back, and on the tab's refresh; a quarter second after the last of them. */
   const [problems, setProblems] = useState<Diagnostic[] | null | undefined>(undefined)
   const [problemsAsk, setProblemsAsk] = useState(0)
+  /** The Problems tab is turned on in Settings > General (Phase 1 gate). Off, or not known yet: no tab and nothing asked. */
+  const problemsOn = workspaceFeatures?.problemsTab === true
   // A project just opened shows no other project's list while its own is asked for
   useEffect(() => {
     setProblems(undefined)
   }, [currentProject])
   useEffect(() => {
+    if (!problemsOn) return
     if (!currentProject) {
       setProblems([])
       return
@@ -3990,7 +3993,11 @@ export default function App(): React.JSX.Element {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [currentProject, orchSnapshot, problemsAsk])
+  }, [problemsOn, currentProject, orchSnapshot, problemsAsk])
+  // A bottom panel on the Problems tab (saved so, or showing it when the switch went off) moves to Run
+  useEffect(() => {
+    if (workspaceFeatures?.problemsTab === false) setBottomTab((cur) => (cur === 'problems' ? 'run' : cur))
+  }, [workspaceFeatures?.problemsTab])
   useEffect(() => {
     const again = (): void => setProblemsAsk((n) => n + 1)
     window.addEventListener('focus', again)
@@ -4897,7 +4904,8 @@ export default function App(): React.JSX.Element {
     'search.text': { run: () => openPalette('%') },
     // The bottom panel on the Problems tab (spec W5); there is no tab without a project
     'problems.open': {
-      blockedBy: () => (currentProject ? null : 'action.blocked.noProject'),
+      blockedBy: () =>
+        workspaceFeaturesRef.current?.problemsTab !== true ? 'action.blocked.featureOff' : currentProject ? null : 'action.blocked.noProject',
       run: () => {
         setRunPanelOpen(true)
         setBottomTab('problems')
@@ -5759,6 +5767,7 @@ export default function App(): React.JSX.Element {
                     onOpenFolder={openLinkedFolder}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
+                    problemsEnabled={problemsOn}
                     problemsRoot={currentProject}
                     problems={problems}
                     onOpenProblem={(file, line) => openFile(file, line !== undefined ? { line } : undefined)}
@@ -6847,10 +6856,12 @@ export default function App(): React.JSX.Element {
           initialQuery={paletteOpen.query}
           projectRoot={currentProject}
           restoreTo={paletteRestoreRef.current}
-          entries={ACTIONS.filter((a) => a.id !== 'palette.open').map((a) => {
-            const chord = bindingsRef.current[a.id]?.[0]
+          entries={ACTIONS.filter((a) => a.id !== 'palette.open').flatMap((a) => {
             const state = actionRegistry.state(a.id)
-            return { id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }
+            // A feature turned off in Settings > General (Phase 1 gate) is not offered, rather than offered as blocked
+            if (!state.ok && state.reason === 'action.blocked.featureOff') return []
+            const chord = bindingsRef.current[a.id]?.[0]
+            return [{ id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }]
           })}
           onRun={(id) => {
             setPaletteOpen(null)

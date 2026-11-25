@@ -1424,6 +1424,7 @@ export const ko = {
   'action.blocked.noLocalCli': '이 컴퓨터에서 Claude Code 나 Codex 를 실행할 수 없습니다',
   'action.blocked.noKubectl': 'kubectl 을 찾지 못했습니다',
   'action.blocked.noSelection': '편집기에서 보낼 부분을 먼저 선택하세요',
+  'action.blocked.featureOff': '설정에서 꺼져 있습니다',
   'palette.title': '명령 팔레트',
   'palette.empty': '맞는 명령이 없습니다',
   'quickOpen.placeholder': '파일 이름을 입력하세요. 명령은 > 부터, 파일 내용은 % 부터 입력하세요',

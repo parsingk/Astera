@@ -48,3 +48,22 @@ describe('layout memory off (Phase 1 gate)', () => {
     expect(app).toMatch(/setWorkspaceFeatures\(updated\)\s*if \(key === 'layoutMemory' && !next\) clearLayout\(\)/)
   })
 })
+
+describe('the Problems tab off (Phase 1 gate)', () => {
+  it('draws the tab only on an explicit on, and asks main for problems only then', () => {
+    expect(app).toMatch(/problemsEnabled=\{problemsOn\}/)
+    expect(app).toMatch(/const problemsOn = workspaceFeatures\?\.problemsTab === true/)
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(!problemsOn\) return\s*if \(!currentProject\) \{\s*setProblems\(\[\]\)/)
+  })
+
+  // A bottom panel saved on the Problems tab opens on Run while the tab is off
+  it('moves the bottom panel off the Problems tab while it is off', () => {
+    expect(app).toMatch(/if \(workspaceFeatures\?\.problemsTab === false\) setBottomTab\(\(cur\) => \(cur === 'problems' \? 'run' : cur\)\)\s*\}, \[workspaceFeatures\?\.problemsTab\]\)/)
+  })
+
+  // Blocked as turned off: its key goes on to the focused element (keyRouting.ts) and the palette leaves it out
+  it('blocks its action as turned off, and the palette leaves out every action turned off', () => {
+    expect(app).toMatch(/'problems\.open': \{\s*blockedBy: \(\) =>\s*workspaceFeaturesRef\.current\?\.problemsTab !== true \? 'action\.blocked\.featureOff'/)
+    expect(app).toMatch(/entries=\{ACTIONS\.filter\(\(a\) => a\.id !== 'palette\.open'\)\.flatMap\(\(a\) => \{\s*const state = actionRegistry\.state\(a\.id\)\s*(?:\/\/[^\n]*\n\s*)*if \(!state\.ok && state\.reason === 'action\.blocked\.featureOff'\) return \[\]/)
+  })
+})

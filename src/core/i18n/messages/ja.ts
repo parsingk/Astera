@@ -1291,6 +1291,7 @@ export const ja: Catalog = {
   'action.blocked.noLocalCli': 'このコンピューターでは Claude Code も Codex も実行できません',
   'action.blocked.noKubectl': 'kubectl が見つかりません',
   'action.blocked.noSelection': '先にエディタで送る部分を選択してください',
+  'action.blocked.featureOff': '設定でオフになっています',
   'palette.title': 'コマンドパレット',
   'palette.empty': '一致するコマンドはありません',
   'quickOpen.placeholder': 'ファイル名を入力 (コマンドは先に >、ファイル内の文字列は先に % を入力)',
