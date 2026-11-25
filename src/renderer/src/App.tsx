@@ -158,6 +158,9 @@ import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTa
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
+import { asBottomTab, restoreTree, toSaved } from '../../core/panes/savedLayout'
+import { readLayout, writeLayout } from './lib/layoutStore'
+import { checkSavedTabs, keepSavedTab } from './lib/restoreLayout'
 import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
@@ -529,6 +532,16 @@ export default function App(): React.JSX.Element {
   // rows over the new ones, and a tab with no row is not drawn (final review of the taken-back tabs fix, minor 1).
   const sessionsRef = useRef(sessions)
   const setSessions = useMemo(() => writeThrough(sessionsRef, setSessionsState), [])
+  /** The layout the window closed with (spec W3, lib/layoutStore.ts), read once before the first paint: the sidebar and
+   *  the bottom panel open as they were, and the tree is rebuilt from it once main has said which tabs can come back
+   *  (the sessions.list() effect below). */
+  const [savedAtStart] = useState(readLayout)
+  /** Set once that rebuild has run. Until then nothing is saved: the empty tree of the first paint must not be written
+   *  over the layout being restored. */
+  const layoutRestoredRef = useRef(false)
+  /** Restored preview and cluster object tabs (spec W3): drawn as a placeholder that reads nothing until a person
+   *  selects the tab or presses its Load button (releaseTab). A restore starts no dev server request and no kubectl. */
+  const [heldTabs, setHeldTabs] = useState<ReadonlySet<string>>(() => new Set())
   // The pane layout tree. It replaces the old single split-slot state — up to 4 panes.
   const [layout, setLayoutState] = useState<PaneNode | null>(null)
   const [activePaneId, setActivePaneIdState] = useState<string | null>(null)
@@ -755,8 +768,8 @@ export default function App(): React.JSX.Element {
    *  so a rebind shows up here too. Undefined when the user cleared every binding for it. */
   const runSelectConfigChord = bindingsRef.current['run.selectConfig']?.[0]
   const runSelectConfigShortcut = runSelectConfigChord ? formatChord(runSelectConfigChord) : undefined
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [explorerOpen, setExplorerOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(() => savedAtStart?.panels.sidebar.open ?? true)
+  const [explorerOpen, setExplorerOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'explorer')
   // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
   // 단축키가 늘 같은 방향으로만 계산되므로, 최신 값을 이 ref 로 읽는다(이 파일의 다른 ref 들과 같은 이유)
   const explorerOpenRef = useRef(explorerOpen)
@@ -839,7 +852,7 @@ export default function App(): React.JSX.Element {
   const [firstRunAsked, setFirstRunAsked] = useState<boolean | null>(null)
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
-  const [jobsOpen, setJobsOpen] = useState(false)
+  const [jobsOpen, setJobsOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'jobs')
   // Read by toggleJobs for the same reason explorerOpenRef exists: the keydown listener is registered
   // once with [] and closes over the first render, so a toggle that reads the render value would always
   // compute the same direction from the keyboard.
@@ -847,7 +860,7 @@ export default function App(): React.JSX.Element {
   jobsOpenRef.current = jobsOpen
   // Whether the How It Works sidebar view is showing — same convention as jobsOpen (toggleHiw mirrors
   // toggleJobs below), unlike Jobs there is no feature flag gating it off the rail.
-  const [hiwOpen, setHiwOpen] = useState(false)
+  const [hiwOpen, setHiwOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'understanding')
   const hiwOpenRef = useRef(hiwOpen) // see jobsOpenRef
   hiwOpenRef.current = hiwOpen
   // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
@@ -1246,28 +1259,63 @@ export default function App(): React.JSX.Element {
         })
         .catch(() => {})
     }
-    // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
-    void window.api.sessions.list().then((all) => {
+    // Re-adopts sessions that are still running after a renderer reload or a restart as tabs (scrollback is lost, by
+    // design), in the layout the window closed with (spec W3): what main says can come back is put back where it was,
+    // and nothing is started, opened anew or loaded to get there.
+    void Promise.all([window.api.sessions.list(), checkSavedTabs(savedAtStart)]).then(([all, checked]) => {
       // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back. One the
       // app lost sight of is left out too: if the Host still runs it, its hand-back places a tab again (session:created)
       const list = all.filter((s) => !closesWhenEnded(s, { afterLostSight: true }))
       setSessions(list)
       for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
-      if (list.length === 0) return
-      // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
-      // first group, and a running session (or the first one, if none) becomes the active tab
-      const g = createGroup(sessionTab(list[0].id))
-      let root: PaneNode = g
-      for (const s of list.slice(1)) root = addTab(root, g.id, sessionTab(s.id))
-      const wanted = (list.find((s) => s.status === 'running') ?? list[0]).id
-      const act = activateTab(root, sessionTab(wanted))
-      if (!act) return
+      const keep = keepSavedTab(savedAtStart, checked, new Set(list.map((s) => s.id)))
+      const restored = restoreTree(savedAtStart?.tree ?? null, savedAtStart?.active ?? -1, keep)
+      layoutRestoredRef.current = true
+      let root: PaneNode | null = restored?.root ?? null
+      let paneId: string | null = restored?.activePaneId ?? null
+      if (root && savedAtStart) {
+        // Each kept tab's row, from what the layout saved beside its id
+        const kept = leaves(root).flatMap((l) => l.tabIds)
+        const held: string[] = []
+        for (const id of kept) {
+          const kind = parseTab(id)?.kind
+          const file = kind === 'file' ? savedAtStart.tabs.files[id] : undefined
+          if (file) loadFileTab(id, file.path, file.projectRoot)
+          if (kind === 'browser' || kind === 'kube') held.push(id)
+        }
+        const records = kept.flatMap((id) => (savedAtStart.tabs.records[id] ? [{ id, ...savedAtStart.tabs.records[id] }] : []))
+        const browsers = kept.flatMap((id) => (savedAtStart.tabs.browsers[id] ? [{ id, ...savedAtStart.tabs.browsers[id] }] : []))
+        if (records.length > 0) setRecordTabs((prev) => [...prev, ...records])
+        if (browsers.length > 0) setBrowserTabs((prev) => [...prev, ...browsers])
+        if (held.length > 0) setHeldTabs(new Set(held))
+      }
+      const named = new Set(root ? leaves(root).flatMap((l) => l.tabIds) : [])
+      const unnamed = list.filter((s) => !named.has(sessionTab(s.id)))
+      if (root) {
+        // A session the layout did not name (started while the window was closed) joins the first group, behind the
+        // tab that group had on top
+        const first = firstLeaf(root)
+        for (const s of unnamed) root = addTab(root, first.id, sessionTab(s.id))
+        root = activateTab(root, first.activeTabId)?.root ?? root
+      } else if (unnamed.length > 0) {
+        // Nothing saved came back: every session goes into one group, as it always did, and a running session (or the
+        // first one, if none) becomes the active tab
+        const g = createGroup(sessionTab(unnamed[0].id))
+        root = g
+        for (const s of unnamed.slice(1)) root = addTab(root, g.id, sessionTab(s.id))
+        const wanted = (unnamed.find((s) => s.status === 'running') ?? unnamed[0]).id
+        const act = activateTab(root, sessionTab(wanted))
+        if (!act) return
+        root = act.root
+        paneId = act.paneId
+      }
+      if (!root || !paneId) return
       // This tree is built from scratch, so the mirror tabs a workspace.list that answered first has
       // already placed go back in (fix round 1: they were wiped). setLayout moves the ref at once, so a
       // list that answers after this, before the render, builds on this tree.
-      const withMirrors = placeAppTabs(act.root, openSessionIds(mirrorsRef.current), act.paneId)
+      const withMirrors = placeAppTabs(root, openSessionIds(mirrorsRef.current), paneId)
       setLayout(withMirrors)
-      setActivePaneId(act.paneId)
+      setActivePaneId(paneId)
     })
     const offAccounts = window.api.on('accounts:changed', (p) => setAccounts(p.accounts))
     const offGhosts = window.api.on('accounts:ghostsChanged', (p) => setGhostAccounts(p.accounts))
@@ -1829,13 +1877,19 @@ export default function App(): React.JSX.Element {
     }
     const root = currentProjectRef.current
     if (!root) return // 트리가 없는 상태에서는 파일을 열 수 없다 — 열 수단 자체가 트리다
-    const title = path.split(/[\\/]/).pop() || path
-    setFileTabs((prev) => [...prev, { id, path, title, projectRoot: root }])
+    loadFileTab(id, path, root, at)
     // 파일 탭도 세션 탭과 같은 트리에 들어간다 — 활성 페인의 새 탭으로 열린다. 세션을 놓을 때와 같은
     // 함수를 쓰므로 배치 규칙이 한 벌뿐이다. StrictMode 대비로 setLayout 콜백 밖에서 계산한다
     const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
+  /** A file tab's row and buffer, read from disk, without placing it: openFile places the tab it opens, and the layout
+   *  restore (spec W3) has placed its tabs already. */
+  const loadFileTab = (id: string, path: string, projectRoot: string, at?: { line: number; col?: number }): void => {
+    const title = path.split(/[\\/]/).pop() || path
+    setFileTabs((prev) => [...prev, { id, path, title, projectRoot }])
     setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
     // mdModes 를 여기서 바로 채운다 — fileBuffers 와 같은 자리(탭이 생기는 시점). 그렇지 않으면
     // 이 탭의 모드는 사용자가 그 탭에서 직접 모드를 바꾸기 전까지 mdModes 에 아예 없고, 렌더가
@@ -2571,10 +2625,45 @@ export default function App(): React.JSX.Element {
   /** The run whose console the Run tab shows. Starting a run selects it. */
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<RunStatus[]>([])
-  const [runPanelOpen, setRunPanelOpen] = useState(false)
+  const [runPanelOpen, setRunPanelOpen] = useState(() => savedAtStart?.panels.bottom.open ?? false)
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
-  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId | log tab id
+  const [bottomTab, setBottomTab] = useState<string>(() => savedAtStart?.panels.bottom.tab ?? 'run') // 'run' | 'kube' | 'problems' | terminalId | log tab id
+  /** The window's layout as a record (spec W3, core/panes/savedLayout.ts), from this render's values. An agent's
+   *  preview tab is left without its info, so it does not come back: it belongs to its session. */
+  const layoutRecordRef = useRef(() => toSaved(null, null, { sidebar: { open: true, view: 'sessions' }, bottom: { open: false, tab: 'run' } }, { files: {}, records: {}, browsers: {} }))
+  layoutRecordRef.current = () =>
+    toSaved(
+      layoutRef.current,
+      activePaneIdRef.current,
+      {
+        sidebar: { open: sidebarOpen, view: explorerOpen ? 'explorer' : jobsOpen ? 'jobs' : hiwOpen ? 'understanding' : 'sessions' },
+        bottom: { open: runPanelOpen, tab: asBottomTab(bottomTab) }
+      },
+      {
+        files: Object.fromEntries(fileTabs.map((f) => [f.id, { path: f.path, projectRoot: f.projectRoot }])),
+        records: Object.fromEntries(recordTabs.map((r) => [r.id, { recordId: r.recordId, title: r.title, projectRoot: r.projectRoot }])),
+        browsers: Object.fromEntries(
+          browserTabs
+            .filter((b) => !b.agentSessionId)
+            .map((b) => [b.id, { url: b.url, title: b.title, projectRoot: b.projectRoot }])
+        )
+      }
+    )
+  // Written a moment after the last change, and only once the restore has run (layoutRestoredRef)
+  useEffect(() => {
+    if (!layoutRestoredRef.current) return
+    const timer = setTimeout(() => writeLayout(layoutRecordRef.current()), 300)
+    return () => clearTimeout(timer)
+  }, [layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
+  // ...and at once when the window goes, so a change in the last 300 ms is not lost
+  useEffect(() => {
+    const flush = (): void => {
+      if (layoutRestoredRef.current) writeLayout(layoutRecordRef.current())
+    }
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [])
   /** Pods' logs tabs in the bottom panel (spec 4.8), opened from the cluster view. */
   const [logTabs, setLogTabs] = useState<KubeLogTab[]>([])
   /** Each logs tab's own element, which its view renders into for the tab's life (see the portals after BottomPanel):
