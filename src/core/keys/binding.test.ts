@@ -349,6 +349,18 @@ describe('actions with no default key, and the palette', () => {
     expect(makeActions('darwin').find((a) => a.id === 'problems.open')?.defaults).toEqual(['Cmd+Shift+M'])
   })
 
+  // Spec W3: the layout presets are palette actions; none takes a key until the person gives it one
+  it('lists the layout presets with no default key', () => {
+    const ids = ['layout.coding', 'layout.review', 'layout.agents', 'layout.devops', 'layout.reset', 'layout.presets']
+    for (const platform of ['win32', 'darwin']) {
+      const actions = makeActions(platform)
+      for (const id of ids) {
+        const a = actions.find((x) => x.id === id)
+        expect(a, `${platform} ${id}`).toMatchObject({ defaults: [], descKey: `shortcut.${id}`, yieldsToTerminal: false })
+      }
+    }
+  })
+
   it('no two actions share a default key, on any platform', () => {
     for (const platform of ['win32', 'linux', 'darwin']) {
       const actions = makeActions(platform)

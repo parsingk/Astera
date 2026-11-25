@@ -201,6 +201,11 @@ what to check when an explanation is missing.
 - **Show problems:** `Ctrl`/`Cmd`+`Shift`+`M` opens the Problems tab of the bottom panel: what the checks and reviews
   of the project's Jobs found, by file and line, with filters and sorting. A row opens its file at the line, and a
   problem whose file changed since it was found is marked
+- **Layout:** the window comes back as you left it: splits, tabs, the sidebar and the bottom panel. A session
+  comes back only while it still runs, and a preview or a cluster object tab waits for a click before it loads.
+  From the command palette, **Layout: Coding**, **Layout: Agent Review**, **Layout: Multi-agent** and
+  **Layout: DevOps** arrange the open tabs, **Layout: Reset to Default** goes back to the start, and
+  **Layout: Saved Presets** keeps your own under a name
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,

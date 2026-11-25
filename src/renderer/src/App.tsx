@@ -158,6 +158,11 @@ import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTa
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
+import { asBottomTab, mergeTabs, restoreTree, toSaved, type SavedPanels } from '../../core/panes/savedLayout'
+import { applySaved, presetPanels, presetTree, withPreset, withoutPreset, type PresetId, type SavedPreset } from '../../core/panes/presets'
+import { readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
+import { LayoutPresetsDialog } from './components/LayoutPresetsDialog'
+import { checkSavedTabs, keepSavedTab } from './lib/restoreLayout'
 import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
@@ -201,6 +206,7 @@ import { holdActivationFocus } from './lib/focusHold'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
+import { HeldTab } from './components/HeldTab'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { onFileChanges } from './lib/fileChanges'
 import type { FileChange } from '../../core/files/changeBatch'
@@ -529,6 +535,16 @@ export default function App(): React.JSX.Element {
   // rows over the new ones, and a tab with no row is not drawn (final review of the taken-back tabs fix, minor 1).
   const sessionsRef = useRef(sessions)
   const setSessions = useMemo(() => writeThrough(sessionsRef, setSessionsState), [])
+  /** The layout the window closed with (spec W3, lib/layoutStore.ts), read once before the first paint: the sidebar and
+   *  the bottom panel open as they were, and the tree is rebuilt from it once main has said which tabs can come back
+   *  (the sessions.list() effect below). */
+  const [savedAtStart] = useState(readLayout)
+  /** Set once that rebuild has run. Until then nothing is saved: the empty tree of the first paint must not be written
+   *  over the layout being restored. */
+  const layoutRestoredRef = useRef(false)
+  /** Restored preview and cluster object tabs (spec W3): drawn as a placeholder that reads nothing until a person
+   *  selects the tab or presses its Load button (releaseTab). A restore starts no dev server request and no kubectl. */
+  const [heldTabs, setHeldTabs] = useState<ReadonlySet<string>>(() => new Set())
   // The pane layout tree. It replaces the old single split-slot state — up to 4 panes.
   const [layout, setLayoutState] = useState<PaneNode | null>(null)
   const [activePaneId, setActivePaneIdState] = useState<string | null>(null)
@@ -540,6 +556,16 @@ export default function App(): React.JSX.Element {
   const activePaneIdRef = useRef(activePaneId)
   const setLayout = useMemo(() => writeThrough(layoutRef, setLayoutState), [])
   const setActivePaneId = useMemo(() => writeThrough(activePaneIdRef, setActivePaneIdState), [])
+  // A held tab that left the tree, by its × or any other removal, is forgotten: a cluster object's id is the same every
+  // time it is opened, and opening it again must not show it as never loaded (final review I3)
+  useEffect(() => {
+    setHeldTabs((prev) => {
+      if (prev.size === 0) return prev
+      const inTree = new Set(layout ? leaves(layout).flatMap((l) => l.tabIds) : [])
+      const next = new Set([...prev].filter((id) => inTree.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [layout])
   // The session whose tab is being dragged (for PaneGrid's drop preview)
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
@@ -755,8 +781,8 @@ export default function App(): React.JSX.Element {
    *  so a rebind shows up here too. Undefined when the user cleared every binding for it. */
   const runSelectConfigChord = bindingsRef.current['run.selectConfig']?.[0]
   const runSelectConfigShortcut = runSelectConfigChord ? formatChord(runSelectConfigChord) : undefined
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [explorerOpen, setExplorerOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(() => savedAtStart?.panels.sidebar.open ?? true)
+  const [explorerOpen, setExplorerOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'explorer')
   // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
   // 단축키가 늘 같은 방향으로만 계산되므로, 최신 값을 이 ref 로 읽는다(이 파일의 다른 ref 들과 같은 이유)
   const explorerOpenRef = useRef(explorerOpen)
@@ -839,7 +865,7 @@ export default function App(): React.JSX.Element {
   const [firstRunAsked, setFirstRunAsked] = useState<boolean | null>(null)
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
-  const [jobsOpen, setJobsOpen] = useState(false)
+  const [jobsOpen, setJobsOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'jobs')
   // Read by toggleJobs for the same reason explorerOpenRef exists: the keydown listener is registered
   // once with [] and closes over the first render, so a toggle that reads the render value would always
   // compute the same direction from the keyboard.
@@ -847,7 +873,7 @@ export default function App(): React.JSX.Element {
   jobsOpenRef.current = jobsOpen
   // Whether the How It Works sidebar view is showing — same convention as jobsOpen (toggleHiw mirrors
   // toggleJobs below), unlike Jobs there is no feature flag gating it off the rail.
-  const [hiwOpen, setHiwOpen] = useState(false)
+  const [hiwOpen, setHiwOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'understanding')
   const hiwOpenRef = useRef(hiwOpen) // see jobsOpenRef
   hiwOpenRef.current = hiwOpen
   // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
@@ -1246,29 +1272,90 @@ export default function App(): React.JSX.Element {
         })
         .catch(() => {})
     }
-    // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
-    void window.api.sessions.list().then((all) => {
-      // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back. One the
-      // app lost sight of is left out too: if the Host still runs it, its hand-back places a tab again (session:created)
-      const list = all.filter((s) => !closesWhenEnded(s, { afterLostSight: true }))
-      setSessions(list)
-      for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
-      if (list.length === 0) return
-      // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
-      // first group, and a running session (or the first one, if none) becomes the active tab
-      const g = createGroup(sessionTab(list[0].id))
-      let root: PaneNode = g
-      for (const s of list.slice(1)) root = addTab(root, g.id, sessionTab(s.id))
-      const wanted = (list.find((s) => s.status === 'running') ?? list[0]).id
-      const act = activateTab(root, sessionTab(wanted))
-      if (!act) return
-      // This tree is built from scratch, so the mirror tabs a workspace.list that answered first has
-      // already placed go back in (fix round 1: they were wiped). setLayout moves the ref at once, so a
-      // list that answers after this, before the render, builds on this tree.
-      const withMirrors = placeAppTabs(act.root, openSessionIds(mirrorsRef.current), act.paneId)
-      setLayout(withMirrors)
-      setActivePaneId(act.paneId)
-    })
+    // Re-adopts sessions that are still running after a renderer reload or a restart as tabs (scrollback is lost, by
+    // design), in the layout the window closed with (spec W3): what main says can come back is put back where it was,
+    // and nothing is started, opened anew or loaded to get there.
+    //
+    // First the Host hands its sessions back (sessions.list's note in main): a session it still runs then keeps its
+    // saved place, and main's project guard, which the file checks go through, counts that session's folder. Then the
+    // saved tabs are checked, and the list is asked last, so it is as fresh as the moment it is applied; whatever
+    // reached the window meanwhile (a session, a file the person opened, an agent's preview) is merged in, never
+    // replaced (final review C1, I1). StrictMode runs this effect twice in development: only the one still mounted
+    // applies (restoreLive).
+    let restoreLive = true
+    void window.api.sessions
+      .list({ afterTakeBack: true })
+      .catch((): SessionInfo[] => [])
+      .then(() => checkSavedTabs(savedAtStart))
+      .then((checked) =>
+        window.api.sessions
+          .list()
+          // No list: the rest of the layout still comes back, and the sessions arrive as session:created
+          .catch((): SessionInfo[] => [])
+          .then((all) => ({ checked, all }))
+      )
+      .then(({ checked, all }) => {
+        if (!restoreLive) return
+        layoutRestoredRef.current = true
+        // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back. One the
+        // app lost sight of is left out too: if the Host still runs it, its hand-back places a tab again (session:created)
+        const list = all.filter((s) => !closesWhenEnded(s, { afterLostSight: true }))
+        // A row that arrived after the list was taken (session:created) stays
+        const listed = new Set(list.map((s) => s.id))
+        const arrived = sessionsRef.current.filter((s) => !listed.has(s.id))
+        setSessions([...list, ...arrived])
+        for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
+        const keep = keepSavedTab(savedAtStart, checked, new Set([...listed, ...arrived.map((s) => s.id)]))
+        const restored = restoreTree(savedAtStart?.tree ?? null, savedAtStart?.active ?? -1, keep)
+        let root: PaneNode | null = restored?.root ?? null
+        let paneId: string | null = restored?.activePaneId ?? null
+        if (root && savedAtStart) {
+          // Each kept tab's row, from what the layout saved beside its id; a row the window already has (a file the person
+          // opened while the restore waited) is not added twice
+          const kept = leaves(root).flatMap((l) => l.tabIds)
+          const held: string[] = []
+          for (const id of kept) {
+            const kind = parseTab(id)?.kind
+            const file = kind === 'file' ? savedAtStart.tabs.files[id] : undefined
+            if (file && !fileTabsRef.current.some((t) => t.id === id)) loadFileTab(id, file.path, file.projectRoot)
+            if (kind === 'browser' || kind === 'kube') held.push(id)
+          }
+          const records = kept.flatMap((id) => (savedAtStart.tabs.records[id] ? [{ id, ...savedAtStart.tabs.records[id] }] : []))
+          const browsers = kept.flatMap((id) => (savedAtStart.tabs.browsers[id] ? [{ id, ...savedAtStart.tabs.browsers[id] }] : []))
+          if (records.length > 0) setRecordTabs((prev) => [...prev, ...records.filter((r) => !prev.some((x) => x.id === r.id))])
+          if (browsers.length > 0) setBrowserTabs((prev) => [...prev, ...browsers.filter((b) => !prev.some((x) => x.id === b.id))])
+          if (held.length > 0) setHeldTabs(new Set(held))
+        }
+        const named = new Set(root ? leaves(root).flatMap((l) => l.tabIds) : [])
+        const unnamed = list.filter((s) => !named.has(sessionTab(s.id)))
+        if (root) {
+          // A session the layout did not name (started while the window was closed) joins the first group, behind the
+          // tab that group had on top
+          const first = firstLeaf(root)
+          for (const s of unnamed) root = addTab(root, first.id, sessionTab(s.id))
+          root = activateTab(root, first.activeTabId)?.root ?? root
+        } else if (unnamed.length > 0) {
+          // Nothing saved came back: every session goes into one group, as it always did, and a running session (or the
+          // first one, if none) becomes the active tab
+          const g = createGroup(sessionTab(unnamed[0].id))
+          root = g
+          for (const s of unnamed.slice(1)) root = addTab(root, g.id, sessionTab(s.id))
+          const wanted = (unnamed.find((s) => s.status === 'running') ?? unnamed[0]).id
+          const act = activateTab(root, sessionTab(wanted))
+          if (!act) return
+          root = act.root
+          paneId = act.paneId
+        }
+        // Nothing to restore: the window keeps whatever it already shows
+        if (!root || !paneId) return
+        // This tree is built from scratch, so what the window drew while the restore waited goes back in behind the first
+        // group's tab (mergeTabs), and so do the mirror tabs a workspace.list that answered first has already placed (fix
+        // round 1: they were wiped). setLayout moves the ref at once, so a list that answers after this, before the
+        // render, builds on this tree.
+        const withMirrors = placeAppTabs(mergeTabs(root, layoutRef.current), openSessionIds(mirrorsRef.current), paneId)
+        setLayout(withMirrors)
+        setActivePaneId(paneId)
+      })
     const offAccounts = window.api.on('accounts:changed', (p) => setAccounts(p.accounts))
     const offGhosts = window.api.on('accounts:ghostsChanged', (p) => setGhostAccounts(p.accounts))
     // Clicking a desktop notification raises the window in main and lands here to activate that
@@ -1380,6 +1467,7 @@ export default function App(): React.JSX.Element {
       })
     })
     return () => {
+      restoreLive = false
       offAccounts()
       offGhosts()
       offNotifyActivate()
@@ -1829,13 +1917,19 @@ export default function App(): React.JSX.Element {
     }
     const root = currentProjectRef.current
     if (!root) return // 트리가 없는 상태에서는 파일을 열 수 없다 — 열 수단 자체가 트리다
-    const title = path.split(/[\\/]/).pop() || path
-    setFileTabs((prev) => [...prev, { id, path, title, projectRoot: root }])
+    loadFileTab(id, path, root, at)
     // 파일 탭도 세션 탭과 같은 트리에 들어간다 — 활성 페인의 새 탭으로 열린다. 세션을 놓을 때와 같은
     // 함수를 쓰므로 배치 규칙이 한 벌뿐이다. StrictMode 대비로 setLayout 콜백 밖에서 계산한다
     const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
+  /** A file tab's row and buffer, read from disk, without placing it: openFile places the tab it opens, and the layout
+   *  restore (spec W3) has placed its tabs already. */
+  const loadFileTab = (id: string, path: string, projectRoot: string, at?: { line: number; col?: number }): void => {
+    const title = path.split(/[\\/]/).pop() || path
+    setFileTabs((prev) => [...prev, { id, path, title, projectRoot }])
     setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
     // mdModes 를 여기서 바로 채운다 — fileBuffers 와 같은 자리(탭이 생기는 시점). 그렇지 않으면
     // 이 탭의 모드는 사용자가 그 탭에서 직접 모드를 바꾸기 전까지 mdModes 에 아예 없고, 렌더가
@@ -1870,9 +1964,10 @@ export default function App(): React.JSX.Element {
   }
 
   /** Opens a cluster object in its read-only editor tab, or focuses the tab already showing it (placeKubeTab; kube
-   *  cluster view spec 4.6). The tab id is the whole record, so nothing else is kept, and like every non-session tab
-   *  it is not restored after a restart. */
+   *  cluster view spec 4.6). The tab id is the whole record, so nothing else is kept; the layout restore brings it back
+   *  held (spec W3), and opening the object is the person asking for it, so a held tab of it loads. */
   const openKubeObject = (ref: ObjectRef): void => {
+    releaseTab(kubeTab(ref))
     const placed = placeKubeTab(layoutRef.current, ref, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
@@ -2016,7 +2111,17 @@ export default function App(): React.JSX.Element {
     place(layoutRef.current, ref.key)
   }
 
+  /** A held tab (heldTabs) starts reading: a person selected it or pressed its Load button. */
+  const releaseTab = (tabId: string): void =>
+    setHeldTabs((prev) => {
+      if (!prev.has(tabId)) return prev
+      const next = new Set(prev)
+      next.delete(tabId)
+      return next
+    })
+
   const selectWorkbenchTab = (tabId: string): void => {
+    releaseTab(tabId)
     const cur = layoutRef.current
     if (!cur) return
     const act = activateTab(cur, tabId)
@@ -2571,10 +2676,49 @@ export default function App(): React.JSX.Element {
   /** The run whose console the Run tab shows. Starting a run selects it. */
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<RunStatus[]>([])
-  const [runPanelOpen, setRunPanelOpen] = useState(false)
+  const [runPanelOpen, setRunPanelOpen] = useState(() => savedAtStart?.panels.bottom.open ?? false)
   // Project terminals. They share the bottom panel with the Run tab.
   const [terminals, setTerminals] = useState<TerminalBuffer[]>([])
-  const [bottomTab, setBottomTab] = useState<string>('run') // 'run' | 'kube' | terminalId | log tab id
+  const [bottomTab, setBottomTab] = useState<string>(() => savedAtStart?.panels.bottom.tab ?? 'run') // 'run' | 'kube' | 'problems' | terminalId | log tab id
+  /** The cluster view restored on screen at start (spec W3, final review I5): like a held cluster object tab, it reads
+   *  nothing (no kubectl, no credential plugin) until the person asks for it: its Load button, the Kubernetes tab, the
+   *  rail icon, or a preset that shows it. */
+  const [kubeHeld, setKubeHeld] = useState(() => savedAtStart?.panels.bottom.open === true && savedAtStart.panels.bottom.tab === 'kube')
+  /** The window's layout as a record (spec W3, core/panes/savedLayout.ts), from this render's values. An agent's
+   *  preview tab is left without its info, so it does not come back: it belongs to its session. */
+  const layoutRecordRef = useRef(() => toSaved(null, null, { sidebar: { open: true, view: 'sessions' }, bottom: { open: false, tab: 'run' } }, { files: {}, records: {}, browsers: {} }))
+  layoutRecordRef.current = () =>
+    toSaved(
+      layoutRef.current,
+      activePaneIdRef.current,
+      {
+        sidebar: { open: sidebarOpen, view: explorerOpen ? 'explorer' : jobsOpen ? 'jobs' : hiwOpen ? 'understanding' : 'sessions' },
+        bottom: { open: runPanelOpen, tab: asBottomTab(bottomTab) }
+      },
+      {
+        files: Object.fromEntries(fileTabs.map((f) => [f.id, { path: f.path, projectRoot: f.projectRoot }])),
+        records: Object.fromEntries(recordTabs.map((r) => [r.id, { recordId: r.recordId, title: r.title, projectRoot: r.projectRoot }])),
+        browsers: Object.fromEntries(
+          browserTabs
+            .filter((b) => !b.agentSessionId)
+            .map((b) => [b.id, { url: b.url, title: b.title, projectRoot: b.projectRoot }])
+        )
+      }
+    )
+  // Written a moment after the last change, and only once the restore has run (layoutRestoredRef)
+  useEffect(() => {
+    if (!layoutRestoredRef.current) return
+    const timer = setTimeout(() => writeLayout(layoutRecordRef.current()), 300)
+    return () => clearTimeout(timer)
+  }, [layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
+  // ...and at once when the window goes, so a change in the last 300 ms is not lost
+  useEffect(() => {
+    const flush = (): void => {
+      if (layoutRestoredRef.current) writeLayout(layoutRecordRef.current())
+    }
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [])
   /** Pods' logs tabs in the bottom panel (spec 4.8), opened from the cluster view. */
   const [logTabs, setLogTabs] = useState<KubeLogTab[]>([])
   /** Each logs tab's own element, which its view renders into for the tab's life (see the portals after BottomPanel):
@@ -2703,6 +2847,12 @@ export default function App(): React.JSX.Element {
 
   /** Run 콘솔의 자리. 리사이저가 --run-panel-h 를 이 노드에 직접 쓴다 */
   const runHostRef = useRef<HTMLDivElement>(null)
+  /** The bottom panel's height as drawn, which the stylesheet keeps inside the window (styles.css .run-panel), or the
+   *  stored one while the panel is closed. */
+  const drawnPanelHeight = (): number => {
+    const panel = runHostRef.current?.querySelector('.run-panel')
+    return panel ? Math.round(panel.getBoundingClientRect().height) : runPanelHeight
+  }
 
   /** 예약을 세운다. **한 곳에 둔다** — 사이드바의 아이콘과 상세 창의 아이콘이 같은 동작이므로 확인
    *  문구도 409 의 갈래도 같아야 한다. 두 벌로 두면 한쪽만 고쳐지는 날 같은 버튼이 다른 말을 한다.
@@ -3766,7 +3916,7 @@ export default function App(): React.JSX.Element {
     shownTab: bottomTabShown,
     segment: kubeSegment,
     windowShown
-  })
+  }) && !kubeHeld
   const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
   /** The explorer's project's problems (spec W5, main/problems.ts): null when they could not be read, undefined while
    *  they are not known yet for this project. Asked again when main says they may differ (an orchestration write that
@@ -3813,7 +3963,8 @@ export default function App(): React.JSX.Element {
 
   /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
   const kubeRail = (): void => {
-    const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
+    setKubeHeld(false)
+    const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: drawnPanelHeight() })
     setRunPanelOpen(next.panelOpen)
     if (next.tab !== null) setBottomTab(next.tab)
     if (next.segment !== null) setKubeSegment(next.segment)
@@ -4545,6 +4696,87 @@ export default function App(): React.JSX.Element {
     setRunMenuOpen(false)
     setPaletteOpen({ query })
   }
+  /** Shows the panels a layout asks for (spec W3): one sidebar view, as the rail shows one, and the bottom panel on its
+   *  tab (shownBottomTab falls back while that tab is not available). */
+  const applyPanels = (p: SavedPanels): void => {
+    setSidebarOpen(p.sidebar.open)
+    setExplorerOpen(p.sidebar.view === 'explorer')
+    setJobsOpen(p.sidebar.view === 'jobs')
+    setHiwOpen(p.sidebar.view === 'understanding')
+    setRunPanelOpen(p.bottom.open)
+    setBottomTab(p.bottom.tab)
+    // A preset that shows the cluster view is the person asking for it
+    if (p.bottom.open && p.bottom.tab === 'kube') setKubeHeld(false)
+  }
+  /** The two sizes, as their resizers keep them (the same keys and bounds). */
+  const setSidebarSize = (w: number): void => {
+    const width = Math.min(520, Math.max(160, Math.round(w)))
+    setSidebarWidth(width)
+    try {
+      localStorage.setItem('cm.sidebarWidth', String(width))
+    } catch {
+      // Storage off: the width holds for this run
+    }
+  }
+  const setPanelHeight = (h: number): void => {
+    const height = Math.min(800, Math.max(120, Math.round(h)))
+    setRunPanelHeight(height)
+    try {
+      localStorage.setItem('cm.runPanelHeight', String(height))
+    } catch {
+      // Storage off: the height holds for this run
+    }
+  }
+  /** Every open tab in leaf order, and the one the active pane shows: what a preset arranges. */
+  const openTabsNow = (): { tabIds: string[]; active: string | null } => {
+    const cur = layoutRef.current
+    if (!cur) return { tabIds: [], active: null }
+    const pane = activePaneIdRef.current !== null ? leafOf(cur, activePaneIdRef.current) : null
+    return { tabIds: leaves(cur).flatMap((l) => l.tabIds), active: pane?.activeTabId ?? null }
+  }
+  const applyTree = (placed: { root: PaneNode; activePaneId: string } | null): void => {
+    if (!placed) return
+    setLayout(placed.root)
+    setActivePaneId(placed.activePaneId)
+  }
+  /** A built-in preset (core/panes/presets.ts): the open tabs rearranged and the preset's panels shown. Nothing is
+   *  opened or started; with no tab open only the panels change. */
+  const applyPreset = (id: PresetId): void => {
+    const { tabIds, active } = openTabsNow()
+    applyTree(presetTree(id, tabIds, active))
+    const p = presetPanels(id)
+    applyPanels(p)
+    // Room for this opening only, like the rail's (K3): the height the person dragged stays theirs
+    if (p.bottomHeight === 'tall') setRunPanelHeight(Math.min(800, Math.max(runPanelHeight, Math.round(window.innerHeight * 0.45))))
+    if (id === 'default') {
+      setSidebarSize(500)
+      setPanelHeight(220)
+    }
+  }
+  const [presetsOpen, setPresetsOpen] = useState(false)
+  const [savedPresets, setSavedPresets] = useState(readSavedPresets)
+  /** Keeps the window's layout as a saved preset under `name` (a same name is replaced where it stood). */
+  const savePreset = (name: string): 'saved' | 'full' => {
+    const now = layoutRecordRef.current()
+    const next = withPreset(savedPresets, { name, tree: now.tree, panels: now.panels, sidebarWidth, bottomHeight: runPanelHeight })
+    if (next === 'full') return 'full'
+    setSavedPresets(next)
+    writeSavedPresets(next)
+    return 'saved'
+  }
+  const deletePreset = (name: string): void => {
+    const next = withoutPreset(savedPresets, name)
+    setSavedPresets(next)
+    writeSavedPresets(next)
+  }
+  const applySavedPreset = (p: SavedPreset): void => {
+    const { tabIds, active } = openTabsNow()
+    applyTree(applySaved(p, tabIds, active))
+    applyPanels(p.panels)
+    setSidebarSize(p.sidebarWidth)
+    setPanelHeight(p.bottomHeight)
+    setPresetsOpen(false)
+  }
   // What each action does, and when it cannot (ADR-007). Rebuilt every render, so a handler reads this render's
   // state; the registry's delegates read it from here. A Record over ActionId: an action added to ACTIONS without a
   // handler here does not compile.
@@ -4611,6 +4843,13 @@ export default function App(): React.JSX.Element {
     // The rail's Kubernetes icon, shown under the same condition.
     'kube.open': { blockedBy: () => (kubectlFound && bottomRoot ? null : 'action.blocked.noKubectl'), run: kubeRail },
     'palette.open': { run: () => openPalette('>') },
+    // The layout presets (spec W3): never blocked, since with no tab open the panels still change
+    'layout.coding': { run: () => applyPreset('coding') },
+    'layout.review': { run: () => applyPreset('review') },
+    'layout.agents': { run: () => applyPreset('agents') },
+    'layout.devops': { run: () => applyPreset('devops') },
+    'layout.reset': { run: () => applyPreset('default') },
+    'layout.presets': { run: () => setPresetsOpen(true) },
     // The same box on files (spec W2), over the explorer's project. With no project it still opens: the box says why it is
     // empty, where a key that did nothing would explain nothing.
     'file.quickOpen': { run: () => openPalette('') },
@@ -5366,6 +5605,8 @@ export default function App(): React.JSX.Element {
                 renderEditor={renderEditor}
                 renderRecord={renderRecord}
                 renderBrowser={renderBrowser}
+                held={heldTabs}
+                onRelease={releaseTab}
                 appTabInfo={appTabInfo}
                 renderApp={renderApp}
                 rollStates={rollStates}
@@ -5431,10 +5672,12 @@ export default function App(): React.JSX.Element {
                     onPointerDown={(e) => {
                       e.preventDefault()
                       const startY = e.clientY
-                      const startH = runPanelHeight
+                      // From the height on screen, inside the window's bound (styles.css .run-panel caps the stored one),
+                      // so a drag after the window got smaller moves the edge at once (final review I4)
+                      const startH = drawnPanelHeight()
                       let latestY = startY
                       let rafId = 0
-                      const clamp = (y: number): number => Math.min(800, Math.max(120, startH + (startY - y)))
+                      const clamp = (y: number): number => Math.min(800, window.innerHeight - 200, Math.max(120, startH + (startY - y)))
                       const apply = (): void => {
                         rafId = 0
                         runHostRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
@@ -5499,7 +5742,10 @@ export default function App(): React.JSX.Element {
                     terminals={terminals}
                     terminalCwd={bottomRoot}
                     activeTab={bottomTabShown}
-                    onSelectTab={setBottomTab}
+                    onSelectTab={(tab) => {
+                      if (tab === 'kube') setKubeHeld(false)
+                      setBottomTab(tab)
+                    }}
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
                     onCollapse={() => setRunPanelOpen(false)}
@@ -5524,16 +5770,23 @@ export default function App(): React.JSX.Element {
                     )}
                     kubeCluster={(switcher) =>
                       kubectlFound ? (
-                        <ClusterView
-                          model={cluster}
-                          detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onOpenShell={showPodShell} onWrite={writeKubeObject} onForward={startForwardDialog} />}
-                          onOpenInEditor={openKubeObject}
-                          onOpenLogs={showPodLogs}
-                          onOpenShell={showPodShell}
-                          onWrite={writeKubeObject}
-                          onForward={startForwardDialog}
-                          toolbarStart={switcher}
-                        />
+                        kubeHeld ? (
+                          <div className="kube-cluster">
+                            <div className="kube-segment-bar">{switcher}</div>
+                            <HeldTab name={t('kube.log.tab')} onLoad={() => setKubeHeld(false)} />
+                          </div>
+                        ) : (
+                          <ClusterView
+                            model={cluster}
+                            detail={<ClusterDetail model={cluster} onOpenInEditor={openKubeObject} onOpenLogs={showPodLogs} onOpenShell={showPodShell} onWrite={writeKubeObject} onForward={startForwardDialog} />}
+                            onOpenInEditor={openKubeObject}
+                            onOpenLogs={showPodLogs}
+                            onOpenShell={showPodShell}
+                            onWrite={writeKubeObject}
+                            onForward={startForwardDialog}
+                            toolbarStart={switcher}
+                          />
+                        )
                       ) : (
                         // The tab is there for its log while kubectl is missing (spec 4.12): the manifests strip's
                         // notice, with its link to the setting, after the switch in the log row's frame, so the switch
@@ -5718,6 +5971,15 @@ export default function App(): React.JSX.Element {
             setShowNew(false)
             setNewSessionCwd(null)
           }}
+        />
+      )}
+      {presetsOpen && (
+        <LayoutPresetsDialog
+          presets={savedPresets}
+          onSave={savePreset}
+          onApply={applySavedPreset}
+          onDelete={deletePreset}
+          onClose={() => setPresetsOpen(false)}
         />
       )}
       {remoteDialog !== null && (

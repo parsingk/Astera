@@ -410,7 +410,7 @@ body { font-family: var(--sans); letter-spacing: var(--tracking); background: va
 .rail-settings { margin-bottom: 10px; }
 
 /* ---------- sidebar / main ---------- */
-.sidebar { width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; display: flex; flex-direction: column; }
+.sidebar { width: 280px; max-width: calc(100vw - 360px); flex: none; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; display: flex; flex-direction: column; }
 .resizer { width: 5px; flex: none; cursor: col-resize; background: transparent; }
 .resizer:hover, .resizer:active { background: var(--accent); }
 body.resizing { cursor: col-resize; user-select: none; }
@@ -2228,6 +2228,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .problem-where.unresolved { font-style: italic; color: var(--text-faint); }
 .bottom-tab-badge.quiet { background: var(--elevated); color: var(--warn); }
 .problem-row.openable:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.layout-presets { width: 440px; max-width: calc(100vw - 32px); }
+.layout-presets-name-row { display: flex; gap: 8px; }
+.layout-presets-name-row input { flex: 1; min-width: 0; }
+.layout-preset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.layout-preset-list li { display: flex; align-items: center; gap: 8px; }
+.layout-preset-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.held-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; background: var(--bg); color: var(--text-dim); text-align: center; }
+.held-tab-note { margin: 0; font-size: 12px; }
+.held-tab-name { margin: 0; font-size: 13px; color: var(--text); word-break: break-all; max-width: 100%; }
 .problem-stale { flex: none; font-size: 10.5px; color: var(--warn); border: 1px solid currentColor; border-radius: var(--radius-sm); padding: 0 4px; }
 /* Quick Open's search scope under the box: the project's folder name, and a note when a large one is cut */
 .palette-scope { flex: none; padding: 0 9px 4px; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3373,7 +3382,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .md-preview .tok-invalid { color: #ffffff; background: #e06c75; }
 
 /* ---------- Run panel ---------- */
-.run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--term-bg); height: var(--run-panel-h, 220px); min-height: 120px; }
+.run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--term-bg); height: var(--run-panel-h, 220px); min-height: 120px; max-height: calc(100vh - 200px); }
 .run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
 .run-panel-actions { display: flex; gap: 2px; }
 .run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }

@@ -42,6 +42,12 @@ export type ActionId =
   | 'palette.open'
   | 'file.quickOpen'
   | 'search.text'
+  | 'layout.coding'
+  | 'layout.review'
+  | 'layout.agents'
+  | 'layout.devops'
+  | 'layout.reset'
+  | 'layout.presets'
 
 export type ActionSpec = {
   id: ActionId
@@ -310,7 +316,11 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       descKey: 'shortcut.search.text',
       yieldsToTerminal: false,
       swallowsWhenBlocked: false
-    }
+    },
+    // Spec W3: the layout presets, reached from the palette; no key until the person gives one
+    ...(['layout.coding', 'layout.review', 'layout.agents', 'layout.devops', 'layout.reset', 'layout.presets'] as const).map(
+      (id): ActionSpec => ({ id, defaults: [], descKey: `shortcut.${id}`, yieldsToTerminal: false, swallowsWhenBlocked: false })
+    )
   ]
 }
 

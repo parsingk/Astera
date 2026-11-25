@@ -19,6 +19,7 @@ import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
 import { KubeObjectTab, type KubeTabHost } from './kube/cluster/KubeObjectTab'
+import { HeldTab } from './HeldTab'
 import { useDocumentShown } from '../hooks/useDocumentShown'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
@@ -67,6 +68,8 @@ export function PaneGrid({
   dirtyFileIds,
   kubeKinds,
   kubeHost,
+  held,
+  onRelease,
   recordTabs,
   recordStatuses,
   browserTabs,
@@ -122,6 +125,10 @@ export function PaneGrid({
   kubeKinds?: Record<string, KubeFileKind>
   /** What every cluster object tab asks of the app: its write dialog, its dirty flag and the edit asks. */
   kubeHost: KubeTabHost
+  /** Restored preview and cluster object tabs that have read nothing yet (spec W3): drawn as a placeholder instead of
+   *  their page or their object, until onRelease. */
+  held: ReadonlySet<string>
+  onRelease: (tabId: string) => void
   /** Every open record tab, whichever pane holds it — same place, same reason as fileTabs. The title
    *  and the project come from this record, so a record tab from another project keeps its name and
    *  its × too. */
@@ -442,7 +449,7 @@ export function PaneGrid({
             inert={draw === 'drawn'}
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >
-            {renderBrowser(b.id)}
+            {held.has(b.id) ? <HeldTab name={b.url} onLoad={() => onRelease(b.id)} /> : renderBrowser(b.id)}
           </div>
         )
       })}
@@ -582,7 +589,11 @@ export function PaneGrid({
             }
             onMouseDown={() => onFocusPane(pane.id)}
           >
-            <KubeObjectTab target={target} visible={visible && windowShown} tabId={tabId} host={kubeHost} />
+            {held.has(tabId) ? (
+              <HeldTab name={`${target.kind} ${target.name}`} onLoad={() => onRelease(tabId)} />
+            ) : (
+              <KubeObjectTab target={target} visible={visible && windowShown} tabId={tabId} host={kubeHost} />
+            )}
           </div>
         )
       })}

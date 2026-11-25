@@ -188,6 +188,12 @@
 - **Mostrar problemas:** `Ctrl`/`Cmd`+`Shift`+`M` abre la pestaña de problemas del panel inferior: lo que encontraron
   las comprobaciones y revisiones de los Jobs del proyecto, por archivo y línea, con filtros y orden. Una fila abre su
   archivo en la línea, y un problema cuyo archivo cambió desde que se encontró queda marcado
+- **Distribución:** la ventana vuelve como la dejaste: divisiones, pestañas, la barra lateral y el panel inferior.
+  Una sesión vuelve solo si sigue en marcha, y una pestaña de vista previa o de objeto de Kubernetes espera un clic
+  antes de cargarse. Desde la paleta de comandos, **Distribución: Programación**, **Distribución: Revisión de agentes**,
+  **Distribución: Varios agentes** y **Distribución: DevOps** ordenan las pestañas abiertas,
+  **Distribución: Restablecer la predeterminada** vuelve al inicio y **Distribución: Distribuciones guardadas**
+  guarda las tuyas con un nombre
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo

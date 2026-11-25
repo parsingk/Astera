@@ -48,6 +48,12 @@ export function createGroup(tabId: string): PaneLeaf {
   return { kind: 'leaf', id: nextId(), tabIds: [tabId], activeTabId: tabId }
 }
 
+/** A split of two subtrees under a fresh id, from the same counter as createGroup: how a tree is rebuilt from a stored
+ *  one (savedLayout.ts) or laid out by a preset (presets.ts) without an id meeting one already on screen. */
+export function createSplit(dir: PaneDir, ratio: number, a: PaneNode, b: PaneNode): PaneSplit {
+  return { kind: 'split', id: nextId(), dir, ratio, a, b }
+}
+
 export function leaves(node: PaneNode): PaneLeaf[] {
   return node.kind === 'leaf' ? [node] : [...leaves(node.a), ...leaves(node.b)]
 }
