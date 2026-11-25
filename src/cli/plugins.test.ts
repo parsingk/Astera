@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { approvalMessage, configureArgs, configureStdinError, doctorEnd, installPlugin } from './plugins'
-import { PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
+import { PLUGIN_RESTRICTED_UI_NOTICE, PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
 
 const INSPECTION = {
   id: '@acme/astera-jira',
@@ -232,5 +232,21 @@ describe('configureArgs', () => {
     expect(configureStdinError(['set', 'unset'])).toBe(
       'plugins configure reads standard input only as --stdin <key>, as in --stdin token; a - after --set or --unset is not one'
     )
+  })
+})
+
+// Plugin API 2 (ADR-008): a UI-only plugin is restricted UI, and is never introduced as trusted code
+describe('approvalMessage by trust level', () => {
+  it('gives a UI-only plugin the restricted UI notice instead of the trusted code warning', () => {
+    const m = approvalMessage({ ...INSPECTION, trust: 'restricted-ui', permissions: ['panels.register'] })
+    expect(m).toBe(
+      `Jira 1.0.0 (@acme/astera-jira) asks for: panels.register. ${PLUGIN_RESTRICTED_UI_NOTICE} Approve with --yes, or name what to grant with --grant <list>.`
+    )
+    expect(m).not.toContain(PLUGIN_TRUST_WARNING)
+  })
+
+  it('keeps the trusted code warning for a plugin with a host entry, and for one that does not say', () => {
+    expect(approvalMessage({ ...INSPECTION, trust: 'trusted' })).toContain(PLUGIN_TRUST_WARNING)
+    expect(approvalMessage(INSPECTION)).toContain(PLUGIN_TRUST_WARNING)
   })
 })
