@@ -617,7 +617,13 @@ astera plugins doctor --id <pluginId>                what could keep it from run
 astera plugins settings --id <pluginId>              its settings; a secret one only as set or not
 astera plugins configure --id <pluginId> --set baseUrl=https://jira.example.com
 printf %s "$TOKEN" | astera plugins configure --id <pluginId> --stdin token   a secret, off the command line
+astera plugins validate --path ./my-plugin           checks the folder as an install would; exit 1 naming each problem
 ```
+
+`plugins validate` is for whoever writes a plugin: it starts no Host and changes nothing, so it works without the app
+and inside an agent session. Each problem has a code (`MANIFEST_INVALID`, `INCOMPATIBLE`, `ENTRY_MISSING`, `UI_MISSING`,
+`LINK_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), the manifest field it is about when there is one, and the
+sentence an install would give.
 
 **A plugin with a host entry runs trusted code on this machine.** It can do anything you can, and its permissions
 limit only what it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program. A
@@ -757,6 +763,7 @@ astera plugins logs    --id <pluginId> [--lines <n>]
 astera plugins doctor  --id <pluginId>
 astera plugins settings  --id <pluginId>
 astera plugins configure --id <pluginId> [--set <key=value>] [--unset <key>] [--stdin <key>]
+astera plugins validate --path <folder>
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

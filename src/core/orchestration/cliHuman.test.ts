@@ -181,6 +181,16 @@ describe('humanFor', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')
   })
 
+  // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted
+  it('plugins validate names the plugin, its version and trust when nothing is wrong', () => {
+    expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'hello', name: 'hello', version: '0.1.0', trust: 'restricted-ui' }, problems: [] })).toBe(
+      'hello 0.1.0, restricted UI: no problem found'
+    )
+    expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'run', name: 'run', version: '1.0.0', trust: 'trusted' }, problems: [] })).toBe(
+      'run 1.0.0, trusted code: no problem found'
+    )
+  })
+
   it('plugins doctor prints one line per check, a failure in capitals', () => {
     expect(
       humanFor('plugins-doctor', {

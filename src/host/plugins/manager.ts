@@ -4,8 +4,9 @@
 import { promises as fs } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginCapability, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission } from '../../core/plugins/manifest'
+import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginCapability, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
+import { readPackage } from './packageFile'
 import { parseNpmSpec } from '../../core/plugins/npmSpec'
 import { NpmFailed, NpmMissing, createNpm, installDependencies, packAndExtract, type NpmRun, type NpmRunner } from './npm'
 import { NpmUnavailable } from './ownNpm'
@@ -80,23 +81,10 @@ const refused = (status: number, error: string, code?: string, reason?: string):
 
 /** The manifest a folder's package.json holds, or the sentence saying why it holds none. */
 async function readManifest(folder: string): Promise<{ ok: true; manifest: PluginManifest } | { ok: false; error: string }> {
-  const file = path.join(folder, 'package.json')
-  let text: string
-  try {
-    text = await fs.readFile(file, 'utf8')
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false, error: `no package.json in ${folder}` }
-    return { ok: false, error: `${file} cannot be read: ${(e as Error).message}` }
-  }
-  let pkg: unknown
-  try {
-    // A byte order mark first, as Windows PowerShell 5.1 and older Notepad write one, is skipped as npm skips it
-    pkg = JSON.parse(text.replace(/^\uFEFF/, ''))
-  } catch {
-    return { ok: false, error: `${file} is not JSON` }
-  }
-  const parsed = parseManifest(pkg)
-  return parsed.ok ? parsed : { ok: false, error: `${file}: ${parsed.problems.join('; ')}` }
+  const read = await readPackage(folder)
+  if (!read.ok) return read
+  const parsed = parseManifest(read.pkg)
+  return parsed.ok ? parsed : { ok: false, error: `${path.join(folder, 'package.json')}: ${parsed.problems.join('; ')}` }
 }
 
 const isFolder = (p: string): Promise<boolean> => fs.stat(p).then((s) => s.isDirectory(), () => false)
@@ -127,10 +115,9 @@ const stranded = (first: unknown, retired: string): Error =>
 /** Removes a folder the Host no longer needs; a failure leaves it behind rather than failing the change it followed. */
 const discard = (p: string): Promise<void> => fs.rm(p, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
 
-/** The plugin capabilities this Host serves (design P8): `event` and `notification` from plugin Phase 3, `job-source`
- *  from Phase 4, `completion-check` from Phase 5. A plugin that names another one installs and does not run;
- *  docs/plugins.md names each of those as not yet (pluginsDoc.test.ts). */
-export const PLUGIN_SERVED_CAPABILITIES: readonly PluginCapability[] = ['event', 'notification', 'job-source', 'completion-check']
+/** The plugin capabilities this Host serves: core/plugins/manifest.ts holds the list, which the CLI's folder check
+ *  (`plugins validate`) reads too. */
+export { PLUGIN_SERVED_CAPABILITIES }
 
 export function createPluginManager(d: {
   profileDir: string

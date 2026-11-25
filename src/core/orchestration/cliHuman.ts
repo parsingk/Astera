@@ -610,6 +610,11 @@ export function humanFor(
       const next = data.status === 'failed' ? `; start it again with astera plugins enable --id ${str(data.id)}` : ''
       return `${rows}\n(${data.status}${reason}${next})`
     }
+    // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted; problems are the error's
+    case 'plugins-validate': {
+      const p = (typeof data.plugin === 'object' && data.plugin !== null ? data.plugin : {}) as Record<string, unknown>
+      return `${str(p.id)} ${str(p.version)}, ${p.trust === 'trusted' ? 'trusted code' : 'restricted UI'}: no problem found`
+    }
     case 'plugins-doctor':
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])

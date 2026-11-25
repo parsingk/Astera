@@ -319,6 +319,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'stdin', value: '<key>', about: 'set that setting to what standard input holds (one trailing newline dropped)' }
     ]
   },
+  'plugins-validate': {
+    summary: 'check a plugin folder the way an install would, naming each problem by its code',
+    detail:
+      'Starts no Host and changes nothing: it reads the folder, checks its package.json, whether this Astera runs it, its links and node_modules layout, and that its entry and ui are files in it. Exits 0 when it would install, 1 naming each problem (code, the manifest field it is about, the sentence) with the problems in the details, 2 when the folder is not there.',
+    flags: [{ name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true }]
+  },
   'plugins-doctor': {
     summary: 'what could keep a plugin from running: its manifest, compatibility, entry, native addons and its last run',
     detail: 'Exits 1 when a check fails, naming each failing check.',
