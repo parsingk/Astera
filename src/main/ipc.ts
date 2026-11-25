@@ -5153,16 +5153,21 @@ export function registerIpc(
   // Turning a plugin off, removing or replacing it closes its panels first (ADR-008 §6, plugin panels review I2)
   ipcMain.handle('plugins.install', (_e, a: unknown) => {
     const replaces = (a as { expect?: { name?: unknown } } | null)?.expect?.name
-    if (typeof replaces === 'string') panelGuests.forget(replaces)
+    if (typeof replaces === 'string') {
+      panelGuests.forget(replaces)
+      return panelGuests.hold(replaces, plugins.install(a as Parameters<typeof plugins.install>[0]))
+    }
     return plugins.install(a as Parameters<typeof plugins.install>[0])
   })
   ipcMain.handle('plugins.setEnabled', (_e, id: unknown, enabled: unknown) => {
-    if (enabled !== true && typeof id === 'string') panelGuests.forget(id)
-    return plugins.setEnabled(id as string, enabled === true)
+    if (typeof id !== 'string') return plugins.setEnabled(id as string, enabled === true)
+    if (enabled !== true) panelGuests.forget(id)
+    return panelGuests.hold(id, plugins.setEnabled(id as string, enabled === true))
   })
   ipcMain.handle('plugins.remove', (_e, id: unknown) => {
-    if (typeof id === 'string') panelGuests.forget(id)
-    return plugins.remove(id as string)
+    if (typeof id !== 'string') return plugins.remove(id as string)
+    panelGuests.forget(id)
+    return panelGuests.hold(id, plugins.remove(id as string))
   })
   ipcMain.handle('plugins.logs', (_e, id: unknown, lines: unknown) => plugins.logs(id as string, lines as number))
   ipcMain.handle('plugins.settings', (_e, id: unknown) => plugins.settings(id as string))

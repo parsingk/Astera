@@ -159,7 +159,24 @@ export function createPanelGuests(d: {
     await s.setProxy(DEAD_PROXY)
   }
 
+  /** A change this app is making to a plugin (off, remove, replace), which a prepare waits for: a tab asking again right
+   *  after it must see the plugin as the change leaves it (plugin dev and test final review M4). */
+  const holds = new Map<string, Promise<unknown>>()
+
   return {
+    /** Holds the plugin's prepares until `change` settles; answers `change`. */
+    hold<T>(pluginId: string, change: Promise<T>): Promise<T> {
+      const settled = change.then(
+        () => undefined,
+        () => undefined
+      )
+      holds.set(pluginId, settled)
+      void settled.then(() => {
+        if (holds.get(pluginId) === settled) holds.delete(pluginId)
+      })
+      return change
+    },
+
     /** Where the Host's plugin list comes from (ipc.ts, once its plugins route exists). */
     listFrom(fn: () => Promise<PluginRow[] | null>): void {
       listPlugins = fn
@@ -171,6 +188,7 @@ export function createPanelGuests(d: {
       panelId: string,
       projectRoot: string | null
     ): Promise<{ ok: true; url: string; partition: string } | { ok: false; code: PanelRefusalCode; reason: string }> {
+      await holds.get(pluginId)
       const list = await listPlugins()
       // A Host that cannot answer says nothing about the plugin: nothing is forgotten (review M3)
       if (list === null) return { ok: false, code: 'host', reason: 'the Host’s plugin list could not be read' }

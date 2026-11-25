@@ -210,7 +210,7 @@ async function test(a: { args: Record<string, unknown>; cwd: string; version: st
     if (r.problems.length === 1 && r.problems[0].code === 'NOT_A_FOLDER') return invalid(r.problems[0].message)
     return refused(folder, { problems: r.problems, warnings: [] })
   }
-  const body = { plugin: r.plugin, ok: r.ok, checks: r.checks }
+  const body = { plugin: r.plugin, ok: r.ok, checks: r.checks, ...(r.warnings ? { warnings: r.warnings } : {}) }
   if (r.ok) return { ok: true, body }
   const failing = r.checks.filter((c) => !c.ok)
   return { ok: false, error: { code: 'FAILED', message: `${r.plugin.id} failed a check: ${failing.map((c) => `${c.name}: ${c.detail}`).join('; ')}`, details: body } }

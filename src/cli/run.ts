@@ -1514,7 +1514,7 @@ export async function main(): Promise<void> {
       call,
       watch: chokidarWatch,
       emit: (e) => {
-        if (mode !== 'quiet') out(mode === 'human' ? devEventLine(e) : okEnvelope('plugins-dev', e))
+        if (mode !== 'quiet') out(mode === 'human' ? terminalSafe(devEventLine(e)) : jsonSafe(okEnvelope('plugins-dev', e)))
       },
       onStop: (stop) => {
         process.once('SIGINT', stop)

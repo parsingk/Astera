@@ -10,6 +10,7 @@ import { codeForStatus, type CliError } from '../core/orchestration/cliOutput'
 import { PLUGIN_SERVED_CAPABILITIES, parseManifest } from '../core/plugins/manifest'
 import { checkPluginFolder, type FolderCheck, type FolderProblem } from '../host/plugins/folderCheck'
 import { readPackage } from '../host/plugins/packageFile'
+import { logToStderr } from './host'
 import { approvalMessage, installPlugin, type PluginCall } from './plugins'
 
 /** What a plugin asks for: what an approval covers. */
@@ -48,15 +49,25 @@ export function devEventLine(e: DevEvent): string {
   }
 }
 
+/** An editor's side file: vim's swap and backup files and its 4913 write test, Emacs' lock links and autosaves. */
+const EDITOR_SIDE_FILE = /^(?:\..*\.sw[a-p]|.*~|\.#.*|#.*#|4913)$/
+
+/** Whether a path under the plugin folder (with / or \\) makes no round: .git, node_modules, an editor's side files. */
+export function ignoredByDev(rel: string): boolean {
+  const parts = rel.split(/[\\/]/)
+  return parts.some((part) => part === '.git' || part === 'node_modules') || EDITOR_SIDE_FILE.test(parts[parts.length - 1])
+}
+
 /** The folder watched as main's watchers watch theirs (main/fileWatcher.ts): no event for what is already there, a file
- *  reported once its writes have settled, and neither .git nor node_modules looked at. */
+ *  reported once its writes have settled, and what ignoredByDev names not looked at. A watcher error is said, not a crash. */
 export function chokidarWatch(folder: string, onChange: () => void): () => void {
   const watcher = chokidar.watch(folder, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-    ignored: (p: string) => path.relative(folder, p).split(/[\\/]/).some((part) => part === '.git' || part === 'node_modules')
+    ignored: (p: string) => p !== folder && ignoredByDev(path.relative(folder, p))
   })
   watcher.on('all', () => onChange())
+  watcher.on('error', (e: unknown) => logToStderr(`plugins dev: watching ${folder} failed: ${e instanceof Error ? e.message : String(e)}`))
   return () => void watcher.close()
 }
 
@@ -74,7 +85,7 @@ export function watchPluginFolder(d: {
   emit: (e: DevEvent) => void
   now?: () => Date
   quietMs?: number
-}): { stop(): void; idle(): Promise<void> } {
+}): { stop(): void; poke(): void; idle(): Promise<void> } {
   const now = d.now ?? (() => new Date())
   let timer: ReturnType<typeof setTimeout> | null = null
   let running: Promise<void> | null = null
@@ -111,13 +122,16 @@ export function watchPluginFolder(d: {
       })
   }
 
-  const unwatch = d.watch(d.folder, () => {
+  const changed = (): void => {
     if (stopped) return
     if (timer) clearTimeout(timer)
     timer = setTimeout(go, d.quietMs ?? QUIET_MS)
-  })
+  }
+  const unwatch = d.watch(d.folder, changed)
 
   return {
+    /** As if the folder had just changed. */
+    poke: changed,
     stop() {
       stopped = true
       if (timer) clearTimeout(timer)
@@ -159,10 +173,17 @@ export async function runPluginDev(d: {
   emit: (e: DevEvent) => void
   onStop: (stop: () => void) => void
   now?: () => Date
+  check?: (folder: string) => Promise<FolderCheck>
+  asks?: (folder: string) => Promise<PluginAsks | null>
 }): Promise<{ ok: true } | { ok: false; error: CliError }> {
   if (typeof d.args.path !== 'string' || d.args.path === '') return { ok: false, error: { code: 'INVALID_ARGUMENTS', message: 'plugins dev needs --path <folder>' } }
   const folder = path.resolve(d.cwd, d.args.path)
-  const first = await installPlugin({ args: { ...d.args, path: folder }, cwd: d.cwd, request: undefined, call: d.call })
+  // Watched from before the first install, so a save made while it runs is installed after it (final review M8)
+  let early = false
+  const unwatchEarly = d.watch(folder, () => {
+    early = true
+  })
+  const first = await installPlugin({ args: { ...d.args, path: folder }, cwd: d.cwd, request: undefined, call: d.call }).finally(unwatchEarly)
   if ('approve' in first) return { ok: false, error: { code: 'INVALID_ARGUMENTS', message: approvalMessage(first.approve), details: { plugin: first.approve } } }
   if ('unreachable' in first) return { ok: false, error: { code: 'HOST_NOT_RUNNING', message: first.unreachable } }
   if ('stuck' in first) return { ok: false, error: { code: 'TIMEOUT', message: first.stuck } }
@@ -176,10 +197,13 @@ export async function runPluginDev(d: {
   const w = watchPluginFolder({
     folder,
     approved,
-    check: (f) => checkPluginFolder(f, { version: d.version, capabilities: PLUGIN_SERVED_CAPABILITIES }),
-    asks: asksOf,
+    check: d.check ?? ((f) => checkPluginFolder(f, { version: d.version, capabilities: PLUGIN_SERVED_CAPABILITIES })),
+    asks: d.asks ?? asksOf,
     install: async (grant) => {
-      const r = await installPlugin({ args: { path: folder, grant: grant.join(',') }, cwd: d.cwd, request: undefined, call: d.call })
+      // What was approved goes with the install: the Host refuses a copy of another trust, and a folder asking for anything
+      // else is refused before it is sent (final review I5)
+      const held = { trust: approved.trust, permissions: approved.permissions, capabilities: approved.capabilities }
+      const r = await installPlugin({ args: { path: folder, grant: grant.join(',') }, cwd: d.cwd, request: undefined, call: d.call, approved: held })
       if ('approve' in r) return { ok: false, message: approvalMessage(r.approve) }
       if ('status' in r && r.status === 200) return { ok: true, body: (r.body ?? {}) as Record<string, unknown> }
       return { ok: false, message: messageOf(r as PluginCall) }
@@ -189,6 +213,7 @@ export async function runPluginDev(d: {
     now
   })
   d.emit({ event: 'watching', folder })
+  if (early) w.poke()
   await new Promise<void>((resolve) =>
     d.onStop(() => {
       w.stop()

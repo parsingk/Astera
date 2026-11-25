@@ -356,6 +356,19 @@ describe('final review fixes', () => {
     expect(m.guests.decideAttach({ partition: other.partition, src: other.url }, {})).toBe('plugin')
   })
 
+  // Final review of plugins dev M4: a tab asking again right after the app turned the plugin off, removed or replaced it
+  // waits for that change, so it is not shown the plugin as it was
+  it('waits for a change the app is making to the plugin before preparing its panel', async () => {
+    const rows = [row()]
+    const m = make(rows)
+    let finish: () => void = () => {}
+    m.guests.hold('hello-panel', new Promise<void>((r) => (finish = r)))
+    const asked = m.guests.prepare('hello-panel', 'main', null)
+    rows[0] = row({ enabled: false })
+    finish()
+    expect(await asked).toMatchObject({ ok: false, code: 'disabled' })
+  })
+
   // M3: a Host that cannot answer changes nothing
   it('says the list could not be read, and forgets nothing', async () => {
     const live = make([row()])

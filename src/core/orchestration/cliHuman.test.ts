@@ -210,6 +210,12 @@ describe('humanFor', () => {
     expect(humanFor('plugins-pack', { file: '/w/a.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [], skipped: 3 })).toContain('not packed: 3 files outside files or in node_modules')
   })
 
+  it('plugins test says a plugin this Astera would not run under its checks', () => {
+    expect(humanFor('plugins-test', { plugin: { id: 'x' }, ok: true, checks: [{ name: 'page', ok: true, detail: 'fine' }], warnings: [{ code: 'INCOMPATIBLE', message: 'the plugin needs Astera >=9.0.0; this is 1.6.0' }] })).toBe(
+      ['ok  page  fine', 'warning INCOMPATIBLE: the plugin needs Astera >=9.0.0; this is 1.6.0'].join(String.fromCharCode(10))
+    )
+  })
+
   it('plugins test prints one line per check, a failure in capitals', () => {
     expect(humanFor('plugins-test', { plugin: { id: 'x', version: '0.1.0' }, ok: true, checks: [{ name: 'starts', ok: true, detail: 'running' }, { name: 'stops', ok: true, detail: 'stopped when asked' }] })).toBe(
       ['ok  starts  running', 'ok  stops   stopped when asked'].join(String.fromCharCode(10))

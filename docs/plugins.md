@@ -705,7 +705,9 @@ astera plugins validate --path ./my-plugin
 
 `astera plugins test --path .` runs the plugin in Astera's plugin runtime against a fake Host, without the app: it starts,
 answers what its capability is asked, keeps running when a call it was not granted is refused, and stops when asked; a
-UI page is checked against what a panel allows. Each check that fails is named, with why.
+UI page is checked against what a panel allows. Each check that fails is named, with why. Each answer is read as
+Astera reads it, so one Astera would refuse fails here. A job source's or a check's calls are its real code: a source
+that reads a service needs that service, and a setting it needs is given with `--set key=value`.
 
 `astera plugins dev --path . --yes` installs the folder, then installs it again each time it changes, with the
 permissions you approved; an open panel of the plugin shows the new page by itself. It does not install a folder with

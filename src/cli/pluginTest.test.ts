@@ -96,3 +96,112 @@ describe('testPlugin', () => {
     expect(r).toMatchObject({ problems: [{ code: 'ENTRY_MISSING' }] })
   })
 })
+
+// Final review of plugins dev and test
+describe('testPlugin, final review', () => {
+  const source = (name: string, body: string): Record<string, string> => ({
+    'package.json': JSON.stringify({ name, version: '0.1.0', type: 'module', astera: { apiVersion: '1', entry: 'index.mjs', capabilities: ['job-source'], permissions: [] } }),
+    'index.mjs': body
+  })
+
+  // I1: the plugin's log is read once it is written, so a forced end is never missed
+  it('fails stops for a plugin that ends just after its grace', async () => {
+    const folder = await write(path.join(work, 'slow'), trusted('slow', 'export default { async activate() {}, async deactivate() { await new Promise((r) => setTimeout(r, 1100)) } }'))
+    const r = await testPlugin({ folder, version: '1.6.0', launcher, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(byName(r.checks)).toMatchObject({ stops: false })
+  }, 60_000)
+
+  // I2: an answer Astera would refuse fails its check, with the Host's own sentence
+  it('fails a job source whose context Astera would refuse', async () => {
+    const body = "const i = { id: 'A-1', title: 'A' }; export default { listItems() { return { items: [i] } }, getItem() { return i }, buildJobContext() { return { objective: 'Do A' } } }"
+    const r = await testPlugin({ folder: await write(path.join(work, 'nolabel'), source('nolabel', body)), version: '1.6.0', launcher, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks.find((c) => c.name === 'job-source')).toMatchObject({ ok: false, detail: expect.stringMatching(/sourceLabel/) })
+  }, 60_000)
+
+  it('fails a completion check whose answer Astera would refuse', async () => {
+    const files = {
+      'package.json': JSON.stringify({ name: 'nomsg', version: '0.1.0', type: 'module', astera: { apiVersion: '1', entry: 'index.mjs', capabilities: ['completion-check'], permissions: [] } }),
+      'index.mjs': "export default { async runCheck() { return { status: 'failed', diagnostics: [{ file: 'a.ts' }] } } }"
+    }
+    const r = await testPlugin({ folder: await write(path.join(work, 'nomsg'), files), version: '1.6.0', launcher, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks.find((c) => c.name === 'completion-check')).toMatchObject({ ok: false, detail: expect.stringMatching(/each diagnostic needs a message/) })
+  }, 60_000)
+
+  it('fails an event plugin whose onEvent throws', async () => {
+    const files = {
+      'package.json': JSON.stringify({ name: 'throwy', version: '0.1.0', type: 'module', astera: { apiVersion: '1', entry: 'index.mjs', capabilities: ['event'], permissions: ['events.subscribe'] } }),
+      'index.mjs': "export default { async activate() {}, async onEvent() { throw new Error('cannot take it') } }"
+    }
+    const r = await testPlugin({ folder: await write(path.join(work, 'throwy'), files), version: '1.6.0', launcher, timings: { ...fast, observeMs: 1500 } })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks.find((c) => c.name === 'event')).toMatchObject({ ok: false, detail: expect.stringMatching(/cannot take it|failed/) })
+  }, 60_000)
+
+  // M1: stops is checked on a running plugin, started again when an earlier check left it stopped
+  it('starts a plugin that a check left stopped again before checking stops', async () => {
+    const body = "let n = 0; export default { listItems() { if (++n === 1) process.exit(1); return { items: [] } }, getItem() { return null }, buildJobContext() { return null } }"
+    const r = await testPlugin({ folder: await write(path.join(work, 'dies'), source('dies', body)), version: '1.6.0', launcher, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(byName(r.checks)).toMatchObject({ 'job-source': false })
+    expect(r.checks.find((c) => c.name === 'stops')?.detail).toMatch(/started again for this check/)
+  }, 60_000)
+
+  // M3: a secret setting given with --set never shows in a check, and no check points to a log that is gone
+  it('hides a secret setting, and does not point to a log it removed', async () => {
+    const files = {
+      'package.json': JSON.stringify({
+        name: 'secretive',
+        version: '0.1.0',
+        type: 'module',
+        astera: { apiVersion: '1', entry: 'index.mjs', permissions: [], settingsSchema: { type: 'object', properties: { token: { type: 'string', secret: true } }, required: ['token'] } }
+      }),
+      'index.mjs': 'export default { async activate(ctx) { throw new Error(`bad token ${ctx.settings.token}`) } }'
+    }
+    const r = await testPlugin({ folder: await write(path.join(work, 'secretive'), files), version: '1.6.0', launcher, settings: { token: 'hunter2-SECRET' }, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(JSON.stringify(r)).not.toContain('hunter2-SECRET')
+    expect(JSON.stringify(r)).not.toContain('astera plugins logs')
+  }, 60_000)
+
+  // M10: a plugin this Astera would not run says so beside its checks
+  it('answers the warnings of a plugin this Astera would not run', async () => {
+    const files = pluginTemplate('ui', 'later')
+    files['package.json'] = JSON.stringify({ ...JSON.parse(files['package.json']), engines: { astera: '>=9.0.0' } })
+    const r = await testPlugin({ folder: await write(path.join(work, 'later'), files), version: '1.6.0', launcher, timings: fast })
+    expect(r).toMatchObject({ warnings: [{ code: 'INCOMPATIBLE' }] })
+  })
+})
+
+// I3: the page check follows what a panel loads, and nothing that loads nothing
+describe('the page check, final review', () => {
+  const page = async (name: string, files: Record<string, string>, ui = 'ui/index.html') => {
+    const pkg = { name, version: '0.1.0', astera: { apiVersion: '2', ui, permissions: [] } }
+    const r = await testPlugin({ folder: await write(path.join(work, name), { 'package.json': JSON.stringify(pkg), ...files }), version: '1.6.0', launcher, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    return r.checks[0]
+  }
+
+  it('passes an inline SVG, an SVG file and a script that names addresses in its text', async () => {
+    const c = await page('svgs', {
+      'ui/index.html': `<!doctype html><svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg><img src='icon.svg'><script src = "app.js"></script>`,
+      'ui/icon.svg': '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+      'ui/app.js': "const help = 'https://react.dev/errors/'"
+    })
+    expect(c).toMatchObject({ ok: true })
+  })
+
+  it('reads a root-relative address from the plugin root, as the panel serves it', async () => {
+    const missing = await page('rootrel', { 'dist/index.html': '<!doctype html><script src="/assets/app.js"></script>', 'dist/assets/app.js': '' }, 'dist/index.html')
+    expect(missing).toMatchObject({ ok: false, detail: expect.stringMatching(/\/assets\/app\.js, which is not a file in the plugin/) })
+    const there = await page('rootrel2', { 'dist/index.html': '<!doctype html><script src="/assets/app.js"></script>', 'assets/app.js': '' }, 'dist/index.html')
+    expect(there).toMatchObject({ ok: true })
+  })
+
+  it('fails a page that loads from the network, in an attribute or a stylesheet', async () => {
+    const c = await page('remote', { 'ui/index.html': '<!doctype html><link rel="stylesheet" href="s.css">', 'ui/s.css': 'body { background: url("https://cdn.example.com/bg.png") }' })
+    expect(c).toMatchObject({ ok: false, detail: expect.stringMatching(/https:\/\/cdn\.example\.com\/bg\.png/) })
+  })
+})

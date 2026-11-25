@@ -4,17 +4,21 @@
 // projects-list answers no project, and anything else allowed answers 404. Nothing of Astera's profile is touched; the copy,
 // the runtime's own profile and a workspace for a completion check live in a temporary folder, removed after.
 //
-// Each check is { name, ok, detail }: `starts`, the capability's contract, `denied` (started with only what its
-// capabilities need, it lives through its other calls being refused), `stops`. A restricted UI plugin's page is checked
-// against what its guest allows instead (`page`).
+// Each check is { name, ok, detail }: `starts`, the capability's contract (each answer read by the Host's own reader, so
+// what Astera would refuse fails here), `denied` (started with only what its capabilities need, it lives through its other
+// calls being refused), `stops`. A restricted UI plugin's page is checked against what its panel loads instead (`page`).
+// A source's or a check's calls are its real code: a job source that reads a service needs that service.
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pluginRefusal } from '../core/host/pluginGate'
 import { createEventRing } from '../core/events/eventRing'
+import { logWriterFor } from '../core/log/logWriter'
+import { checkAnswerOf } from '../core/orchestration/pluginChecks'
 import { PLUGIN_SERVED_CAPABILITIES, capabilityPermissionProblem, parseManifest, pluginFolderName, type PluginManifest } from '../core/plugins/manifest'
 import { notificationOf } from '../core/plugins/notifications'
 import { coerceSetting, missingRequired, type SettingValue } from '../core/plugins/settings'
+import { itemDetail, itemsPage, jobContext } from '../core/sources/answers'
 import { checkPluginFolder, type FolderProblem } from '../host/plugins/folderCheck'
 import { PluginRequestFailed, createPluginRuntime, type PluginLaunch, type PluginRuntime } from '../host/plugins/runtime'
 
@@ -34,35 +38,68 @@ export interface TestTimings {
 }
 const TIMINGS: TestTimings = { startMs: 15_000, stopGraceMs: 5_000, observeMs: 2_000 }
 const REQUEST_MS = 15_000
+/** What checkAnswerOf says for an answer of the wrong shape (core/orchestration/pluginChecks.ts). */
+const NOT_A_CHECK_RESULT = 'the plugin answered with something that is not a check result'
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** The page check of a restricted UI plugin: its page and every file it names are in the plugin, no inline script or
- *  handler (the guest's CSP refuses both), no remote address (its CSP refuses the network). */
+/** A page's references to what it loads: src and href (either quote, spaces around =), and in CSS url() and @import. */
+const ATTR_REFS = /\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
+const CSS_REFS = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)|@import\s+(?:"([^"]*)"|'([^']*)')/gi
+const refsIn = (text: string, re: RegExp): string[] => [...text.matchAll(re)].map((m) => m.slice(1).find((g) => g !== undefined) ?? '').filter((r) => r !== '')
+const isRemote = (ref: string): boolean => /^https?:/i.test(ref) || ref.startsWith('//')
+const loadsNothing = (ref: string): boolean => ref.startsWith('#') || /^(?:data|blob|about|javascript|mailto):/i.test(ref)
+
+/** The page check of a restricted UI plugin: its page and every file it loads are in the plugin (a root-relative address
+ *  from the plugin's root, as its panel serves it), no inline script or handler (the panel's CSP refuses both), and
+ *  nothing loaded from the network (its CSP refuses that too). Only what loads is read: script text, an SVG's namespace
+ *  and binary files name addresses that load nothing. */
 async function pageCheck(copy: string, ui: string): Promise<TestCheck> {
   const page = await fs.readFile(path.join(copy, ui), 'utf8')
   const found: string[] = []
-  if (/<script(?![^>]*\bsrc=)[^>]*>/i.test(page)) found.push('an inline script')
-  if (/\son[a-z]+\s*=/i.test(page)) found.push('an inline handler')
-  const named = [...page.matchAll(/\b(?:src|href)\s*=\s*"([^"]*)"/gi)].map((m) => m[1])
-  const texts = [page]
-  for (const ref of named) {
-    if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith('//')) continue
-    const file = path.join(path.dirname(path.join(copy, ui)), ref.split(/[?#]/)[0])
-    const text = await fs.readFile(file, 'utf8').catch(() => null)
-    if (text === null) found.push(`${ref}, which is not a file in the plugin`)
-    else texts.push(text)
+  const tags = page.match(/<[^>]+>/g) ?? []
+  if (tags.some((t) => /^<script\b/i.test(t) && !/\bsrc\s*=/i.test(t))) found.push('an inline script')
+  if (tags.some((t) => /\son[a-z]+\s*=/i.test(t))) found.push('an inline handler')
+  const read = new Set<string>()
+  const follow = async (from: string, refs: string[]): Promise<void> => {
+    for (const ref of refs) {
+      if (loadsNothing(ref)) continue
+      if (isRemote(ref)) {
+        found.push(`a load from the network, ${ref}, which a panel cannot make`)
+        continue
+      }
+      let rel: string
+      try {
+        rel = decodeURIComponent(ref.split(/[?#]/)[0])
+      } catch {
+        found.push(`${ref}, which is not an address`)
+        continue
+      }
+      const file = rel.startsWith('/') ? path.join(copy, rel) : path.join(path.dirname(path.join(copy, from)), rel)
+      const inside = path.relative(copy, file)
+      if (inside.startsWith('..') || path.isAbsolute(inside) || !(await fs.stat(file).then((s) => s.isFile(), () => false))) {
+        found.push(`${ref}, which is not a file in the plugin`)
+        continue
+      }
+      const key = inside.split(path.sep).join('/')
+      if (read.has(key)) continue
+      read.add(key)
+      // A stylesheet loads what it names; nothing else read here does
+      if (/\.css$/i.test(file)) await follow(key, refsIn(await fs.readFile(file, 'utf8'), CSS_REFS))
+    }
   }
-  const remote = [...new Set(texts.flatMap((t) => [...t.matchAll(/(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s"'()<>]*/gi)].map((m) => m[0])))]
-  for (const r of remote) found.push(`a remote address, ${r}, which its page cannot reach`)
+  await follow(ui, [...refsIn(page, ATTR_REFS), ...(page.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) ?? []).flatMap((s) => refsIn(s, CSS_REFS))])
   return found.length === 0
-    ? { name: 'page', ok: true, detail: `${ui} and the ${named.length} files it names keep to what a panel allows` }
+    ? { name: 'page', ok: true, detail: `${ui} and the ${read.size} files it loads keep to what a panel allows` }
     : { name: 'page', ok: false, detail: `${ui} holds ${found.join('; ')}` }
 }
 
-/** The settings a plugin starts with: each one's default, then what was given. */
-function settingsOf(m: PluginManifest, given: Record<string, string>): { ok: true; values: Record<string, SettingValue> } | { ok: false; problem: string } {
+/** The settings a plugin starts with: each one's default, then what was given; and the secret values among them. */
+function settingsOf(
+  m: PluginManifest,
+  given: Record<string, string>
+): { ok: true; values: Record<string, SettingValue>; secrets: string[] } | { ok: false; problem: string } {
   const values: Record<string, SettingValue> = {}
   for (const f of m.settings) if (f.default !== undefined) values[f.key] = f.default
   for (const [key, raw] of Object.entries(given)) {
@@ -73,7 +110,9 @@ function settingsOf(m: PluginManifest, given: Record<string, string>): { ok: tru
     values[key] = v.value
   }
   const missing = missingRequired(m.settings, (k) => Object.hasOwn(values, k), (k) => values[k])
-  return missing.length > 0 ? { ok: false, problem: `it needs ${missing.join(', ')}: give ${missing.length === 1 ? 'it' : 'them'} with --set <key=value>` } : { ok: true, values }
+  if (missing.length > 0) return { ok: false, problem: `it needs ${missing.join(', ')}: give ${missing.length === 1 ? 'it' : 'them'} with --set <key=value>` }
+  const secrets = m.settings.filter((f) => f.secret === true && typeof values[f.key] === 'string' && values[f.key] !== '').map((f) => String(values[f.key]))
+  return { ok: true, values, secrets }
 }
 
 /** The fewest of what it asks for that its capabilities still need: what `denied` starts it with. */
@@ -86,9 +125,13 @@ function leastGrant(m: PluginManifest): string[] {
   return grant
 }
 
-/** The plugin's own log, as the runtime writes it (what it printed, and the runtime's [host] lines about it). */
-const logLines = async (r: PluginRuntime, folder: string): Promise<string[]> =>
-  (await fs.readFile(r.logFile(folder), 'utf8').catch(() => '')).split(/\r?\n/).filter((l) => l !== '')
+/** The plugin's own log, as the runtime writes it (what it printed, and the runtime's [host] lines about it), once
+ *  everything buffered is on disk: the runtime writes it a moment later (final review I1). */
+async function logLines(r: PluginRuntime, folder: string): Promise<string[]> {
+  const file = r.logFile(folder)
+  await logWriterFor(file).flush()
+  return (await fs.readFile(file, 'utf8').catch(() => '')).split(/\r?\n/).filter((l) => l !== '')
+}
 
 /** Waits until the plugin runs, fails, or the time is up; says how it went and, on a failure, its last log lines. */
 async function started(r: PluginRuntime, id: string, folder: string, ms: number): Promise<{ ok: boolean; why: string }> {
@@ -106,44 +149,49 @@ async function started(r: PluginRuntime, id: string, folder: string, ms: number)
   }
 }
 
-/** The capability's contract, asked of a running plugin. */
-async function contract(r: PluginRuntime, m: PluginManifest, ring: ReturnType<typeof createEventRing>, workspace: string, t: TestTimings): Promise<TestCheck[]> {
+/** The capability's contract, asked of a running plugin; each answer read as the Host reads it. */
+async function contract(
+  r: PluginRuntime,
+  m: PluginManifest,
+  folder: string,
+  ring: ReturnType<typeof createEventRing>,
+  workspace: string,
+  t: TestTimings
+): Promise<TestCheck[]> {
   const out: TestCheck[] = []
   const ask = (method: string, params: unknown): Promise<unknown> => r.request(m.id, method, params, REQUEST_MS)
   for (const c of m.capabilities) {
     try {
       if (c === 'job-source') {
-        const list = await ask('jobSource.list', {})
-        const items = isObject(list) && Array.isArray(list.items) ? list.items : null
-        if (items === null || !items.every((i) => isObject(i) && typeof i.id === 'string' && typeof i.title === 'string')) {
-          out.push({ name: c, ok: false, detail: 'listItems must answer { items: [{ id, title }] }' })
+        const page = itemsPage(await ask('jobSource.list', {}))
+        if (!page.ok) {
+          out.push({ name: c, ok: false, detail: `listItems: ${page.problem}` })
           continue
         }
-        if (items.length === 0) {
+        if (page.value.items.length === 0) {
           out.push({ name: c, ok: true, detail: 'listItems answered no item, so getItem and buildJobContext were not asked' })
           continue
         }
-        const id = (items[0] as { id: string }).id
-        const item = await ask('jobSource.get', { id })
-        if (!isObject(item) || typeof item.id !== 'string' || typeof item.title !== 'string') {
-          out.push({ name: c, ok: false, detail: `getItem(${id}) must answer { id, title }` })
+        const id = page.value.items[0].id
+        const item = itemDetail(await ask('jobSource.get', { id }))
+        if (!item.ok) {
+          out.push({ name: c, ok: false, detail: `getItem(${id}): ${item.problem}` })
           continue
         }
-        const context = await ask('jobSource.context', { id })
+        const context = jobContext(await ask('jobSource.context', { id }))
         out.push(
-          isObject(context) && typeof context.objective === 'string' && context.objective.trim() !== ''
-            ? { name: c, ok: true, detail: `listed ${items.length}, read ${id} and built its Job's objective` }
-            : { name: c, ok: false, detail: `buildJobContext(${id}) must answer { objective }` }
+          context.ok
+            ? { name: c, ok: true, detail: `listed ${page.value.items.length}, read ${id} and built its Job's objective` }
+            : { name: c, ok: false, detail: `buildJobContext(${id}): ${context.problem}` }
         )
       } else if (c === 'completion-check') {
         const input = { jobId: 'job_test', runId: 'run_test', taskId: 'task_test', task: { title: 'astera plugins test' }, workspace: { root: workspace } }
         try {
-          const answer = await ask('completionCheck.run', { input })
-          const ok = isObject(answer) && ['passed', 'failed', 'error'].includes(String(answer.status)) && (answer.summary === undefined || typeof answer.summary === 'string')
+          const answer = checkAnswerOf(await ask('completionCheck.run', { input }))
           out.push(
-            ok
-              ? { name: c, ok: true, detail: `runCheck answered ${String((answer as Record<string, unknown>).status)} in an empty workspace` }
-              : { name: c, ok: false, detail: 'runCheck must answer { status: passed, failed or error, summary? }' }
+            answer.summary.startsWith(NOT_A_CHECK_RESULT)
+              ? { name: c, ok: false, detail: `runCheck: ${answer.summary}` }
+              : { name: c, ok: true, detail: `runCheck answered ${answer.status} in an empty workspace` }
           )
         } catch (e) {
           // A check that throws is an `error` answer Astera records, with its sentence: within the contract
@@ -151,13 +199,22 @@ async function contract(r: PluginRuntime, m: PluginManifest, ring: ReturnType<ty
           else throw e
         }
       } else if (c === 'event' || c === 'notification') {
-        ring.append([{ type: 'run.completed', jobId: 'job_test', runId: 'run_test', payload: { id: 'run_test', jobId: 'job_test', ordinal: 1, createdAt: 'T', outcome: 'completed', progress: { done: 1, total: 1 }, questionsOpen: 0 } }], new Date().toISOString())
+        const what = c === 'event' ? 'an event' : 'a notification'
+        const before = (await logLines(r, folder)).length
+        ring.append(
+          [{ type: 'run.completed', jobId: 'job_test', runId: 'run_test', payload: { id: 'run_test', jobId: 'job_test', ordinal: 1, createdAt: 'T', outcome: 'completed', progress: { done: 1, total: 1 }, questionsOpen: 0 } }],
+          new Date().toISOString()
+        )
         await wait(t.observeMs)
+        // A delivery the plugin failed is written in its log by the deliverer (host/plugins/deliverer.ts)
+        const refused = (await logLines(r, folder)).slice(before).find((l) => /delivering .* failed/i.test(l))
         const s = r.status(m.id)
         out.push(
-          s?.status === 'running'
-            ? { name: c, ok: true, detail: `still running ${t.observeMs} ms after ${c === 'event' ? 'an event' : 'a notification'} was offered` }
-            : { name: c, ok: false, detail: `it stopped after ${c === 'event' ? 'an event' : 'a notification'}: ${s?.reason ?? s?.status ?? 'gone'}` }
+          refused !== undefined
+            ? { name: c, ok: false, detail: `it failed ${what}: ${refused.replace(/^\S+\s+/, '')}` }
+            : s?.status === 'running'
+              ? { name: c, ok: true, detail: `took ${what} and kept running` }
+              : { name: c, ok: false, detail: `it stopped after ${what}: ${s?.reason ?? s?.status ?? 'gone'}` }
         )
       }
     } catch (e) {
@@ -174,10 +231,11 @@ export async function testPlugin(a: {
   launcher: string
   settings?: Record<string, string>
   timings?: Partial<TestTimings>
-}): Promise<{ problems: FolderProblem[] } | { plugin: { id: string; version: string }; ok: boolean; checks: TestCheck[] }> {
+}): Promise<{ problems: FolderProblem[] } | { plugin: { id: string; version: string }; ok: boolean; checks: TestCheck[]; warnings?: FolderProblem[] }> {
   const t = { ...TIMINGS, ...a.timings }
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-plugin-test-'))
   let runtime: PluginRuntime | null = null
+  let folder = ''
   try {
     const copy = path.join(work, 'plugin')
     const checked = await checkPluginFolder(a.folder, { version: a.version, capabilities: PLUGIN_SERVED_CAPABILITIES }, { keepCopy: copy })
@@ -186,12 +244,22 @@ export async function testPlugin(a: {
     if (!parsed.ok) return { problems: parsed.problems.map((message) => ({ code: 'MANIFEST_INVALID' as const, message })) }
     const m = parsed.manifest
     const plugin = { id: m.id, version: m.version }
-    const done = (checks: TestCheck[]) => ({ plugin, ok: checks.every((c) => c.ok), checks })
+    let secrets: string[] = []
+    // A secret given with --set never shows in a check, and the log a detail points to is gone once the run is over
+    const clean = (s: string): string =>
+      secrets.reduce((text, v) => text.split(v).join('[redacted]'), s).replace(/;\s*see astera plugins logs --id \S+/g, '')
+    const done = (checks: TestCheck[]) => ({
+      plugin,
+      ok: checks.every((c) => c.ok),
+      checks: checks.map((c) => ({ ...c, detail: clean(c.detail) })),
+      ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {})
+    })
 
     if (m.entry === undefined) return done(m.ui !== undefined ? [await pageCheck(copy, m.ui)] : [])
 
     const settings = settingsOf(m, a.settings ?? {})
     if (!settings.ok) return done([{ name: 'starts', ok: false, detail: settings.problem }])
+    secrets = settings.secrets
     const workspace = path.join(work, 'workspace')
     await fs.mkdir(workspace)
     const ring = createEventRing({ boot: 'aaaaaaaaaaaa', retainEvents: 100, retainChars: 100_000 })
@@ -215,26 +283,26 @@ export async function testPlugin(a: {
       delivery: { retryFirstMs: 50, retryMaxMs: 50 },
       notify: (e) => notificationOf(e, { lang: 'en', objectiveOf: () => 'astera plugins test' })
     })
+    folder = pluginFolderName(m.id)
     const launch = (granted: string[]): PluginLaunch => ({
       id: m.id,
       version: m.version,
-      folder: pluginFolderName(m.id),
+      folder,
       dir: copy,
       entry: path.join(copy, m.entry as string),
       granted,
       capabilities: m.capabilities,
       settings: settings.values,
-      redact: []
+      redact: settings.secrets
     })
     const r = runtime
-    const folder = pluginFolderName(m.id)
     const checks: TestCheck[] = []
 
     r.start(launch([...m.permissions]))
     const up = await started(r, m.id, folder, t.startMs)
     checks.push(up.ok ? { name: 'starts', ok: true, detail: `running with ${m.permissions.length > 0 ? m.permissions.join(', ') : 'no permission'} granted` } : { name: 'starts', ok: false, detail: up.why })
     if (!up.ok) return done(checks)
-    checks.push(...(await contract(r, m, ring, workspace, t)))
+    checks.push(...(await contract(r, m, folder, ring, workspace, t)))
 
     // Calls refused: started again with only what its capabilities need
     const least = leastGrant(m)
@@ -252,19 +320,30 @@ export async function testPlugin(a: {
       )
     } else checks.push({ name: 'denied', ok: true, detail: 'it asks for no permission beyond what its capabilities need, so nothing was withheld' })
 
-    // Stopped as Astera stops it: asked, and ended by force only once the grace is over (the runtime says so in its log)
+    // Stopped as Astera stops it, from running: started again with its whole grant when an earlier check left it
+    // stopped (final review M1), then asked, and ended by force only once the grace is over (the runtime logs that)
+    let note = ''
+    if (r.status(m.id)?.status !== 'running') {
+      // restart, not start: a slot that failed starts again only with its crash count cleared
+      r.restart(launch([...m.permissions]))
+      const back = await started(r, m.id, folder, t.startMs)
+      if (!back.ok) return done([...checks, { name: 'stops', ok: false, detail: `not checked: it did not run again (${back.why})` }])
+      note = ' (started again for this check)'
+    }
     const forced = async (): Promise<number> => (await logLines(r, folder)).filter((l) => /did not stop within/.test(l)).length
     const before = await forced()
     await r.stop(m.id)
     const ended = (await forced()) > before
     checks.push(
       ended
-        ? { name: 'stops', ok: false, detail: `it did not stop within ${t.stopGraceMs} ms of being asked; Astera ended it` }
-        : { name: 'stops', ok: true, detail: `stopped when asked` }
+        ? { name: 'stops', ok: false, detail: `it did not stop within ${t.stopGraceMs} ms of being asked; Astera ended it${note}` }
+        : { name: 'stops', ok: true, detail: `stopped when asked${note}` }
     )
     return done(checks)
   } finally {
     await runtime?.stopAll().catch(() => {})
-    await fs.rm(work, { recursive: true, force: true }).catch(() => {})
+    // Its log released before the folder goes, which Windows will not remove with a file open in it (final review M2)
+    if (runtime !== null && folder !== '') await runtime.forget(folder).catch(() => {})
+    await fs.rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {})
   }
 }

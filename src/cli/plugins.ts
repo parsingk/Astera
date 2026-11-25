@@ -102,6 +102,9 @@ export async function installPlugin<R extends PluginCall>(a: {
   /** The request id this invocation carries; it goes on the install, the call that acts. */
   request: string | undefined
   call: (cmd: string, args: Record<string, unknown>, request: string | undefined) => Promise<R>
+  /** What a person already approved (`plugins dev`): a folder asking for anything else is refused before the install, and
+   *  the approved trust is what the Host must find in the copy it installs. */
+  approved?: { trust: string; permissions: string[]; capabilities: string[] }
 }): Promise<R | { status: number; body: unknown } | { approve: Record<string, unknown> }> {
   const given = a.args.path
   const pkg = a.args.npm
@@ -131,5 +134,12 @@ export async function installPlugin<R extends PluginCall>(a: {
   const trust = typeof inspection.trust === 'string' ? { trust: inspection.trust } : {}
   const shownSource = (typeof inspection.source === 'object' && inspection.source !== null ? inspection.source : {}) as Record<string, unknown>
   const sha256 = 'file' in source && typeof shownSource.sha256 === 'string' ? { sha256: shownSource.sha256 } : {}
+  if (a.approved) {
+    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+    const same = (x: string[], y: string[]): boolean => x.length === y.length && [...x].sort().join('\n') === [...y].sort().join('\n')
+    if (inspection.trust !== a.approved.trust || !same(strings(inspection.permissions), a.approved.permissions) || !same(strings(inspection.capabilities), a.approved.capabilities))
+      return { status: 409, body: { error: 'the folder asks for something other than what was approved; run plugins dev again to approve it' } }
+    return a.call('plugins-install', { ...source, grant, expect: { name: inspection.name, version: inspection.version, trust: a.approved.trust, ...sha256 } }, a.request)
+  }
   return a.call('plugins-install', { ...source, grant, expect: { name: inspection.name, version: inspection.version, ...trust, ...sha256 } }, a.request)
 }

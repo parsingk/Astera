@@ -630,9 +630,12 @@ export function humanFor(
     }
     case 'plugins-doctor':
     case 'plugins-test':
-      return columns(
-        (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
-      )
+      return [
+        columns(
+          (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
+        ),
+        ...warningLines(data)
+      ].join('\n')
     // Agent Profiles design §6: its state first, as plugins list puts it, then what a person picks it by. The sandbox
     // switch (sandbox design §6) as `on`/`off`; a Host from before it sends none, which is off
     case 'agent-profiles-list':

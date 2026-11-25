@@ -54,7 +54,9 @@ describe('PluginPanelTab wiring', () => {
   // React.StrictMode runs the effect twice: the first answer must not mount a guest (review focus 5)
   it('prepares on mount and on each reopen, dropping an answer it no longer waits for', () => {
     expect(src).toMatch(/window\.api\.plugins\s*\.preparePanel\(pluginId, panelId, projectRoot \|\| null\)/)
-    expect(src).toMatch(/if \(current\) setState\(r\.ok \? \{ phase: 'shown', url: r\.url, partition: r\.partition \} : \{ phase: 'refused', code: r\.code \}\)/)
+    expect(src).toMatch(/if \(!current\) return/)
+    expect(src).toMatch(/setState\(\{ phase: 'refused', code: r\.code \}\)/)
+    expect(src).toMatch(/setState\(\{ phase: 'shown', url: r\.url, partition: r\.partition \}\)/)
     expect(src).toMatch(/return \(\) => \{\s*current = false\s*\}/)
     expect(src).toMatch(/\}, \[pluginId, panelId, projectRoot, attempt\]\)/)
   })
@@ -87,7 +89,7 @@ describe('the panel tab’s words', () => {
 // shown asks main again; a page already showing is not reloaded.
 describe('running the command again', () => {
   it('asks again only when the tab is refused or its guest is gone', () => {
-    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(nonce === 0\) return\s*const phase = stateRef\.current\.phase\s*if \(phase === 'refused' \|\| phase === 'gone'\) setAttempt\(\(n\) => n \+ 1\)\s*\}, \[nonce\]\)/)
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(nonce === 0\) return\s*const phase = stateRef\.current\.phase\s*if \(phase === 'refused' \|\| phase === 'gone'\) \{\s*auto\.current = false\s*setAttempt\(\(n\) => n \+ 1\)\s*\}\s*\}, \[nonce\]\)/)
   })
 })
 
@@ -97,11 +99,23 @@ describe('running the command again', () => {
 describe('a guest main ended', () => {
   it('asks main again on destroyed, at most three times without a page loading, and not after the tab closed', () => {
     expect(src).toMatch(/const AUTO_REOPEN_MAX = 3/)
-    expect(src).toMatch(/onEnded=\{\(\) => \{\s*if \(!mounted\.current\) return\s*if \(autoReopens\.current < AUTO_REOPEN_MAX\) \{\s*autoReopens\.current \+= 1\s*setAttempt\(\(n\) => n \+ 1\)\s*\} else setState\(\{ phase: 'gone' \}\)/)
-    expect(src).toMatch(/onLoaded=\{\(\) => \{\s*autoReopens\.current = 0\s*\}\}/)
+    expect(src).toMatch(/onEnded=\{\(\) => \{\s*if \(!mounted\.current\) return\s*if \(autoReopens\.current < AUTO_REOPEN_MAX\) \{\s*autoReopens\.current \+= 1\s*auto\.current = true\s*setAttempt\(\(n\) => n \+ 1\)\s*\} else setState\(\{ phase: 'gone' \}\)/)
+    expect(src).toMatch(/onLoaded=\{\(\) => \{\s*autoReopens\.current = 0\s*auto\.current = false\s*\}\}/)
     expect(src).toMatch(/view\.addEventListener\('destroyed', ended\)/)
     expect(src).toMatch(/view\.addEventListener\('render-process-gone', gone\)/)
     expect(src).toMatch(/view\.addEventListener\('dom-ready', loaded\)/)
   })
 })
 
+describe('a guest main ended, final review', () => {
+  // I4: React.StrictMode unmounts and mounts once in development; mounted is set again, or no ask would ever be made
+  it('sets mounted again on each mount', () => {
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*mounted\.current = true\s*return \(\) => \{\s*mounted\.current = false\s*\}\s*\}, \[\]\)/)
+  })
+
+  // M5: an ask it made by itself that finds the plugin not ready yet (just installed again) asks once more a moment later
+  it('asks again a moment later when its own ask found the plugin not ready', () => {
+    expect(src).toMatch(/if \(auto\.current && r\.code === 'notReady' && autoReopens\.current < AUTO_REOPEN_MAX\)/)
+    expect(src).toMatch(/setTimeout\(\(\) => \{\s*if \(!mounted\.current\) return\s*autoReopens\.current \+= 1\s*setAttempt\(\(n\) => n \+ 1\)\s*\}, NOT_READY_RETRY_MS\)/)
+  })
+})

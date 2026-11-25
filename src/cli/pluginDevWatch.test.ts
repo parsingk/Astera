@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FolderCheck } from '../host/plugins/folderCheck'
-import { devEventLine, runPluginDev, watchPluginFolder, type DevEvent } from './pluginDevWatch'
+import { devEventLine, ignoredByDev, runPluginDev, watchPluginFolder, type DevEvent } from './pluginDevWatch'
 
 // Phase 2 step 4b (spec E4 dev): watch, check, reinstall with the grant first approved; anything new asked waits for the
 // person. The file watcher, the folder check and the Host are fakes here; cli/run.ts wires the real ones.
@@ -146,13 +146,15 @@ describe('runPluginDev', () => {
     }
   }
 
-  it('asks for approval as install does, installing nothing and watching nothing', async () => {
+  it('asks for approval as install does, installing nothing and leaving nothing watched', async () => {
     const h = host()
-    const watch = vi.fn()
-    const r = await runPluginDev({ args: { path: '/w/p' }, cwd: '/w', version: '1.6.0', call: h.call, watch, emit: () => {}, onStop: () => {} })
+    const unwatch = vi.fn()
+    const events: DevEvent[] = []
+    const r = await runPluginDev({ args: { path: '/w/p' }, cwd: '/w', version: '1.6.0', call: h.call, watch: () => unwatch, emit: (e) => void events.push(e), onStop: () => {} })
     expect(r).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringMatching(/asks for: projects\.read\..*Approve with --yes/) } })
     expect(h.calls).toEqual(['plugins-inspect'])
-    expect(watch).not.toHaveBeenCalled()
+    expect(unwatch).toHaveBeenCalled()
+    expect(events).toEqual([])
   })
 
   it('installs with the approval, says so, watches until stopped, and ends with the last install in place', async () => {
@@ -177,12 +179,12 @@ describe('runPluginDev', () => {
     expect(h.calls).toEqual(['plugins-inspect', 'plugins-install'])
   })
 
-  it('ends with the Host’s refusal of the first install, watching nothing', async () => {
+  it('ends with the Host’s refusal of the first install, leaving nothing watched', async () => {
     const h = host({ status: 409, body: { error: 'the folder changed after it was shown' } } as never)
-    const watch = vi.fn()
-    const r = await runPluginDev({ args: { path: '/w/p', yes: true }, cwd: '/w', version: '1.6.0', call: h.call, watch, emit: () => {}, onStop: () => {} })
+    const unwatch = vi.fn()
+    const r = await runPluginDev({ args: { path: '/w/p', yes: true }, cwd: '/w', version: '1.6.0', call: h.call, watch: () => unwatch, emit: () => {}, onStop: () => {} })
     expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: 'the folder changed after it was shown' } })
-    expect(watch).not.toHaveBeenCalled()
+    expect(unwatch).toHaveBeenCalled()
   })
 })
 
@@ -209,5 +211,51 @@ describe('run.ts runs plugins dev', () => {
     expect(block).toMatch(/const conn = await connectHost\(\{ address, profileDir, app: CLI_VERSION, log: logToStderr \}\)[\s\S]*?finally \{\s*conn\.close\(\)/)
     expect(block).toMatch(/onStop: \(stop\) => \{\s*process\.once\('SIGINT', stop\)\s*process\.once\('SIGTERM', stop\)/)
     expect(block).toMatch(/watch: chokidarWatch/)
+  })
+})
+
+// Final review of plugins dev
+describe('plugins dev, final review', () => {
+  // M8: a save made while the first install runs is installed after it
+  it('installs again after the first install a change made during it', async () => {
+    let change: () => void = () => {}
+    const calls: string[] = []
+    let installs = 0
+    const done = runPluginDev({
+      args: { path: '/w/p', yes: true },
+      cwd: '/w',
+      version: '1.6.0',
+      call: async (cmd) => {
+        calls.push(cmd)
+        if (cmd === 'plugins-inspect') return { status: 200, body: { id: 'p', name: 'p', version: '0.1.0', trust: 'trusted', permissions: [], capabilities: [] } }
+        if (++installs === 1) change()
+        return { status: 200, body: { id: 'p', version: '0.1.0', permissions: [], requested: [], capabilities: [], trust: 'trusted' } }
+      },
+      watch: (_f, onChange) => {
+        change = onChange
+        return () => {}
+      },
+      emit: () => {},
+      onStop: (s) => setTimeout(s, 1500),
+      check: async () => ({ plugin: { id: 'p', name: 'p', version: '0.1.0', trust: 'trusted' }, problems: [], warnings: [] }),
+      asks: async () => ({ permissions: [], capabilities: [], trust: 'trusted' })
+    })
+    await done
+    expect(installs).toBe(2)
+  })
+
+  // M9: an editor's side files make no round
+  it('leaves editor side files and the folders it never watches alone', () => {
+    for (const rel of ['.index.mjs.swp', 'index.mjs~', '.#index.mjs', '#index.mjs#', '4913', 'node_modules/a/index.js', '.git/HEAD', 'ui/.panel.js.swo'])
+      expect(ignoredByDev(rel), rel).toBe(true)
+    for (const rel of ['index.mjs', 'ui/panel.js', 'package.json']) expect(ignoredByDev(rel), rel).toBe(false)
+  })
+
+  // M7, M6: a watcher error is said, not a crash; output lines are made safe as every other command's
+  it('listens for a watcher error, and writes each line safely', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'pluginDevWatch.ts'), 'utf8')
+    expect(src).toMatch(/watcher\.on\('error', /)
+    const run = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'run.ts'), 'utf8')
+    expect(run).toMatch(/out\(mode === 'human' \? terminalSafe\(devEventLine\(e\)\) : jsonSafe\(okEnvelope\('plugins-dev', e\)\)\)/)
   })
 })
