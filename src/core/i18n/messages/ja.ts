@@ -1338,6 +1338,8 @@ export const ja: Catalog = {
   'problems.noProject': 'プロジェクトを開くとその問題が表示されます',
   'problems.unavailable': '問題を読み取れませんでした',
   'problems.scope': 'このコンピューターで実行したこのプロジェクトの Job の最後のチェックとレビューの結果です',
+  'layout.held.title': 'アプリを再び開いたとき、このタブは読み込んでいません',
+  'layout.held.load': '読み込む',
   'problems.loading': '問題を読み込んでいます',
   'problems.checkFailed': 'チェックが失敗しました',
   'problems.unlisted': 'このチェックが見つけたもののうち {count} 件は一覧にありません。レポートを見てください',

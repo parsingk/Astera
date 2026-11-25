@@ -2070,7 +2070,17 @@ export default function App(): React.JSX.Element {
     place(layoutRef.current, ref.key)
   }
 
+  /** A held tab (heldTabs) starts reading: a person selected it or pressed its Load button. */
+  const releaseTab = (tabId: string): void =>
+    setHeldTabs((prev) => {
+      if (!prev.has(tabId)) return prev
+      const next = new Set(prev)
+      next.delete(tabId)
+      return next
+    })
+
   const selectWorkbenchTab = (tabId: string): void => {
+    releaseTab(tabId)
     const cur = layoutRef.current
     if (!cur) return
     const act = activateTab(cur, tabId)
@@ -5455,6 +5465,8 @@ export default function App(): React.JSX.Element {
                 renderEditor={renderEditor}
                 renderRecord={renderRecord}
                 renderBrowser={renderBrowser}
+                held={heldTabs}
+                onRelease={releaseTab}
                 appTabInfo={appTabInfo}
                 renderApp={renderApp}
                 rollStates={rollStates}

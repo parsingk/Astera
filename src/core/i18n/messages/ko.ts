@@ -1463,6 +1463,8 @@ export const ko = {
   'problems.noProject': '프로젝트를 열면 그 프로젝트의 문제가 보입니다',
   'problems.unavailable': '문제 목록을 읽지 못했습니다',
   'problems.scope': '이 컴퓨터에서 돈 이 프로젝트 Job 의 마지막 검사와 검토 결과입니다',
+  'layout.held.title': '앱을 다시 켤 때 이 탭은 불러오지 않았습니다',
+  'layout.held.load': '불러오기',
   'problems.loading': '문제 목록을 읽는 중입니다',
   'problems.checkFailed': '검사가 실패했습니다',
   'problems.unlisted': '이 검사가 찾은 것 중 {count}개는 목록에 없습니다. 검사 보고서를 보세요',

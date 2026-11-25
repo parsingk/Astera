@@ -1350,6 +1350,8 @@ export const es: Catalog = {
   'problems.noProject': 'Abre un proyecto para ver sus problemas',
   'problems.unavailable': 'No se pudieron leer los problemas',
   'problems.scope': 'De las últimas comprobaciones y revisiones de los Jobs que este equipo ejecutó en este proyecto',
+  'layout.held.title': 'Esta pestaña no se cargó al volver a abrir la aplicación',
+  'layout.held.load': 'Cargar',
   'problems.loading': 'Leyendo los problemas',
   'problems.checkFailed': 'La comprobación falló',
   'problems.unlisted': 'Hallazgos de esta comprobación que no aparecen aquí: {count}. Consulta su informe',

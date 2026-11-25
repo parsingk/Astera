@@ -1381,6 +1381,8 @@ export const en: Record<keyof typeof ko, string> = {
   'problems.noProject': 'Open a project to see its problems',
   'problems.unavailable': 'Could not read the problems',
   'problems.scope': 'From the last checks and reviews of the Jobs this computer ran in this project',
+  'layout.held.title': 'This tab was not loaded when the app started again',
+  'layout.held.load': 'Load',
   'problems.loading': 'Reading the problems',
   'problems.checkFailed': 'The check failed',
   'problems.unlisted': 'Findings of this check not listed here: {count}. See its report',

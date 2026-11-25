@@ -2228,6 +2228,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .problem-where.unresolved { font-style: italic; color: var(--text-faint); }
 .bottom-tab-badge.quiet { background: var(--elevated); color: var(--warn); }
 .problem-row.openable:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.held-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; background: var(--bg); color: var(--text-dim); text-align: center; }
+.held-tab-note { margin: 0; font-size: 12px; }
+.held-tab-name { margin: 0; font-size: 13px; color: var(--text); word-break: break-all; max-width: 100%; }
 .problem-stale { flex: none; font-size: 10.5px; color: var(--warn); border: 1px solid currentColor; border-radius: var(--radius-sm); padding: 0 4px; }
 /* Quick Open's search scope under the box: the project's folder name, and a note when a large one is cut */
 .palette-scope { flex: none; padding: 0 9px 4px; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

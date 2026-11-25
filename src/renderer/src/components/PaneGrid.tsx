@@ -58,6 +58,22 @@ import {
 /** A remote session tab's underline: no local account colours it, since its account is the Runtime's. */
 const REMOTE_TAB_COLOR = '#8a8f98'
 
+/** A restored preview or cluster object tab that has read nothing yet (spec W3): what it is, and a button that loads
+ *  it. Selecting the tab loads it too (App's selectWorkbenchTab), so this is seen only on a tab that was on screen when
+ *  the window opened. */
+function HeldTab({ name, onLoad }: { name: string; onLoad: () => void }): React.JSX.Element {
+  const { t } = useI18n()
+  return (
+    <div className="held-tab">
+      <p className="held-tab-note">{t('layout.held.title')}</p>
+      <p className="held-tab-name">{name}</p>
+      <button type="button" className="kube-btn" onClick={onLoad}>
+        {t('layout.held.load')}
+      </button>
+    </div>
+  )
+}
+
 export function PaneGrid({
   layout,
   activePaneId,
@@ -67,6 +83,8 @@ export function PaneGrid({
   dirtyFileIds,
   kubeKinds,
   kubeHost,
+  held,
+  onRelease,
   recordTabs,
   recordStatuses,
   browserTabs,
@@ -122,6 +140,10 @@ export function PaneGrid({
   kubeKinds?: Record<string, KubeFileKind>
   /** What every cluster object tab asks of the app: its write dialog, its dirty flag and the edit asks. */
   kubeHost: KubeTabHost
+  /** Restored preview and cluster object tabs that have read nothing yet (spec W3): drawn as a placeholder instead of
+   *  their page or their object, until onRelease. */
+  held: ReadonlySet<string>
+  onRelease: (tabId: string) => void
   /** Every open record tab, whichever pane holds it — same place, same reason as fileTabs. The title
    *  and the project come from this record, so a record tab from another project keeps its name and
    *  its × too. */
@@ -442,7 +464,7 @@ export function PaneGrid({
             inert={draw === 'drawn'}
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >
-            {renderBrowser(b.id)}
+            {held.has(b.id) ? <HeldTab name={b.url} onLoad={() => onRelease(b.id)} /> : renderBrowser(b.id)}
           </div>
         )
       })}
@@ -582,7 +604,11 @@ export function PaneGrid({
             }
             onMouseDown={() => onFocusPane(pane.id)}
           >
-            <KubeObjectTab target={target} visible={visible && windowShown} tabId={tabId} host={kubeHost} />
+            {held.has(tabId) ? (
+              <HeldTab name={`${target.kind} ${target.name}`} onLoad={() => onRelease(tabId)} />
+            ) : (
+              <KubeObjectTab target={target} visible={visible && windowShown} tabId={tabId} host={kubeHost} />
+            )}
           </div>
         )
       })}
