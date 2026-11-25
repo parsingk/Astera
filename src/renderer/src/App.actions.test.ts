@@ -60,14 +60,26 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   it('sends the active editor selection through a preview, into a fitting session, unsubmitted', () => {
     expect(src).toMatch(/'context\.attachSelection': \{\s*blockedBy: \(\) => \(activeEditorSelection\(\) \? null : 'action\.blocked\.noSelection'\),\s*run: \(\) => openSelectionContext\(\)/)
     expect(src).toMatch(/const paneId = activePaneIdRef\.current\s*const view = paneId \? mdViews\[paneId\] : undefined/)
-    expect(src).toMatch(/sessionsRef\.current\.filter\(\(s\) => sessionFits\(ref, \{ cwd: s\.cwd, alive: s\.status !== 'exited' \}\)\)/)
+    expect(src).toMatch(/sessionsRef\.current\s*\.filter\(\(s\) => sessionFits\(ref, \{ cwd: s\.cwd, alive: s\.status !== 'exited' \}\)\)/)
     const attach = src.slice(src.indexOf('const attachContext = '), src.indexOf('const attachContext = ') + 2500)
-    expect(attach).toMatch(/contentRevision\(buf\.savedContent\) !== p\.ref\.revision\) return 'changed'/)
+    // Final review I3: the file is read again at attach, whatever the buffer or the watcher saw
+    expect(attach).toMatch(/const disk = await window\.api\.files\.read\(p\.ref\.path\)/)
+    expect(attach).toMatch(/contentRevision\(toLf\(disk\.content\)\) !== p\.ref\.revision\) return 'changed'/)
+    // Final review I5: a terminal without bracketed paste does not take several lines
+    expect(attach).toMatch(/!sessionBus\.canPaste\(sessionId, p\.text\)\) return 'notReady'/)
+    // Final review M5: what is said is what happened
+    expect(attach).toMatch(/const landed = sessionBus\.pasteInto\(sessionId, p\.text\)\s*toast\.info\(t\(landed \? 'context\.preview\.attached' : 'context\.preview\.notPasted', \{ name: s\.title \}\)\)/)
     expect(attach).toMatch(/isWaitingOnDialog\(screen\)\) return 'waiting'/)
     expect(attach).toMatch(/sessionBus\.pasteInto\(sessionId, p\.text\)/)
     expect(attach).not.toMatch(/pasteAndSubmit|submitInto/)
     expect(src).toMatch(/modalOpenRef\.current = modalOpenRef\.current \|\| paletteOpen !== null \|\| contextPreview !== null \|\|/)
-    expect(src).toMatch(/sessions: fitting\.map\(\(s\) => \(\{ id: s\.id, title: s\.title, account: accounts\.find\(\(a\) => a\.id === s\.accountId\)\?\.label \?\? s\.accountId \}\)\)/)
+    expect(src).toMatch(/account: accounts\.find\(\(a\) => a\.id === s\.accountId\)\?\.label \?\? s\.accountId/)
+    // Final review M7: a session an agent or Astera started is offered last and marked, never the default
+    expect(src).toMatch(/\.sort\(\(a, b\) => Number\(a\.startedBy === 'agent'\) - Number\(b\.startedBy === 'agent'\)\)/)
+    expect(src).toMatch(/agent: s\.startedBy === 'agent'/)
+    // Final review M8: the agent is told of unsaved edits, and the person that only the main selection goes
+    expect(src).toMatch(/contextText\(made\.ref, made\.excerpt, made\.language, \{ dirty: made\.dirty \}\)/)
+    expect(src).toMatch(/mainOnly: sel\.view\.state\.selection\.ranges\.length > 1/)
   })
 
   // Review M1: read once as the palette opens, in the handler, so a remount on the other list keeps it.

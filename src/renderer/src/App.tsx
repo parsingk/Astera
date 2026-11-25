@@ -724,16 +724,17 @@ export default function App(): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)
-  /** A piece of the workbench on its way to an agent (spec W4), shown in ContextPreview until attached or dropped.
-   *  `fileTabId` is the editor tab a selection came from, whose saved text decides whether it changed meanwhile. */
+  /** A piece of the workbench on its way to an agent (spec W4), shown in ContextPreview until attached or dropped. A
+   *  piece of a file (`ref.path`) is checked against the file on disk again as it is attached. */
   const [contextPreview, setContextPreview] = useState<{
     ref: ContextRef
     text: string
     masked: number
-    cut: boolean
+    cut: 'start' | 'end' | null
+    stripped: number
     dirty: boolean
-    sessions: Array<{ id: string; title: string; account: string }>
-    fileTabId?: string
+    mainOnly: boolean
+    sessions: Array<{ id: string; title: string; account: string; agent: boolean }>
   } | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
@@ -4393,18 +4394,34 @@ export default function App(): React.JSX.Element {
   }
   /** Opens the preview for a piece of context, offering the sessions that may receive it (sessionFits: local, alive,
    *  in the piece's folder and holding its file). None: said, and nothing opens. */
-  const openContextPreview = (ref: ContextRef, made: { text: string; masked: number; cut: boolean }, dirty: boolean, fileTabId?: string): void => {
-    const fitting = sessionsRef.current.filter((s) => sessionFits(ref, { cwd: s.cwd, alive: s.status !== 'exited' }))
+  const openContextPreview = (
+    ref: ContextRef,
+    made: { text: string; masked: number; cut: boolean; stripped: number },
+    more: { keepEnd?: boolean; dirty?: boolean; mainOnly?: boolean } = {}
+  ): void => {
+    const fitting = sessionsRef.current
+      .filter((s) => sessionFits(ref, { cwd: s.cwd, alive: s.status !== 'exited' }))
+      // A session an agent or Astera started (a Job's coordinator, a worker) is typed into and submitted by Astera, which
+      // would send the pasted context with its own message: offered last, marked, never the default
+      .sort((a, b) => Number(a.startedBy === 'agent') - Number(b.startedBy === 'agent'))
     if (fitting.length === 0) {
       toast.info(t('context.noSession'))
       return
     }
     setContextPreview({
       ref,
-      ...made,
-      dirty,
-      sessions: fitting.map((s) => ({ id: s.id, title: s.title, account: accounts.find((a) => a.id === s.accountId)?.label ?? s.accountId })),
-      ...(fileTabId !== undefined ? { fileTabId } : {})
+      text: made.text,
+      masked: made.masked,
+      cut: made.cut ? (more.keepEnd ? 'end' : 'start') : null,
+      stripped: made.stripped,
+      dirty: more.dirty === true,
+      mainOnly: more.mainOnly === true,
+      sessions: fitting.map((s) => ({
+        id: s.id,
+        title: s.title,
+        account: accounts.find((a) => a.id === s.accountId)?.label ?? s.accountId,
+        agent: s.startedBy === 'agent'
+      }))
     })
   }
   const openSelectionContext = (): void => {
@@ -4423,30 +4440,39 @@ export default function App(): React.JSX.Element {
       toast.info(t(made.reason === 'credential' ? 'context.credential' : 'action.blocked.noSelection'))
       return
     }
-    openContextPreview(made.ref, contextText(made.ref, made.excerpt, made.language), made.dirty, sel.tab.id)
+    openContextPreview(made.ref, contextText(made.ref, made.excerpt, made.language, { dirty: made.dirty }), {
+      dirty: made.dirty,
+      mainOnly: sel.view.state.selection.ranges.length > 1
+    })
   }
   /** Puts the previewed text in a session's input, never submitting it (spec W4: attach by default). Checked first, in
-   *  this order: the file it came from has not changed since (else it is selected again), the session still fits, it
-   *  is not holding a dialog (a paste would answer it, as Design Mode found), and it can take a paste. Its tab comes
-   *  forward first, since a chat composer cannot take focus while hidden. */
-  const attachContext = (sessionId: string): AttachOutcome => {
+   *  this order: the file it came from still holds what it held when taken, read from disk now (neither the buffer nor
+   *  the watcher can say so: a dirty buffer keeps its saved text through a change, and the watcher follows only the
+   *  explorer's project), the session still fits, it is not holding a dialog (a paste would answer it, as Design Mode
+   *  found), and it takes this paste (a terminal without bracketed paste takes no line breaks). Its tab comes forward
+   *  first, since a chat composer cannot take focus while hidden, and what is said afterwards is what happened. */
+  const attachContext = async (sessionId: string): Promise<AttachOutcome> => {
     const p = contextPreview
     if (!p) return 'notReady'
-    if (p.fileTabId !== undefined) {
-      const buf = fileBuffersRef.current[p.fileTabId]
-      if (!buf || contentRevision(buf.savedContent) !== p.ref.revision) return 'changed'
+    if (p.ref.path !== undefined && p.ref.revision !== undefined) {
+      try {
+        const disk = await window.api.files.read(p.ref.path)
+        if (disk.binary || contentRevision(toLf(disk.content)) !== p.ref.revision) return 'changed'
+      } catch {
+        return 'changed' // gone, or no longer readable: it is not what was taken
+      }
     }
     const s = sessionsRef.current.find((x) => x.id === sessionId)
     if (!s || !sessionFits(p.ref, { cwd: s.cwd, alive: s.status !== 'exited' })) return 'notReady'
     const screen = sessionBus.screenOf(sessionId)
     if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
-    if (!sessionBus.canPaste(sessionId)) return 'notReady'
+    if (!sessionBus.canPaste(sessionId, p.text)) return 'notReady'
     selectWorkbenchTab(sessionTab(sessionId))
     requestAnimationFrame(() => {
-      sessionBus.pasteInto(sessionId, p.text)
+      const landed = sessionBus.pasteInto(sessionId, p.text)
+      toast.info(t(landed ? 'context.preview.attached' : 'context.preview.notPasted', { name: s.title }))
     })
     setContextPreview(null)
-    toast.info(t('context.preview.attached', { name: s.title }))
     return 'sent'
   }
   /** A hunk of a Job's diff to a repair Job draft (spec W4): the detail closes and the new Job form opens with the
@@ -5400,13 +5426,17 @@ export default function App(): React.JSX.Element {
                       // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
                       const run = runs.find((r) => r.runId === runId)
                       const read = readRunConsole(runId)
-                      if (!run || !read) return
+                      if (!run || !read) {
+                        toast.info(t('context.run.empty'))
+                        return
+                      }
                       const made = logContext({ run, selection: read.selection, tail: read.tail })
                       if (!made.ok) {
                         toast.info(t('context.run.empty'))
                         return
                       }
-                      openContextPreview(made.ref, contextText(made.ref, made.excerpt), false)
+                      // A tail keeps its end when it has to be cut: the failure is on the last lines
+                      openContextPreview(made.ref, contextText(made.ref, made.excerpt, '', { keepEnd: made.fromTail }), { keepEnd: made.fromTail })
                     }}
                     terminals={terminals}
                     terminalCwd={bottomRoot}
@@ -6483,7 +6513,9 @@ export default function App(): React.JSX.Element {
           text={contextPreview.text}
           masked={contextPreview.masked}
           cut={contextPreview.cut}
+          stripped={contextPreview.stripped}
           dirty={contextPreview.dirty}
+          mainOnly={contextPreview.mainOnly}
           sessions={contextPreview.sessions}
           onAttach={attachContext}
           onClose={() => setContextPreview(null)}

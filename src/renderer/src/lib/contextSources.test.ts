@@ -68,7 +68,8 @@ describe('logContext', () => {
     expect(logContext({ run, selection: 'Error: boom\n  at x', tail: ['a', 'b'] })).toEqual({
       ok: true,
       ref: { schemaVersion: 1, kind: 'log', root: 'D:\\repo', sourceId: 'run-7', label: 'Run: npm run dev' },
-      excerpt: 'Error: boom\n  at x'
+      excerpt: 'Error: boom\n  at x',
+      fromTail: false
     })
   })
 
@@ -76,6 +77,7 @@ describe('logContext', () => {
   it('takes the end of the log, without trailing blank lines, when nothing is selected', () => {
     const r = logContext({ run, selection: '', tail: ['one', 'two', '', '  '] })
     expect(r.ok && r.excerpt).toBe('one\ntwo')
+    expect(r.ok && r.fromTail).toBe(true)
   })
 
   it('refuses a log with nothing in it', () => {

@@ -9,13 +9,16 @@ export function logContext(input: {
   run: { runId: string; projectPath: string; configName: string }
   selection: string
   tail: readonly string[]
-}): { ok: true; ref: ContextRef; excerpt: string } | { ok: false; reason: 'empty' } {
-  const excerpt = input.selection.trim() !== '' ? input.selection : input.tail.join('\n').replace(/\s+$/, '')
+}): { ok: true; ref: ContextRef; excerpt: string; fromTail: boolean } | { ok: false; reason: 'empty' } {
+  const fromTail = input.selection.trim() === ''
+  const excerpt = fromTail ? input.tail.join('\n').replace(/\s+$/, '') : input.selection
   if (excerpt.trim() === '') return { ok: false, reason: 'empty' }
   return {
     ok: true,
     ref: { schemaVersion: 1, kind: 'log', root: input.run.projectPath, sourceId: input.run.runId, label: `Run: ${input.run.configName}` },
-    excerpt
+    excerpt,
+    // A tail is sent for its end, where the failure is: contextText keeps the end when it has to cut (keepEnd)
+    fromTail
   }
 }
 

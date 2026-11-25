@@ -24,9 +24,11 @@ describe('a run log to an agent', () => {
   it('opens the preview from what the console holds, for sessions in the run\'s project', () => {
     expect(bottom).toMatch(/onSendToAgent=\{onSendRunLog\}/)
     expect(app).toMatch(/onSendRunLog=\{\(runId\) => \{/)
-    const send = app.slice(app.indexOf('onSendRunLog={(runId) => {'), app.indexOf('onSendRunLog={(runId) => {') + 900)
+    const send = app.slice(app.indexOf('onSendRunLog={(runId) => {'), app.indexOf('onSendRunLog={(runId) => {') + 1400)
     expect(send).toMatch(/readRunConsole\(runId\)/)
     expect(send).toMatch(/logContext\(\{ run, selection: read\.selection, tail: read\.tail \}\)/)
-    expect(send).toMatch(/openContextPreview\(made\.ref, contextText\(made\.ref, made\.excerpt\), false\)/)
+    // Final review I4: a tail keeps its end; M8: a console that cannot be read says so
+    expect(send).toMatch(/contextText\(made\.ref, made\.excerpt, '', \{ keepEnd: made\.fromTail \}\)/)
+    expect(send).toMatch(/if \(!run \|\| !read\) \{\s*toast\.info\(t\('context\.run\.empty'\)\)/)
   })
 })
