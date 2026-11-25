@@ -206,6 +206,8 @@ describe('humanFor', () => {
       ['wrote /w/a-0.1.0.tgz (4 files, 900 bytes)', 'sha256 ab12', 'left out: .env'].join(String.fromCharCode(10))
     )
     expect(humanFor('plugins-pack', { file: '/w/a-0.1.0.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [] })).not.toContain('left out')
+    expect(humanFor('plugins-pack', { file: '/w/a.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [], skipped: 1 })).toContain('not packed: 1 file outside files or in node_modules')
+    expect(humanFor('plugins-pack', { file: '/w/a.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [], skipped: 3 })).toContain('not packed: 3 files outside files or in node_modules')
   })
 
   it('plugins doctor prints one line per check, a failure in capitals', () => {
