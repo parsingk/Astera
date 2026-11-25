@@ -4,7 +4,6 @@ import {
   Tray,
   Menu,
   nativeImage,
-  ipcMain,
   shell,
   webContents,
   Notification,
@@ -34,6 +33,7 @@ import { handleMediaRequest } from './media/protocol'
 import { mediaAllowlist } from './media/allowlist'
 import { MEDIA_SCHEME } from '../core/files/media'
 import { isOwnDocument } from './navigationGuard'
+import { ipcMain, trustWebContents } from './ipcGuard'
 import { installPreviewGuards } from './preview/guest'
 import { AgentGuestRegistry } from './agentBrowser/registry'
 import { registerPreviewDevTools } from './preview/devtools'
@@ -283,7 +283,16 @@ function createWindow(startingText: string | null = null, theme?: Theme): Browse
     // session, which is exactly the regression a217ac1 was written to prevent.
     // webviewTag: the browser tab's <webview> (renderer/components/BrowserPane.tsx). Off by default
     // in Electron; installPreviewGuards below is what makes turning it on safe.
-    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false, webviewTag: true }
+    // contextIsolation and nodeIntegration are Electron 41's defaults, named so a default that moves
+    // cannot loosen them; sandbox keeps the preload to the few modules a sandboxed renderer gets (the
+    // clipboard is answered by main for that reason). Spec E3, the Phase 2 entry gate.
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webviewTag: true
+    }
   })
   if (startingText === null) loadApp(win)
   else loadInto(win, { url: startingPageUrl(startingText, theme) }, (m) => console.log(m))
@@ -322,6 +331,9 @@ function createWindow(startingText: string | null = null, theme?: Theme): Browse
     const parsed = parseAllowedExternalUrl(url)
     if (parsed) void shell.openExternal(parsed.toString())
   })
+  // The handlers answer this window, and only while its top frame shows the app's own document (ipcGuard.ts): the same
+  // test as the reload above, so the start-up page and anything the window is moved to get refused.
+  trustWebContents(win.webContents, (url) => isOwnDocument(url, process.env['ELECTRON_RENDERER_URL'], indexFileUrl))
   // The guest id the guard is handed is the webContents id of the <webview>, which is the same number
   // BrowserPane reports through preview.registerAgentGuest — so the agent's tab, and only it, is held
   // to the loopback rule.

@@ -5,7 +5,8 @@
 // the alt-tab list. `setDevToolsWebContents` is the documented way to host DevTools in a window the
 // application creates, which is what this module does — one window per guest, with the app icon and
 // a title naming the page it is inspecting.
-import { BrowserWindow, ipcMain, webContents, type NativeImage } from 'electron'
+import { BrowserWindow, webContents, type NativeImage } from 'electron'
+import { ipcMain } from '../ipcGuard'
 import { wireDevtoolsWindow } from './devtoolsWiring'
 
 /** Guest webContents id → the window hosting its DevTools. Absent means closed. */

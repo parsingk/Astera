@@ -2,7 +2,8 @@
 // the prompt; Claude Code opens image paths it is given, which is how the agent gets to see the
 // element rather than read about it. The writing and the eviction rule live in shots.ts, shared with
 // the agent browser's screenshot().
-import { ipcMain, webContents } from 'electron'
+import { webContents } from 'electron'
+import { ipcMain } from '../ipcGuard'
 import { isSaneRect } from '../../core/preview/pick/rect'
 import type { CaptureResult } from '../../core/preview/pick/types'
 import { evictShots, previewShotsDir, savePng } from './shots'

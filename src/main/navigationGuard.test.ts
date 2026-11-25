@@ -30,3 +30,30 @@ describe('isOwnDocument — will-navigate 가드가 자기 자신의 문서인�
     expect(isOwnDocument('not a url', DEV_SERVER, INDEX_FILE)).toBe(false)
   })
 })
+
+// Final review C1, I1 (security gate): the IPC guard asks this of every call's frame, so a URL that names the same file
+// another way must still read as the app's own document. A `#` link in a chat reply moves the page to index.html#...,
+// Chromium writes the drive letter upper case and leaves [ ] ~ unescaped where Node's pathToFileURL does not.
+describe('isOwnDocument on the packaged file: the same file however the URL spells it', () => {
+  it('ignores the fragment and the query', () => {
+    expect(isOwnDocument(`${INDEX_FILE}#fn-1`, undefined, INDEX_FILE)).toBe(true)
+    expect(isOwnDocument(`${INDEX_FILE}?x=1#top`, undefined, INDEX_FILE)).toBe(true)
+  })
+
+  it('reads the drive letter in any case on Windows, and exactly elsewhere', () => {
+    expect(isOwnDocument('file:///C:/app/out/renderer/index.html', undefined, 'file:///c:/app/out/renderer/index.html', true)).toBe(true)
+    expect(isOwnDocument('file:///home/A/index.html', undefined, 'file:///home/a/index.html', false)).toBe(false)
+  })
+
+  it('reads an escaped and an unescaped character as the same', () => {
+    expect(isOwnDocument('file:///C:/a[1]~b/index.html', undefined, 'file:///C:/a%5B1%5D%7Eb/index.html', true)).toBe(true)
+    expect(isOwnDocument('file:///C:/My%20App/index.html', undefined, 'file:///C:/My App/index.html', true)).toBe(true)
+  })
+
+  it('still refuses another file, another host and a URL that does not parse', () => {
+    expect(isOwnDocument('file:///C:/app/out/renderer/index.html.bak', undefined, INDEX_FILE, true)).toBe(false)
+    expect(isOwnDocument('file://server/C:/app/out/renderer/index.html', undefined, INDEX_FILE, true)).toBe(false)
+    expect(isOwnDocument('file:///C:/app/out/renderer/%E0%A4%A.html', undefined, INDEX_FILE, true)).toBe(false)
+    expect(isOwnDocument('not a url', undefined, INDEX_FILE, true)).toBe(false)
+  })
+})

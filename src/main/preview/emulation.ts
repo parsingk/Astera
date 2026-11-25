@@ -5,7 +5,8 @@
 // it for a <webview> guest (measured — the button is absent and Ctrl+Shift+M does nothing), while this
 // API drives a guest correctly. Doing it this way also keeps the debugger free, so the pane's DevTools
 // button never has to compete with emulation for the one debugger a guest can have.
-import { ipcMain, webContents } from 'electron'
+import { webContents } from 'electron'
+import { ipcMain } from '../ipcGuard'
 import { areMetricsSane, type EmulationMetrics } from '../../core/preview/viewports'
 
 /** Per guest, the last emulation call chained onto the previous one. Rapid switching sends several
