@@ -118,7 +118,11 @@ export type ManualInstallIO = {
 }
 
 export const nodeManualInstallIO: ManualInstallIO = {
-  rm: (dir) => fs.rm(dir, { recursive: true, force: true }),
+  // `rm -rf`, not fs.rm. This runs in Electron's main process, whose `fs` is patched to read .asar
+  // archives as directories, so fs.rm walks into the earlier extraction's Contents/Resources/app.asar
+  // instead of unlinking it and then fails with ENOTEMPTY on Resources. That made every second
+  // attempt at the same version fail. A child process gets the real filesystem.
+  rm: (dir) => execFileAsync('rm', ['-rf', dir]).then(() => undefined),
   mkdir: async (dir) => void (await fs.mkdir(dir, { recursive: true })),
   run: async (file, args) => void (await execFileAsync(file, args)),
   list: (dir) => fs.readdir(dir)
@@ -154,4 +158,53 @@ export async function extractForManualInstall(opts: {
   const app = (await io.list(dest)).find((e) => e.endsWith('.app'))
   if (!app) throw new Error(`no .app found in ${dest} after extracting ${opts.downloadedFile}`)
   return path.join(dest, app)
+}
+
+/**
+ * The app bundle the running executable belongs to, when that bundle is a manual-install copy in the updater's cache
+ * (`…/astera-updater/manual/<version>/<Name>.app`), else null.
+ *
+ * **Why it is asked.** The manual path above shows that copy in Finder for the person to drag into /Applications. A
+ * double-click there is just as natural, and then the new version runs from the cache while /Applications keeps the old
+ * one, which is what the Dock, Launchpad and Spotlight open next time (1.5.5 ran like this for a person whose
+ * /Applications still held 1.4.16). Only this exact place counts: an app someone keeps elsewhere on purpose is theirs.
+ *
+ * `cacheDirName` is the updater cache folder's name (UPDATER_CACHE_DIR), passed in so this module keeps importing
+ * nothing but node: a test loads it as it is into a real Electron.
+ */
+export function manualInstallCopyOf(exePath: string, cacheDirName: string): string | null {
+  const bundle = path.dirname(path.dirname(path.dirname(exePath)))
+  if (!bundle.endsWith('.app') || path.basename(path.dirname(exePath)) !== 'MacOS') return null
+  const manual = path.dirname(path.dirname(bundle))
+  if (path.basename(manual) !== 'manual' || path.basename(path.dirname(manual)) !== cacheDirName) return null
+  return bundle
+}
+
+/** The work of installing the copy, behind a seam: `trash` is Electron's shell.trashItem, which this module may not import. */
+export type CopyInstallIO = {
+  exists(p: string): Promise<boolean>
+  trash(p: string): Promise<void>
+  run(file: string, args: string[]): Promise<void>
+}
+
+/**
+ * Installs the manual-install copy into the Applications folder and returns the installed bundle's path.
+ *
+ * **A copy, not a move.** Electron's app.moveToApplicationsFolder moves the bundle, but the Host this copy started is
+ * still running from that path and goes on after the app relaunches; moving its files out from under it would leave it
+ * running from a path that no longer exists. The cache copy is replaced by the next manual install anyway.
+ *
+ * The app already there goes to the Trash rather than being deleted, so the person can take it back. The quarantine
+ * attribute is stripped for the reason extractForManualInstall gives.
+ */
+export async function installCopyToApplications(opts: {
+  bundle: string
+  applicationsDir?: string
+  io: CopyInstallIO
+}): Promise<string> {
+  const target = path.join(opts.applicationsDir ?? '/Applications', path.basename(opts.bundle))
+  if (await opts.io.exists(target)) await opts.io.trash(target)
+  await opts.io.run('ditto', [opts.bundle, target])
+  await opts.io.run('xattr', ['-dr', 'com.apple.quarantine', target])
+  return target
 }

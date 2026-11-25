@@ -127,6 +127,7 @@ import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { announceSettingsRecovery } from './lib/settingsRecoveryNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
+import { offerCopyInstall } from './lib/copyInstallOffer'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
 import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
@@ -733,6 +734,8 @@ export default function App(): React.JSX.Element {
   const notifiedUpdateRef = useRef<string | null>(null)
   // The install toast on screen, so 'manual' can replace the 'downloaded' one rather than stack on it.
   const readyToastRef = useRef<number | null>(null)
+  /** The manual-install copy offer (lib/copyInstallOffer) is made once per run, not again on a remount. */
+  const copyOfferedRef = useRef(false)
   // The update campaign. A value is present only when this app is in the target range. It is a ref
   // because the onStatus subscription — registered once at mount — has to see the latest campaign (a
   // plain state would leave the closure stale).
@@ -1482,6 +1485,25 @@ export default function App(): React.JSX.Element {
         setCampaign(c)
       })
       .catch(() => {})
+    // Running from the manual install's copy in the update cache: said once per run, with the move to /Applications.
+    if (!copyOfferedRef.current) {
+      copyOfferedRef.current = true
+      void offerCopyInstall({
+        copyLocation: () => window.api.update.copyLocation(),
+        installCopy: () => window.api.update.installCopy(),
+        confirm: () =>
+          confirmModal({
+            title: tRef.current('update.copy.move'),
+            body: tRef.current('update.copy.confirmBody'),
+            confirmLabel: tRef.current('update.copy.confirm')
+          }),
+        quit: () => window.api.app.quit(),
+        t: (key, params) => tRef.current(key, params),
+        info: (message, options) => toast.info(message, options),
+        error: (message) => void toast.error(message),
+        dismiss
+      })
+    }
     const offUpdate = window.api.update.onStatus((s) => {
       setUpdate({ ...s, checkedAt: isCheckResult(s.state) ? Date.now() : null })
       // There are two notification points:

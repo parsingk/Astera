@@ -327,15 +327,49 @@ Required secrets:
 |---|---|
 | `APPLE_CSC_LINK` | base64 of the Developer ID Application `.p12` (`base64 -i cert.p12`) |
 | `APPLE_CSC_KEY_PASSWORD` | the password for that `.p12` |
-| `APPLE_ID` | the Apple account email used for notarization |
-| `APPLE_APP_SPECIFIC_PASSWORD` | an app-specific password for that account (not the account's own password) |
-| `APPLE_TEAM_ID` | the Developer Team ID (10-character alphanumeric) |
+| `APPLE_API_KEY_P8` | the contents of an App Store Connect team API key, the `AuthKey_<id>.p8` file as it is |
+| `APPLE_API_KEY_ID` | that key's Key ID |
+| `APPLE_API_ISSUER` | the Issuer ID shown above the team keys |
 
 The certificate must be a **Developer ID Application** type. `Apple Development` and `Mac App
 Distribution` certificates cannot sign builds distributed outside the App Store.
 
+Notarization signs in with an **App Store Connect API key**, not an Apple ID and app-specific
+password. An app-specific password also opens the account's iCloud mail, contacts and calendars to
+whoever holds it; a team key with the Developer role reaches only the developer team and can be
+revoked on its own. To make one: App Store Connect → **Users and Access** → **Integrations** →
+**App Store Connect API** → **Team Keys** (the first time, the Account Holder presses **Request
+Access** there) → `+`, any name, Access **Developer**, then **Download API Key** — the `.p8` can be downloaded only once, so keep a copy with the `.p12`. The Key ID is in the
+key's row and the Issuer ID above the table. It has to be a team key: electron-builder needs the
+Issuer ID, which an individual key does not have.
+
+Setting the secrets from a terminal keeps the values out of shell history and out of any log:
+
+```bash
+base64 -i DeveloperID.p12 | gh secret set APPLE_CSC_LINK
+gh secret set APPLE_CSC_KEY_PASSWORD          # prompts
+gh secret set APPLE_API_KEY_P8 < AuthKey_XXXXXXXXXX.p8
+gh secret set APPLE_API_KEY_ID                # prompts
+gh secret set APPLE_API_ISSUER                # prompts
+```
+
+The workflow writes the key to the runner's temp folder for the build (electron-builder takes it as a
+file path, `APPLE_API_KEY`) and deletes it when the step ends. Signing is attempted once
+`APPLE_CSC_LINK` and `APPLE_API_KEY_P8` are both set; with either of the other two missing,
+electron-builder refuses to notarize and the build fails, as fail-closed should.
+
 Notarization is a round trip to Apple's servers and takes 5-20 minutes — it is normal for the
 `macos` job to run long while it waits.
+
+To build a signed and notarized package locally, with the Developer ID certificate in the login
+keychain (electron-builder finds it there) and the API key stored once as a notarytool profile so it
+is not passed around in the environment:
+
+```bash
+xcrun notarytool store-credentials astera-notary \
+  --key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer <issuer-id>
+npm run build && APPLE_KEYCHAIN_PROFILE=astera-notary npx electron-builder --mac --publish never
+```
 
 To verify a build locally:
 
@@ -362,6 +396,13 @@ The first time you push a tag after this workflow change, check the following in
 4. **Actually verify auto-update.** With the previous version installed and running on macOS, launch
    it and an update notice should appear; accepting and restarting should land on the new version. If
    this step fails, the cause is almost always signing — Squirrel.Mac refuses unsigned updates.
+
+   **Except across the switch to a Developer ID.** Squirrel.Mac checks the new build against the
+   running app's designated requirement, and an ad-hoc app's requirement is a list of its own
+   cdhashes, which no other build can meet — not even a Developer ID one. So the first signed release
+   still goes through the manual install (the app offers it once Squirrel refuses,
+   `src/main/manualInstall.ts`), and auto-update can be checked from the first signed release to the
+   second.
 
 ### A locally built dmg cannot tell you whether Gatekeeper is happy
 

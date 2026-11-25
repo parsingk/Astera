@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Globe, RotateCw, Square, X } from 'lucide-react'
 import { useI18n } from '../../../i18n/I18nProvider'
 import type { MessageKey } from '../../../../../core/i18n'
-import { LOST, LOST_POD, REFUSED, FORWARD_ADDRESS } from '../../../../../core/kube/cluster/forward'
+import { LOST, LOST_POD, PORT_BUSY, REFUSED, FORWARD_ADDRESS } from '../../../../../core/kube/cluster/forward'
 import { runText } from '../../../../../core/kube/cluster/status'
 import { displayContextName } from '../../../../../core/kube/contextName'
 import { forwardRunMs, isLive, type KubeForward } from '../../../lib/kubeForwards'
@@ -40,7 +40,12 @@ export function KubeForwardPanel({
   const stateText = (f: KubeForward): string => {
     if (f.state !== 'disconnected' && f.state !== 'failed') return t(`kube.forward.state.${f.state}`)
     if (f.reason === null) return t(`kube.forward.state.${f.state}Plain`)
-    const named = { [LOST_POD]: 'kube.forward.lostPod', [LOST]: 'kube.forward.lost', [REFUSED]: 'kube.forward.refused' } as const
+    const named = {
+      [LOST_POD]: 'kube.forward.lostPod',
+      [LOST]: 'kube.forward.lost',
+      [REFUSED]: 'kube.forward.refused',
+      [PORT_BUSY]: 'kube.forward.portBusy'
+    } as const
     const reason = f.reason in named ? t(named[f.reason as keyof typeof named]) : f.reason
     return t(`kube.forward.state.${f.state}`, { reason })
   }

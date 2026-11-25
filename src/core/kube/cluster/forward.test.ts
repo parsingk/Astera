@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { K8sObject } from '../objects'
 import {
-  FORWARD_ADDRESS, LOST, LOST_POD, REFUSED, canForward, forwardArgs, forwardPorts, forwardReason, forwardUrl, listeningPort, lostCause,
+  FORWARD_ADDRESS, LOST, LOST_POD, PORT_BUSY, REFUSED, canForward, forwardArgs, forwardPorts, forwardReason, forwardUrl, listeningPort, lostCause,
   validPort
 } from './forward'
 
@@ -57,6 +57,9 @@ describe('forward rules', () => {
     expect(forwardReason('Unable to listen on port 18080: boom', 'pod-gone')).toBe(LOST_POD)
     expect(forwardReason('Unable to listen on port 18080: boom')).toBe('Unable to listen on port 18080: boom')
     expect(forwardReason(null)).toBeNull()
+  })
+  it('names a local port another program holds', () => {
+    expect(forwardReason('127.0.0.1:18080 is in use by another program', 'port-busy')).toBe(PORT_BUSY)
   })
   it('tells a replaced Pod from a refused port', () => {
     const gone =

@@ -407,7 +407,10 @@ const api = {
     dismissCampaign: (id: string) => ipcRenderer.invoke('update:dismissCampaign', id),
     check: () => ipcRenderer.invoke('update:check'),
     download: () => ipcRenderer.invoke('update:download'),
-    install: () => ipcRenderer.invoke('update:install')
+    install: () => ipcRenderer.invoke('update:install'),
+    /** The manual-install copy in the update cache this app runs from, or null (main: manualInstallCopyOf). */
+    copyLocation: (): Promise<string | null> => ipcRenderer.invoke('update:copyLocation'),
+    installCopy: (): Promise<{ ok: true } | { ok: false; message: string }> => ipcRenderer.invoke('update:installCopy')
   },
   rolling: {
     forceRoll: invoke('rolling.forceRoll'),

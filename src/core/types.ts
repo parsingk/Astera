@@ -2040,6 +2040,10 @@ export interface UpdateApi {
   download(): Promise<void>
   /** Resolves with what actually happened — on macOS the app does not always quit. See InstallOutcome. */
   install(): Promise<InstallOutcome>
+  /** The manual-install copy in the update cache this app runs from, or null (src/main/manualInstall.ts). */
+  copyLocation(): Promise<string | null>
+  /** Installs that copy into /Applications and arranges the relaunch from there; the caller then quits. */
+  installCopy(): Promise<{ ok: true } | { ok: false; message: string }>
 }
 
 /** The rolling coordinators' renderer surface. `forceRoll` is development only — packaged builds do not

@@ -137,6 +137,15 @@ import { attachGatewayLink } from './gatewayLink'
 import { readRemoteSettings } from '../core/remote/settings'
 import { loadIdentity, type RuntimeIdentity } from '../core/remote/identity'
 import { readMcpHttp } from '../core/settings/mcpHttp'
+import { utf8CtypeFor } from '../core/terminal/utf8Locale'
+
+// Before any session or terminal is spawned: a Host started under no locale (the app from the Finder, or launchd)
+// would hand every child the C locale, under which pbcopy empties the clipboard for non-ASCII text
+// (core/terminal/utf8Locale.ts). The app sets it too; this covers a Host started some other way.
+{
+  const ctype = utf8CtypeFor(process.env, process.platform)
+  if (ctype) process.env.LC_CTYPE = ctype
+}
 
 /** A folder's `origin` URL, or null: the GitHub lifecycle reads and pushes origin alone (design L24). */
 const originOf = async (cwd: string): Promise<string | null> => {

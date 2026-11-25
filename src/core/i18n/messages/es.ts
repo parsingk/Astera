@@ -1202,6 +1202,12 @@ export const es: Catalog = {
   'update.manual.failed': 'No se pudo preparar el instalador: {message}',
   'update.manual.noFile': 'No hay ningún instalador descargado',
   'update.manual.quit': 'Salir y moverla',
+  'update.copy.running': 'Astera se está ejecutando desde la carpeta de caché de actualizaciones',
+  'update.copy.move': 'Mover a Aplicaciones',
+  'update.copy.confirmBody':
+    'Este Astera es la copia que la instalación manual descomprimió en la caché de actualizaciones. El Dock, Launchpad y Spotlight abren el Astera de la carpeta Aplicaciones, así que la próxima vez podría abrirse una versión anterior.\n\nAl moverla, esta versión se instala en la carpeta Aplicaciones y se reinicia. El Astera que ya estaba ahí va a la Papelera.',
+  'update.copy.confirm': 'Mover y reiniciar',
+  'update.copy.failed': 'No se pudo mover a la carpeta Aplicaciones: {message}',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': 'Ya está disponible la versión v{version}',
   'update.toast.download': 'Descargar',
@@ -3278,6 +3284,7 @@ export const es: Catalog = {
   'kube.forward.lostPod': 'el Pod fue reemplazado o desapareció',
   'kube.forward.lost': 'se perdió la conexión con el Pod',
   'kube.forward.refused': 'el Pod rechazó la conexión',
+  'kube.forward.portBusy': 'otro programa está usando el puerto local',
   'kube.forward.openBrowser': 'Abrir en el navegador',
   'kube.forward.stop': 'Detener',
   'kube.forward.reconnect': 'Reconectar',

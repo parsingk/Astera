@@ -67,7 +67,9 @@ mac:
   # Lets child processes (node-pty's spawn-helper, Electron's helpers) inherit the same entitlements.
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
-  # Notarization. Reads the APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID env vars.
+  # Notarization. The release workflow signs in with an App Store Connect API key (APPLE_API_KEY, a path to
+  # the .p8, with APPLE_API_KEY_ID and APPLE_API_ISSUER); a local build can use a notarytool keychain
+  # profile instead (APPLE_KEYCHAIN_PROFILE).
   # Forks that build without the secrets get this value overridden to false by the release workflow, so it passes (fail-open).
   notarize: true
   # @electron/universal merges the two architecture builds and expects files at the same path to be
