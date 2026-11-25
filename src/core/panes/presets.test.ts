@@ -51,6 +51,13 @@ describe('built-in presets', () => {
     expect(shape(presetTree('agents', ['file:/p/a.ts'], null)!.root)).toEqual([['file:/p/a.ts']])
   })
 
+  it('agents keeps the first group in tab order, so a mirror or a file does not jump ahead of its session', () => {
+    expect(shape(presetTree('agents', ['session:s1', 'app:s1', 'file:/p/a.ts', 'session:s2'], null)!.root)).toEqual([
+      ['session:s1', 'app:s1', 'file:/p/a.ts'],
+      ['session:s2']
+    ])
+  })
+
   it('review, devops and default keep one group in tab order', () => {
     const tabs = ['session:s1', 'file:/p/a.ts', 'session:s2']
     for (const id of ['review', 'devops', 'default'] as const) expect(shape(presetTree(id, tabs, null)!.root)).toEqual([tabs])

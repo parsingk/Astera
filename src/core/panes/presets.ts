@@ -65,10 +65,11 @@ export function presetTree(id: PresetId, tabIds: readonly string[], activeTabId:
     const sessions = all.filter((t) => parseTab(t)?.kind === 'session')
     if (sessions.length === 0) return placed(group(all, activeTabId), activeTabId)
     const count = Math.min(MAX_PANES, sessions.length)
+    // Sessions are dealt round-robin; everything that is not a session (files, mirrors) stays with the first group.
+    // Each group keeps tab order, so a mirror does not jump ahead of the session it shows.
+    const groupOf = new Map(sessions.map((s, i) => [s, i % count]))
     const dealt: string[][] = Array.from({ length: count }, () => [])
-    // Everything that is not a session (files, mirrors) stays with the first group, in tab order
-    dealt[0].push(...all.filter((t) => parseTab(t)?.kind !== 'session'))
-    sessions.forEach((s, i) => dealt[i % count].push(s))
+    for (const t of all) dealt[groupOf.get(t) ?? 0].push(t)
     return placed(arrange(dealt.map((tabs) => group(tabs, activeTabId))), activeTabId)
   }
   return placed(group(all, activeTabId), activeTabId)

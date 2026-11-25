@@ -67,7 +67,7 @@ function HeldTab({ name, onLoad }: { name: string; onLoad: () => void }): React.
     <div className="held-tab">
       <p className="held-tab-note">{t('layout.held.title')}</p>
       <p className="held-tab-name">{name}</p>
-      <button type="button" className="kube-btn" onClick={onLoad}>
+      <button type="button" className="primary" onClick={onLoad}>
         {t('layout.held.load')}
       </button>
     </div>

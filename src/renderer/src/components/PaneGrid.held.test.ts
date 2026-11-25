@@ -21,7 +21,8 @@ describe('held preview and cluster tabs (spec W3)', () => {
 
   it('says why and offers to load it', () => {
     expect(grid).toMatch(/t\('layout\.held\.title'\)/)
-    expect(grid).toMatch(/onClick=\{onLoad\}[^>]*>\s*\{t\('layout\.held\.load'\)\}/)
+    // Screen check: the kube toolbar's 26px icon button wrapped the word over two lines; the app's own button shape
+    expect(grid).toMatch(/<button type="button" className="primary" onClick=\{onLoad\}>\s*\{t\('layout\.held\.load'\)\}/)
     for (const lang of ['ko', 'en', 'ja', 'es']) {
       expect(catalog(lang)).toMatch(/'layout\.held\.title':/)
       expect(catalog(lang)).toMatch(/'layout\.held\.load':/)
