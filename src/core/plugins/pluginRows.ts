@@ -1,7 +1,7 @@
 // The Host's plugin list as panels need it, read the same way in main (which prepares a panel) and in the renderer
 // (which lists the commands and keeps the tabs): which plugins are installed, which can show a panel now, and why not.
 // node: no imports, the renderer imports this.
-import { contributionKey, type ContributionKey } from './manifest'
+import { INVISIBLE, contributionKey, type ContributionKey } from './manifest'
 
 /** One installed plugin as the Host lists it, the fields a panel needs. */
 export interface PluginRow {
@@ -69,6 +69,10 @@ export interface PanelCommand {
   pluginName: string
 }
 
+/** The name a plugin is shown by: its display name, or its id when it has none or its display name holds a character
+ *  that could make it read as another plugin's. */
+const shownName = (p: PluginRow): string => (p.displayName !== undefined && !INVISIBLE.test(p.displayName) ? p.displayName : p.id)
+
 /** The commands of the plugins that can show a panel now, in the Host's order; a command whose panel is not
  *  contributed is left out. */
 export function panelCommands(rows: readonly PluginRow[]): PanelCommand[] {
@@ -79,7 +83,7 @@ export function panelCommands(rows: readonly PluginRow[]): PanelCommand[] {
       const panelTitle = panels.get(c.panel)
       return panelTitle === undefined
         ? []
-        : [{ key: contributionKey(p.id, c.id), pluginId: p.id, panelId: c.panel, title: c.title, panelTitle, pluginName: p.displayName ?? p.id }]
+        : [{ key: contributionKey(p.id, c.id), pluginId: p.id, panelId: c.panel, title: c.title, panelTitle, pluginName: shownName(p) }]
     })
   })
 }
@@ -89,5 +93,5 @@ export function panelCommands(rows: readonly PluginRow[]): PanelCommand[] {
 export function panelInfo(rows: readonly PluginRow[], pluginId: string, panelId: string): { title: string; pluginName: string } | null {
   const p = rows.find((r) => r.id === pluginId)
   const panel = p?.contributes?.panels.find((x) => x.id === panelId)
-  return p && panel ? { title: panel.title, pluginName: p.displayName ?? p.id } : null
+  return p && panel ? { title: panel.title, pluginName: shownName(p) } : null
 }

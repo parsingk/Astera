@@ -13,7 +13,7 @@ vi.mock('../i18n/I18nProvider', () => ({
 const here = path.dirname(fileURLToPath(import.meta.url))
 const src = readFileSync(path.join(here, 'PluginPanelTab.tsx'), 'utf8')
 const view = (state: Parameters<typeof PluginPanelView>[0]['state']): string =>
-  renderToStaticMarkup(createElement(PluginPanelView, { state, onReopen: () => {}, onGone: () => {}, onFocus: () => {} }))
+  renderToStaticMarkup(createElement(PluginPanelView, { state, title: 'Hello', onReopen: () => {}, onGone: () => {}, onFocus: () => {} }))
 
 // Phase 2 step 3 (ADR-008): a plugin's panel is a <webview> guest whose src and partition are exactly what main
 // answered, or a note saying why it is not shown, with a way to ask again.
@@ -23,6 +23,8 @@ describe('PluginPanelView', () => {
     expect(html).toContain('<webview')
     expect(html).toContain('src="astera-plugin://hello-panel/ui/index.html?panel=hello&amp;t=abc"')
     expect(html).toContain('partition="plugin-hello-panel"')
+    // A name for the guest, so a screen reader says which panel it is (final review)
+    expect(html).toContain('aria-label="Hello"')
     expect(html).not.toContain('plugin.panel.reopen')
   })
 
@@ -78,5 +80,13 @@ describe('the panel tab’s words', () => {
     const { CATALOGS, LANGS } = await import('../../../core/i18n')
     const keys = ['preparing', 'gone', 'reopen', ...['host', 'missing', 'disabled', 'notReady', 'noUi', 'noPanel', 'address', 'invalid'].map((c) => `refused.${c}`)]
     for (const lang of LANGS) for (const k of keys) expect((CATALOGS[lang].messages as Record<string, string>)[`plugin.panel.${k}`], `${lang}:${k}`).toBeTruthy()
+  })
+})
+
+// Final review I1: running the plugin's command again is the person asking for the panel. A tab that says why it is not
+// shown asks main again; a page already showing is not reloaded.
+describe('running the command again', () => {
+  it('asks again only when the tab is refused or its guest is gone', () => {
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(nonce === 0\) return\s*const phase = stateRef\.current\.phase\s*if \(phase === 'refused' \|\| phase === 'gone'\) setAttempt\(\(n\) => n \+ 1\)\s*\}, \[nonce\]\)/)
   })
 })

@@ -166,7 +166,8 @@ const uiProblem = (v: unknown): string | null => {
 }
 
 /** Characters that hide or reorder text: a title sits beside core actions in the palette (final review M10). */
-const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
+/** Characters a person cannot see, or that turn the text around them: a title or name holding one can read as another. */
+export const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
 
 const CONTRIBUTION_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const TITLE_MAX = 64

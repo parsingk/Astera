@@ -71,3 +71,13 @@ describe('panelInfo', () => {
     expect(panelInfo([], 'hello-panel', 'hello')).toBeNull()
   })
 })
+
+// Final review (declined to judge, ruled a fix): a display name is now shown in the palette and on a tab, where an
+// invisible or direction-changing character could make one plugin read as another
+describe('a plugin’s name where it is shown', () => {
+  it('is its id when its display name holds an invisible or direction-changing character', () => {
+    const spoof = row({ displayName: 'Hello\u202epanel' })
+    expect(panelCommands([spoof])[0].pluginName).toBe('hello-panel')
+    expect(panelInfo([spoof], 'hello-panel', 'hello')?.pluginName).toBe('hello-panel')
+  })
+})

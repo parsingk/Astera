@@ -76,6 +76,7 @@ export function PaneGrid({
   recordStatuses,
   browserTabs,
   pluginTabs,
+  pluginNonces,
   browserLoading,
   agentBusy,
   rollStates,
@@ -144,6 +145,8 @@ export function PaneGrid({
   browserTabs: BrowserTab[]
   /** Every open plugin panel tab (Phase 2 step 3), whichever pane holds it: its title and project come from here. */
   pluginTabs: readonly PluginPanelTabInfo[]
+  /** Plugin tab id → how many times its command ran again: a tab not showing its page asks main again on a bump. */
+  pluginNonces: Record<string, number>
   /** Browser tab id → the page is loading. Chip state, kept beside the tabs rather than in them. */
   browserLoading: Record<string, boolean>
   /** Session id → a script is running in its agent tab. Same shape and reason as browserLoading. */
@@ -636,7 +639,14 @@ export function PaneGrid({
             {held.has(tabId) ? (
               <HeldTab name={info.title} onLoad={() => onRelease(tabId)} />
             ) : (
-              <PluginPanelTab pluginId={info.pluginId} panelId={info.panelId} projectRoot={info.projectRoot} onFocus={() => onFocusPane(pane.id)} />
+              <PluginPanelTab
+                pluginId={info.pluginId}
+                panelId={info.panelId}
+                projectRoot={info.projectRoot}
+                title={info.title}
+                nonce={pluginNonces[tabId] ?? 0}
+                onFocus={() => onFocusPane(pane.id)}
+              />
             )}
           </div>
         )

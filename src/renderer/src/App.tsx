@@ -995,6 +995,8 @@ export default function App(): React.JSX.Element {
   /** Plugin panel tabs (Phase 2 step 3): what each draws while held and the project its panel was opened in. The page
    *  lives in the panel's guest, which main hosts (main/plugins/panelGuests.ts). */
   const [pluginTabs, setPluginTabs] = useState<PluginPanelTabInfo[]>([])
+  /** Plugin tab id → retry nonce (openPluginPanel bumps it: a tab not showing its page asks main again) */
+  const [pluginNonces, setPluginNonces] = useState<Record<string, number>>({})
   const browserTabsRef = useRef(browserTabs)
   browserTabsRef.current = browserTabs
   /** Browser tab id → loading. Chip state, not tab identity */
@@ -1107,12 +1109,13 @@ export default function App(): React.JSX.Element {
   /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
    *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
    *  both belong here. Browser tabs too — closing one closes a page, not a process. A cluster object's
-   *  tab too: closing it ends only its own watch, never anything in the cluster. */
+   *  tab too: closing it ends only its own watch, never anything in the cluster. A plugin's panel tab too: closing it ends
+   *  only its guest. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media' || activeTab?.kind === 'kube'
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media' || activeTab?.kind === 'kube' || activeTab?.kind === 'plugin'
       ? activeTabId
       : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
@@ -1705,16 +1708,19 @@ export default function App(): React.JSX.Element {
 
   // The commands plugins contribute, read each time the palette opens (Phase 2 step 3): the Host's plugin list has no
   // change event, and the palette is where they are offered. An answer that arrives after the palette closed or opened
-  // again is dropped; a list that cannot be read keeps the last one.
+  // again is dropped. A list that cannot be read (the Host stopped, or did not answer) takes the commands down with it:
+  // none of them could open its panel then (final review M3; spec E1, a Host that ends leaves no command behind).
   useEffect(() => {
     if (paletteOpen === null) return
     let current = true
     void window.api.plugins
       .list()
       .then((r) => {
-        if (current && r.ok) applyPluginCommands(panelCommands(pluginRowsOf(r.body)))
+        if (current) applyPluginCommands(r.ok ? panelCommands(pluginRowsOf(r.body)) : [])
       })
-      .catch(() => {})
+      .catch(() => {
+        if (current) applyPluginCommands([])
+      })
     return () => {
       current = false
     }
@@ -2091,15 +2097,18 @@ export default function App(): React.JSX.Element {
 
   /** Opens a plugin's panel in its tab, or focuses the tab already showing it (placePluginTab; Phase 2 step 3). The
    *  tab keeps the project open now: its page may ask which project it was opened in (main/plugins/panelGuests.ts).
-   *  Running the command is the person asking for it, so a held tab of it loads. */
+   *  Running the command is the person asking for it, so a held tab of it loads, a tab that says why its panel is not
+   *  shown asks again, and an open tab's record takes the panel's title now and, when it had none, this project
+   *  (final review I1, M4). */
   const openPluginPanel = (c: { pluginId: string; panelId: string; panelTitle: string; pluginName: string }): void => {
     const id = pluginTab(c.pluginId, c.panelId)
     releaseTab(id)
     setPluginTabs((prev) =>
       prev.some((x) => x.id === id)
-        ? prev
+        ? prev.map((x) => (x.id === id ? { ...x, title: c.panelTitle, pluginName: c.pluginName, projectRoot: x.projectRoot || (currentProject ?? '') } : x))
         : [...prev, { id, pluginId: c.pluginId, panelId: c.panelId, title: c.panelTitle, pluginName: c.pluginName, projectRoot: currentProject ?? '' }]
     )
+    setPluginNonces((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
     const placed = placePluginTab(layoutRef.current, c.pluginId, c.panelId, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
@@ -2334,6 +2343,7 @@ export default function App(): React.JSX.Element {
     if (ref.kind === 'plugin') {
       // A page in its guest, not a process: dropping the tab unmounts its webview, which ends the guest (ADR-008 §6)
       setPluginTabs((prev) => prev.filter((x) => x.id !== tabId))
+      setPluginNonces(({ [tabId]: _n, ...rest }) => rest)
       dropTabFromTree(tabId)
       return
     }
@@ -5764,6 +5774,7 @@ export default function App(): React.JSX.Element {
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
                 pluginTabs={pluginTabs}
+                pluginNonces={pluginNonces}
                 browserLoading={browserLoading}
                 agentBusy={agentBusy}
                 renderEditor={renderEditor}

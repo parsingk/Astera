@@ -11,8 +11,12 @@ export function readRecentActions(known: readonly RegistryId[]): RegistryId[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(KEY) ?? '[]')
     if (!Array.isArray(parsed)) return []
-    // An id this version does not know (an action that was removed, or a plugin's that is gone) is dropped.
-    return parsed.filter((id): id is RegistryId => typeof id === 'string' && known.includes(id as RegistryId)).slice(0, MAX)
+    // A core action this version does not know (one that was removed) is dropped. A plugin's command (a contribution
+    // key, the one id with a colon) is kept whether or not it is listed now: the Host's list may not have arrived, or
+    // its plugin may be off for a while; a row is ranked only while it is listed, and a gone one ages out of the eight.
+    return parsed
+      .filter((id): id is RegistryId => typeof id === 'string' && (known.includes(id as RegistryId) || id.includes(':')))
+      .slice(0, MAX)
   } catch {
     return []
   }

@@ -22,17 +22,33 @@ export function PluginPanelTab({
   pluginId,
   panelId,
   projectRoot,
+  title,
+  nonce,
   onFocus
 }: {
   pluginId: string
   panelId: string
   /** The project the panel was opened in, `''` for none. */
   projectRoot: string
+  /** The panel's title, the guest's name for a screen reader. */
+  title: string
+  /** Bumped each time the plugin's command runs for this tab: a tab not showing its page asks main again. */
+  nonce: number
   /** The person moved into the guest: its pane becomes the active one, as a click elsewhere in the slot makes it. */
   onFocus: () => void
 }): React.JSX.Element {
   const [state, setState] = useState<PanelState>({ phase: 'preparing' })
   const [attempt, setAttempt] = useState(0)
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  // The command run again is the person asking for the panel (final review I1): a refusal or a gone guest is asked
+  // about again; a page already showing is left as it is, not reloaded
+  useEffect(() => {
+    if (nonce === 0) return
+    const phase = stateRef.current.phase
+    if (phase === 'refused' || phase === 'gone') setAttempt((n) => n + 1)
+  }, [nonce])
 
   useEffect(() => {
     // React.StrictMode runs this twice: the answer to the first ask is dropped, so only one guest ever mounts
@@ -56,6 +72,7 @@ export function PluginPanelTab({
   return (
     <PluginPanelView
       state={state}
+      title={title}
       onReopen={() => setAttempt((n) => n + 1)}
       onGone={() => setState({ phase: 'gone' })}
       onFocus={onFocus}
@@ -66,17 +83,20 @@ export function PluginPanelTab({
 /** What a panel tab draws for each state; apart from PluginPanelTab so each is tested without a DOM. */
 export function PluginPanelView({
   state,
+  title,
   onReopen,
   onGone,
   onFocus
 }: {
   state: PanelState
+  title: string
   onReopen: () => void
   onGone: () => void
   onFocus: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  if (state.phase === 'shown') return <PluginGuest key={state.url} url={state.url} partition={state.partition} onGone={onGone} onFocus={onFocus} />
+  if (state.phase === 'shown')
+    return <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} onGone={onGone} onFocus={onFocus} />
   if (state.phase === 'preparing') return <div className="plugin-panel-note">{t('plugin.panel.preparing')}</div>
   const note: MessageKey = state.phase === 'gone' ? 'plugin.panel.gone' : `plugin.panel.refused.${state.code}`
   return (
@@ -91,7 +111,19 @@ export function PluginPanelView({
 
 /** The guest element: its src and partition exactly as main answered them, set before it is attached (main's attach
  *  guard compares both). Removing it destroys the guest (ADR-008 §6). */
-function PluginGuest({ url, partition, onGone, onFocus }: { url: string; partition: string; onGone: () => void; onFocus: () => void }): React.JSX.Element {
+function PluginGuest({
+  url,
+  partition,
+  title,
+  onGone,
+  onFocus
+}: {
+  url: string
+  partition: string
+  title: string
+  onGone: () => void
+  onFocus: () => void
+}): React.JSX.Element {
   const viewRef = useRef<WebviewTag>(null)
   const latest = useRef({ onGone, onFocus })
   latest.current = { onGone, onFocus }
@@ -111,5 +143,5 @@ function PluginGuest({ url, partition, onGone, onFocus }: { url: string; partiti
       view.removeEventListener('focus', focus)
     }
   }, [])
-  return <webview ref={viewRef} className="plugin-view" src={url} partition={partition} />
+  return <webview ref={viewRef} className="plugin-view" src={url} partition={partition} aria-label={title} />
 }
