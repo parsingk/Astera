@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { appTab, sessionTab } from '../../../core/panes/tabId'
-import { createGroup, leaves, type PaneNode } from '../../../core/panes/tree'
+import { createGroup, leaves, splitAndMove, type PaneNode } from '../../../core/panes/tree'
 import { applyWorkspaceEvent, createSessionSizeReporters, createSizeReporter, mirrorStatus, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './workspaceMirror'
 
 const frame = { jpeg: '/9j/', width: 4, height: 3, at: 1 }
@@ -67,6 +67,17 @@ describe('placing the mirror tabs', () => {
     const root = placeAppTabs(g, ['s1', 's2'], g.id)
     expect(tabsOf(root)).toEqual([sessionTab('s0'), appTab('s1'), appTab('s2')])
     expect(root && leaves(root)[0].activeTabId).toBe(sessionTab('s0'))
+  })
+
+  // Final review M5: beside its session, as a saved preset and the restore place it; still in the background
+  it('places a mirror in its session group, and in the active group when its session has no tab', () => {
+    const left = createGroup(sessionTab('s0'))
+    const split = splitAndMove(left, sessionTab('s1'), left.id, 'row', false)!.root
+    const root = placeAppTabs(split, ['s1', 's9'], left.id)
+    expect(root && leaves(root).map((l) => [l.tabIds, l.activeTabId])).toEqual([
+      [[sessionTab('s0'), appTab('s9')], sessionTab('s0')],
+      [[sessionTab('s1'), appTab('s1')], sessionTab('s1')]
+    ])
   })
 
   it('places onto an empty tree, and never places a tab twice', () => {

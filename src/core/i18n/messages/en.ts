@@ -926,7 +926,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.notifications.limitWaitingHint': 'Sent when the session stops on a usage limit.',
   'settings.notifications.accountSwitched': 'Account switched',
   'settings.notifications.accountSwitchedHint': 'Sent when rolling moves the session to another account.',
-  'settings.workspace.hint': 'Each new workspace feature can be turned off here. The command palette, go to file and find in files turn off by taking their key away in the Shortcuts tab.',
+  'settings.workspace.hint': 'Each new workspace feature can be turned off here. The command palette, go to file and find in files share one box, which turns off once all three of their keys are taken away in the Shortcuts tab.',
   'settings.workspace.layoutMemory': 'Remember the layout',
   'settings.workspace.layoutMemoryHint': 'The splits, tabs, sidebar and bottom panel the window closed with come back the next time it opens. Turning this off deletes the saved layout.',
   'settings.workspace.problemsTab': 'Problems tab',

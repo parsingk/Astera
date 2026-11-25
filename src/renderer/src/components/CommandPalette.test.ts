@@ -164,3 +164,13 @@ describe('useQuickOpenFiles', () => {
     expect(hook).toMatch(/\}, \[root, text, enabled\]\)/)
   })
 })
+
+// Final review M6: an action hidden while its feature is off keeps its place in the recent list
+describe('the recent list and hidden actions', () => {
+  const app = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../App.tsx'), 'utf8')
+  it('remembers against every action, not only those shown', () => {
+    expect(src).toMatch(/actionIds: readonly ActionId\[\]/)
+    expect(src).toMatch(/const known = actionIds/)
+    expect(app).toMatch(/actionIds=\{ACTIONS\.map\(\(a\) => a\.id\)\}/)
+  })
+})

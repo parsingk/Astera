@@ -207,8 +207,8 @@ what to check when an explanation is missing.
   **Layout: DevOps** arrange the open tabs, **Layout: Reset to Default** goes back to the start, and
   **Layout: Saved Presets** keeps your own under a name
 - **Turning them off:** in Settings › General, **Remember the layout**, **Problems tab** and **Send to an agent**
-  each turn their feature off. The command palette, go to file and find in files open only by their keys: in
-  Settings › Shortcuts, **Remove key** takes a key away and **Default** brings it back
+  each turn their feature off. The command palette, go to file and find in files are one box opened only by their
+  keys: in Settings › Shortcuts, **Remove key** on all three turns it off, and **Default** brings a key back
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,

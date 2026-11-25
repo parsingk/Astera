@@ -12,7 +12,11 @@ describe('the workspace feature switches in App (Phase 1 gate)', () => {
   it('holds them as null until main answers, and reads them once at start', () => {
     expect(app).toMatch(/const \[workspaceFeatures, setWorkspaceFeaturesState\] = useState<WorkspaceFeatures \| null>\(null\)/)
     expect(app).toMatch(/const setWorkspaceFeatures = useMemo\(\(\) => writeThrough\(workspaceFeaturesRef, setWorkspaceFeaturesState\), \[\]\)/)
-    expect(app).toMatch(/void window\.api\.settings\s*\.getWorkspaceFeatures\(\)\s*\.then\(setWorkspaceFeatures\)\s*\.catch\(\(\) => setWorkspaceFeatures\(\{ \.\.\.WORKSPACE_FEATURES_DEFAULTS \}\)\)/)
+    // Final review M1: one read, shared with the restore
+    expect(app).toMatch(/const \[featuresAsked\] = useState\(\(\) =>\s*window\.api\.settings\.getWorkspaceFeatures\(\)\.catch\(\(\) => \(\{ \.\.\.WORKSPACE_FEATURES_DEFAULTS \}\)\)\s*\)/)
+    expect(app).toMatch(/void featuresAsked\.then\(setWorkspaceFeatures\)/)
+    expect(app).not.toMatch(/getWorkspaceFeatures\(\)[\s\S]{0,40}getWorkspaceFeatures\(\)/)
+    expect(app.match(/window\.api\.settings\.getWorkspaceFeatures\(\)/g)).toHaveLength(1)
   })
 
   it('saves a switch at once and puts back only that one when the save fails', () => {
@@ -34,12 +38,15 @@ describe('the workspace feature switches in App (Phase 1 gate)', () => {
 describe('layout memory off (Phase 1 gate)', () => {
   // Asked beside the Host's take back, so it adds no wait; a failed read is the default, on
   it('restores nothing and deletes the saved layout while it is off', () => {
-    expect(app).toMatch(/const memoryAsked = window\.api\.settings\.getWorkspaceFeatures\(\)\.catch\(\(\) => \(\{ \.\.\.WORKSPACE_FEATURES_DEFAULTS \}\)\)/)
-    expect(app).toMatch(/if \(!features\.layoutMemory\) clearLayout\(\)\s*const saved = features\.layoutMemory \? savedAtStart : null/)
+    expect(app).toMatch(/\.then\(\(\) => featuresAsked\)\s*\.then\(async \(features\) => \{\s*if \(!features\.layoutMemory\) clearLayout\(\)\s*const saved = features\.layoutMemory \? savedAtStart : null/)
+    // Final review M1: turned off while the restore waited, nothing comes back
+    expect(app).toMatch(/\.then\(\(\{ saved: savedThen, checked, all \}\) => \{\s*if \(!restoreLive\) return\s*layoutRestoredRef\.current = true\s*(?:\/\/[^\n]*\n\s*)*const saved = workspaceFeaturesRef\.current\?\.layoutMemory === false \? null : savedThen/)
+    // Final review M2: a record left in storage while it is off does not keep the panels it opened at first paint
+    expect(app).toMatch(/if \(savedAtStart && !saved\) \{\s*applyPanels\(presetPanels\('default'\)\)\s*setKubeHeld\(false\)\s*\}/)
   })
 
   it('saves only while it is on, and saves the screen as it is when it is turned on', () => {
-    expect(app).toMatch(/if \(!layoutRestoredRef\.current \|\| workspaceFeaturesRef\.current\?\.layoutMemory !== true\) return\s*const timer = setTimeout/)
+    expect(app).toMatch(/if \(!layoutRestoredRef\.current \|\| workspaceFeaturesRef\.current\?\.layoutMemory !== true\) return\s*const timer = setTimeout\(\(\) => \{\s*if \(workspaceFeaturesRef\.current\?\.layoutMemory === true\) writeLayout\(layoutRecordRef\.current\(\)\)\s*\}, 300\)/)
     expect(app).toMatch(/\}, \[workspaceFeatures\?\.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs\]\)/)
     expect(app).toMatch(/const flush = \(\): void => \{\s*if \(layoutRestoredRef\.current && workspaceFeaturesRef\.current\?\.layoutMemory === true\) writeLayout\(layoutRecordRef\.current\(\)\)/)
   })
@@ -52,6 +59,8 @@ describe('layout memory off (Phase 1 gate)', () => {
 describe('the Problems tab off (Phase 1 gate)', () => {
   it('draws the tab only on an explicit on, and asks main for problems only then', () => {
     expect(app).toMatch(/problemsEnabled=\{problemsOn\}/)
+    // Final review I1: the shown tab falls back to Run while the Problems tab is off, whoever asked for it
+    expect(app).toMatch(/shownBottomTab\(\{\s*wanted: bottomTab,\s*runAvailable,\s*kubeAvailable,\s*problemsAvailable: workspaceFeatures\?\.problemsTab === true,\s*terminalIds: terminals\.map\(\(x\) => x\.id\)\s*\}\)/)
     expect(app).toMatch(/const problemsOn = workspaceFeatures\?\.problemsTab === true/)
     expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(!problemsOn\) return\s*if \(!currentProject\) \{\s*setProblems\(\[\]\)/)
   })

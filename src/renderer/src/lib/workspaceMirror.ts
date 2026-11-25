@@ -3,7 +3,7 @@
 // the person sees "closed" rather than a tab that vanished (agent workspace plan ruling P7).
 import type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary } from '../../../core/host/protocol'
 import { placeTab } from '../../../core/panes/place'
-import { appTab } from '../../../core/panes/tabId'
+import { appTab, sessionTab } from '../../../core/panes/tabId'
 import { groupOfTab, removeTab, type PaneNode } from '../../../core/panes/tree'
 import { SIZE_REPORT_DEBOUNCE_MS, clampAppSize, sizeToReport, type AppSize } from '../../../core/workspace/size'
 
@@ -160,14 +160,16 @@ export function openSessionIds(m: Mirrors): string[] {
 }
 
 /** Places each session's mirror tab in the background (the openAgentTab rule: the agent's work must not
- *  take the tab the person is on), each placement building on the previous one's tree, so two
- *  workspaces that open before a render both keep their tab. A tab already in the tree is left alone. */
+ *  take the tab the person is on), beside its session when the tree has that session's tab and in the active group
+ *  otherwise (a saved preset and the restore place it the same way), each placement building on the previous one's
+ *  tree, so two workspaces that open before a render both keep their tab. A tab already in the tree is left alone. */
 export function placeAppTabs(root: PaneNode | null, sessionIds: string[], activePaneId: string | null): PaneNode | null {
   let next = root
   for (const sid of sessionIds) {
     const id = appTab(sid)
     if (next && groupOfTab(next, id)) continue
-    next = placeTab(next, id, { activePaneId, background: true }).root
+    const home = next ? groupOfTab(next, sessionTab(sid)) : null
+    next = placeTab(next, id, { activePaneId: home?.id ?? activePaneId, background: true }).root
   }
   return next
 }

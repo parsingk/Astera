@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { shownBottomTab } from './bottomTab'
 
-const project = { runAvailable: true, kubeAvailable: true, terminalIds: [] as string[] }
+const project = { runAvailable: true, kubeAvailable: true, problemsAvailable: true, terminalIds: [] as string[] }
 const home = { ...project, runAvailable: false }
 
 describe('shownBottomTab', () => {
@@ -14,6 +14,12 @@ describe('shownBottomTab', () => {
 
   it('falls back to Run when the Kubernetes tab is gone', () => {
     expect(shownBottomTab({ ...project, kubeAvailable: false, wanted: 'kube' })).toBe('run')
+  })
+
+  // Final review I1: Layout: Agent Review, or a saved preset, asks for the Problems tab while it is turned off
+  it('falls back to Run when the Problems tab is turned off, and shows it while it is on', () => {
+    expect(shownBottomTab({ ...project, problemsAvailable: false, wanted: 'problems' })).toBe('run')
+    expect(shownBottomTab({ ...project, wanted: 'problems' })).toBe('problems')
   })
 
   // The Kubernetes and logs tabs belong to no project: at home they show as they are.

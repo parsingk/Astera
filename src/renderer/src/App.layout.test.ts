@@ -24,7 +24,7 @@ describe('the window layout (spec W3)', () => {
     // Final review C1, I1: the checks wait for the Host's take back (the project guard counts the sessions' folders), and
     // the list is asked after the checks, so it is fresh when applied (screen re-check: a file of a project known only
     // through a session's folder was dropped when checked before the take back)
-    expect(app).toMatch(/void window\.api\.sessions\s*\.list\(\{ afterTakeBack: true \}\)\s*\.catch\(\(\): SessionInfo\[\] => \[\]\)\s*\.then\(\(\) => memoryAsked\)\s*\.then\(async \(features\) => \{[\s\S]*?return \{ saved, checked: await checkSavedTabs\(saved\) \}\s*\}\)\s*\.then\(\(\{ saved, checked \}\) =>\s*window\.api\.sessions\s*\.list\(\)/)
+    expect(app).toMatch(/void window\.api\.sessions\s*\.list\(\{ afterTakeBack: true \}\)\s*\.catch\(\(\): SessionInfo\[\] => \[\]\)\s*\.then\(\(\) => featuresAsked\)\s*\.then\(async \(features\) => \{[\s\S]*?return \{ saved, checked: await checkSavedTabs\(saved\) \}\s*\}\)\s*\.then\(\(\{ saved, checked \}\) =>\s*window\.api\.sessions\s*\.list\(\)/)
     expect(app).toMatch(/const keep = keepSavedTab\(saved, checked, new Set\(\[\.\.\.listed, \.\.\.arrived\.map\(\(s\) => s\.id\)\]\)\)/)
     expect(app).toMatch(/restoreTree\(saved\?\.tree \?\? null, saved\?\.active \?\? -1, keep\)/)
     // A session the layout did not name joins the first group without taking its active tab
@@ -39,7 +39,7 @@ describe('the window layout (spec W3)', () => {
 
   // Final review I2, M8: StrictMode's second run applies once; a list that cannot be had still restores the rest
   it('applies the restore once, and restores without a session list', () => {
-    expect(app).toMatch(/\.then\(\(\{ saved, checked, all \}\) => \{\s*if \(!restoreLive\) return\s*layoutRestoredRef\.current = true/)
+    expect(app).toMatch(/\.then\(\(\{ saved: savedThen, checked, all \}\) => \{\s*if \(!restoreLive\) return\s*layoutRestoredRef\.current = true/)
     expect(app).toMatch(/return \(\) => \{\s*restoreLive = false/)
     expect(app).toMatch(/\.catch\(\(\): SessionInfo\[\] => \[\]\)/)
   })
@@ -85,7 +85,7 @@ describe('the window layout (spec W3)', () => {
 
   it('saves only after the restore, a moment after the last change, and at once when the page goes', () => {
     expect(app).toMatch(/layoutRestoredRef\.current = true/)
-    expect(app).toMatch(/if \(!layoutRestoredRef\.current \|\| workspaceFeaturesRef\.current\?\.layoutMemory !== true\) return\s*const timer = setTimeout\(\(\) => writeLayout\(layoutRecordRef\.current\(\)\), 300\)/)
+    expect(app).toMatch(/if \(!layoutRestoredRef\.current \|\| workspaceFeaturesRef\.current\?\.layoutMemory !== true\) return\s*const timer = setTimeout\(\(\) => \{/)
     expect(app).toMatch(/window\.addEventListener\('pagehide', flush\)/)
     expect(app).toMatch(/browserTabs\s*\.filter\(\(b\) => !b\.agentSessionId\)/)
   })

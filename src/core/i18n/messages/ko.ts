@@ -936,7 +936,7 @@ export const ko = {
   'settings.notifications.limitWaitingHint': '한도에 걸렸을 때 알림을 보냅니다.',
   'settings.notifications.accountSwitched': '계정을 전환할 때',
   'settings.notifications.accountSwitchedHint': '계정을 전환할 때 알림을 보냅니다.',
-  'settings.workspace.hint': '새 작업 공간 기능을 하나씩 끌 수 있습니다. 명령 팔레트, 파일로 이동, 파일 내용에서 찾기는 단축키 탭에서 키를 해제하면 꺼집니다.',
+  'settings.workspace.hint': '새 작업 공간 기능을 하나씩 끌 수 있습니다. 명령 팔레트, 파일로 이동, 파일 내용에서 찾기는 한 상자를 함께 쓰므로, 단축키 탭에서 세 키를 모두 해제하면 꺼집니다.',
   'settings.workspace.layoutMemory': '창 배치 기억',
   'settings.workspace.layoutMemoryHint': '창을 닫을 때의 분할, 탭, 사이드바, 아래 패널을 다음에 켤 때 되살립니다. 끄면 저장해 둔 배치를 지웁니다.',
   'settings.workspace.problemsTab': '문제 탭',
