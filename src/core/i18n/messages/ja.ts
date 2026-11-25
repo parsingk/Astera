@@ -461,7 +461,7 @@ export const ja: Catalog = {
   'audit.coverageNote.runtime-measured': 'ランタイムで測定',
   'audit.coverageNote.via-codex': 'シェルが Codex のサンドボックスにあるとき。Windows のサンドボックスを設定した Codex アカウントが必要',
   'audit.coverageNote.bus-path-only': 'セッションバスがファイルパスのとき',
-  'settings.plugins.hint': 'プラグインは Astera Host と並んで動くプログラムです。インストールすると、このコンピューター上で信頼されたコードとして動き、Astera には許可した権限の範囲でしかリクエストできません。',
+  'settings.plugins.hint': 'プラグインには 2 種類あります。信頼されたコードのプラグインは Astera Host と並んで動くプログラムで、このコンピューター上で信頼されたコードとして動き、Astera には許可した権限の範囲でしかリクエストできません。制限付き UI のプラグインはプログラムを起動せず、Astera のパネルにページを表示するだけです。',
   'settings.plugins.none': 'インストール済みのプラグインはありません。',
   'settings.plugins.installFolder': 'フォルダーからインストール…',
   'settings.plugins.installing': 'インストール中…',

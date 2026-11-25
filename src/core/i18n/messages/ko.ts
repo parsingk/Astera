@@ -476,7 +476,7 @@ export const ko = {
   'audit.coverageNote.runtime-measured': '런타임으로 측정',
   'audit.coverageNote.via-codex': '셸이 Codex sandbox 안에 있을 때. Windows sandbox를 설정한 Codex 계정이 필요합니다',
   'audit.coverageNote.bus-path-only': '세션 bus가 파일 경로일 때',
-  'settings.plugins.hint': '플러그인은 Astera Host 옆에서 도는 프로그램입니다. 설치하면 이 컴퓨터에서 신뢰된 코드로 실행되고, Astera 에는 허락한 권한 안에서만 요청할 수 있습니다.',
+  'settings.plugins.hint': '플러그인은 두 가지입니다. 신뢰된 코드 플러그인은 Astera Host 옆에서 도는 프로그램이라 이 컴퓨터에서 신뢰된 코드로 실행되고, Astera 에는 허락한 권한 안에서만 요청할 수 있습니다. 제한된 UI 플러그인은 프로그램을 실행하지 않고 Astera 패널 안에 페이지만 보여 줍니다.',
   'settings.plugins.none': '설치된 플러그인이 없습니다.',
   'settings.plugins.installFolder': '폴더에서 설치…',
   'settings.plugins.installing': '설치하는 중…',

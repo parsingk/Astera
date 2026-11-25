@@ -277,3 +277,14 @@ describe('the trust level in Settings', () => {
     expect(both.footer).toContain(en('settings.plugins.install.trust'))
   })
 })
+
+// Screen check: the tab's opening sentence said every plugin is a program running as trusted code
+describe('the Plugins tab hint', () => {
+  it('names both trust levels in every language', () => {
+    for (const lang of ['ko', 'en', 'ja', 'es'] as const) {
+      const tr = (key: MessageKey): string => translate(lang, key)
+      expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.trusted'))
+      expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.restrictedUi'))
+    }
+  })
+})

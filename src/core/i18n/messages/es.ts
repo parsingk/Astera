@@ -465,7 +465,7 @@ export const es: Catalog = {
   'audit.coverageNote.runtime-measured': 'medido en el entorno de ejecución',
   'audit.coverageNote.via-codex': 'cuando el shell va en el sandbox de Codex, que requiere una cuenta de Codex con su sandbox de Windows configurado',
   'audit.coverageNote.bus-path-only': 'cuando el bus de sesión es una ruta de archivo',
-  'settings.plugins.hint': 'Un plugin es un programa que se ejecuta junto al Astera Host. Una vez instalado se ejecuta como código de confianza en este equipo y solo pide a Astera lo que le concediste.',
+  'settings.plugins.hint': 'Hay dos tipos de plugin. El código de confianza es un programa que se ejecuta junto al Astera Host: una vez instalado se ejecuta como código de confianza en este equipo y solo pide a Astera lo que le concediste. La UI restringida no inicia ningún programa y solo muestra páginas en paneles de Astera.',
   'settings.plugins.none': 'No hay plugins instalados.',
   'settings.plugins.installFolder': 'Instalar desde una carpeta…',
   'settings.plugins.installing': 'Instalando…',

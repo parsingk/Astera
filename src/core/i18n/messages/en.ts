@@ -471,7 +471,7 @@ export const en: Record<keyof typeof ko, string> = {
   'audit.coverageNote.runtime-measured': 'measured on the runtime',
   'audit.coverageNote.via-codex': 'when the shell is in Codex’s sandbox, which needs a Codex account with its Windows sandbox set up',
   'audit.coverageNote.bus-path-only': 'when the session bus is a file path',
-  'settings.plugins.hint': 'A plugin is a program that runs beside the Astera Host. Once installed it runs as trusted code on this computer, and asks Astera only for what you granted.',
+  'settings.plugins.hint': 'A plugin is one of two kinds. Trusted code is a program that runs beside the Astera Host: once installed it runs as trusted code on this computer, and asks Astera only for what you granted. Restricted UI starts no program and only shows pages in Astera panels.',
   'settings.plugins.none': 'No plugins are installed.',
   'settings.plugins.installFolder': 'Install from a folder…',
   'settings.plugins.installing': 'Installing…',
