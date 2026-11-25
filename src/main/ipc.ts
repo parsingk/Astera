@@ -307,7 +307,8 @@ import { createLiveWrites } from './kube/liveWrites'
 import { createWatchRegistry } from './kube/clusterWatch'
 import { createLogRegistry } from './kube/logStreams'
 import { createShellRegistry } from './kube/shells'
-import { createForwardRegistry, pickLocalPort, realPortProbe, realAnyFreePort } from './kube/forwards'
+import { createForwardRegistry, pickLocalPort, realPoke, realPortProbe, realAnyFreePort } from './kube/forwards'
+import { createForwardPodWatch } from './kube/forwardPods'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { kubectlBin } from '../core/kube/kubectl'
 import { streamKubectl } from '../core/kube/stream'
@@ -4602,15 +4603,20 @@ export function registerIpc(
     redact: redactKubectlStderr,
     emit: (m) => send('kube:shell', m)
   })
+  const forwardStream: Parameters<typeof createForwardRegistry>[0]['stream'] = (args, h) =>
+    streamKubectl(args, {
+      bin: kubectlBin(core.appSettings.getKubectlPath()),
+      env: kubeEnv(core.appSettings.getKubeconfigFiles(), process.env, os.homedir()),
+      ...h
+    })
   const kubeForwards = createForwardRegistry({
-    stream: (args, h) =>
-      streamKubectl(args, {
-        bin: kubectlBin(core.appSettings.getKubectlPath()),
-        env: kubeEnv(core.appSettings.getKubeconfigFiles(), process.env, os.homedir()),
-        ...h
-      }),
+    stream: forwardStream,
     redact: redactKubectlStderr,
-    emit: (m) => send('kube:forward', m)
+    emit: (m) => send('kube:forward', m),
+    probe: realPortProbe,
+    watchPods: createForwardPodWatch({ get: (ref) => kubeCluster.get(ref), stream: forwardStream, now: Date.now }),
+    poke: realPoke,
+    now: Date.now
   })
   const kubeWrites = createLiveWrites({ run: kubeService.kubectl, counts: kubeCluster.counts, now: () => new Date() })
   registerKubeIpc(ipcMain, {

@@ -1,7 +1,7 @@
 /** Port forwarding: which objects offer it, their ports, the kubectl arguments and how to read kubectl's lines. The
  *  renderer imports this, so nothing here may touch `node:`. */
 import type { K8sObject } from '../objects'
-import type { ForwardPort, ForwardSpec, LostCause } from './types'
+import type { ForwardCause, ForwardPort, ForwardSpec, LostCause } from './types'
 
 /** Loopback only: a forward is never reachable from the network. */
 export const FORWARD_ADDRESS = '127.0.0.1'
@@ -11,6 +11,8 @@ export const LOST_POD = 'lost-pod'
 export const REFUSED = 'refused'
 /** The reason of a forward that lost its connection for a cause kubectl's lines do not tell. */
 export const LOST = 'lost'
+/** The reason of a forward whose local port another program already held, so kubectl was never started. */
+export const PORT_BUSY = 'port-busy'
 
 export function validPort(n: unknown): n is number {
   return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 65535
@@ -75,9 +77,10 @@ export function lostCause(stderr: string): LostCause | null {
 
 export function forwardReason(
   message: string | null,
-  cause?: LostCause
-): typeof LOST_POD | typeof REFUSED | typeof LOST | string | null {
+  cause?: ForwardCause
+): typeof LOST_POD | typeof REFUSED | typeof LOST | typeof PORT_BUSY | string | null {
   if (message === null) return null
+  if (cause === 'port-busy') return PORT_BUSY
   if (cause === 'pod-gone') return LOST_POD
   if (cause === 'refused') return REFUSED
   return message.includes('lost connection to pod') ? LOST : message

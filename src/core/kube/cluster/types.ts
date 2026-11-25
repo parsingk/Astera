@@ -62,12 +62,14 @@ export interface ForwardPort { port: number; name?: string }
 export interface ForwardSpec { ref: ObjectRef; local: number; remote: number; remoteName?: string }
 /** Why a lost connection ended: the Pod was replaced, or nothing listens on the remote port. */
 export type LostCause = 'pod-gone' | 'refused'
+/** Why a forward ended, when it can be told: a lost connection's cause, or a local port another program already held. */
+export type ForwardCause = LostCause | 'port-busy'
 /** What a forward sends the renderer: kubectl is listening, then how it ended (message: kubectl's last stderr line
  *  after listening, else its first, redacted, or null when it printed none; cause: set for a lost connection whose klog
- *  line tells why). */
+ *  line tells why, and for a local port found taken before kubectl was started). */
 export type ForwardMessage = { forwardId: string } & (
   | { kind: 'listening'; local: number }
-  | { kind: 'exit'; message: string | null; cause?: LostCause }
+  | { kind: 'exit'; message: string | null; cause?: ForwardCause }
 )
 /** The one plain manifest in the project that declares an object: `same` when it targets the object's own context and
  *  namespace, `other` (with that target) when it targets elsewhere. `file` is an absolute path. */
