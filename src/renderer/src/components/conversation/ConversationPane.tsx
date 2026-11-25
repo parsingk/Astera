@@ -961,15 +961,18 @@ export function ConversationPane({
   /** Put text into the composer as though it had been typed. `insertText` rather than an assignment
    *  for the reason the completion menu gives: the composer is a controlled input, and only a real
    *  edit reaches the store behind it. */
-  const insertIntoComposer = useCallback((text: string): void => {
+  const insertIntoComposer = useCallback((text: string): boolean => {
     const input = paneRef.current?.querySelector("textarea");
-    if (!input) return;
+    if (!input || input.disabled) return false;
     input.focus();
-    document.execCommand("insertText", false, text);
+    // A hidden pane's composer cannot take focus, and then nothing is inserted: say so rather than claim it landed
+    if (document.activeElement !== input) return false;
+    return document.execCommand("insertText", false, text);
   }, []);
   // Context handed to this session (spec W4, App's attach) lands here as a terminal session's lands in its xterm: in the
   // composer, unsent, for the person to read and send (sessionBus.pasteInto). A chat session has no terminal registered.
-  useEffect(() => sessionBus.registerPaste(sessionId, insertIntoComposer), [sessionId, insertIntoComposer]);
+  // It never submits: Design Mode's paste-and-Enter is for a terminal's pty, which a chat session has none of.
+  useEffect(() => sessionBus.registerPaste(sessionId, insertIntoComposer, { submits: false }), [sessionId, insertIntoComposer]);
 
   /**
    * A file dropped on this pane, or an image pasted into it, becomes a path in the message.

@@ -7,6 +7,7 @@ import { xtermThemeOf } from '../../../core/theme/apply'
 import { NOTE_RESERVE_PX, PaneSize, showOwn, showPty, wantedOf } from '../lib/terminalScale'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import * as sessionBus from '../lib/sessionBus'
+import { stripControls } from '../../../core/context/contextRef'
 import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
@@ -220,7 +221,13 @@ export function TerminalView({
     })
     // Design Mode's "send to session" pastes here — the same path as Ctrl+V, so the prompt arrives
     // bracketed and unsubmitted (sessionBus.registerPaste explains why not sessions.write)
-    const unregisterPaste = sessionBus.registerPaste(session.id, (text) => term.paste(text))
+    // Never a control character (an ESC[201~ in a pasted file would end bracketed paste early and the next line break
+    // would be an Enter), and never several lines while bracketed paste is off, when each line break is an Enter
+    const unregisterPaste = sessionBus.registerPaste(
+      session.id,
+      (text) => term.paste(stripControls(text).text),
+      { accepts: (text) => !/[\r\n]/.test(text) || term.modes.bracketedPasteMode }
+    )
     // The live screen, so a send can tell an agent at its prompt from one holding a dialog open.
     // One screen's worth rather than the whole scrollback: a dialog answered ten minutes ago is not
     // what is waiting now, and `translateToString(true)` trims the padding a TUI draws to the right edge.

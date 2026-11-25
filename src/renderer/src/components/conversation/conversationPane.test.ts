@@ -419,6 +419,10 @@ describe('toThreadMessages — unchanged turns keep their message', () => {
 describe('a chat session takes a paste from the session bus', () => {
   const paneSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ConversationPane.tsx'), 'utf8')
   it('registers its composer insert for its session, and lets go on unmount', () => {
-    expect(paneSrc).toMatch(/useEffect\(\(\) => sessionBus\.registerPaste\(sessionId, insertIntoComposer\), \[sessionId, insertIntoComposer\]\)/)
+    // Final review I1: registered as a paste that never submits, so Design Mode's paste-and-Enter refuses a chat session
+    expect(paneSrc).toMatch(/useEffect\(\(\) => sessionBus\.registerPaste\(sessionId, insertIntoComposer, \{ submits: false \}\), \[sessionId, insertIntoComposer\]\)/)
+    // Final review M5: the insert says whether it landed (a hidden or locked composer takes nothing)
+    expect(paneSrc).toMatch(/if \(!input \|\| input\.disabled\) return false;/)
+    expect(paneSrc).toMatch(/if \(document\.activeElement !== input\) return false;\s*return document\.execCommand\("insertText", false, text\);/)
   })
 })
