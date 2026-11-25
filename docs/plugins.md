@@ -663,7 +663,19 @@ Bundle to CommonJS, as here, and point `astera.entry` at `dist/index.cjs`. Many 
 
 ## Developing a plugin
 
-Edit, install again, read the log:
+`astera plugins init <name> --template <kind>` writes a starting folder: `ui` (a panel, Plugin API 2), `host` (a
+plugin Astera runs), `check` (a completion check) or `source` (a job source), each the smallest that installs, in plain
+JavaScript with no dependency. `astera plugins validate --path <folder>` checks a folder the way an install would and
+names each problem by a code (`MANIFEST_INVALID` with the field it is about, `INCOMPATIBLE`, `ENTRY_MISSING`,
+`UI_MISSING`, `LINK_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), exit 1 when there is one. Neither starts a Host
+or changes anything in Astera.
+
+```sh
+astera plugins init my-plugin --template host
+astera plugins validate --path ./my-plugin
+```
+
+Then edit, install again, read the log:
 
 ```sh
 astera plugins install --path . --yes

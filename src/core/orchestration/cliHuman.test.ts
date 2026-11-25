@@ -191,6 +191,12 @@ describe('humanFor', () => {
     )
   })
 
+  it('plugins init says where it wrote the plugin, then what to run next', () => {
+    expect(humanFor('plugins-init', { folder: '/w/my-plugin', template: 'ui', files: [], next: ['astera plugins validate --path /w/my-plugin', 'astera plugins install --path /w/my-plugin'] })).toBe(
+      ['wrote /w/my-plugin (ui)', 'next: astera plugins validate --path /w/my-plugin', 'next: astera plugins install --path /w/my-plugin'].join(String.fromCharCode(10))
+    )
+  })
+
   it('plugins doctor prints one line per check, a failure in capitals', () => {
     expect(
       humanFor('plugins-doctor', {

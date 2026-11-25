@@ -51,5 +51,38 @@ describe('run.ts answers the plugin author’s commands without a Host', () => {
     expect(block).toMatch(/if \(presented\)\s*fail\(\{\s*code: 'INVALID_ARGUMENTS',[\s\S]*?cannot carry a request id/)
     expect(block).toMatch(/const done = await pluginDevCommand\(\{ cmd: parsed\.cmd, args, cwd: process\.cwd\(\), version: CLI_VERSION \}\)/)
     expect(run.indexOf("if (PLUGIN_DEV_COMMANDS.includes(parsed.cmd))")).toBeLessThan(run.indexOf("if (parsed.cmd === 'plugins-install') {"))
+    expect(run).toMatch(/const PLUGIN_DEV_COMMANDS: readonly string\[\] = \['plugins-validate', 'plugins-init'/)
+  })
+})
+
+describe('astera plugins init', () => {
+  it('writes the template into a new folder named after the plugin, and says what to run next', async () => {
+    const r = await pluginDevCommand({ cmd: 'plugins-init', args: { name: '@acme/my-plugin', template: 'ui' }, cwd: dir, version: '1.6.0' })
+    if (!r.ok) throw new Error(r.error.message)
+    const folder = path.join(dir, 'my-plugin')
+    expect(r.body).toMatchObject({ folder, template: 'ui', plugin: { name: '@acme/my-plugin', trust: 'restricted-ui' } })
+    expect(r.body.files).toEqual(expect.arrayContaining(['package.json', 'README.md', 'ui/index.html']))
+    expect(r.body.next).toEqual([`astera plugins validate --path ${folder}`, `astera plugins install --path ${folder}`])
+    expect(JSON.parse(await fs.readFile(path.join(folder, 'package.json'), 'utf8')).name).toBe('@acme/my-plugin')
+  })
+
+  it('writes into an empty folder, and refuses one that holds anything, writing nothing', async () => {
+    await fs.mkdir(path.join(dir, 'empty'))
+    expect((await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'empty', template: 'host' }, cwd: dir, version: '1.6.0' })).ok).toBe(true)
+    await fs.mkdir(path.join(dir, 'taken'))
+    await fs.writeFile(path.join(dir, 'taken', 'notes.txt'), 'mine')
+    const r = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'taken', template: 'host' }, cwd: dir, version: '1.6.0' })
+    expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await fs.readdir(path.join(dir, 'taken'))).toEqual(['notes.txt'])
+  })
+
+  it('refuses a name npm would refuse, and a template it does not know, writing nothing', async () => {
+    const bad = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'Bad Name', template: 'ui' }, cwd: dir, version: '1.6.0' })
+    expect(bad).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringMatching(/is not an npm package name/) } })
+    const kind = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'ok', template: 'theme' }, cwd: dir, version: '1.6.0' })
+    expect(kind).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: 'plugins init needs --template ui, host, check or source' } })
+    const none = await pluginDevCommand({ cmd: 'plugins-init', args: { template: 'ui' }, cwd: dir, version: '1.6.0' })
+    expect(none).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: 'plugins init needs the plugin name: astera plugins init <name> --template <kind>' } })
+    expect(await fs.readdir(dir)).toEqual([])
   })
 })

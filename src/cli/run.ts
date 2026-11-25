@@ -82,7 +82,7 @@ import { helloLine, verboseLog, type VerboseLog } from '../core/orchestration/cl
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
 const CLI_VERSION = typeof __ASTERA_VERSION__ === 'string' ? __ASTERA_VERSION__ : '0.0.0'
 /** The plugin author's commands, answered in this process without a Host (cli/pluginDev.ts). */
-const PLUGIN_DEV_COMMANDS: readonly string[] = ['plugins-validate']
+const PLUGIN_DEV_COMMANDS: readonly string[] = ['plugins-validate', 'plugins-init']
 import {
   DEFAULT_WAIT_TIMEOUT_MS
 } from '../core/orchestration/types'

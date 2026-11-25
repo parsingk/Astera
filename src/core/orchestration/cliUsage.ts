@@ -325,6 +325,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       'Starts no Host and changes nothing: it reads the folder, checks its package.json, whether this Astera runs it, its links and node_modules layout, and that its entry and ui are files in it. Exits 0 when it would install, 1 naming each problem (code, the manifest field it is about, the sentence) with the problems in the details, 2 when the folder is not there.',
     flags: [{ name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true }]
   },
+  'plugins-init': {
+    summary: 'start a plugin: a new folder from a template, UI only, a Host plugin, a completion check or a job source',
+    detail:
+      'Starts no Host and installs nothing: it writes the folder <name> (the last part of a scoped name) where you run it, with a package.json named <name>, the template\'s files and a README, in plain JavaScript with no dependency. A folder that already holds files is 6 and nothing is written.',
+    operand: { name: 'name', value: '<name>', about: 'the plugin\'s npm name, as its package.json will hold it' },
+    flags: [{ name: 'template', value: '<kind>', about: 'ui, host, check or source', required: true }]
+  },
   'plugins-doctor': {
     summary: 'what could keep a plugin from running: its manifest, compatibility, entry, native addons and its last run',
     detail: 'Exits 1 when a check fails, naming each failing check.',

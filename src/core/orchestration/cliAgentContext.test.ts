@@ -143,6 +143,7 @@ const NOT_SWITCHED = [
   'ext-list',
   'ext-sync',
   'plugins-validate',
+  'plugins-init',
   'mcp-serve',
   'mcp-status',
   'projects-add',

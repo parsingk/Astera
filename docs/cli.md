@@ -618,10 +618,13 @@ astera plugins settings --id <pluginId>              its settings; a secret one 
 astera plugins configure --id <pluginId> --set baseUrl=https://jira.example.com
 printf %s "$TOKEN" | astera plugins configure --id <pluginId> --stdin token   a secret, off the command line
 astera plugins validate --path ./my-plugin           checks the folder as an install would; exit 1 naming each problem
+astera plugins init my-plugin --template ui          writes ./my-plugin: ui, host, check or source
 ```
 
-`plugins validate` is for whoever writes a plugin: it starts no Host and changes nothing, so it works without the app
-and inside an agent session. Each problem has a code (`MANIFEST_INVALID`, `INCOMPATIBLE`, `ENTRY_MISSING`, `UI_MISSING`,
+`plugins validate` and `plugins init` are for whoever writes a plugin: they start no Host and change nothing in
+Astera, so they work without the app and inside an agent session. `init` writes a new folder from a template (`ui`, a
+panel; `host`, a plugin Astera runs; `check`, a completion check; `source`, a job source) and refuses a folder that
+already holds files. Each problem has a code (`MANIFEST_INVALID`, `INCOMPATIBLE`, `ENTRY_MISSING`, `UI_MISSING`,
 `LINK_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), the manifest field it is about when there is one, and the
 sentence an install would give.
 
@@ -764,6 +767,7 @@ astera plugins doctor  --id <pluginId>
 astera plugins settings  --id <pluginId>
 astera plugins configure --id <pluginId> [--set <key=value>] [--unset <key>] [--stdin <key>]
 astera plugins validate --path <folder>
+astera plugins init <name> --template <kind>
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

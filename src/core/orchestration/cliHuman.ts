@@ -615,6 +615,9 @@ export function humanFor(
       const p = (typeof data.plugin === 'object' && data.plugin !== null ? data.plugin : {}) as Record<string, unknown>
       return `${str(p.id)} ${str(p.version)}, ${p.trust === 'trusted' ? 'trusted code' : 'restricted UI'}: no problem found`
     }
+    // A new plugin folder: where it is, then what to run next
+    case 'plugins-init':
+      return [`wrote ${str(data.folder)} (${str(data.template)})`, ...(Array.isArray(data.next) ? (data.next as unknown[]).map((l) => `next: ${str(l)}`) : [])].join('\n')
     case 'plugins-doctor':
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
