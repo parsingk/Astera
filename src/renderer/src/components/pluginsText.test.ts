@@ -282,7 +282,8 @@ describe('the trust level in Settings', () => {
 describe('the Plugins tab hint', () => {
   it('names both trust levels in every language', () => {
     for (const lang of ['ko', 'en', 'ja', 'es'] as const) {
-      const tr = (key: MessageKey): string => translate(lang, key)
+      // A label inside a sentence may start lower case (es: "El código de confianza")
+      const tr = (key: MessageKey): string => translate(lang, key).toLowerCase()
       expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.trusted'))
       expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.restrictedUi'))
     }
