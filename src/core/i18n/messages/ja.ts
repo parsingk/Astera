@@ -1232,6 +1232,7 @@ export const ja: Catalog = {
   'shortcut.group.editable': '変更可能',
   'shortcut.edit': '変更',
   'shortcut.resetOne': '既定値',
+  'shortcut.unbind': 'キーを解除',
   'shortcut.capturing': 'キーを押してください (Esc でキャンセル)',
   'shortcut.unbound': 'なし',
   'shortcut.conflictWith': '{key} はすでに「{action}」に使われています',

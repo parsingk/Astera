@@ -1372,6 +1372,7 @@ export const ko = {
   'shortcut.group.editable': '변경 가능',
   'shortcut.edit': '변경',
   'shortcut.resetOne': '기본값',
+  'shortcut.unbind': '키 해제',
   'shortcut.capturing': '키를 누르세요 (Esc 취소)',
   'shortcut.unbound': '없음',
   'shortcut.conflictWith': '{key}는 이미 "{action}"에 쓰입니다',

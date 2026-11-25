@@ -12,7 +12,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import type { MessageKey } from '../../../core/i18n'
-import { Pencil, RotateCcw } from 'lucide-react'
+import { Ban, Pencil, RotateCcw } from 'lucide-react'
 
 /**
  * Shortcut settings. Only the actions handled by the global capture handler can be edited —
@@ -74,6 +74,13 @@ export function ShortcutSettings({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [capturing, bindings, t, onChanged])
 
+  // No key at all: an empty list, which resolveBindings reads as off. What turns off the palette, go to file and find in
+  // files (Phase 1 gate), which open only by their keys; the default button brings the key back.
+  const unbind = async (id: ActionId): Promise<void> => {
+    await window.api.keys.set(id, [])
+    onChanged(await window.api.keys.get())
+  }
+
   const reset = async (id: ActionId): Promise<void> => {
     await window.api.keys.reset(id)
     onChanged(await window.api.keys.get())
@@ -111,6 +118,14 @@ export function ShortcutSettings({
                 aria-label={t('shortcut.edit')}
               >
                 <Pencil size={13} />
+              </button>
+              <button
+                onClick={() => void unbind(action.id)}
+                disabled={capturing !== null || keys.length === 0}
+                title={t('shortcut.unbind')}
+                aria-label={t('shortcut.unbind')}
+              >
+                <Ban size={13} />
               </button>
               <button
                 onClick={() => void reset(action.id)}

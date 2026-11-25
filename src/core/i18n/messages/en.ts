@@ -1290,6 +1290,7 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.group.editable': 'Customizable',
   'shortcut.edit': 'Change',
   'shortcut.resetOne': 'Default',
+  'shortcut.unbind': 'Remove key',
   'shortcut.capturing': 'Press a key (Esc to cancel)',
   'shortcut.unbound': 'None',
   'shortcut.conflictWith': '{key} is already used by "{action}"',

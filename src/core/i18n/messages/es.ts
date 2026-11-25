@@ -1244,6 +1244,7 @@ export const es: Catalog = {
   'shortcut.group.editable': 'Personalizables',
   'shortcut.edit': 'Cambiar',
   'shortcut.resetOne': 'Predeterminado',
+  'shortcut.unbind': 'Quitar tecla',
   'shortcut.capturing': 'Presiona una tecla (Esc para cancelar)',
   'shortcut.unbound': 'Ninguno',
   'shortcut.conflictWith': '{key} ya se usa en "{action}"',
