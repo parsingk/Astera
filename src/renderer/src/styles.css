@@ -2228,6 +2228,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .problem-where.unresolved { font-style: italic; color: var(--text-faint); }
 .bottom-tab-badge.quiet { background: var(--elevated); color: var(--warn); }
 .problem-row.openable:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.layout-presets { width: 440px; max-width: calc(100vw - 32px); }
+.layout-presets-name-row { display: flex; gap: 8px; }
+.layout-presets-name-row input { flex: 1; min-width: 0; }
+.layout-preset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.layout-preset-list li { display: flex; align-items: center; gap: 8px; }
+.layout-preset-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .held-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; background: var(--bg); color: var(--text-dim); text-align: center; }
 .held-tab-note { margin: 0; font-size: 12px; }
 .held-tab-name { margin: 0; font-size: 13px; color: var(--text); word-break: break-all; max-width: 100%; }

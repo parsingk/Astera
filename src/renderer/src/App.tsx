@@ -158,8 +158,10 @@ import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTa
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
-import { asBottomTab, restoreTree, toSaved } from '../../core/panes/savedLayout'
-import { readLayout, writeLayout } from './lib/layoutStore'
+import { asBottomTab, restoreTree, toSaved, type SavedPanels } from '../../core/panes/savedLayout'
+import { applySaved, presetPanels, presetTree, withPreset, withoutPreset, type PresetId, type SavedPreset } from '../../core/panes/presets'
+import { readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
+import { LayoutPresetsDialog } from './components/LayoutPresetsDialog'
 import { checkSavedTabs, keepSavedTab } from './lib/restoreLayout'
 import { mediaKindOf } from '../../core/files/media'
 import { openPath } from './lib/openPath'
@@ -4644,6 +4646,84 @@ export default function App(): React.JSX.Element {
     setRunMenuOpen(false)
     setPaletteOpen({ query })
   }
+  /** Shows the panels a layout asks for (spec W3): one sidebar view, as the rail shows one, and the bottom panel on its
+   *  tab (shownBottomTab falls back while that tab is not available). */
+  const applyPanels = (p: SavedPanels): void => {
+    setSidebarOpen(p.sidebar.open)
+    setExplorerOpen(p.sidebar.view === 'explorer')
+    setJobsOpen(p.sidebar.view === 'jobs')
+    setHiwOpen(p.sidebar.view === 'understanding')
+    setRunPanelOpen(p.bottom.open)
+    setBottomTab(p.bottom.tab)
+  }
+  /** The two sizes, as their resizers keep them (the same keys and bounds). */
+  const setSidebarSize = (w: number): void => {
+    const width = Math.min(520, Math.max(160, Math.round(w)))
+    setSidebarWidth(width)
+    try {
+      localStorage.setItem('cm.sidebarWidth', String(width))
+    } catch {
+      // Storage off: the width holds for this run
+    }
+  }
+  const setPanelHeight = (h: number): void => {
+    const height = Math.min(800, Math.max(120, Math.round(h)))
+    setRunPanelHeight(height)
+    try {
+      localStorage.setItem('cm.runPanelHeight', String(height))
+    } catch {
+      // Storage off: the height holds for this run
+    }
+  }
+  /** Every open tab in leaf order, and the one the active pane shows: what a preset arranges. */
+  const openTabsNow = (): { tabIds: string[]; active: string | null } => {
+    const cur = layoutRef.current
+    if (!cur) return { tabIds: [], active: null }
+    const pane = activePaneIdRef.current !== null ? leafOf(cur, activePaneIdRef.current) : null
+    return { tabIds: leaves(cur).flatMap((l) => l.tabIds), active: pane?.activeTabId ?? null }
+  }
+  const applyTree = (placed: { root: PaneNode; activePaneId: string } | null): void => {
+    if (!placed) return
+    setLayout(placed.root)
+    setActivePaneId(placed.activePaneId)
+  }
+  /** A built-in preset (core/panes/presets.ts): the open tabs rearranged and the preset's panels shown. Nothing is
+   *  opened or started; with no tab open only the panels change. */
+  const applyPreset = (id: PresetId): void => {
+    const { tabIds, active } = openTabsNow()
+    applyTree(presetTree(id, tabIds, active))
+    const p = presetPanels(id)
+    applyPanels(p)
+    if (p.bottomHeight === 'tall') setPanelHeight(Math.max(runPanelHeight, window.innerHeight * 0.45))
+    if (id === 'default') {
+      setSidebarSize(500)
+      setPanelHeight(220)
+    }
+  }
+  const [presetsOpen, setPresetsOpen] = useState(false)
+  const [savedPresets, setSavedPresets] = useState(readSavedPresets)
+  /** Keeps the window's layout as a saved preset under `name` (a same name is replaced where it stood). */
+  const savePreset = (name: string): 'saved' | 'full' => {
+    const now = layoutRecordRef.current()
+    const next = withPreset(savedPresets, { name, tree: now.tree, panels: now.panels, sidebarWidth, bottomHeight: runPanelHeight })
+    if (next === 'full') return 'full'
+    setSavedPresets(next)
+    writeSavedPresets(next)
+    return 'saved'
+  }
+  const deletePreset = (name: string): void => {
+    const next = withoutPreset(savedPresets, name)
+    setSavedPresets(next)
+    writeSavedPresets(next)
+  }
+  const applySavedPreset = (p: SavedPreset): void => {
+    const { tabIds, active } = openTabsNow()
+    applyTree(applySaved(p, tabIds, active))
+    applyPanels(p.panels)
+    setSidebarSize(p.sidebarWidth)
+    setPanelHeight(p.bottomHeight)
+    setPresetsOpen(false)
+  }
   // What each action does, and when it cannot (ADR-007). Rebuilt every render, so a handler reads this render's
   // state; the registry's delegates read it from here. A Record over ActionId: an action added to ACTIONS without a
   // handler here does not compile.
@@ -4710,6 +4790,13 @@ export default function App(): React.JSX.Element {
     // The rail's Kubernetes icon, shown under the same condition.
     'kube.open': { blockedBy: () => (kubectlFound && bottomRoot ? null : 'action.blocked.noKubectl'), run: kubeRail },
     'palette.open': { run: () => openPalette('>') },
+    // The layout presets (spec W3): never blocked, since with no tab open the panels still change
+    'layout.coding': { run: () => applyPreset('coding') },
+    'layout.review': { run: () => applyPreset('review') },
+    'layout.agents': { run: () => applyPreset('agents') },
+    'layout.devops': { run: () => applyPreset('devops') },
+    'layout.reset': { run: () => applyPreset('default') },
+    'layout.presets': { run: () => setPresetsOpen(true) },
     // The same box on files (spec W2), over the explorer's project. With no project it still opens: the box says why it is
     // empty, where a key that did nothing would explain nothing.
     'file.quickOpen': { run: () => openPalette('') },
@@ -5819,6 +5906,15 @@ export default function App(): React.JSX.Element {
             setShowNew(false)
             setNewSessionCwd(null)
           }}
+        />
+      )}
+      {presetsOpen && (
+        <LayoutPresetsDialog
+          presets={savedPresets}
+          onSave={savePreset}
+          onApply={applySavedPreset}
+          onDelete={deletePreset}
+          onClose={() => setPresetsOpen(false)}
         />
       )}
       {remoteDialog !== null && (
