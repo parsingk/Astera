@@ -241,7 +241,7 @@ import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
 import { createQuickOpen } from './quickOpen'
 import { createTextSearch } from './textSearch'
-import { completionProducer, createProblems, statMtime } from './problems'
+import { completionProducer, createProblems, createProblemsPing, statMtime } from './problems'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
@@ -1568,7 +1568,12 @@ export function registerIpc(
     send: (snapshot) => send('orch:state', snapshot),
     log: orchLog
   })
-  const pushOrchState = (state: OrchState): void => orchPushes.push(state)
+  // The Problems list asks again when what it is made of moved, whatever view is open (main/problems.ts)
+  const problemsPing = createProblemsPing({ send: () => send('problems:changed', null) })
+  const pushOrchState = (state: OrchState): void => {
+    orchPushes.push(state)
+    problemsPing.onState(state)
+  }
   /** Why the Jobs view has nothing to draw, when the reason is the Host (see `OrchHostGate`). Null
    *  whenever the snapshot's own emptiness is the honest answer: before `bootOrch` runs at all (every
    *  toggle off — nobody is waiting on anything), and again once it has succeeded. */
@@ -5176,7 +5181,8 @@ export function registerIpc(
         stat: statMtime
       })
     ],
-    allowedRoot: assertAllowedPath
+    allowedRoot: assertAllowedPath,
+    log: orchLog
   })
   ipcMain.handle('problems.list', (_e, project: unknown) => problems(project))
   ipcMain.handle('orch.command', (_e, projectPath: string, cmd: string, args: Record<string, unknown>, runtimeId?: string) =>
@@ -5729,6 +5735,8 @@ export function registerIpc(
     // Quick Open and the composer's `@` answer from the file index: a deleted file leaves it now, a new one is found on
     // the next ask (main/fileIndex.ts noteChanges).
     fileIndex.noteChanges(batch.changes)
+    // A file changed under the explorer: a problem found in it may be stale now
+    problemsPing.touch()
     send('files:changedBatch', batch)
   })
   ipcMain.handle('files.watch', async (_e, root: string) => {

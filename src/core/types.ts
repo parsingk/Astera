@@ -1068,6 +1068,8 @@ export interface CoreEvents {
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
    *  "다시 읽어라"는 신호로만 쓴다. 배경 재생성이 화면에 닿는 유일한 길이다. */
   'understanding:changed': string
+  /** The project's problems may differ: ask problems.list again (main/problems.ts createProblemsPing). */
+  'problems:changed': null
   /** The open-task section's redraw trigger. **Not folded**, unlike 'understanding:changed' above —
    *  workUnits.json (what this section reads) is keyed by the raw session cwd, a different key space
    *  from understanding.json's origin-repo fold (ipc.ts's sessionTasks.* handlers explain why). The

@@ -38,7 +38,7 @@ export async function resolveConsolePath(a: {
 }
 
 /** Two separators in front: a UNC share, a `\\?\` or `\\.\` device path, or the `//` spelling of either. */
-const UNC_LIKE = /^[\\/]{2}/
+export const UNC_LIKE = /^[\\/]{2}/
 
 /** Whether a path a session terminal (or a session's SendUserFile) names is a regular file, and
  *  where. resolveConsolePath's rule cut down to its core: an absolute target as it is, a relative one
