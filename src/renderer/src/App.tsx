@@ -162,7 +162,7 @@ import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
 import { asBottomTab, mergeTabs, restoreTree, toSaved, type SavedPanels } from '../../core/panes/savedLayout'
 import { applySaved, presetPanels, presetTree, withPreset, withoutPreset, type PresetId, type SavedPreset } from '../../core/panes/presets'
-import { readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
+import { clearLayout, readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
 import { LayoutPresetsDialog } from './components/LayoutPresetsDialog'
 import { checkSavedTabs, keepSavedTab } from './lib/restoreLayout'
 import { mediaKindOf } from '../../core/files/media'
@@ -866,6 +866,7 @@ export default function App(): React.JSX.Element {
     if (!current) return
     const updated = { ...current, [key]: next }
     setWorkspaceFeatures(updated)
+    if (key === 'layoutMemory' && !next) clearLayout()
     void window.api.settings.setWorkspaceFeatures(updated).catch((err) => {
       setWorkspaceFeatures((f) => (f ? { ...f, [key]: !next } : f))
       toast.error(
@@ -1311,19 +1312,28 @@ export default function App(): React.JSX.Element {
     // reached the window meanwhile (a session, a file the person opened, an agent's preview) is merged in, never
     // replaced (final review C1, I1). StrictMode runs this effect twice in development: only the one still mounted
     // applies (restoreLive).
+    //
+    // With layout memory off (Settings > General) nothing saved comes back and a record still in storage goes; the
+    // switch is asked beside the take back, so it adds no wait, and a failed read is the default, on.
     let restoreLive = true
+    const memoryAsked = window.api.settings.getWorkspaceFeatures().catch(() => ({ ...WORKSPACE_FEATURES_DEFAULTS }))
     void window.api.sessions
       .list({ afterTakeBack: true })
       .catch((): SessionInfo[] => [])
-      .then(() => checkSavedTabs(savedAtStart))
-      .then((checked) =>
+      .then(() => memoryAsked)
+      .then(async (features) => {
+        if (!features.layoutMemory) clearLayout()
+        const saved = features.layoutMemory ? savedAtStart : null
+        return { saved, checked: await checkSavedTabs(saved) }
+      })
+      .then(({ saved, checked }) =>
         window.api.sessions
           .list()
           // No list: the rest of the layout still comes back, and the sessions arrive as session:created
           .catch((): SessionInfo[] => [])
-          .then((all) => ({ checked, all }))
+          .then((all) => ({ saved, checked, all }))
       )
-      .then(({ checked, all }) => {
+      .then(({ saved, checked, all }) => {
         if (!restoreLive) return
         layoutRestoredRef.current = true
         // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back. One the
@@ -1334,23 +1344,23 @@ export default function App(): React.JSX.Element {
         const arrived = sessionsRef.current.filter((s) => !listed.has(s.id))
         setSessions([...list, ...arrived])
         for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
-        const keep = keepSavedTab(savedAtStart, checked, new Set([...listed, ...arrived.map((s) => s.id)]))
-        const restored = restoreTree(savedAtStart?.tree ?? null, savedAtStart?.active ?? -1, keep)
+        const keep = keepSavedTab(saved, checked, new Set([...listed, ...arrived.map((s) => s.id)]))
+        const restored = restoreTree(saved?.tree ?? null, saved?.active ?? -1, keep)
         let root: PaneNode | null = restored?.root ?? null
         let paneId: string | null = restored?.activePaneId ?? null
-        if (root && savedAtStart) {
+        if (root && saved) {
           // Each kept tab's row, from what the layout saved beside its id; a row the window already has (a file the person
           // opened while the restore waited) is not added twice
           const kept = leaves(root).flatMap((l) => l.tabIds)
           const held: string[] = []
           for (const id of kept) {
             const kind = parseTab(id)?.kind
-            const file = kind === 'file' ? savedAtStart.tabs.files[id] : undefined
+            const file = kind === 'file' ? saved.tabs.files[id] : undefined
             if (file && !fileTabsRef.current.some((t) => t.id === id)) loadFileTab(id, file.path, file.projectRoot)
             if (kind === 'browser' || kind === 'kube') held.push(id)
           }
-          const records = kept.flatMap((id) => (savedAtStart.tabs.records[id] ? [{ id, ...savedAtStart.tabs.records[id] }] : []))
-          const browsers = kept.flatMap((id) => (savedAtStart.tabs.browsers[id] ? [{ id, ...savedAtStart.tabs.browsers[id] }] : []))
+          const records = kept.flatMap((id) => (saved.tabs.records[id] ? [{ id, ...saved.tabs.records[id] }] : []))
+          const browsers = kept.flatMap((id) => (saved.tabs.browsers[id] ? [{ id, ...saved.tabs.browsers[id] }] : []))
           if (records.length > 0) setRecordTabs((prev) => [...prev, ...records.filter((r) => !prev.some((x) => x.id === r.id))])
           if (browsers.length > 0) setBrowserTabs((prev) => [...prev, ...browsers.filter((b) => !prev.some((x) => x.id === b.id))])
           if (held.length > 0) setHeldTabs(new Set(held))
@@ -2734,16 +2744,17 @@ export default function App(): React.JSX.Element {
         )
       }
     )
-  // Written a moment after the last change, and only once the restore has run (layoutRestoredRef)
+  // Written a moment after the last change, only once the restore has run (layoutRestoredRef) and only while layout
+  // memory is on. Turning it on saves the screen as it is then.
   useEffect(() => {
-    if (!layoutRestoredRef.current) return
+    if (!layoutRestoredRef.current || workspaceFeaturesRef.current?.layoutMemory !== true) return
     const timer = setTimeout(() => writeLayout(layoutRecordRef.current()), 300)
     return () => clearTimeout(timer)
-  }, [layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
+  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
   // ...and at once when the window goes, so a change in the last 300 ms is not lost
   useEffect(() => {
     const flush = (): void => {
-      if (layoutRestoredRef.current) writeLayout(layoutRecordRef.current())
+      if (layoutRestoredRef.current && workspaceFeaturesRef.current?.layoutMemory === true) writeLayout(layoutRecordRef.current())
     }
     window.addEventListener('pagehide', flush)
     return () => window.removeEventListener('pagehide', flush)

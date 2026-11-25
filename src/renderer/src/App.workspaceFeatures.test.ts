@@ -30,3 +30,21 @@ describe('the workspace feature switches in App (Phase 1 gate)', () => {
     expect(pane).toBeLessThan(cli)
   })
 })
+
+describe('layout memory off (Phase 1 gate)', () => {
+  // Asked beside the Host's take back, so it adds no wait; a failed read is the default, on
+  it('restores nothing and deletes the saved layout while it is off', () => {
+    expect(app).toMatch(/const memoryAsked = window\.api\.settings\.getWorkspaceFeatures\(\)\.catch\(\(\) => \(\{ \.\.\.WORKSPACE_FEATURES_DEFAULTS \}\)\)/)
+    expect(app).toMatch(/if \(!features\.layoutMemory\) clearLayout\(\)\s*const saved = features\.layoutMemory \? savedAtStart : null/)
+  })
+
+  it('saves only while it is on, and saves the screen as it is when it is turned on', () => {
+    expect(app).toMatch(/if \(!layoutRestoredRef\.current \|\| workspaceFeaturesRef\.current\?\.layoutMemory !== true\) return\s*const timer = setTimeout/)
+    expect(app).toMatch(/\}, \[workspaceFeatures\?\.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs\]\)/)
+    expect(app).toMatch(/const flush = \(\): void => \{\s*if \(layoutRestoredRef\.current && workspaceFeaturesRef\.current\?\.layoutMemory === true\) writeLayout\(layoutRecordRef\.current\(\)\)/)
+  })
+
+  it('deletes the saved layout when it is turned off', () => {
+    expect(app).toMatch(/setWorkspaceFeatures\(updated\)\s*if \(key === 'layoutMemory' && !next\) clearLayout\(\)/)
+  })
+})

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { toSaved, type SavedPanels } from '../../../core/panes/savedLayout'
 import { createGroup } from '../../../core/panes/tree'
-import { readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './layoutStore'
+import { clearLayout, readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './layoutStore'
 
 function memoryStorage(initial: Record<string, string> = {}): Storage {
   const data = new Map(Object.entries(initial))
@@ -62,5 +62,26 @@ describe('layout store', () => {
     vi.stubGlobal('localStorage', memoryStorage({ 'cm.layout': '{"v":1,"tree":7}', 'cm.layoutPresets': 'nope' }))
     expect(readLayout()).toBeNull()
     expect(readSavedPresets()).toEqual([])
+  })
+})
+
+// Phase 1 gate: turning layout memory off deletes the saved layout, and only that
+describe('clearLayout', () => {
+  it('removes the window layout and keeps the saved presets', () => {
+    vi.stubGlobal('localStorage', memoryStorage({ 'cm.layout': '{}', 'cm.layoutPresets': '{}', 'cm.sidebarWidth': '300' }))
+    clearLayout()
+    expect(localStorage.getItem('cm.layout')).toBeNull()
+    expect(localStorage.getItem('cm.layoutPresets')).toBe('{}')
+    expect(localStorage.getItem('cm.sidebarWidth')).toBe('300')
+  })
+
+  it('does not throw when storage throws', () => {
+    vi.stubGlobal('localStorage', {
+      ...throwing,
+      removeItem: () => {
+        throw new Error('storage off')
+      }
+    })
+    expect(() => clearLayout()).not.toThrow()
   })
 })
