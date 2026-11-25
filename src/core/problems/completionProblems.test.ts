@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { OrchState } from '../orchestration/state'
-import { completionProblemsOf } from './completionProblems'
+import { completionProblemsOf, problemsKeyOf } from './completionProblems'
 
 const job = (id: string, cwd: string) => ({ id, objective: id, cwd })
 const run = (id: string, jobId: string, ordinal: number) => ({ id, jobId, ordinal, createdAt: `2026-11-25T0${ordinal}:00:00Z` })
@@ -101,7 +101,57 @@ describe('completionProblemsOf', () => {
     expect(reviews[2].producedAt).toBe('2026-11-25T03:00:00Z')
   })
 
+  // Review I2: a run configuration check carries no findings; a red Job must not read "No problems".
+  it('gives a failed check with no findings one row without a file, in its own words', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    t1.checks = [
+      { configId: 'cfg-test', name: 'npm test', status: 'failed', exitCode: 1, endedAt: '2026-11-25T02:31:00Z', outputTail: 'PASS a\n  FAIL b.test.ts > adds\n\n' },
+      { configId: 'cfg-build', name: 'build', status: 'timed-out', endedAt: '2026-11-25T02:32:00Z' },
+      { configId: 'plugin:x', name: 'X', status: 'error', summary: 'could not start', endedAt: '2026-11-25T02:33:00Z' },
+      { configId: 'cfg-ok', name: 'lint', status: 'passed', endedAt: '2026-11-25T02:34:00Z' },
+      { configId: 'cfg-skip', name: 'e2e', status: 'not-run' }
+    ]
+    const rows = completionProblemsOf(s, new Set(['r2'])).filter((p) => p.source.kind === 'check')
+    expect(rows.map((p) => [p.id, p.severity, p.message, p.file ?? null])).toEqual([
+      ['check:t1:cfg-test', 'error', 'FAIL b.test.ts > adds', null],
+      ['check:t1:cfg-build', 'error', '', null],
+      ['check:t1:plugin:x', 'error', 'could not start', null]
+    ])
+  })
+
+  // Review M10: a check keeps 20 findings and counts the rest; the list says so in one row.
+  it('adds one row for the findings a check kept no detail of', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    t1.checks = [{ configId: 'plugin:lint', name: 'Lint', status: 'failed', endedAt: 'x', diagnostics: [{ file: 'a.ts', message: 'm' }], diagnosticsTotal: 25 }]
+    const rows = completionProblemsOf(s, new Set(['r2'])).filter((p) => p.source.kind === 'check')
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toEqual(expect.objectContaining({ id: 'check:t1:plugin:lint:more', severity: 'info', message: '', unlisted: 24 }))
+  })
+
   it('answers nothing when no run of the project is known', () => {
     expect(completionProblemsOf(state(), new Set())).toEqual([])
+  })
+})
+
+// Review I1: the Problems list is asked again when what it is made of changes, whatever view is open. main compares this
+// key on every orchestration write; it moves with findings and runs, not with a status change.
+describe('problemsKeyOf', () => {
+  it('moves when a check round, a review or a run changes, and not otherwise', () => {
+    const a = state()
+    const base = problemsKeyOf(a)
+    const b = state()
+    b.tasks.find((t) => t.id === 't1')!.status = 'dispatched' as never
+    expect(problemsKeyOf(b)).toBe(base)
+    const c = state()
+    c.tasks.find((t) => t.id === 't1')!.checks![0].endedAt = '2026-11-25T09:00:00Z'
+    expect(problemsKeyOf(c)).not.toBe(base)
+    const d = state()
+    d.tasks.find((t) => t.id === 't1')!.reviewIssues!.pop()
+    expect(problemsKeyOf(d)).not.toBe(base)
+    const e = state()
+    e.runs.push({ id: 'r4', jobId: 'j1', ordinal: 3, createdAt: 'x' } as never)
+    expect(problemsKeyOf(e)).not.toBe(base)
   })
 })

@@ -49,6 +49,21 @@ describe('filterDiagnostics', () => {
   })
 })
 
+describe('filter and sort on what a row shows (review M4)', () => {
+  // The row shows a project-relative place and, for a review, the app's word for it: those are what a person types
+  const shown = (x: Diagnostic): string[] => [x.message, (x.path ?? '').replace('D:\\p\\', ''), x.source.kind === 'review' ? '검토' : x.source.label]
+  it('filters on the strings given, not the absolute path or the English label', () => {
+    const all = new Set(['error', 'warning', 'info'] as const)
+    expect(filterDiagnostics(LIST, { severities: all, text: 'D:\\p', shown }).map((x) => x.id)).toEqual([])
+    expect(filterDiagnostics(LIST, { severities: all, text: '검토', shown }).map((x) => x.id)).toEqual(['b'])
+  })
+
+  it('sorts by the label given', () => {
+    const labelOf = (x: Diagnostic): string => (x.source.kind === 'review' ? 'A-review' : x.source.label)
+    expect(sortDiagnostics(LIST, 'source', labelOf).map((x) => x.id)).toEqual(['b', 'c', 'e', 'a'])
+  })
+})
+
 describe('problemCounts', () => {
   it('counts each severity', () => {
     expect(problemCounts(LIST)).toEqual({ error: 2, warning: 1, info: 1 })

@@ -25,6 +25,11 @@ export interface Diagnostic {
   origin?: { runId: string; taskId: string; task: string }
   /** The file changed after the finding (`changed`) or is not there (`missing`): it may no longer hold. */
   stale?: 'changed' | 'missing'
+  /** This row stands for that many findings the producer kept no detail of (a check keeps 20 and counts the rest). */
+  unlisted?: number
+  /** The file as the finding named it, when it was not looked at: a name that leaves its folder or points at another
+   *  machine. Shown, never opened. */
+  unresolved?: string
 }
 
 /** What the Problems list asks of each source of findings. Main runs one per source and merges them. */
@@ -43,25 +48,32 @@ const byPlace = (a: Diagnostic, b: Diagnostic): number => {
 const bySeverity = (a: Diagnostic, b: Diagnostic): number => RANK[a.severity] - RANK[b.severity]
 
 /** The list in the order a person asked for: errors first (then by place), by place, or by who found it (errors first
- *  within each). A new array; ties keep the producers' order. */
-export function sortDiagnostics(list: readonly Diagnostic[], by: 'severity' | 'file' | 'source'): Diagnostic[] {
+ *  within each), who found it read through `labelOf`, the name the row shows. A new array; ties keep the producers'
+ *  order. */
+export function sortDiagnostics(
+  list: readonly Diagnostic[],
+  by: 'severity' | 'file' | 'source',
+  labelOf: (d: Diagnostic) => string = (d) => d.source.label
+): Diagnostic[] {
   const compare =
     by === 'severity'
       ? (a: Diagnostic, b: Diagnostic) => bySeverity(a, b) || byPlace(a, b)
       : by === 'file'
         ? (a: Diagnostic, b: Diagnostic) => byPlace(a, b) || bySeverity(a, b)
-        : (a: Diagnostic, b: Diagnostic) => a.source.label.localeCompare(b.source.label) || bySeverity(a, b) || byPlace(a, b)
+        : (a: Diagnostic, b: Diagnostic) => labelOf(a).localeCompare(labelOf(b)) || bySeverity(a, b) || byPlace(a, b)
   return [...list].sort(compare)
 }
 
-/** The problems of the severities asked for whose message, file or source holds the text (any case). */
-export function filterDiagnostics(list: readonly Diagnostic[], f: { severities: ReadonlySet<DiagnosticSeverity>; text: string }): Diagnostic[] {
+/** The problems of the severities asked for whose shown strings hold the text (any case). `shown` is what the row shows
+ *  (the panel passes its project-relative place and its own word for a review); by default the message, the path and
+ *  the source's name. */
+export function filterDiagnostics(
+  list: readonly Diagnostic[],
+  f: { severities: ReadonlySet<DiagnosticSeverity>; text: string; shown?: (d: Diagnostic) => string[] }
+): Diagnostic[] {
   const text = f.text.trim().toLowerCase()
-  return list.filter(
-    (d) =>
-      f.severities.has(d.severity) &&
-      (text === '' || [d.message, d.path ?? '', d.source.label].some((s) => s.toLowerCase().includes(text)))
-  )
+  const shown = f.shown ?? ((d: Diagnostic) => [d.message, d.path ?? '', d.source.label])
+  return list.filter((d) => f.severities.has(d.severity) && (text === '' || shown(d).some((s) => s.toLowerCase().includes(text))))
 }
 
 /** How many of each severity, for the tab and the toggles. */
