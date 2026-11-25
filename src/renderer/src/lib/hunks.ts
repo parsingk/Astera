@@ -17,7 +17,9 @@ export function hunkAt(
   const startLine = Number(m[3])
   const count = m[4] === undefined ? 1 : Number(m[4])
   const body: string[] = []
-  for (let i = index + 1; i < rows.length && rows[i].kind !== 'hunk' && rows[i].kind !== 'meta'; i++) body.push(rows[i].text)
+  // A "\ No newline at end of file" marker is a meta row inside the hunk, not the start of the next file
+  const ends = (r: DiffRow): boolean => r.kind === 'hunk' || (r.kind === 'meta' && !r.text.startsWith('\\'))
+  for (let i = index + 1; i < rows.length && !ends(rows[i]); i++) body.push(rows[i].text)
   return { header: head.text, text: [head.text, ...body].join('\n'), startLine, endLine: Math.max(startLine, startLine + count - 1) }
 }
 

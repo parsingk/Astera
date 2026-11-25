@@ -151,8 +151,11 @@ export function NewRunModal({
         {cwd === null && <p className="warn-text">{t('jobs.runtime.noFolder')}</p>}
         <div className="field">
           <label>{t('jobs.new.objective')}</label>
-          <input
-            type="text"
+          {/* A textarea: an objective can be several lines, and a repair draft is (spec W4). A single-line input strips
+              every line break of what it shows and reports, which squashed a drafted hunk into one line. */}
+          <textarea
+            className="new-run-objective"
+            rows={initialObjective ? 12 : 3}
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
             autoFocus

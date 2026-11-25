@@ -38,6 +38,12 @@ describe('hunkAt', () => {
     expect(h && { startLine: h.startLine, endLine: h.endLine }).toEqual({ startLine: 41, endLine: 41 })
   })
 
+  // Final review M3: git writes this marker inside a hunk; the hunk goes on after it.
+  it('keeps the lines after a no-newline marker in the hunk', () => {
+    const marked = diffLines(['@@ -1 +1 @@', '-old', String.fromCharCode(92) + ' No newline at end of file', '+new', String.fromCharCode(92) + ' No newline at end of file', ''].join('\n'))
+    expect(hunkAt(marked, 0)?.text).toBe(['@@ -1 +1 @@', '-old', String.fromCharCode(92) + ' No newline at end of file', '+new', String.fromCharCode(92) + ' No newline at end of file'].join('\n'))
+  })
+
   it('answers null for a row that is not a hunk header', () => {
     expect(hunkAt(rows, 0)).toBeNull()
     expect(hunkAt(rows, first + 1)).toBeNull()

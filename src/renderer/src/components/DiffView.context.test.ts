@@ -22,6 +22,13 @@ describe('a hunk to a repair Job draft', () => {
     expect(read('NewRunModal.tsx')).toMatch(/const \[objective, setObjective\] = useState\(initialObjective \?\? ''\)/)
   })
 
+  // Final review C1: a single-line input strips every line break of what it shows and reports, so typing after "What is
+  // wrong:" squashed the hunk into one line and the Job was made with it. The objective is a textarea.
+  it('edits the objective in a textarea, tall enough for a draft', () => {
+    expect(read('NewRunModal.tsx')).toMatch(/<label>\{t\('jobs\.new\.objective'\)\}<\/label>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<textarea\s+className="new-run-objective"\s+rows=\{initialObjective \? 12 : 3\}\s+value=\{objective\}/)
+    expect(read('NewRunModal.tsx')).not.toMatch(/<input\s+type="text"\s+value=\{objective\}/)
+  })
+
   it('drafts only for this computer\'s Jobs of the explorer\'s project, closes the detail, and fills the form', () => {
     const app = read('../App.tsx')
     expect(app).toMatch(/\.\.\.\(openRun\.runtimeId === undefined\s*\?\s*\{\s*onOpenAuditLogs:[\s\S]{0,600}onDraftRepair: \(file: string, diff: string, rowIndex: number\) => openRepairDraft\(openRun, file, diff, rowIndex\)/)
