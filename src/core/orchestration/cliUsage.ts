@@ -352,6 +352,15 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'grant', value: '<list>', about: 'approve exactly these permissions, comma separated (empty grants none)' }
     ]
   },
+  'plugins-test': {
+    summary: "run a plugin against Astera's contract without the app: it starts, answers its capability, lives through refused calls and stops",
+    detail:
+      'Starts no Host and installs nothing: a copy of the folder runs in Astera\'s plugin runtime against a fake Host, where a call it was not granted is refused as Astera refuses it. Checks: starts (running within 15 s with what it asks granted), its capability (a job source lists, reads and builds a Job; a completion check answers in an empty workspace; an event or notification plugin keeps running after one), denied (started with only what its capabilities need, it keeps running), stops (it ends within 5 s of being asked). A restricted UI plugin\'s page is checked against what a panel allows instead. Exits 1 naming each failed check, with the checks in the details; refused with 1, as validate refuses, when the folder would not install. It runs the plugin\'s code on this machine.',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'set', value: '<key=value>', about: 'a setting it starts with; repeat for more' }
+    ]
+  },
   'plugins-doctor': {
     summary: 'what could keep a plugin from running: its manifest, compatibility, entry, native addons and its last run',
     detail: 'Exits 1 when a check fails, naming each failing check.',

@@ -51,9 +51,9 @@ describe('run.ts answers the plugin author’s commands without a Host', () => {
   it('routes them to pluginDevCommand before any Host is asked, refusing a request id', () => {
     const block = run.slice(run.indexOf("if (PLUGIN_DEV_COMMANDS.includes(parsed.cmd))"))
     expect(block).toMatch(/if \(presented\)\s*fail\(\{\s*code: 'INVALID_ARGUMENTS',[\s\S]*?cannot carry a request id/)
-    expect(block).toMatch(/const done = await pluginDevCommand\(\{ cmd: parsed\.cmd, args, cwd: process\.cwd\(\), version: CLI_VERSION \}\)/)
+    expect(block).toMatch(/const done = await pluginDevCommand\(\{\s*cmd: parsed\.cmd,\s*args,\s*cwd: process\.cwd\(\),\s*version: CLI_VERSION,/)
     expect(run.indexOf("if (PLUGIN_DEV_COMMANDS.includes(parsed.cmd))")).toBeLessThan(run.indexOf("if (parsed.cmd === 'plugins-install') {"))
-    expect(run).toMatch(/const PLUGIN_DEV_COMMANDS: readonly string\[\] = \['plugins-validate', 'plugins-init', 'plugins-pack'\]/)
+    expect(run).toMatch(/const PLUGIN_DEV_COMMANDS: readonly string\[\] = \['plugins-validate', 'plugins-init', 'plugins-pack', 'plugins-test'\]/)
   })
 })
 
@@ -188,5 +188,32 @@ describe('astera plugins pack and dependencies', () => {
       error: { code: 'FAILED', message: expect.stringMatching(/DEPENDENCIES_NOT_PACKED: lodash is a dependency the package would not carry: bundle the plugin into its entry, or list it in bundleDependencies/) }
     })
     expect((await fs.readdir(dir)).filter((n) => n.endsWith('.tgz'))).toEqual([])
+  })
+})
+
+describe('astera plugins test', () => {
+  it('answers each check, and fails (exit 1) with the checks in the details when one fails', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'paged', template: 'ui' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    const ok = await pluginDevCommand({ cmd: 'plugins-test', args: { path: 'paged' }, cwd: dir, version: '1.6.0', launcher: '/nowhere/plugin-host.js' })
+    expect(ok).toMatchObject({ ok: true, body: { plugin: { id: 'paged' }, ok: true, checks: [{ name: 'page', ok: true }] } })
+    await fs.writeFile(path.join(dir, 'paged', 'ui', 'index.html'), '<!doctype html><script>1</script>')
+    const bad = await pluginDevCommand({ cmd: 'plugins-test', args: { path: 'paged' }, cwd: dir, version: '1.6.0', launcher: '/nowhere/plugin-host.js' })
+    expect(bad).toMatchObject({ ok: false, error: { code: 'FAILED', message: expect.stringMatching(/^paged failed a check: page: /), details: { ok: false, checks: [{ name: 'page', ok: false }] } } })
+  })
+
+  it('refuses a --set without its key=value, and a folder that would not install', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'set', template: 'host' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    const r = await pluginDevCommand({ cmd: 'plugins-test', args: { path: 'set', set: 'novalue' }, cwd: dir, version: '1.6.0', launcher: '/x' })
+    expect(r).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: '--set needs key=value, and one has no =' } })
+    await fs.rm(path.join(dir, 'set', 'index.mjs'))
+    const broken = await pluginDevCommand({ cmd: 'plugins-test', args: { path: 'set' }, cwd: dir, version: '1.6.0', launcher: '/x' })
+    expect(broken).toMatchObject({ ok: false, error: { code: 'FAILED', message: expect.stringMatching(/would not install: ENTRY_MISSING/) } })
+  })
+
+  it('runs with the launcher the app ships beside the CLI', () => {
+    const run = readFileSync(path.join(here, 'run.ts'), 'utf8')
+    expect(run).toMatch(/launcher: path\.join\(path\.dirname\(process\.argv\[1\] \?\? ''\), 'plugin-host\.js'\)/)
   })
 })

@@ -622,7 +622,14 @@ astera plugins validate --path ./my-plugin           checks the folder as an ins
 astera plugins init my-plugin --template ui          writes ./my-plugin: ui, host, check or source
 astera plugins pack --path ./my-plugin               writes my-plugin-0.1.0.tgz beside it, with its sha256
 astera plugins dev --path ./my-plugin --yes          installs it, then again each time it changes; Ctrl+C stops
+astera plugins test --path ./my-plugin               runs it against a fake Host; exit 1 naming each failed check
 ```
+
+`plugins test` runs a copy of the folder in Astera's plugin runtime against a fake Host, without the app, and checks that
+it starts, answers its capability (a job source lists, reads and builds a Job; a completion check answers; an event or
+notification plugin keeps running after one), keeps running when the calls it was not granted are refused, and stops
+within 5 seconds of being asked. A restricted UI plugin's page is checked against what a panel allows. `--set
+key=value` gives the settings it needs. It runs the plugin's code on this machine, as an install would.
 
 `plugins dev` installs a folder as `install` does, with your approval, then watches it: once a change has settled it
 checks the folder as `validate` does and installs it again with the same grant, and an open panel of the plugin takes the
@@ -791,6 +798,7 @@ astera plugins validate --path <folder>
 astera plugins init <name> --template <kind>
 astera plugins pack --path <folder> [--out <file>]
 astera plugins dev --path <folder> [--yes] [--grant <list>]
+astera plugins test --path <folder> [--set <key=value>]
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

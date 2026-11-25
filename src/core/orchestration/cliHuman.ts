@@ -629,6 +629,7 @@ export function humanFor(
       return [`wrote ${str(data.file)} (${str(data.files)} files, ${str(data.bytes)} bytes)`, `sha256 ${str(data.sha256)}`, ...(left.length > 0 ? [`left out: ${left.join(', ')}`] : []), ...skipped, ...warningLines(data)].join('\n')
     }
     case 'plugins-doctor':
+    case 'plugins-test':
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
       )
