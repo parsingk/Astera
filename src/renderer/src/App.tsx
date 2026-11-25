@@ -2755,7 +2755,7 @@ export default function App(): React.JSX.Element {
   const [kubeHeld, setKubeHeld] = useState(() => savedAtStart?.panels.bottom.open === true && savedAtStart.panels.bottom.tab === 'kube')
   /** The window's layout as a record (spec W3, core/panes/savedLayout.ts), from this render's values. An agent's
    *  preview tab is left without its info, so it does not come back: it belongs to its session. */
-  const layoutRecordRef = useRef(() => toSaved(null, null, { sidebar: { open: true, view: 'sessions' }, bottom: { open: false, tab: 'run' } }, { files: {}, records: {}, browsers: {} }))
+  const layoutRecordRef = useRef(() => toSaved(null, null, { sidebar: { open: true, view: 'sessions' }, bottom: { open: false, tab: 'run' } }, { files: {}, records: {}, browsers: {}, plugins: {} }))
   layoutRecordRef.current = () =>
     toSaved(
       layoutRef.current,
@@ -2771,7 +2771,8 @@ export default function App(): React.JSX.Element {
           browserTabs
             .filter((b) => !b.agentSessionId)
             .map((b) => [b.id, { url: b.url, title: b.title, projectRoot: b.projectRoot }])
-        )
+        ),
+        plugins: {}
       }
     )
   // Written a moment after the last change, only once the restore has run (layoutRestoredRef) and only while layout

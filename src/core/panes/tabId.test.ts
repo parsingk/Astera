@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { appTab, browserTab, recordTab, fileTab, parseTab, sessionTab, remoteSessionKey, parseRemoteSessionKey, isRemoteSessionKey, kubeTab, parseKubeTab } from './tabId'
+import { appTab, browserTab, recordTab, fileTab, parseTab, sessionTab, remoteSessionKey, parseRemoteSessionKey, isRemoteSessionKey, kubeTab, parseKubeTab, pluginTab, parsePluginTab } from './tabId'
 
 describe('tabId', () => {
   it('세션 탭 id를 만들고 되읽는다', () => {
@@ -81,5 +81,19 @@ describe('tabId', () => {
     expect(parseKubeTab('c//pods/Pod/w/extra')).toBeNull()
     expect(parseKubeTab('c/api/pods/Pod/')).toBeNull() // no name
     expect(parseKubeTab('%E0%A4%A/api/pods/Pod/w')).toBeNull() // a broken escape
+  })
+
+  // A plugin's panel (Phase 2 step 3): one tab per panel, named by the plugin and the panel, neither of which holds a colon
+  it('round-trips a plugin panel tab, a scoped plugin too', () => {
+    expect(pluginTab('hello-panel', 'hello')).toBe('plugin:hello-panel:hello')
+    expect(parseTab(pluginTab('@acme/tools', 'main'))).toEqual({ kind: 'plugin', id: '@acme/tools:main' })
+    expect(parsePluginTab(parseTab(pluginTab('@acme/tools', 'main'))!.id)).toEqual({ pluginId: '@acme/tools', panelId: 'main' })
+  })
+
+  it('refuses a plugin tab id that does not name one plugin and one panel', () => {
+    expect(parsePluginTab('hello-panel')).toBeNull()
+    expect(parsePluginTab(':hello')).toBeNull()
+    expect(parsePluginTab('hello-panel:')).toBeNull()
+    expect(parsePluginTab('a:b:c')).toBeNull()
   })
 })

@@ -4,8 +4,9 @@
 // 도입하는 것이 아니라 흩어져 있던 형식을 한 곳으로 모으는 것이다.
 // node: import 없음 — 렌더러가 import한다.
 import type { ObjectRef } from '../kube/cluster/types'
+import { contributionKey } from '../plugins/manifest'
 
-export type TabKind = 'session' | 'file' | 'record' | 'browser' | 'app' | 'media' | 'kube'
+export type TabKind = 'session' | 'file' | 'record' | 'browser' | 'app' | 'media' | 'kube' | 'plugin'
 export type TabRef = { kind: TabKind; id: string }
 
 export const sessionTab = (sessionId: string): string => `session:${sessionId}`
@@ -53,6 +54,17 @@ export function parseKubeTab(id: string): ObjectRef | null {
   return { context, namespace: namespace === '' ? null : namespace, resource, kind, name }
 }
 
+/** A plugin's panel (Phase 2 step 3, ADR-008): one tab per panel, so a second run of its command finds this tab
+ *  (place.ts placePluginTab). The id is the panel's contribution key, `<plugin id>:<panel id>`; neither holds a colon
+ *  (the manifest refuses one), so the part after `plugin:` splits at its one colon. */
+export const pluginTab = (pluginId: string, panelId: string): string => `plugin:${contributionKey(pluginId, panelId)}`
+/** The plugin and panel a plugin tab's id (the part after `plugin:`) names; null for anything pluginTab did not make. */
+export function parsePluginTab(id: string): { pluginId: string; panelId: string } | null {
+  const parts = id.split(':')
+  if (parts.length !== 2 || parts[0] === '' || parts[1] === '') return null
+  return { pluginId: parts[0], panelId: parts[1] }
+}
+
 /** 탭 id가 아닌 문자열은 null — 던지지 않는다. 저장된 옛 상태나 다른 종류의 id를 만나도 화면이 죽지
  *  않아야 한다. Windows 경로의 드라이브 콜론 때문에 쪼개기는 첫 콜론에서만 한다. */
 export function parseTab(tabId: string): TabRef | null {
@@ -61,7 +73,7 @@ export function parseTab(tabId: string): TabRef | null {
   const kind = tabId.slice(0, i)
   const id = tabId.slice(i + 1)
   if (id === '') return null
-  return kind === 'session' || kind === 'file' || kind === 'record' || kind === 'browser' || kind === 'app' || kind === 'media' || kind === 'kube'
+  return kind === 'session' || kind === 'file' || kind === 'record' || kind === 'browser' || kind === 'app' || kind === 'media' || kind === 'kube' || kind === 'plugin'
     ? { kind, id }
     : null
 }

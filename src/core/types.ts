@@ -17,6 +17,7 @@ import type { CountInfo, Dependents, EditBase, ForwardMessage, ForwardSpec, Kind
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { TextSearchAnswer } from './files/textMatch'
 import type { Diagnostic } from './problems/diagnostic'
+import type { PanelRefusalCode } from './plugins/pluginRows'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
@@ -2180,7 +2181,7 @@ export interface PluginPanelsApi {
     pluginId: string,
     panelId: string,
     projectRoot: string | null
-  ): Promise<{ ok: true; url: string; partition: string } | { ok: false; reason: string }>
+  ): Promise<{ ok: true; url: string; partition: string } | { ok: false; code: PanelRefusalCode; reason: string }>
 }
 
 export interface PluginsApi {

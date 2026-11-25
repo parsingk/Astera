@@ -22,6 +22,8 @@ describe('plugin panel guests wiring', () => {
     expect(ipc).toMatch(/ipcMain\.handleGuest\('plugin-ui\.call', \(e, _guest, method: unknown, payload: unknown\) => panelGuests\.call\(e\.sender\.id, method, payload\)\)/)
     expect(ipc).toMatch(/ipcMain\.handle\('plugins\.preparePanel', \(_e, pluginId: unknown, panelId: unknown, projectRoot: unknown\) =>/)
     expect(read('../preload/index.ts')).toContain("preparePanel: invoke('plugins.preparePanel'),")
+    // Arguments that are not ids are refused with a code the renderer words, as every other refusal
+    expect(ipc).toContain("{ ok: false, code: 'invalid', reason: 'plugins.preparePanel needs a plugin id and a panel id' }")
   })
 
   it('builds the bridge preload as its own entry, exposing only astera.context on the one channel', () => {

@@ -38,7 +38,7 @@ describe('layout store', () => {
   it('round-trips a layout and the saved presets', () => {
     vi.stubGlobal('localStorage', memoryStorage())
     const g = createGroup('session:s1')
-    const layout = toSaved(g, g.id, panels, { files: {}, records: {}, browsers: {} })
+    const layout = toSaved(g, g.id, panels, { files: {}, records: {}, browsers: {}, plugins: {} })
     writeLayout(layout)
     expect(readLayout()).toEqual(layout)
     writeSavedPresets([{ name: 'Mine', tree: layout.tree, panels, sidebarWidth: 300, bottomHeight: 300 }])
@@ -54,7 +54,7 @@ describe('layout store', () => {
   it('writes nothing and does not throw when storage throws', () => {
     vi.stubGlobal('localStorage', throwing)
     const g = createGroup('session:s1')
-    expect(() => writeLayout(toSaved(g, g.id, panels, { files: {}, records: {}, browsers: {} }))).not.toThrow()
+    expect(() => writeLayout(toSaved(g, g.id, panels, { files: {}, records: {}, browsers: {}, plugins: {} }))).not.toThrow()
     expect(() => writeSavedPresets([])).not.toThrow()
   })
 

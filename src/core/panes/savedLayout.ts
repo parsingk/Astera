@@ -32,6 +32,9 @@ export type SavedTabs = {
   files: Record<string, { path: string; projectRoot: string }>
   records: Record<string, { recordId: string; title: string; projectRoot: string }>
   browsers: Record<string, { url: string; title: string; projectRoot: string }>
+  /** A plugin panel's title and its plugin's name, drawn while its tab is held, and the project its panel was opened in
+   *  (`''` for none). Optional on read: a record written before plugin panels has none. */
+  plugins: Record<string, { title: string; pluginName: string; projectRoot: string }>
 }
 
 export type SavedLayout = {
@@ -86,7 +89,7 @@ export function toSaved(root: PaneNode | null, activePaneId: string | null, pane
     tree,
     active,
     panels: { sidebar: { ...panels.sidebar }, bottom: { open: panels.bottom.open, tab: asBottomTab(panels.bottom.tab) } },
-    tabs: { files: pick(tabs.files), records: pick(tabs.records), browsers: pick(tabs.browsers) }
+    tabs: { files: pick(tabs.files), records: pick(tabs.records), browsers: pick(tabs.browsers), plugins: pick(tabs.plugins) }
   }
 }
 
@@ -145,7 +148,9 @@ function readTabs(v: unknown): SavedTabs | null {
   const files = readMap(v.files, ['path', 'projectRoot'] as const)
   const records = readMap(v.records, ['recordId', 'title', 'projectRoot'] as const)
   const browsers = readMap(v.browsers, ['url', 'title', 'projectRoot'] as const)
-  return files && records && browsers ? { files, records, browsers } : null
+  // Absent in a record written before plugin panels: read as none, so that record keeps its layout
+  const plugins = v.plugins === undefined ? {} : readMap(v.plugins, ['title', 'pluginName', 'projectRoot'] as const)
+  return files && records && browsers && plugins ? { files, records, browsers, plugins } : null
 }
 
 /** The stored record, or null for nothing, junk, or another version. Never throws. */

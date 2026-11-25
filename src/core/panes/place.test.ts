@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { placeKubeTab, placeTab } from './place'
-import { kubeTab } from './tabId'
+import { placeKubeTab, placePluginTab, placeTab } from './place'
+import { kubeTab, pluginTab } from './tabId'
 import {
   MAX_PANES,
   addTab,
@@ -301,5 +301,26 @@ describe('placeKubeTab', () => {
     const res = placeKubeTab(root, ref, { activePaneId: ids[1] })
     expect(leafOf(res.root, ids[1])!.tabIds).toEqual(['s2', kubeTab(ref)])
     expect(res.paneId).toBe(ids[1])
+  })
+})
+
+// Phase 2 step 3: running a plugin's command again focuses its panel's tab, in whichever pane it sits (kube's rule)
+describe('placePluginTab', () => {
+  it('focuses an open panel tab instead of opening a second, in another pane too', () => {
+    const { root, ids } = threePane()
+    const once = placePluginTab(root, 'hello-panel', 'hello', { activePaneId: ids[0] })
+    const twice = placePluginTab(once.root, 'hello-panel', 'hello', { activePaneId: ids[2], splitDir: 'row' })
+    const tab = pluginTab('hello-panel', 'hello')
+    expect(leaves(twice.root).flatMap((l) => l.tabIds).filter((id) => id === tab)).toHaveLength(1)
+    expect(groupOfTab(twice.root, tab)!.id).toBe(ids[0])
+    expect(leafOf(twice.root, ids[0])!.activeTabId).toBe(tab)
+    expect(twice.paneId).toBe(ids[0])
+    assertInvariants(twice.root, ['s1', 's2', 's3', tab])
+  })
+
+  it('opens a new tab in the active pane otherwise', () => {
+    const { root, ids } = threePane()
+    const res = placePluginTab(root, 'hello-panel', 'hello', { activePaneId: ids[1] })
+    expect(leafOf(res.root, ids[1])!.tabIds).toEqual(['s2', pluginTab('hello-panel', 'hello')])
   })
 })

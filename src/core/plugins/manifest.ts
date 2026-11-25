@@ -54,7 +54,8 @@ export function capabilityPermissionProblem(capabilities: readonly PluginCapabil
 /** The key a contributed command or panel is registered under: the plugin id, a colon, its own id. No npm name, no
  *  contribution id and no core action id (`area.verb`) holds a colon, so a plugin's `run` command can never read as the
  *  core `run.run` action (final review M6). */
-export const contributionKey = (pluginId: string, id: string): string => `${pluginId}:${id}`
+export type ContributionKey = `${string}:${string}`
+export const contributionKey = (pluginId: string, id: string): ContributionKey => `${pluginId}:${id}`
 
 /** The host of a plugin's pages on the plugin scheme (ADR-008): its id, a scoped one written `scope+name`, which no npm
  *  name can be, so `@acme/x` and a plugin named `acme` never share a host (final review M5). */

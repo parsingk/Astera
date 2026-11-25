@@ -19,7 +19,8 @@ function layout(tabs: string[]): SavedLayout {
         'file:/p/b.ts': { path: '/p/secret.ts', projectRoot: '/p' }
       },
       records: { 'record:r1': { recordId: 'r1', title: 'R', projectRoot: '/p' }, 'record:r2': { recordId: 'r2', title: 'R2', projectRoot: '/gone' } },
-      browsers: { 'browser:b1': { url: 'http://localhost:5173/', title: '', projectRoot: '/p' } }
+      browsers: { 'browser:b1': { url: 'http://localhost:5173/', title: '', projectRoot: '/p' } },
+      plugins: {}
     }
   }
 }
