@@ -4,7 +4,7 @@
 import { promises as fs } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginCapability, type PluginManifest, type PluginPermission } from '../../core/plugins/manifest'
+import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginCapability, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
 import { parseNpmSpec } from '../../core/plugins/npmSpec'
 import { NpmFailed, NpmMissing, createNpm, installDependencies, packAndExtract, type NpmRun, type NpmRunner } from './npm'
@@ -16,7 +16,8 @@ import { REDACT_MIN, pluginLogFile, type PluginLaunch, type PluginRuntime } from
 import { coerceSetting, missingRequired, type SettingField, type SettingValue } from '../../core/plugins/settings'
 import { PluginSettingsUnreadable, forgetPluginData, pluginSecrets, readSettings, writeSettings } from './pluginData'
 
-export type PluginStatus = 'disabled' | 'incompatible' | 'stopped' | 'starting' | 'running' | 'failed'
+/** `ready`: an enabled UI-only plugin (Plugin API 2, ADR-008) with nothing to start and nothing missing. */
+export type PluginStatus = 'disabled' | 'incompatible' | 'stopped' | 'starting' | 'running' | 'failed' | 'ready'
 
 /** A Host answer: an HTTP-like status and a body, `{ error }` when it is not 2xx. */
 export interface PluginsAnswer {
@@ -259,7 +260,7 @@ export function createPluginManager(d: {
    *  did not run event plugins (1.4.12, 1.4.13) installed one whatever was granted. It is held back rather than
    *  started into a failure, with what to do. */
   const ungranted = (r: PluginRecord, m: PluginManifest): string | null => {
-    const problem = capabilityPermissionProblem(m.capabilities, r.granted)
+    const problem = capabilityPermissionProblem(m.capabilities, r.granted) ?? contributionPermissionProblem(m.contributes, r.granted)
     return problem === null ? null : `${problem}, which it was not granted: install it again and grant it`
   }
 
@@ -271,7 +272,8 @@ export function createPluginManager(d: {
       version: m.version,
       folder: r.folder,
       dir,
-      entry: path.resolve(dir, m.entry),
+      // runnable hands over only a plugin with a host entry
+      entry: path.resolve(dir, m.entry ?? ''),
       granted: r.granted,
       capabilities: m.capabilities,
       // The plugin is trusted (design P1): it gets its secret settings beside the plain ones.
@@ -285,7 +287,8 @@ export function createPluginManager(d: {
   async function runnable(r: PluginRecord): Promise<PluginLaunch | null> {
     if (!r.enabled) return null
     const read = await readManifest(path.join(installed, r.folder))
-    if (!read.ok || incompatibility(read.manifest, host) !== null || ungranted(r, read.manifest) !== null) return null
+    // A UI-only plugin has no program to start (ADR-008)
+    if (!read.ok || read.manifest.entry === undefined || incompatibility(read.manifest, host) !== null || ungranted(r, read.manifest) !== null) return null
     const state = await settingsState(r, read.manifest)
     if (!state.ok || heldBack(r, state) !== null) return null
     return launchOf(r, read.manifest, state)
@@ -304,11 +307,14 @@ export function createPluginManager(d: {
     const read = await readManifest(dir)
     const m = read.ok ? read.manifest : null
     const incompatible = m ? incompatibility(m, host) : `the installed copy cannot be read: ${read.ok ? '' : read.error}`
-    const run = r.enabled && incompatible === null ? d.runtime?.status(r.id) : undefined
-    const status: PluginStatus = !r.enabled ? 'disabled' : incompatible !== null ? 'incompatible' : (run?.status ?? 'stopped')
+    const uiOnly = m !== null && m.entry === undefined
+    const run = r.enabled && incompatible === null && !uiOnly ? d.runtime?.status(r.id) : undefined
+    let status: PluginStatus = !r.enabled ? 'disabled' : incompatible !== null ? 'incompatible' : (run?.status ?? 'stopped')
     let reason = incompatible ?? run?.reason ?? null
     // A plugin that is not running may be waiting for a grant or for its settings: say which.
     if (m && r.enabled && incompatible === null && status === 'stopped') reason = ungranted(r, m) ?? heldBack(r, await settingsState(r, m)) ?? reason
+    // A UI-only plugin with nothing missing is ready: it has nothing to start
+    if (uiOnly && status === 'stopped' && reason === null) status = 'ready'
     return {
       id: r.id,
       name: m?.name ?? r.id,
@@ -319,6 +325,9 @@ export function createPluginManager(d: {
       status,
       ...(reason !== null ? { reason } : {}),
       ...(run?.pid !== undefined ? { pid: run.pid } : {}),
+      trust: m?.trust ?? 'trusted',
+      ...(m?.ui !== undefined ? { ui: m.ui } : {}),
+      ...(m?.apiVersion === '2' ? { contributes: m.contributes } : {}),
       capabilities: m?.capabilities ?? [],
       permissions: r.granted,
       requested: m?.permissions ?? [],
@@ -403,10 +412,14 @@ export function createPluginManager(d: {
       version: m.version,
       ...(m.description !== undefined ? { description: m.description } : {}),
       apiVersion: m.apiVersion,
-      entry: m.entry,
+      trust: m.trust,
+      ...(m.entry !== undefined ? { entry: m.entry } : {}),
+      ...(m.ui !== undefined ? { ui: m.ui } : {}),
+      ...(m.apiVersion === '2' ? { contributes: m.contributes } : {}),
       capabilities: m.capabilities,
       permissions: m.permissions,
       ...(m.minAsteraVersion !== undefined ? { minAsteraVersion: m.minAsteraVersion } : {}),
+      ...(m.engines !== undefined ? { engines: m.engines } : {}),
       compatible: reason === null,
       ...(reason !== null ? { reason } : {}),
       ...(installed ? { installed: { version: installed.version, enabled: installed.enabled } } : {})
@@ -419,24 +432,29 @@ export function createPluginManager(d: {
     folder: string,
     shownAs: string,
     grant: readonly string[],
-    expected: { name: string; version: string } | undefined
-  ): Promise<{ manifest: PluginManifest; granted: PluginPermission[] }> {
+    expected: { name: string; version: string; trust?: string } | undefined
+  ): Promise<{ manifest: PluginManifest; granted: (PluginPermission | PluginUiPermission)[] }> {
     const read = await readManifest(folder)
     if (!read.ok) throw new Refused(400, read.error.split(folder).join(shownAs))
     const m = read.manifest
     if (expected !== undefined && (expected.name !== m.name || expected.version !== m.version))
       throw new Refused(409, `the folder changed after it was shown: it now holds ${m.name}@${m.version}; run the install again`)
-    const granted: PluginPermission[] = []
+    // A folder that gained a host entry while a restricted UI prompt was open must not install as trusted code (final review
+    // M7); an expect without a trust level, from an older caller, is checked as before
+    if (expected?.trust !== undefined && expected.trust !== m.trust)
+      throw new Refused(409, `the folder changed after it was shown: it now holds ${m.name}@${m.version} as ${m.trust === 'trusted' ? 'trusted code' : 'restricted UI'}; run the install again`)
+    const granted: (PluginPermission | PluginUiPermission)[] = []
     for (const g of grant) {
       if (!(m.permissions as string[]).includes(g))
         throw new Refused(400, `${g} is not one the plugin asks for; it asks for: ${m.permissions.length > 0 ? m.permissions.join(', ') : 'nothing'}`)
       if (!granted.includes(g as PluginPermission)) granted.push(g as PluginPermission)
     }
     // Plugin Phase 3 N4: refused before anything is copied, with the reason the manifest's own check gives
-    const needs = capabilityPermissionProblem(m.capabilities, granted)
+    const needs = capabilityPermissionProblem(m.capabilities, granted) ?? contributionPermissionProblem(m.contributes, granted)
     if (needs !== null) throw new Refused(400, needs)
-    const entry = await fs.stat(path.join(folder, m.entry)).then((s) => s.isFile(), () => false)
-    if (!entry) throw new Refused(400, `the entry ${m.entry} is not a file in the plugin`)
+    const isFile = (rel: string): Promise<boolean> => fs.stat(path.join(folder, rel)).then((s) => s.isFile(), () => false)
+    if (m.entry !== undefined && !(await isFile(m.entry))) throw new Refused(400, `the entry ${m.entry} is not a file in the plugin`)
+    if (m.ui !== undefined && !(await isFile(m.ui))) throw new Refused(400, `the ui ${m.ui} is not a file in the plugin`)
     return { manifest: m, granted }
   }
 
@@ -451,7 +469,10 @@ export function createPluginManager(d: {
       (typeof want !== 'object' || want === null || typeof (want as Record<string, unknown>).name !== 'string' || typeof (want as Record<string, unknown>).version !== 'string')
     )
       throw new Refused(400, 'expect must be { name, version }')
-    const expected = want as { name: string; version: string } | undefined
+    const trustShown = want !== undefined ? (want as Record<string, unknown>).trust : undefined
+    if (trustShown !== undefined && trustShown !== 'trusted' && trustShown !== 'restricted-ui')
+      throw new Refused(400, 'expect.trust must be trusted or restricted-ui')
+    const expected = want as { name: string; version: string; trust?: string } | undefined
     if (source.kind === 'folder') {
       // Read before anything is copied: a registry that cannot be read refuses the change with nothing written.
       const records = await readRegistry(root)
@@ -602,8 +623,15 @@ export function createPluginManager(d: {
     checks.push({ name: 'manifest', ok: true, detail: `${m.name} ${m.version}, Plugin API ${m.apiVersion}` })
     const incompatible = incompatibility(m, host)
     checks.push({ name: 'compatible', ok: incompatible === null, detail: incompatible ?? 'this Astera runs it' })
-    const entry = await fs.stat(path.resolve(dir, m.entry)).then((st) => st.isFile(), () => false)
-    checks.push({ name: 'entry', ok: entry, detail: entry ? m.entry : `${m.entry} is not a file in the installed copy` })
+    const fileIn = (rel: string): Promise<boolean> => fs.stat(path.resolve(dir, rel)).then((st) => st.isFile(), () => false)
+    if (m.entry !== undefined) {
+      const entry = await fileIn(m.entry)
+      checks.push({ name: 'entry', ok: entry, detail: entry ? m.entry : `${m.entry} is not a file in the installed copy` })
+    }
+    if (m.ui !== undefined) {
+      const ui = await fileIn(m.ui)
+      checks.push({ name: 'ui', ok: ui, detail: ui ? m.ui : `${m.ui} is not a file in the installed copy` })
+    }
     const grant = ungranted(r, m)
     if (grant !== null) checks.push({ name: 'permissions', ok: false, detail: grant })
     // Design P2: plugins run on the Node inside Astera. An addon loads there only if it was built for it, as N-API addons
@@ -635,7 +663,9 @@ export function createPluginManager(d: {
     )
     const run = r.enabled && incompatible === null ? d.runtime?.status(r.id) : undefined
     checks.push(
-      !r.enabled
+      m.entry === undefined
+        ? { name: 'runtime', ok: true, detail: 'none: a UI-only plugin starts no program' }
+        : !r.enabled
         ? { name: 'runtime', ok: true, detail: 'disabled' }
         : incompatible !== null
           ? { name: 'runtime', ok: true, detail: 'not started' }

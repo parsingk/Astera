@@ -2,7 +2,7 @@
 // first; without `--yes` or `--grant` nothing is installed and the person is shown what the plugin is and asks for.
 // The install then carries what was shown (`expect`), so the Host refuses a folder that changed in between.
 import path from 'node:path'
-import { PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
+import { PLUGIN_RESTRICTED_UI_NOTICE, PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
 
 /** What one Host call came back as: an answer, or none (`callHost`). */
 export type PluginCall = { status: number; body: unknown } | { unreachable: string } | { stuck: string }
@@ -18,9 +18,11 @@ export function approvalMessage(inspection: Record<string, unknown>, o: { agent?
   const how = o.agent
     ? ' Installing it is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set): ask them to run astera plugins install with --yes.'
     : ' Approve with --yes, or name what to grant with --grant <list>.'
+  // ADR-008: a plugin with a UI and no host entry is restricted UI; anything else, or a Host that does not say, is trusted code
+  const trust = inspection.trust === 'restricted-ui' ? PLUGIN_RESTRICTED_UI_NOTICE : PLUGIN_TRUST_WARNING
   return (
     `${String(inspection.displayName)} ${String(inspection.version)} (${String(inspection.id)}) asks for: ${asks}.${replaces} ` +
-    `${PLUGIN_TRUST_WARNING}${wontRun}${how}`
+    `${trust}${wontRun}${how}`
   )
 }
 
@@ -112,5 +114,7 @@ export async function installPlugin<R extends PluginCall>(a: {
   const named = grantOf(a.args.grant)
   if (named === null && a.args.yes !== true) return { approve: inspection }
   const grant = named ?? (Array.isArray(inspection.permissions) ? (inspection.permissions as string[]) : [])
-  return a.call('plugins-install', { ...source, grant, expect: { name: inspection.name, version: inspection.version } }, a.request)
+  // The trust level shown goes too, so a folder that changed it in between is refused (final review M7)
+  const trust = typeof inspection.trust === 'string' ? { trust: inspection.trust } : {}
+  return a.call('plugins-install', { ...source, grant, expect: { name: inspection.name, version: inspection.version, ...trust } }, a.request)
 }

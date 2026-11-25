@@ -1319,6 +1319,10 @@ input.settings-reviewer-line { color: var(--text); }
 .plugin-status.is-running { color: var(--ok); background: var(--ok-bg); }
 .plugin-status.is-starting { color: var(--info); background: var(--info-bg); }
 .plugin-status.is-failed, .plugin-status.is-incompatible { color: var(--danger); background: var(--danger-bg); }
+.plugin-status.is-ready { color: var(--ok); background: var(--ok-bg); }
+/* The plugin's trust level (ADR-008): trusted code runs with the person's rights, restricted UI only shows pages */
+.plugin-trust { flex-shrink: 0; font-size: 11px; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--line); color: var(--text-dim); }
+.plugin-trust.is-trusted { color: var(--warn); }
 .plugin-facts { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; }
 .plugin-facts > span:last-child { color: var(--text); overflow-wrap: anywhere; }
 /* Settings › Extensions: one scrolling list per kind, rows collapsed to their name until opened */

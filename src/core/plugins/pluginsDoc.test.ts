@@ -554,10 +554,12 @@ describe('the quick start, followed as written', () => {
     const dir = path.join(work, m.id)
     mkdirSync(dir, { recursive: true })
     writeFileSync(path.join(dir, 'package.json'), pkgText)
-    writeFileSync(path.join(dir, m.entry), code)
+    // The guide's plugins are API 1, which always has its entry
+    const entry = m.entry as string
+    writeFileSync(path.join(dir, entry), code)
 
     const { r, log } = runtime(m.id)
-    r.start({ id: m.id, version: m.version, folder: m.id, dir, entry: path.join(dir, m.entry), granted: m.permissions, capabilities: m.capabilities, settings: {}, redact: [] })
+    r.start({ id: m.id, version: m.version, folder: m.id, dir, entry: path.join(dir, entry), granted: m.permissions, capabilities: m.capabilities, settings: {}, redact: [] })
     // The log lines the guide shows, without their times and the process id
     const shown = fenced(start, 'text')
       .join('\n')

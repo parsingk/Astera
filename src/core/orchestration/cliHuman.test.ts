@@ -136,20 +136,20 @@ describe('humanFor', () => {
   })
 
   // Plugin Phase 5 C6: what each plugin offers, so a person finds the plugin:<id> a Task's checks can name
-  it('plugins list puts the status first in capitals, then the id, the version, what was granted and what it offers', () => {
+  it('plugins list puts the status first in capitals, then the id, the version, the trust level, what was granted and what it offers', () => {
     expect(
       humanFor('plugins-list', {
         plugins: [
-          { id: '@acme/astera-jira', version: '1.0.0', status: 'stopped', permissions: ['jobs.read', 'jobs.create'], capabilities: ['completion-check'] },
+          { id: '@acme/astera-jira', version: '1.0.0', status: 'stopped', trust: 'trusted', permissions: ['jobs.read', 'jobs.create'], capabilities: ['completion-check'] },
           { id: 'astera-hello', version: '0.1.0', status: 'incompatible', permissions: [], capabilities: ['event', 'job-source'], reason: 'this Astera does not run event plugins yet' },
-          { id: 'astera-plain', version: '0.1.0', status: 'running', permissions: [] }
+          { id: 'hello-panel', version: '0.1.0', status: 'ready', trust: 'restricted-ui', permissions: ['panels.register'] }
         ]
       })
     ).toBe(
       [
-        'STOPPED       @acme/astera-jira  1.0.0  jobs.read,jobs.create  completion-check',
-        `INCOMPATIBLE  astera-hello       0.1.0  -${' '.repeat(22)}event,job-source  this Astera does not run event plugins yet`,
-        `RUNNING       astera-plain       0.1.0  -${' '.repeat(22)}-`
+        'STOPPED       @acme/astera-jira  1.0.0  trusted        jobs.read,jobs.create  completion-check',
+        `INCOMPATIBLE  astera-hello       0.1.0  trusted        -${' '.repeat(22)}event,job-source  this Astera does not run event plugins yet`,
+        `READY         hello-panel        0.1.0  restricted-ui  panels.register${' '.repeat(8)}-`
       ].join('\n')
     )
   })

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { t as translate, type MessageKey, type MessageParams } from '../../../core/i18n'
 import { PLUGIN_TRUST_WARNING } from '../../../core/plugins/manifest'
 import type { SettingField } from '../../../core/plugins/settings'
-import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel } from './pluginsText'
+import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel, trustLabel } from './pluginsText'
 
 const en = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
 const ko = (key: MessageKey, params?: MessageParams): string => translate('ko', key, params)
@@ -252,5 +252,40 @@ describe('installFailureLine', () => {
     expect(installFailureLine(changed, en)).toBe('The folder changed after the warning was shown, so nothing was installed. Install it again.')
     expect(installFailureLine(changed, ko)).toBe('경고를 보여 준 뒤 폴더가 바뀌어 아무것도 설치하지 않았습니다. 다시 설치하세요.')
     expect(installFailureLine({ ok: false, code: 'HOST_NOT_RUNNING', message: 'x' }, en)).toBe('The app is not connected to the Host.')
+  })
+})
+
+// Plugin API 2 (ADR-008): the trust level is said wherever a plugin is installed or listed
+describe('the trust level in Settings', () => {
+  it('names the UI permissions, the ready status and both trust levels', () => {
+    for (const p of ['commands.register', 'panels.register', 'workspace.read']) {
+      expect(permissionLabel(p, en), p).not.toBe(p)
+      expect(permissionLabel(p, ko), p).not.toBe(p)
+    }
+    expect(statusLabel('ready', en)).toBe('Ready')
+    expect(trustLabel('trusted', en)).toBe('Trusted code')
+    expect(trustLabel('restricted-ui', en)).toBe('Restricted UI')
+    // An answer from a Host without the field: the plugin is a trusted one, as every API 1 plugin is
+    expect(trustLabel(undefined, en)).toBe('Trusted code')
+  })
+
+  it('ends a UI-only plugin’s install prompt with the restricted UI notice, never the trusted code warning', () => {
+    const ui = installPrompt({ ...INSPECTION, trust: 'restricted-ui', permissions: ['panels.register'] }, 'D:/work/hello', en)
+    expect(ui.footer).toContain(en('settings.plugins.install.restrictedUi'))
+    expect(ui.footer).not.toContain(en('settings.plugins.install.trust'))
+    const both = installPrompt({ ...INSPECTION, trust: 'trusted' }, 'D:/work/both', en)
+    expect(both.footer).toContain(en('settings.plugins.install.trust'))
+  })
+})
+
+// Screen check: the tab's opening sentence said every plugin is a program running as trusted code
+describe('the Plugins tab hint', () => {
+  it('names both trust levels in every language', () => {
+    for (const lang of ['ko', 'en', 'ja', 'es'] as const) {
+      // A label inside a sentence may start lower case (es: "El código de confianza")
+      const tr = (key: MessageKey): string => translate(lang, key).toLowerCase()
+      expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.trusted'))
+      expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.restrictedUi'))
+    }
   })
 })

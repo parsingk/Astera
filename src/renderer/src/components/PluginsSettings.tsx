@@ -5,7 +5,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
 import { Select } from './Select'
-import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel } from './pluginsText'
+import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel, trustLabel } from './pluginsText'
 import { createPluginsPoller, installBlocked, installHolds, keepOnly } from './pluginsList'
 
 type Plugin = Record<string, unknown>
@@ -134,7 +134,14 @@ export function PluginsSettings(): React.JSX.Element {
       setInstalling('installing')
       // What was shown is what the Host checks the copy against (design P6), and from npm the version it fetches.
       const r = await during(() =>
-        window.api.plugins.install({ ...source, grant: answer.checked, expect: { name: str(seen.body.name), version: str(seen.body.version) } }).catch(failed)
+        window.api.plugins
+          .install({
+            ...source,
+            grant: answer.checked,
+            // The trust level shown too, so a folder that changed it in between is refused (final review M7)
+            expect: { name: str(seen.body.name), version: str(seen.body.version), ...(str(seen.body.trust) !== '' ? { trust: str(seen.body.trust) } : {}) }
+          })
+          .catch(failed)
       )
       if (!r.ok) {
         toast.error(installFailureLine(r, t))
@@ -341,6 +348,7 @@ export function PluginCard({
     <>
       <div className="plugin-head">
         <span className="plugin-name">{str(plugin.displayName) || id}</span>
+        <span className={`plugin-trust is-${plugin.trust === 'restricted-ui' ? 'restricted-ui' : 'trusted'}`}>{trustLabel(plugin.trust, t)}</span>
         <span className={`plugin-status is-${status}`}>{statusLabel(status, t)}</span>
       </div>
       <span className="settings-hint">

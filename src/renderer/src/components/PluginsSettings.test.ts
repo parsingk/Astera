@@ -150,3 +150,14 @@ describe('PluginLogs', () => {
     expect(renderToStaticMarkup(React.createElement(PluginLogs, { lines: [], onRefresh: noop }))).toContain('No log yet.')
   })
 })
+
+describe('PluginCard trust level (ADR-008)', () => {
+  it('says a UI-only plugin is restricted UI, ready, and a plugin with code is trusted code', () => {
+    const ui = card({ ...PLUGIN, status: 'ready', trust: 'restricted-ui' })
+    expect(ui).toContain('Restricted UI')
+    expect(ui).toContain('Ready')
+    expect(ui).toContain('plugin-trust is-restricted-ui')
+    expect(card({ ...PLUGIN, trust: 'trusted' })).toContain('Trusted code')
+    expect(card(PLUGIN)).toContain('Trusted code')
+  })
+})

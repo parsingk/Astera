@@ -21,7 +21,11 @@ const PERMISSIONS: Record<string, MessageKey> = {
   'events.subscribe': 'settings.plugins.perm.events.subscribe',
   'github.read': 'settings.plugins.perm.github.read',
   'github.write': 'settings.plugins.perm.github.write',
-  'how-it-works.read': 'settings.plugins.perm.how-it-works.read'
+  'how-it-works.read': 'settings.plugins.perm.how-it-works.read',
+  // Plugin API 2's UI permissions (core/plugins/manifest.ts PLUGIN_UI_PERMISSIONS)
+  'commands.register': 'settings.plugins.perm.commands.register',
+  'panels.register': 'settings.plugins.perm.panels.register',
+  'workspace.read': 'settings.plugins.perm.workspace.read'
 }
 
 const STATUSES: Record<string, MessageKey> = {
@@ -30,13 +34,18 @@ const STATUSES: Record<string, MessageKey> = {
   stopped: 'settings.plugins.status.stopped',
   failed: 'settings.plugins.status.failed',
   disabled: 'settings.plugins.status.disabled',
-  incompatible: 'settings.plugins.status.incompatible'
+  incompatible: 'settings.plugins.status.incompatible',
+  ready: 'settings.plugins.status.ready'
 }
 
 /** A permission in words; one this app does not know (a newer Host's) by its name. */
 export const permissionLabel = (p: string, t: T): string => (Object.hasOwn(PERMISSIONS, p) ? t(PERMISSIONS[p]) : p)
 
 export const statusLabel = (s: string, t: T): string => (Object.hasOwn(STATUSES, s) ? t(STATUSES[s]) : s)
+
+/** A plugin's trust level in words (ADR-008). A Host that does not say runs only API 1 plugins, which are trusted code. */
+export const trustLabel = (trust: unknown, t: T): string =>
+  trust === 'restricted-ui' ? t('settings.plugins.trust.restrictedUi') : t('settings.plugins.trust.trusted')
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
@@ -70,7 +79,12 @@ export function installPrompt(
   return {
     title: t('settings.plugins.install.title', { name: str(inspection.displayName) || str(inspection.id) }),
     body: lines.join('\n'),
-    footer: [permissions.length > 0 ? t('settings.plugins.install.uncheck') : t('settings.plugins.install.noPermissions'), '', t('settings.plugins.install.trust')].join('\n'),
+    footer: [
+      permissions.length > 0 ? t('settings.plugins.install.uncheck') : t('settings.plugins.install.noPermissions'),
+      '',
+      // ADR-008: a UI-only plugin is never introduced as trusted code, and a plugin with code always is
+      inspection.trust === 'restricted-ui' ? t('settings.plugins.install.restrictedUi') : t('settings.plugins.install.trust')
+    ].join('\n'),
     confirmLabel: t('settings.plugins.install.button'),
     choices: permissions.map((p) => ({
       id: p,
