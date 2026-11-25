@@ -4,6 +4,7 @@
 // the real plugin runtime, its TypeScript compiles against the SDKs, its links land, and it is published.
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { removeFixture } from '../testFixtures'
+import { BRIDGE_MAX_CALLS_PER_SECOND, BRIDGE_METHODS, PLUGIN_UI_CSP } from './panelGuest'
 import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -456,6 +457,22 @@ describe('docs/plugins.md', () => {
     expect(prose(sample)).toContain('after it first starts')
     expect(prose(sample)).toContain('starting again after a crash')
     expect(prose(sample)).not.toContain('is not posted')
+  })
+
+  // Plugin Platform V2, Phase 2 step 3: what a panel's page may do is what main enforces (core/plugins/panelGuest.ts)
+  it('says what a panel’s page may do, as the guest’s CSP and bridge enforce it, and links the Hello panel sample', () => {
+    const panels = prose(section(guide, '### Panels'))
+    for (const clause of ["script-src 'self'", "connect-src 'none'", "frame-src 'none'", "img-src 'self' data:", "font-src 'self' data:"]) {
+      expect(PLUGIN_UI_CSP).toContain(clause)
+    }
+    expect(panels).toContain('every request to the network are refused')
+    expect(panels).toContain('inline `<script>`')
+    expect(BRIDGE_METHODS).toEqual(['context'])
+    expect(panels).toContain('`window.astera.context()` answers `{ plugin, panel, project }`')
+    expect(panels).toContain(`at most ${BRIDGE_MAX_CALLS_PER_SECOND} times a second`)
+    expect(panels).not.toContain('not shown yet')
+    expect(guide).toContain('](../examples/plugins/hello-panel)')
+    expect(read('examples/plugins/hello-panel/README.md')).toContain('docs/plugins.md#plugin-api-2)')
   })
 
   // 2f final review m1: the quick start's commands need the astera command
