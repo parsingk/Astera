@@ -18,14 +18,14 @@ describe('pluginRowsOf', () => {
     expect(
       pluginRowsOf({
         plugins: [
-          { id: 'hello-panel', enabled: true, status: 'ready', dir: '/p/hello', ui: 'dist/ui/index.html', displayName: 'Hello', permissions: ['panels.register', 7], contributes: { commands: [], panels: [{ id: 'main', title: 'Hello' }] } },
+          { id: 'hello-panel', enabled: true, status: 'ready', dir: '/p/hello', ui: 'dist/ui/index.html', displayName: 'Hello', installedAt: 12, permissions: ['panels.register', 7], contributes: { commands: [], panels: [{ id: 'main', title: 'Hello' }] } },
           { id: 'old', enabled: true, status: 'running', dir: '/p/old', permissions: [], displayName: 3 },
           { id: 'broken', status: 'ready' },
           'junk'
         ]
       })
     ).toEqual([
-      { id: 'hello-panel', enabled: true, status: 'ready', dir: '/p/hello', ui: 'dist/ui/index.html', displayName: 'Hello', permissions: ['panels.register'], contributes: { commands: [], panels: [{ id: 'main', title: 'Hello' }] } },
+      { id: 'hello-panel', enabled: true, status: 'ready', dir: '/p/hello', ui: 'dist/ui/index.html', displayName: 'Hello', installedAt: 12, permissions: ['panels.register'], contributes: { commands: [], panels: [{ id: 'main', title: 'Hello' }] } },
       { id: 'old', enabled: true, status: 'running', dir: '/p/old', permissions: [] }
     ])
     expect(pluginRowsOf(null)).toEqual([])

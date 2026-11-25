@@ -22,6 +22,9 @@ describe('plugin panel guests wiring', () => {
     expect(ipc).toMatch(/ipcMain\.handleGuest\('plugin-ui\.call', \(e, _guest, method: unknown, payload: unknown\) => panelGuests\.call\(e\.sender\.id, method, payload\)\)/)
     expect(ipc).toMatch(/ipcMain\.handle\('plugins\.preparePanel', \(_e, pluginId: unknown, panelId: unknown, projectRoot: unknown\) =>/)
     expect(read('../preload/index.ts')).toContain("preparePanel: invoke('plugins.preparePanel'),")
+    // Final review of plugins dev M4: a change the app makes holds the plugin's prepares until it is done
+    expect(ipc).toMatch(/panelGuests\.hold\(id, plugins\.setEnabled\(id as string, enabled === true\)\)/)
+    expect(ipc).toMatch(/panelGuests\.hold\(id, plugins\.remove\(/)
     // Arguments that are not ids are refused with a code the renderer words, as every other refusal
     expect(ipc).toContain("{ ok: false, code: 'invalid', reason: 'plugins.preparePanel needs a plugin id and a panel id' }")
   })
@@ -59,9 +62,9 @@ describe('plugin panels: final review wiring', () => {
   // I2: turning a plugin off, removing or replacing it through this app forgets it first, and a watch catches the CLI
   it('forgets a plugin before the Host turns it off, removes or replaces it, and watches while anything is open', () => {
     const ipc = read('ipc.ts')
-    expect(ipc).toMatch(/ipcMain\.handle\('plugins\.setEnabled', \(_e, id: unknown, enabled: unknown\) => \{\s*if \(enabled !== true && typeof id === 'string'\) panelGuests\.forget\(id\)/)
-    expect(ipc).toMatch(/ipcMain\.handle\('plugins\.remove', \(_e, id: unknown\) => \{\s*if \(typeof id === 'string'\) panelGuests\.forget\(id\)/)
-    expect(ipc).toMatch(/const replaces = \(a as \{ expect\?: \{ name\?: unknown \} \} \| null\)\?\.expect\?\.name\s*if \(typeof replaces === 'string'\) panelGuests\.forget\(replaces\)/)
+    expect(ipc).toMatch(/ipcMain\.handle\('plugins\.setEnabled', \(_e, id: unknown, enabled: unknown\) => \{[\s\S]*?if \(enabled !== true\) panelGuests\.forget\(id\)/)
+    expect(ipc).toMatch(/ipcMain\.handle\('plugins\.remove', \(_e, id: unknown\) => \{[\s\S]*?panelGuests\.forget\(id\)\s*return panelGuests\.hold/)
+    expect(ipc).toMatch(/const replaces = \(a as \{ expect\?: \{ name\?: unknown \} \} \| null\)\?\.expect\?\.name\s*if \(typeof replaces === 'string'\) \{\s*panelGuests\.forget\(replaces\)/)
     expect(ipc).toMatch(/setInterval\(\(\) => \{\s*if \(panelGuests\.active\(\)\) void panelGuests\.refresh\(\)\s*\}, PANEL_WATCH_MS\)\.unref\(\)/)
     expect(ipc).toMatch(/return r\.ok \? pluginRowsOf\(r\.body\) : null/)
   })

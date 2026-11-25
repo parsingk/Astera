@@ -6,6 +6,7 @@
 //   init      a new plugin folder from one of four templates (cli/pluginTemplates.ts)
 //   pack      a deterministic package of a folder that validates, with its checksums (host/plugins/pack.ts), read back
 //             as `install --file` will read it before it is written where asked
+//   test      the plugin run against Astera's contract in the real plugin runtime and a fake Host (cli/pluginTest.ts)
 //
 // A file system error is an answer (FAILED, exit 1), never a stack trace (plugin CLI final review I3).
 import { createHash } from 'node:crypto'
@@ -18,7 +19,9 @@ import { checkPluginFolder, type FolderCheck, type FolderProblem } from '../host
 import { moveRetrying } from '../host/plugins/moves'
 import { packFolder } from '../host/plugins/pack'
 import { PackageRefused, extractPackage } from '../host/plugins/tarball'
+import { configureArgs } from './plugins'
 import { PLUGIN_TEMPLATES, pluginTemplate, type PluginTemplate } from './pluginTemplates'
+import { testPlugin } from './pluginTest'
 
 type Outcome = { ok: true; body: Record<string, unknown> } | { ok: false; error: CliError }
 
@@ -29,11 +32,19 @@ const reason = (e: unknown): string => (e instanceof Error ? e.message : String(
 /** One problem as a line: its code, the field it is about, the install's sentence. */
 const lineOf = (p: FolderProblem): string => `${p.code}${p.field !== undefined ? ` ${p.field}` : ''}: ${p.message}`
 
-export async function pluginDevCommand(a: { cmd: string; args: Record<string, unknown>; cwd: string; version: string }): Promise<Outcome> {
+export async function pluginDevCommand(a: {
+  cmd: string
+  args: Record<string, unknown>
+  cwd: string
+  version: string
+  /** The plugin launcher `test` runs a plugin with: plugin-host.js beside the CLI. */
+  launcher?: string
+}): Promise<Outcome> {
   try {
     if (a.cmd === 'plugins-validate') return await validate(a)
     if (a.cmd === 'plugins-init') return await init(a)
     if (a.cmd === 'plugins-pack') return await pack(a)
+    if (a.cmd === 'plugins-test') return await test(a)
   } catch (e) {
     return failed(`${a.cmd.replace('-', ' ')} could not finish: ${reason(e)}`)
   }
@@ -188,3 +199,20 @@ async function entryAndUi(copy: string): Promise<{ entry?: string; ui?: string }
   const parsed = parseManifest(JSON.parse(await fs.readFile(path.join(copy, 'package.json'), 'utf8')))
   return parsed.ok ? { entry: parsed.manifest.entry, ui: parsed.manifest.ui } : {}
 }
+
+async function test(a: { args: Record<string, unknown>; cwd: string; version: string; launcher?: string }): Promise<Outcome> {
+  if (typeof a.args.path !== 'string' || a.args.path === '') return invalid('plugins test needs --path <folder>')
+  const set = configureArgs({ set: a.args.set }, undefined)
+  if ('error' in set) return invalid(set.error)
+  const folder = path.resolve(a.cwd, a.args.path)
+  const r = await testPlugin({ folder, version: a.version, launcher: a.launcher ?? '', settings: set.args.set as Record<string, string> })
+  if ('problems' in r) {
+    if (r.problems.length === 1 && r.problems[0].code === 'NOT_A_FOLDER') return invalid(r.problems[0].message)
+    return refused(folder, { problems: r.problems, warnings: [] })
+  }
+  const body = { plugin: r.plugin, ok: r.ok, checks: r.checks, ...(r.warnings ? { warnings: r.warnings } : {}) }
+  if (r.ok) return { ok: true, body }
+  const failing = r.checks.filter((c) => !c.ok)
+  return { ok: false, error: { code: 'FAILED', message: `${r.plugin.id} failed a check: ${failing.map((c) => `${c.name}: ${c.detail}`).join('; ')}`, details: body } }
+}
+

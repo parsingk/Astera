@@ -3,7 +3,7 @@
 // cannot be tested — that is why the side-effect-free functions and main() were pulled in here.
 // main() does not call itself inside this file, so importing this module (as the tests do) does not
 // terminate the process.
-import { approvalMessage, configureArgs, configureStdinError, doctorEnd, installPlugin } from './plugins'
+import { approvalMessage, configureArgs, configureStdinError, doctorEnd, installPlugin, type PluginCall } from './plugins'
 import { randomBytes, randomUUID } from 'node:crypto'
 import fsSync, { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -24,6 +24,7 @@ import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
 import { pluginDevCommand } from './pluginDev'
+import { chokidarWatch, devEventLine, runPluginDev } from './pluginDevWatch'
 import { agentProfilesCommand } from './agentProfiles'
 import { auditCommand, policiesCommand } from './audit'
 import { readExtensionRegistry } from '../core/extensions/registry'
@@ -82,7 +83,7 @@ import { helloLine, verboseLog, type VerboseLog } from '../core/orchestration/cl
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
 const CLI_VERSION = typeof __ASTERA_VERSION__ === 'string' ? __ASTERA_VERSION__ : '0.0.0'
 /** The plugin author's commands, answered in this process without a Host (cli/pluginDev.ts). */
-const PLUGIN_DEV_COMMANDS: readonly string[] = ['plugins-validate', 'plugins-init', 'plugins-pack']
+const PLUGIN_DEV_COMMANDS: readonly string[] = ['plugins-validate', 'plugins-init', 'plugins-pack', 'plugins-test']
 import {
   DEFAULT_WAIT_TIMEOUT_MS
 } from '../core/orchestration/types'
@@ -1468,9 +1469,59 @@ export async function main(): Promise<void> {
         code: 'INVALID_ARGUMENTS',
         message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
       })
-    const done = await pluginDevCommand({ cmd: parsed.cmd, args, cwd: process.cwd(), version: CLI_VERSION })
+    const done = await pluginDevCommand({
+      cmd: parsed.cmd,
+      args,
+      cwd: process.cwd(),
+      version: CLI_VERSION,
+      // The launcher the Host starts plugins with, built beside this CLI (out/main/plugin-host.js)
+      launcher: path.join(path.dirname(process.argv[1] ?? ''), 'plugin-host.js')
+    })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
+    process.exit(0)
+  }
+
+  // `plugins dev`: the first install with the person's approval, then a watch that installs again as the folder changes
+  // (cli/pluginDevWatch.ts). Each Host call is a connection of its own: the watch may run for hours, and a Host that went
+  // away and came back is found again.
+  if (parsed.cmd === 'plugins-dev') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} watches and installs many times, so it cannot carry one request id`
+      })
+    if (sessionId !== '')
+      fail({
+        code: 'PERMISSION_DENIED',
+        message: 'plugins dev installs into Astera, which is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)'
+      })
+    const call = async (cmd: string, callArgs: Record<string, unknown>, request: string | undefined): Promise<PluginCall> => {
+      const conn = await connectHost({ address, profileDir, app: CLI_VERSION, log: logToStderr })
+      if ('error' in conn)
+        return { unreachable: conn.error === 'impostor' ? impostorError(address, profileDir).message : `no Host is running for ${profileDir}; start it with astera host start` }
+      try {
+        const token = workloadTokenFor({ env: process.env, platform: process.platform, home: homedir(), profileDir, address })
+        return await callHost({ conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }), ...(token === undefined ? {} : { token }) })
+      } finally {
+        conn.close()
+      }
+    }
+    const done = await runPluginDev({
+      args,
+      cwd: process.cwd(),
+      version: CLI_VERSION,
+      call,
+      watch: chokidarWatch,
+      emit: (e) => {
+        if (mode !== 'quiet') out(mode === 'human' ? terminalSafe(devEventLine(e)) : jsonSafe(okEnvelope('plugins-dev', e)))
+      },
+      onStop: (stop) => {
+        process.once('SIGINT', stop)
+        process.once('SIGTERM', stop)
+      }
+    })
+    if (!done.ok) fail(done.error)
     process.exit(0)
   }
 

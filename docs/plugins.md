@@ -703,7 +703,16 @@ astera plugins init my-plugin --template host
 astera plugins validate --path ./my-plugin
 ```
 
-Then edit, install again, read the log:
+`astera plugins test --path .` runs the plugin in Astera's plugin runtime against a fake Host, without the app: it starts,
+answers what its capability is asked, keeps running when a call it was not granted is refused, and stops when asked; a
+UI page is checked against what a panel allows. Each check that fails is named, with why. Each answer is read as
+Astera reads it, so one Astera would refuse fails here. A job source's or a check's calls are its real code: a source
+that reads a service needs that service, and a setting it needs is given with `--set key=value`.
+
+`astera plugins dev --path . --yes` installs the folder, then installs it again each time it changes, with the
+permissions you approved; an open panel of the plugin shows the new page by itself. It does not install a folder with
+problems, and waits for you to run it again when the folder asks for something new. Or, by hand, edit, install again,
+read the log:
 
 ```sh
 astera plugins install --path . --yes
@@ -791,10 +800,12 @@ nothing after the app quits:
 - Every Astera theme is dark, and the page does not follow it on its own: a page that follows the system's light mode
   stands white beside the app. Declaring `color-scheme: dark`, as the sample does, keeps it dark.
 
-Turning the plugin off, removing it or installing it again from the app closes its open panels; their tabs say so and
-offer to open the panel again. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
+Turning the plugin off, removing it or installing it again closes its open panels, from the app at once and from the CLI
+within a few seconds; each tab then asks again by itself, so a plugin installed again shows its new page and one turned
+off or removed says so. A page that crashes is not opened again by itself: its tab says it stopped and offers to open
+it. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
 
 ## Not yet
 
 - The `github` and `how-it-works` commands for plugins, which their permissions are already named for.
-- A folder for each plugin's own data, and a development mode that reloads a plugin as you edit it.
+- A folder for each plugin's own data.

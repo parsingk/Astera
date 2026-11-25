@@ -4,6 +4,13 @@ import type { MessageKey } from '../../../core/i18n'
 import type { PanelRefusalCode } from '../../../core/plugins/pluginRows'
 import { useI18n } from '../i18n/I18nProvider'
 
+/** How many times in a row a tab asks main again, by itself, for a guest main ended without a page loading between:
+ *  enough for a reinstall, never a loop. */
+const AUTO_REOPEN_MAX = 3
+/** How long a tab waits before asking again when its own ask found the plugin not ready (just installed again, still
+ *  starting). */
+const NOT_READY_RETRY_MS = 1000
+
 /** Where a panel tab is: asking main, showing the guest main agreed to, refused with a reason, or its guest gone. */
 export type PanelState =
   | { phase: 'preparing' }
@@ -14,9 +21,9 @@ export type PanelState =
 /**
  * A plugin's panel in its workbench tab (Phase 2 step 3, ADR-008). Main decides what may be shown: asked on mount, it
  * answers the page and partition one guest may attach with (a one-time token in the page), or why not. The guest's
- * page is the plugin's; nothing of it runs in this document. When main ends the guest (its plugin turned off, removed
- * or replaced) or its page crashes, the tab says so; Open again asks main afresh, which needs a new token and so a new
- * element.
+ * page is the plugin's; nothing of it runs in this document. When main ends the guest (its plugin installed again, turned
+ * off or removed) the tab asks main again by itself, so it shows the new page or says why not; when its page crashes the
+ * tab says so. Open again asks main afresh, which needs a new token and so a new element.
  */
 export function PluginPanelTab({
   pluginId,
@@ -41,13 +48,28 @@ export function PluginPanelTab({
   const [attempt, setAttempt] = useState(0)
   const stateRef = useRef(state)
   stateRef.current = state
+  const mounted = useRef(true)
+  // Set on each mount: React.StrictMode unmounts and mounts once in development (final review I4)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  /** Asks made by itself since a page last loaded. */
+  const autoReopens = useRef(0)
+  /** Whether the ask under way is one the tab made by itself. */
+  const auto = useRef(false)
 
   // The command run again is the person asking for the panel (final review I1): a refusal or a gone guest is asked
   // about again; a page already showing is left as it is, not reloaded
   useEffect(() => {
     if (nonce === 0) return
     const phase = stateRef.current.phase
-    if (phase === 'refused' || phase === 'gone') setAttempt((n) => n + 1)
+    if (phase === 'refused' || phase === 'gone') {
+      auto.current = false
+      setAttempt((n) => n + 1)
+    }
   }, [nonce])
 
   useEffect(() => {
@@ -58,7 +80,21 @@ export function PluginPanelTab({
       .preparePanel(pluginId, panelId, projectRoot || null)
       .then(
         (r) => {
-          if (current) setState(r.ok ? { phase: 'shown', url: r.url, partition: r.partition } : { phase: 'refused', code: r.code })
+          if (!current) return
+          if (!r.ok) {
+            // Just installed again, the plugin may still be starting: an ask of its own tries once more a moment later
+            if (auto.current && r.code === 'notReady' && autoReopens.current < AUTO_REOPEN_MAX) {
+              setTimeout(() => {
+                if (!mounted.current) return
+                autoReopens.current += 1
+                setAttempt((n) => n + 1)
+              }, NOT_READY_RETRY_MS)
+              return
+            }
+            setState({ phase: 'refused', code: r.code })
+            return
+          }
+          setState({ phase: 'shown', url: r.url, partition: r.partition })
         },
         () => {
           if (current) setState({ phase: 'refused', code: 'host' })
@@ -73,8 +109,25 @@ export function PluginPanelTab({
     <PluginPanelView
       state={state}
       title={title}
-      onReopen={() => setAttempt((n) => n + 1)}
+      onReopen={() => {
+        auto.current = false
+        setAttempt((n) => n + 1)
+      }}
       onGone={() => setState({ phase: 'gone' })}
+      // Main ended the guest (the plugin installed again, turned off or removed): ask again, so the tab shows the new
+      // page or says why not (Phase 2 step 4b); a closed tab asks nothing
+      onEnded={() => {
+        if (!mounted.current) return
+        if (autoReopens.current < AUTO_REOPEN_MAX) {
+          autoReopens.current += 1
+          auto.current = true
+          setAttempt((n) => n + 1)
+        } else setState({ phase: 'gone' })
+      }}
+      onLoaded={() => {
+        autoReopens.current = 0
+        auto.current = false
+      }}
       onFocus={onFocus}
     />
   )
@@ -86,17 +139,26 @@ export function PluginPanelView({
   title,
   onReopen,
   onGone,
+  onEnded = onGone,
+  onLoaded = () => {},
   onFocus
 }: {
   state: PanelState
   title: string
   onReopen: () => void
+  /** The page crashed. */
   onGone: () => void
+  /** Main ended the guest. */
+  onEnded?: () => void
+  /** A page loaded in the guest. */
+  onLoaded?: () => void
   onFocus: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   if (state.phase === 'shown')
-    return <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} onGone={onGone} onFocus={onFocus} />
+    return (
+      <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} onGone={onGone} onEnded={onEnded} onLoaded={onLoaded} onFocus={onFocus} />
+    )
   if (state.phase === 'preparing') return <div className="plugin-panel-note">{t('plugin.panel.preparing')}</div>
   const note: MessageKey = state.phase === 'gone' ? 'plugin.panel.gone' : `plugin.panel.refused.${state.code}`
   return (
@@ -116,30 +178,38 @@ function PluginGuest({
   partition,
   title,
   onGone,
+  onEnded,
+  onLoaded,
   onFocus
 }: {
   url: string
   partition: string
   title: string
   onGone: () => void
+  onEnded: () => void
+  onLoaded: () => void
   onFocus: () => void
 }): React.JSX.Element {
   const viewRef = useRef<WebviewTag>(null)
-  const latest = useRef({ onGone, onFocus })
-  latest.current = { onGone, onFocus }
+  const latest = useRef({ onGone, onEnded, onLoaded, onFocus })
+  latest.current = { onGone, onEnded, onLoaded, onFocus }
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const gone = (): void => latest.current.onGone()
+    const ended = (): void => latest.current.onEnded()
+    const loaded = (): void => latest.current.onLoaded()
     const focus = (): void => latest.current.onFocus()
-    // Main ending the guest (its plugin turned off, removed or replaced) reaches the element as `destroyed`; a page that
-    // crashes while its guest stays as `render-process-gone` (measured in the app)
-    view.addEventListener('destroyed', gone)
+    // Main ending the guest (its plugin turned off, removed or installed again), or refusing its attach, reaches the
+    // element as `destroyed`; a page that crashes while its guest stays as `render-process-gone` (measured in the app)
+    view.addEventListener('destroyed', ended)
     view.addEventListener('render-process-gone', gone)
+    view.addEventListener('dom-ready', loaded)
     view.addEventListener('focus', focus)
     return () => {
-      view.removeEventListener('destroyed', gone)
+      view.removeEventListener('destroyed', ended)
       view.removeEventListener('render-process-gone', gone)
+      view.removeEventListener('dom-ready', loaded)
       view.removeEventListener('focus', focus)
     }
   }, [])

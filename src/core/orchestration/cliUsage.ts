@@ -342,6 +342,25 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'out', value: '<file>', about: 'where to write the package (default: beside the folder)' }
     ]
   },
+  'plugins-dev': {
+    summary: 'install a plugin folder, then install it again each time it changes, with the permissions you approved',
+    detail:
+      'Shows what the plugin asks for and installs nothing until you approve, as install does: --yes or --grant, or exit 2. Then it watches the folder (not .git or node_modules) and, once a change has settled, checks it as validate does and installs it again with the same grant; an open panel of it takes the new page by itself. A folder with problems is not installed, and one that asks for a new permission, capability or trust level waits for you to run dev again. One line per event on standard output. Ctrl+C stops it and leaves the last install in place. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'yes', about: 'approve the permissions the plugin asks for' },
+      { name: 'grant', value: '<list>', about: 'approve exactly these permissions, comma separated (empty grants none)' }
+    ]
+  },
+  'plugins-test': {
+    summary: "run a plugin against Astera's contract without the app: it starts, answers its capability, lives through refused calls and stops",
+    detail:
+      'Starts no Host and installs nothing: a copy of the folder runs in Astera\'s plugin runtime against a fake Host, where a call it was not granted is refused as Astera refuses it. Checks: starts (running within 15 s with what it asks granted), its capability (a job source lists, reads and builds a Job; a completion check answers in an empty workspace; an event or notification plugin keeps running after one), denied (started with only what its capabilities need, it keeps running), stops (it ends within 5 s of being asked). A restricted UI plugin\'s page is checked against what a panel allows instead. Exits 1 naming each failed check, with the checks in the details; refused with 1, as validate refuses, when the folder would not install. It runs the plugin\'s code on this machine.',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'set', value: '<key=value>', about: 'a setting it starts with; repeat for more' }
+    ]
+  },
   'plugins-doctor': {
     summary: 'what could keep a plugin from running: its manifest, compatibility, entry, native addons and its last run',
     detail: 'Exits 1 when a check fails, naming each failing check.',

@@ -292,3 +292,19 @@ describe('installPlugin sends the trust level it showed', () => {
     expect((install?.args as { expect: unknown }).expect).toEqual({ name: '@acme/astera-jira', version: '1.0.0', trust: 'restricted-ui' })
   })
 })
+
+// Final review of plugins dev, I5: a reinstall carries the approval dev holds, never what a later inspection showed
+describe('installPlugin with an approval held', () => {
+  it('refuses, installing nothing, a folder that now asks for something other than what was approved', async () => {
+    const h = host({ status: 200, body: { ...INSPECTION, trust: 'trusted' } })
+    const r = await installPlugin({ args: { path: 'jira', grant: 'jobs.read' }, cwd: CWD, request: undefined, call: h.call, approved: { trust: 'restricted-ui', permissions: ['jobs.read', 'jobs.create'], capabilities: [] } })
+    expect(r).toMatchObject({ status: 409, body: { error: expect.stringMatching(/asks for something other than what was approved/) } })
+    expect(h.calls.map((c) => c.cmd)).toEqual(['plugins-inspect'])
+  })
+
+  it('sends the approved trust as what the Host must find', async () => {
+    const h = host({ status: 200, body: { ...INSPECTION, trust: 'trusted' } })
+    await installPlugin({ args: { path: 'jira', grant: 'jobs.read' }, cwd: CWD, request: undefined, call: h.call, approved: { trust: 'trusted', permissions: ['jobs.read', 'jobs.create'], capabilities: [] } })
+    expect(h.calls[1]).toMatchObject({ cmd: 'plugins-install', args: { expect: { trust: 'trusted' } } })
+  })
+})
