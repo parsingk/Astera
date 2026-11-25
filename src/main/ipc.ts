@@ -1,4 +1,4 @@
-import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
+import { ipcMain, dialog, app, shell, session, webContents, clipboard, type BrowserWindow, type WebContents } from 'electron'
 import { killProcessTree } from '../core/run/kill'
 import { cachedByStamp } from '../core/stampCache'
 import fsSync, { promises as fs, existsSync, readFileSync } from 'node:fs'
@@ -6021,6 +6021,21 @@ export function registerIpc(
     await assertAllowedPath(to)
     await withFileOp(opId, [to], (c) => copyTree(from, to, c ? () => c.entry('copy') : undefined))
     return to
+  })
+
+  // The clipboard for the sandboxed preload, answered synchronously: the terminal's key handler asks while a key is
+  // down and needs the answer at once (preload/index.ts ClipboardApi).
+  ipcMain.on('clipboard.readTextSync', (e) => {
+    e.returnValue = clipboard.readText()
+  })
+  ipcMain.on('clipboard.writeTextSync', (e, text: unknown) => {
+    if (typeof text === 'string') clipboard.writeText(text)
+    e.returnValue = true
+  })
+  ipcMain.on('clipboard.hasFilesSync', (e) => {
+    // Chromium maps a Windows CF_HDROP (and the mac/linux equivalent) onto this format name. It is
+    // the presence that is usable, not the content: reading the format back gives an empty buffer.
+    e.returnValue = clipboard.availableFormats().includes('text/uri-list')
   })
 
   /** Sends the calling window a paste. The explorer's Paste **menu item** is the only caller: what the

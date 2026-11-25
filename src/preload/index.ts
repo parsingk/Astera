@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   RendererApi,
   CoreEventChannel,
@@ -376,11 +376,11 @@ const api = {
     agentStop: invoke('preview.agentStop')
   },
   clipboard: {
-    readText: () => clipboard.readText(),
-    writeText: (text: string) => clipboard.writeText(text),
-    // Chromium maps a Windows CF_HDROP (and the mac/linux equivalent) onto this format name. It is
-    // the presence that is usable, not the content: reading the format back gives an empty buffer.
-    hasFiles: () => clipboard.availableFormats().includes('text/uri-list'),
+    // A sandboxed preload has no clipboard module, and the terminal's key handler needs these answers at
+    // once (xterm takes a boolean back synchronously), so main answers them through synchronous IPC.
+    readText: (): string => ipcRenderer.sendSync('clipboard.readTextSync'),
+    writeText: (text: string): void => void ipcRenderer.sendSync('clipboard.writeTextSync', text),
+    hasFiles: (): boolean => ipcRenderer.sendSync('clipboard.hasFilesSync'),
     requestFilePaste: invoke('clipboard.requestFilePaste'),
     writeFiles: invoke('clipboard.writeFiles')
   },

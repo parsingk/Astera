@@ -284,12 +284,13 @@ function createWindow(startingText: string | null = null, theme?: Theme): Browse
     // webviewTag: the browser tab's <webview> (renderer/components/BrowserPane.tsx). Off by default
     // in Electron; installPreviewGuards below is what makes turning it on safe.
     // contextIsolation and nodeIntegration are Electron 41's defaults, named so a default that moves
-    // cannot loosen them (spec E3, the Phase 2 entry gate).
+    // cannot loosen them; sandbox keeps the preload to the few modules a sandboxed renderer gets (the
+    // clipboard is answered by main for that reason). Spec E3, the Phase 2 entry gate.
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webviewTag: true
     }
   })
