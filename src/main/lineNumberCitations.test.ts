@@ -63,7 +63,11 @@ const CITATION_DATA_FILES = new Set([
   // `path.tsx:line:column`. These two handle and format that value, so their fixtures have to hold the
   // real shape — the same reason the two console-link files above are here.
   'src/core/preview/pick/payload.test.ts',
-  'src/core/preview/pick/prompt.test.ts'
+  'src/core/preview/pick/prompt.test.ts',
+  // A ContextRef's label is what the context preview shows as the source, literally `path:start-end` (core/context/
+  // contextRef.ts), so the fixtures that build and check refs hold that shape — the same reason as the two above.
+  'src/core/context/contextRef.test.ts',
+  'src/renderer/src/lib/contextSources.test.ts'
 ])
 
 function findViolations(): string[] {

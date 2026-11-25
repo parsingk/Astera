@@ -29,7 +29,7 @@ export function ContextPreview({
   onAttach,
   onClose
 }: {
-  /** Where the piece is from, as the person reads it (`src/a.ts:3-5`, a run's name). */
+  /** Where the piece is from, as the person reads it (a file with its line range, a run's name). */
   label: string
   /** The text that will be pasted (contextText). */
   text: string
