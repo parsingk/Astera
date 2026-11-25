@@ -616,6 +616,8 @@ describe('a CONFLICT for runs stop on a finished Run', () => {
   })
   it('any other runs stop refusal keeps astera status', () => {
     expect(nextStepsFor({ code: 'CONFLICT', cmd: 'runs-stop' })).toEqual(['astera status'])
+    // Phase 2 step 4a: init refused a folder that holds files; no command fixes that, another name or folder does
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'plugins-init' })).toEqual([])
   })
 })
 
