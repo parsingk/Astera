@@ -312,6 +312,8 @@ vitest_group mac-desk 1 0 src/host/workspace/deskMac.test.ts src/host/workspace/
 vitest_group mac-desk-e2e 1 1 src/host/workspace/desktop.mac.e2e.test.ts
 # The manual update's unzip with the real ditto and xattr.
 vitest_group manual-install 1 0 src/main/manualInstall.test.ts
+# The UTF-8 LC_CTYPE an app from the Finder lacks: the locale it names, read through this Mac's real wc.
+vitest_group utf8-ctype 1 0 src/core/terminal/utf8Locale.test.ts
 # The Codex rollout owner (Task D and G): the macOS reader's cases, and the locate that asks it.
 vitest_group rollout-owner 0 0 src/core/rolling/rolloutOwner.test.ts src/core/rolling/codexLocate.test.ts
 # The sandbox builders (Task E): the lists, the start warnings and the link rule against this Mac's real folders. The

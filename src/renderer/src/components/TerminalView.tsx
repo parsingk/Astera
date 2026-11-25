@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
+import { FORCED_SELECTION_OPTIONS } from '../../../core/terminal/forcedSelection'
 import '@xterm/xterm/css/xterm.css'
 import type { RollStateEvent, SchedStateEvent, SessionInfo } from '../../../core/types'
 import { nextResize, type Dims } from '../../../core/terminal/resize'
@@ -69,7 +70,9 @@ export function TerminalView({
       // This is the chain `family` resolves to when the user hasn't configured a font.
       fontFamily: family,
       scrollback: 5000,
-      theme: xtermThemeOf(theme)
+      theme: xtermThemeOf(theme),
+      // Option-drag selects over Claude Code's fullscreen view, which takes the mouse (core/terminal/forcedSelection.ts)
+      ...FORCED_SELECTION_OPTIONS
     })
     // If a program run inside the session changes the cursor style and does not restore it, only that tab's cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)

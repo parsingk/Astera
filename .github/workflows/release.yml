@@ -25,9 +25,12 @@ name: Release
 # macOS (Apple Developer ID):
 #   secret   APPLE_CSC_LINK                - base64 of the Developer ID Application .p12
 #   secret   APPLE_CSC_KEY_PASSWORD        - password for that .p12
-#   secret   APPLE_ID                      - Apple account used for notarization
-#   secret   APPLE_APP_SPECIFIC_PASSWORD   - app-specific password for that account
-#   secret   APPLE_TEAM_ID                 - Developer Team ID
+#   secret   APPLE_API_KEY_P8              - contents of an App Store Connect team API key (AuthKey_<id>.p8)
+#   secret   APPLE_API_KEY_ID              - that key's Key ID
+#   secret   APPLE_API_ISSUER              - the Issuer ID shown above the team keys
+# Notarization signs in with the API key rather than an Apple ID and app-specific password: such a
+# password also opens the account's iCloud mail, contacts and calendars to whoever holds it, while a
+# team key with the Developer role reaches only the developer team and is revoked on its own.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -292,7 +295,7 @@ jobs:
       # Fail-open like Windows's SignPath: forks without the secrets fall back to an ad-hoc signature
       # instead of a Developer ID. Once the secrets are present it flips to fail-closed — a signing or
       # notarization failure kills the build.
-      SIGNING: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
+      SIGNING: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -306,15 +309,25 @@ jobs:
       # Signed path. electron-builder builds a temporary keychain from CSC_LINK to sign the app, then
       # hands off to notarytool to notarize it. No need to split this into two stages like Windows —
       # unlike SignPath there is no approval wait, so signing finishes during packaging.
+      #
+      # electron-builder takes the API key as a file path (APPLE_API_KEY, with APPLE_API_KEY_ID and
+      # APPLE_API_ISSUER; it refuses to notarize with only some of the three, which keeps this path
+      # fail-closed). The key is written to the runner's temp folder, readable by this user only, and
+      # removed when the step ends; its contents leave the environment before the build runs.
       - name: Build signed and notarized package
         if: env.SIGNING == 'true'
         env:
           CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          key="$RUNNER_TEMP/AuthKey.p8"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
+          unset APPLE_API_KEY_P8
+          export APPLE_API_KEY="$key"
           npm run build
           npx electron-builder --mac --publish never
 
@@ -402,7 +415,7 @@ jobs:
       # here rather than on the step because the secrets context is NOT available in a step's if: —
       # referencing it there makes the whole file an invalid workflow. Same shape as the macos job's
       # SIGNING.
-      MAC_SIGNED: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
+      MAC_SIGNED: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       # fetch-depth: 0 because the release notes are built from the commits since the previous tag —
       # the default shallow clone has neither the history to walk nor the tags to find the range in.

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
+import { FORCED_SELECTION_OPTIONS } from '../../../core/terminal/forcedSelection'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { xtermThemeOf } from '../../../core/theme/apply'
@@ -74,7 +75,9 @@ export function TerminalBody({
       fontSize: 13,
       fontFamily: family,
       scrollback: 5000,
-      theme: xtermThemeOf(theme)
+      theme: xtermThemeOf(theme),
+      // Option-drag selects over a program that takes the mouse (core/terminal/forcedSelection.ts)
+      ...FORCED_SELECTION_OPTIONS
     })
     // If a program run from the shell changes the cursor style and does not restore it, the cursor blinks (the same reason as in TerminalView)
     const blinkGuard = pinCursorBlinkOff(term)

@@ -93,6 +93,7 @@ import {
 } from '../core/update/checkTimeout'
 import { providerOf } from '../core/providers/meta'
 import { USAGE_GATE_MAX_AGE_MS } from '../core/usage/rateLimitFetcher'
+import { utf8CtypeFor } from '../core/terminal/utf8Locale'
 
 // The dev (unpackaged) app uses a different userData folder than the installed one. The installer
 // writes to %APPDATA%\Astera, and because Windows is case-insensitive the dev build (app name
@@ -105,6 +106,14 @@ import { USAGE_GATE_MAX_AGE_MS } from '../core/usage/rateLimitFetcher'
 // The same rule applies on macOS: APFS is case-insensitive by default, so 'Astera' and 'astera'
 // resolve to the same folder under ~/Library/Application Support.
 if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+
+// An app started from the Finder or the Dock has no LANG or LC_*, and the Host, its sessions and terminals inherit
+// that: under the C locale pbcopy turns any non-ASCII text into an empty clipboard, so a Claude Code selection said
+// "copied" and pasted nothing (core/terminal/utf8Locale.ts). Set before anything is spawned.
+{
+  const ctype = utf8CtypeFor(process.env, process.platform)
+  if (ctype) process.env.LC_CTYPE = ctype
+}
 
 // Under WSLg, running on XWayland is what puts the window off the screen edge and makes clicks land
 // away from what they are drawn on. ozone.ts carries the measurements, the dead ends, and why this is
