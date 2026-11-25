@@ -2314,12 +2314,6 @@ export default function App(): React.JSX.Element {
       })()
       return
     }
-    if (ref.kind === 'plugin') {
-      // A page in its guest, not a process: dropping the tab unmounts its webview, which ends the guest (ADR-008 §6)
-      setPluginTabs((prev) => prev.filter((x) => x.id !== tabId))
-      dropTabFromTree(tabId)
-      return
-    }
     if (ref.kind === 'app') {
       // A picture, not a process: dropping the tab is the whole close. The workspace itself is closed
       // only by the pane's Close button (workspace-close). The mirror entry stays, so the next frame of
@@ -2327,6 +2321,12 @@ export default function App(): React.JSX.Element {
       // does (newlyOpened reads a transition, not a presence). Its picture goes (second pass R2-2): a frame still
       // coming brings the next one.
       mirrorFrames.drop([ref.id])
+      dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'plugin') {
+      // A page in its guest, not a process: dropping the tab unmounts its webview, which ends the guest (ADR-008 §6)
+      setPluginTabs((prev) => prev.filter((x) => x.id !== tabId))
       dropTabFromTree(tabId)
       return
     }
