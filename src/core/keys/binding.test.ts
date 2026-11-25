@@ -297,7 +297,7 @@ describe('actions with no default key, and the palette', () => {
   it('new session, new Job and Kubernetes are actions with no default key', () => {
     for (const platform of ['win32', 'darwin']) {
       const actions = makeActions(platform)
-      for (const id of ['session.new', 'job.new', 'kube.open']) {
+      for (const id of ['session.new', 'job.new', 'kube.open', 'context.attachSelection']) {
         const a = actions.find((x) => x.id === id)
         expect(a, `${platform} ${id}`).toBeDefined()
         expect(a!.defaults, `${platform} ${id}`).toEqual([])
@@ -373,6 +373,7 @@ describe('action wording', () => {
       'action.blocked.noCli',
       'action.blocked.noLocalCli',
       'action.blocked.noKubectl',
+      'action.blocked.noSelection',
       'quickOpen.placeholder',
       'quickOpen.empty',
       'quickOpen.indexing',

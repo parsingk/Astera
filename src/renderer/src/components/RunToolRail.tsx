@@ -1,9 +1,10 @@
 import type { RunStatus } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
-import { ChevronsDown, Eraser, RotateCw, Search, Square } from 'lucide-react'
+import { ChevronsDown, Eraser, MessageSquareShare, RotateCw, Search, Square } from 'lucide-react'
 
 /** The vertical tool rail on the console's left, acting on the selected run: rerun · stop, then
- *  scroll-to-end · clear, then find. Rerun starts the run's configuration again (main decides whether
+ *  scroll-to-end · clear, then find, then send to an agent (spec W4: the selection, or the end of the log, through the
+ *  context preview). Rerun starts the run's configuration again (main decides whether
  *  that restarts a live instance or adds one — the same call the toolbar's ▶ makes); stop is enabled
  *  only while the run is running. Everything is disabled with no run selected. */
 export function RunToolRail({
@@ -14,7 +15,8 @@ export function RunToolRail({
   onStop,
   onScrollToEnd,
   onClear,
-  onToggleFind
+  onToggleFind,
+  onSendToAgent
 }: {
   run: RunStatus | null
   /** The run's configuration was deleted since it started: ↻ has nowhere to go, so it is disabled with
@@ -27,6 +29,7 @@ export function RunToolRail({
   onScrollToEnd: () => void
   onClear: () => void
   onToggleFind: () => void
+  onSendToAgent: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const none = run === null
@@ -55,6 +58,9 @@ export function RunToolRail({
       <span className="run-rail-sep" />
       <button type="button" className={`run-rail-btn${findOpen ? ' on' : ''}`} title={t('run.rail.find')} aria-label={t('run.rail.find')} aria-pressed={findOpen} disabled={none} onClick={onToggleFind}>
         <Search size={14} />
+      </button>
+      <button type="button" className="run-rail-btn" title={t('context.run.send')} aria-label={t('context.run.send')} disabled={none} onClick={() => run && onSendToAgent(run.runId)}>
+        <MessageSquareShare size={14} />
       </button>
     </div>
   )

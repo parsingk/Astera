@@ -164,31 +164,49 @@ export function discard(sessionId: string): void {
   observers.delete(sessionId)
 }
 
-// ---- input direction: paste into a session's terminal ----
+// ---- input direction: paste into a session's terminal or chat composer ----
 //
 // Everything above carries PTY output *to* a terminal. This carries text *into* one, through the
 // terminal's own paste — the Ctrl+V path. That matters: a raw `sessions.write` turns the first newline
 // into Enter and submits a half-built prompt, while xterm's paste wraps the text in bracketed paste,
 // which Claude Code receives as one paste and leaves for the user to send.
 
-const pasters = new Map<string, (text: string) => void>()
+/** A registered paste: a terminal's xterm paste (TerminalView) or a chat composer's insert (ConversationPane). `paste`
+ *  answers false when the text did not land; `accepts` says beforehand whether this text would (a terminal without
+ *  bracketed paste turns each line break into an Enter); `submits` false marks one that never sends (a composer has no
+ *  pty for paste-and-Enter to press Enter in). */
+type Paster = { paste: (text: string) => boolean | void; accepts?: (text: string) => boolean; submits: boolean }
+const pasters = new Map<string, Paster>()
 const screens = new Map<string, () => string>()
 
-/** TerminalView registers its xterm's paste when it mounts. Returns the unregister. */
-export function registerPaste(sessionId: string, paste: (text: string) => void): () => void {
-  pasters.set(sessionId, paste)
+/** TerminalView registers its xterm's paste when it mounts, and a chat ConversationPane its composer (`submits: false`).
+ *  Returns the unregister, which leaves alone a newer registration for the same session. */
+export function registerPaste(
+  sessionId: string,
+  paste: (text: string) => boolean | void,
+  opts: { accepts?: (text: string) => boolean; submits?: boolean } = {}
+): () => void {
+  const entry: Paster = { paste, ...(opts.accepts ? { accepts: opts.accepts } : {}), submits: opts.submits !== false }
+  pasters.set(sessionId, entry)
   return () => {
-    if (pasters.get(sessionId) === paste) pasters.delete(sessionId)
+    if (pasters.get(sessionId) === entry) pasters.delete(sessionId)
   }
 }
 
-/** Pastes into that session's terminal. false when no terminal is registered for the id — the tab is
- *  gone, or has not mounted yet. Session slots stay mounted off screen, so a live session always has one. */
+/** Whether that session can take a paste now, and, given a text, that text: something is registered for it and takes
+ *  it. Asked before anything is shown for a paste (W4's attach), so a refusal comes first. */
+export function canPaste(sessionId: string, text?: string): boolean {
+  const entry = pasters.get(sessionId)
+  if (!entry) return false
+  return text === undefined || entry.accepts?.(text) !== false
+}
+
+/** Pastes into that session's terminal or chat composer, never submitting. false when nothing is registered for the id
+ *  (the tab is gone, or has not mounted yet), when the paste does not take this text, or when it did not land. */
 export function pasteInto(sessionId: string, text: string): boolean {
-  const paste = pasters.get(sessionId)
-  if (!paste) return false
-  paste(text)
-  return true
+  const entry = pasters.get(sessionId)
+  if (!entry || entry.accepts?.(text) === false) return false
+  return entry.paste(text) !== false
 }
 
 /** TerminalView registers a reader for its xterm's visible screen when it mounts. Returns the
@@ -217,7 +235,7 @@ export function screenOf(sessionId: string): string | null {
  *  terminal is registered. Deliberately a raw write rather than a paste: this is one keypress, and
  *  the bracketing that makes `pasteInto` safe is exactly what would stop it being one. */
 export function submitInto(sessionId: string): boolean {
-  if (!pasters.has(sessionId)) return false
+  if (pasters.get(sessionId)?.submits !== true) return false
   window.api.sessions.write(sessionId, '\r')
   return true
 }
@@ -225,9 +243,12 @@ export function submitInto(sessionId: string): boolean {
 /** Pastes into that session's terminal, then presses Enter once the session has drawn the paste and gone quiet
  *  (untilEnter, core/sessions/sessionDriver.ts), the way every delivery into a pty waits. The paste has to be in the
  *  agent's input box before the Enter lands, or the Enter submits an empty prompt, and Codex swallows an Enter that
- *  comes right after a paste (openai/codex#56982). false, with nothing written, when no terminal is registered. */
+ *  comes right after a paste (openai/codex#56982). false, with nothing written, when no terminal is registered (a chat
+ *  composer registers a paste that does not submit). */
 export function pasteAndSubmit(sessionId: string, text: string): boolean {
-  if (!pasteInto(sessionId, text)) return false
+  // A terminal's paste only, and whatever it accepts: this delivery presses Enter after it anyway
+  const entry = pasters.get(sessionId)
+  if (entry?.submits !== true || entry.paste(text) === false) return false
   const wroteAt = Date.now()
   let drawnAt: number | null = null
   const stop = observe(sessionId, () => {

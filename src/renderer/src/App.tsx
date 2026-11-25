@@ -32,6 +32,12 @@ import { RecordDetailHost } from './components/RecordDetail'
 import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { CommandPalette } from './components/CommandPalette'
+import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
+import { contentRevision, contextText, isUnder, sessionFits, type ContextRef } from '../../core/context/contextRef'
+import { logContext, selectionContext } from './lib/contextSources'
+import { readRunConsole } from './lib/runConsoleText'
+import { hunkAt, repairObjective } from './lib/hunks'
+import { diffLines } from './lib/diffLines'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -718,6 +724,18 @@ export default function App(): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)
+  /** A piece of the workbench on its way to an agent (spec W4), shown in ContextPreview until attached or dropped. A
+   *  piece of a file (`ref.path`) is checked against the file on disk again as it is attached. */
+  const [contextPreview, setContextPreview] = useState<{
+    ref: ContextRef
+    text: string
+    masked: number
+    cut: 'start' | 'end' | null
+    stripped: number
+    dirty: boolean
+    mainOnly: boolean
+    sessions: Array<{ id: string; title: string; account: string; chat: boolean; agent: boolean }>
+  } | null>(null)
   /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
    *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
   const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
@@ -3010,6 +3028,8 @@ export default function App(): React.JSX.Element {
    *  돌아가지 않는다"는 이유로 도달 불가능이라 판단했지만, 새로 설치한 상태의 stickyRoot 는
    *  처음부터 비어 있어 정확히 그 경로에 닿았다 — 그 판단은 틀렸다. */
   const [newRunOpen, setNewRunOpen] = useState(false)
+  /** What the new Job form's objective starts as: a repair Job drafted from a diff hunk (spec W4), null for an empty form. */
+  const [newRunDraft, setNewRunDraft] = useState<string | null>(null)
   /** The "+ From a source" window (plugin Phase 4 J20): the project it was opened in, this machine's only, or null.
    *  The project is kept rather than read live, so a tab change while it is open does not move the Job elsewhere (4c
    *  final review M17). */
@@ -3220,7 +3240,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || paletteOpen !== null || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
+  modalOpenRef.current = modalOpenRef.current || paletteOpen !== null || contextPreview !== null || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen || sourceJobOpen !== null || kubeOps.dialog !== null || liveWrites.dialog !== null || forwardDialog !== null
   // Three more dialogs with a backdrop, under the conditions they are drawn on below: the remote sessions dialog, a
   // block-mode update campaign's gate, and the first-run question. Without them a shortcut or the palette acted on
   // the workbench behind them, and Escape in the palette also dismissed the first-run question for good.
@@ -4362,6 +4382,114 @@ export default function App(): React.JSX.Element {
     const tab = id ? fileTabsRef.current.find((tb) => tb.id === id) : undefined
     return tab && isMarkdownPath(tab.path) ? tab.id : null
   }
+  /** The active pane's editor and its file tab, when the editor holds a selection (W4's attach). The pane's one editor
+   *  (mdViews, by pane) shows the pane's active tab, so the two belong together whenever that tab is a file. */
+  const activeEditorSelection = (): { tab: (typeof fileTabs)[number]; view: EditorView } | null => {
+    const id = activeFileIdRef.current
+    const tab = id ? fileTabsRef.current.find((f) => f.id === id) : undefined
+    const paneId = activePaneIdRef.current
+    const view = paneId ? mdViews[paneId] : undefined
+    if (!tab || !view || view.state.selection.main.empty) return null
+    return { tab, view }
+  }
+  /** Opens the preview for a piece of context, offering the sessions that may receive it (sessionFits: local, alive,
+   *  in the piece's folder and holding its file). None: said, and nothing opens. */
+  const openContextPreview = (
+    ref: ContextRef,
+    made: { text: string; masked: number; cut: boolean; stripped: number },
+    more: { keepEnd?: boolean; dirty?: boolean; mainOnly?: boolean } = {}
+  ): void => {
+    const fitting = sessionsRef.current
+      .filter((s) => sessionFits(ref, { cwd: s.cwd, alive: s.status !== 'exited' }))
+      // A session an agent or Astera started (a Job's coordinator, a worker) is typed into and submitted by Astera, which
+      // would send the pasted context with its own message: offered last, marked, never the default
+      .sort((a, b) => Number(a.startedBy === 'agent') - Number(b.startedBy === 'agent'))
+    if (fitting.length === 0) {
+      toast.info(t('context.noSession'))
+      return
+    }
+    setContextPreview({
+      ref,
+      text: made.text,
+      masked: made.masked,
+      cut: made.cut ? (more.keepEnd ? 'end' : 'start') : null,
+      stripped: made.stripped,
+      dirty: more.dirty === true,
+      mainOnly: more.mainOnly === true,
+      sessions: fitting.map((s) => ({
+        id: s.id,
+        title: s.title,
+        account: accounts.find((a) => a.id === s.accountId)?.label ?? s.accountId,
+        chat: sessionKindOf(s) === 'chat',
+        agent: s.startedBy === 'agent'
+      }))
+    })
+  }
+  const openSelectionContext = (): void => {
+    const sel = activeEditorSelection()
+    if (!sel) return
+    const { from, to } = sel.view.state.selection.main
+    const made = selectionContext({
+      path: sel.tab.path,
+      root: sel.tab.projectRoot,
+      doc: sel.view.state.doc.toString(),
+      saved: fileBuffersRef.current[sel.tab.id]?.savedContent ?? '',
+      from,
+      to
+    })
+    if (!made.ok) {
+      toast.info(t(made.reason === 'credential' ? 'context.credential' : 'action.blocked.noSelection'))
+      return
+    }
+    openContextPreview(made.ref, contextText(made.ref, made.excerpt, made.language, { dirty: made.dirty }), {
+      dirty: made.dirty,
+      mainOnly: sel.view.state.selection.ranges.length > 1
+    })
+  }
+  /** Puts the previewed text in a session's input, never submitting it (spec W4: attach by default). Checked first, in
+   *  this order: the file it came from still holds what it held when taken, read from disk now (neither the buffer nor
+   *  the watcher can say so: a dirty buffer keeps its saved text through a change, and the watcher follows only the
+   *  explorer's project), the session still fits, it is not holding a dialog (a paste would answer it, as Design Mode
+   *  found), and it takes this paste (a terminal without bracketed paste takes no line breaks). Its tab comes forward
+   *  first, since a chat composer cannot take focus while hidden, and what is said afterwards is what happened. */
+  const attachContext = async (sessionId: string): Promise<AttachOutcome> => {
+    const p = contextPreview
+    if (!p) return 'notReady'
+    if (p.ref.path !== undefined && p.ref.revision !== undefined) {
+      try {
+        const disk = await window.api.files.read(p.ref.path)
+        if (disk.binary || contentRevision(toLf(disk.content)) !== p.ref.revision) return 'changed'
+      } catch {
+        return 'changed' // gone, or no longer readable: it is not what was taken
+      }
+    }
+    const s = sessionsRef.current.find((x) => x.id === sessionId)
+    if (!s || !sessionFits(p.ref, { cwd: s.cwd, alive: s.status !== 'exited' })) return 'notReady'
+    const screen = sessionBus.screenOf(sessionId)
+    if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
+    if (!sessionBus.canPaste(sessionId, p.text)) return 'notReady'
+    selectWorkbenchTab(sessionTab(sessionId))
+    requestAnimationFrame(() => {
+      const landed = sessionBus.pasteInto(sessionId, p.text)
+      toast.info(t(landed ? 'context.preview.attached' : 'context.preview.notPasted', { name: s.title }))
+    })
+    setContextPreview(null)
+    return 'sent'
+  }
+  /** A hunk of a Job's diff to a repair Job draft (spec W4): the detail closes and the new Job form opens with the
+   *  objective filled in; nothing is created until the person presses Create there. The form makes a Job in the
+   *  explorer's project, so a Run of another project drafts nothing and says to open that project first. */
+  const openRepairDraft = (run: { projectPath: string; runId: string }, file: string, diff: string, rowIndex: number): void => {
+    const hunk = hunkAt(diffLines(diff), rowIndex)
+    if (!hunk) return
+    if (!currentProject || !isUnder(currentProject, run.projectPath) || !isUnder(run.projectPath, currentProject)) {
+      toast.info(t('context.diff.otherProject'))
+      return
+    }
+    setOpenRun(null)
+    setNewRunDraft(repairObjective({ file, hunk, projectPath: run.projectPath, runId: run.runId }))
+    setNewRunOpen(true)
+  }
   /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
   const openPalette = (query: PaletteStart): void => {
@@ -4442,7 +4570,12 @@ export default function App(): React.JSX.Element {
     // empty, where a key that did nothing would explain nothing.
     'file.quickOpen': { run: () => openPalette('') },
     // The same box on text in the project's files (spec W2), with or without a project for the same reason.
-    'search.text': { run: () => openPalette('%') }
+    'search.text': { run: () => openPalette('%') },
+    // The editor selection to an agent, after a preview (spec W4).
+    'context.attachSelection': {
+      blockedBy: () => (activeEditorSelection() ? null : 'action.blocked.noSelection'),
+      run: () => openSelectionContext()
+    }
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -5290,6 +5423,22 @@ export default function App(): React.JSX.Element {
                     onOpenFolder={openLinkedFolder}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
+                    onSendRunLog={(runId) => {
+                      // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
+                      const run = runs.find((r) => r.runId === runId)
+                      const read = readRunConsole(runId)
+                      if (!run || !read) {
+                        toast.info(t('context.run.empty'))
+                        return
+                      }
+                      const made = logContext({ run, selection: read.selection, tail: read.tail })
+                      if (!made.ok) {
+                        toast.info(t('context.run.empty'))
+                        return
+                      }
+                      // A tail keeps its end when it has to be cut: the failure is on the last lines
+                      openContextPreview(made.ref, contextText(made.ref, made.excerpt, '', { keepEnd: made.fromTail }), { keepEnd: made.fromTail })
+                    }}
                     terminals={terminals}
                     terminalCwd={bottomRoot}
                     activeTab={bottomTabShown}
@@ -6278,7 +6427,9 @@ export default function App(): React.JSX.Element {
                   setAuditRun(focus)
                   setSettingsTab('security')
                   setShowSettings(true)
-                }
+                },
+                // A hunk of its diff to a repair Job draft (spec W4): this computer's Runs only, as the form is local
+                onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
               }
             : {})}
         />
@@ -6313,9 +6464,14 @@ export default function App(): React.JSX.Element {
           // 아직 안 왔으면 거짓 — 없는 것을 경고하는 것보다 낫다
           projectFolderBusy={orchSnapshot?.projectFolderBusy ?? false}
           accounts={accounts}
-          onClose={() => setNewRunOpen(false)}
+          initialObjective={newRunDraft ?? undefined}
+          onClose={() => {
+            setNewRunOpen(false)
+            setNewRunDraft(null)
+          }}
           onCreated={(runId) => {
             setNewRunOpen(false)
+            setNewRunDraft(null)
             // 만들자마자 상세 창을 열어 Task 를 짤 수 있게 한다 — onOpenRun 이 하는 것과 같은 짝
             setOpenRun({ projectPath: currentProject, runId })
           }}
@@ -6350,6 +6506,20 @@ export default function App(): React.JSX.Element {
             openFile(path, at)
           }}
           onClose={() => setPaletteOpen(null)}
+        />
+      )}
+      {contextPreview !== null && (
+        <ContextPreview
+          label={contextPreview.ref.label}
+          text={contextPreview.text}
+          masked={contextPreview.masked}
+          cut={contextPreview.cut}
+          stripped={contextPreview.stripped}
+          dirty={contextPreview.dirty}
+          mainOnly={contextPreview.mainOnly}
+          sessions={contextPreview.sessions}
+          onAttach={attachContext}
+          onClose={() => setContextPreview(null)}
         />
       )}
       {sourceJobOpen !== null && (

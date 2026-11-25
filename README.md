@@ -194,6 +194,10 @@ what to check when an explanation is missing.
   opens the file at the matching line. Binaries, files over 1 MB and credential files such as `.env` are left out;
   to leave out more, name it in a `.ignore` file at the project root, the file ripgrep and VS Code also read. Go to
   file and the chat box's `@` leave it out too
+- **Send the selection to an agent:** from the command palette, the editor's selection, or a run's log (from the
+  button on the console's rail), goes to a session working in that project after a preview. Values that look like
+  secrets are masked, a credential file is never sent, and the text is only put in the session's input: you send it.
+  In a Job's diff, each hunk can open a new Job draft to fix it
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,

@@ -13,7 +13,18 @@ const errorOf = (r: { status: number; body: unknown }): string => String((r.body
 
 type Diff = { fileId: string; state: 'loading' } | { fileId: string; state: 'shown'; diff: string; truncated: boolean } | { fileId: string; state: 'failed'; message: string }
 
-export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; runId: string; taskId?: string }): React.JSX.Element {
+export function ChangedFilesBlock({
+  door,
+  runId,
+  taskId,
+  onDraftRepair
+}: {
+  door: OrchDoor
+  runId: string
+  taskId?: string
+  /** A hunk of a shown diff to a repair Job draft (spec W4): the file's path, its diff, and the hunk's row. */
+  onDraftRepair?: (file: string, diff: string, rowIndex: number) => void
+}): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   /** undefined: not read yet. */
@@ -111,7 +122,14 @@ export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; run
                       <div className="changed-file-diff">
                         {diff.state === 'loading' && <p className="modal-hint">{t('files.editor.loading')}</p>}
                         {diff.state === 'failed' && <p className="warn">{t('jobs.changes.diffFailed', { message: diff.message })}</p>}
-                        {diff.state === 'shown' && <DiffView diff={diff.diff} truncated={diff.truncated} binary={f.binary === true} />}
+                        {diff.state === 'shown' && (
+                          <DiffView
+                            diff={diff.diff}
+                            truncated={diff.truncated}
+                            binary={f.binary === true}
+                            onDraftRepair={onDraftRepair ? (i) => onDraftRepair(f.path, diff.diff, i) : undefined}
+                          />
+                        )}
                       </div>
                     )}
                   </li>

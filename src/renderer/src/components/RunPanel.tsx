@@ -13,6 +13,8 @@ import { attachConsoleLinks } from '../terminalLinks'
 import { copyTextFor } from '../../../core/terminal/copy'
 import { RunFindBar } from './RunFindBar'
 import { createReplayJoin } from '../lib/runReplay'
+import { bufferTail, registerRunConsole } from '../lib/runConsoleText'
+import { CONTEXT_EXCERPT_LINES } from '../../../core/context/contextRef'
 
 /** The app's amber, which both the find highlights and the console's selection colour are built from.
  *  Read from the theme rather than hardcoded; the fallback is the value every shipped theme defines. */
@@ -189,8 +191,11 @@ export function RunPanel({
       }, 60)
     })
     observer.observe(host)
+    // What the rail's send-to-agent reads (spec W4): the selection, or the end of the log (lib/runConsoleText.ts)
+    const unregisterConsole = registerRunConsole(runId, () => ({ selection: term.getSelection(), tail: bufferTail(term, CONTEXT_EXCERPT_LINES) }))
     return () => {
       cancelled = true
+      unregisterConsole()
       off()
       disposeLinks()
       selectionLatch.dispose()

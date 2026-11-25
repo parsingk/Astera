@@ -180,6 +180,11 @@
   y los archivos de credenciales como `.env`; para dejar fuera algo más, escríbelo en un archivo `.ignore` en la raíz
   del proyecto, el mismo que leen ripgrep y VS Code. Ir a un archivo y la `@` del cuadro del chat también lo dejan
   fuera
+- **Enviar la selección a un agente:** desde la paleta de comandos, la selección del editor, o el registro de una
+  ejecución (con el botón del lateral de la consola), pasa a una sesión que trabaja en ese proyecto tras una vista
+  previa. Los valores que parecen secretos se ocultan, un archivo de credenciales nunca se envía y el texto solo se
+  pone en la entrada de la sesión: lo envías tú. En el diff de un Job, cada bloque puede abrir un borrador de Job
+  nuevo para corregirlo
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo

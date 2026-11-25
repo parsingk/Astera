@@ -228,3 +228,52 @@ describe('pasteAndSubmit', () => {
     expect(r.writes).toEqual([])
   })
 })
+
+// W4: whether a session can take a paste is asked before its tab is brought forward, so a refusal comes first and
+// nothing is shown for a paste that cannot land.
+describe('canPaste', () => {
+  it('is true only while a paste is registered for the session', () => {
+    expect(mod.canPaste('s9')).toBe(false)
+    const off = mod.registerPaste('s9', () => {})
+    expect(mod.canPaste('s9')).toBe(true)
+    off()
+    expect(mod.canPaste('s9')).toBe(false)
+  })
+})
+
+// Final review I1: a chat composer registered as a paster made Design Mode's paste-and-Enter report "sent" for a chat
+// session, emptying its tray while nothing arrived. A composer pastes; it never submits.
+describe('a paste that does not submit', () => {
+  it('is refused by pasteAndSubmit and submitInto, and taken by pasteInto', () => {
+    const pasted: string[] = []
+    const writes: string[] = []
+    ;(window as unknown as { api: Record<string, unknown> }).api.sessions = { write: (_id: string, d: string) => void writes.push(d) }
+    const off = mod.registerPaste('chat1', (text) => void pasted.push(text), { submits: false })
+    expect(mod.pasteAndSubmit('chat1', 'batch')).toBe(false)
+    expect(mod.submitInto('chat1')).toBe(false)
+    expect(pasted).toEqual([])
+    expect(mod.pasteInto('chat1', 'context')).toBe(true)
+    expect(pasted).toEqual(['context'])
+    expect(writes).toEqual([])
+    off()
+  })
+})
+
+// Final review I5: with bracketed paste off (a CLI still starting), every line break of a paste is an Enter. The paste
+// says whether it takes a text; attach asks first.
+describe('a paste that takes only some text', () => {
+  it('canPaste and pasteInto ask it, and pasteInto reports its own failure', () => {
+    let bracketed = false
+    let took = true
+    const off = mod.registerPaste('t1', () => took, { accepts: (text) => !/[\r\n]/.test(text) || bracketed })
+    expect(mod.canPaste('t1')).toBe(true)
+    expect(mod.canPaste('t1', 'one line')).toBe(true)
+    expect(mod.canPaste('t1', 'two\nlines')).toBe(false)
+    expect(mod.pasteInto('t1', 'two\nlines')).toBe(false)
+    bracketed = true
+    expect(mod.canPaste('t1', 'two\nlines')).toBe(true)
+    took = false
+    expect(mod.pasteInto('t1', 'two\nlines')).toBe(false)
+    off()
+  })
+})

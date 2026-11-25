@@ -24,7 +24,8 @@ export function NewRunModal({
   projectFolderBusy,
   accounts,
   onClose,
-  onCreated
+  onCreated,
+  initialObjective
 }: {
   /** 이 프로젝트 폴더에서 이미 일하는 워커가 있는가(OrchSnapshot.projectFolderBusy). 동시 실행 1 을
    *  고르면 이 Run 의 워커도 그 폴더로 가므로 둘이 한 작업 트리를 나눠 쓰게 된다 — 그때 경고한다.
@@ -40,9 +41,11 @@ export function NewRunModal({
   onClose: () => void
   /** 만들어진 Run 의 id — 부르는 쪽이 곧바로 상세 창을 열어 Task 를 짜게 한다 */
   onCreated: (runId: string) => void
+  /** What the objective starts as: a repair Job drafted from a diff hunk (spec W4). Absent: empty. */
+  initialObjective?: string
 }): React.JSX.Element {
   const { t } = useI18n()
-  const [objective, setObjective] = useState('')
+  const [objective, setObjective] = useState(initialObjective ?? '')
   const [concurrency, setConcurrency] = useState(3)
   /** 이 Run 을 관리할 코디네이터 세션의 계정. **하나다**(Run.coordinatorAccountId). 고르기 전에는
    *  만들 수 없다 — 이 폼은 코디네이터 없는 Run 을 만들지 않는다. 코드에는 그 갈래가 남아 있지만
@@ -148,8 +151,11 @@ export function NewRunModal({
         {cwd === null && <p className="warn-text">{t('jobs.runtime.noFolder')}</p>}
         <div className="field">
           <label>{t('jobs.new.objective')}</label>
-          <input
-            type="text"
+          {/* A textarea: an objective can be several lines, and a repair draft is (spec W4). A single-line input strips
+              every line break of what it shows and reports, which squashed a drafted hunk into one line. */}
+          <textarea
+            className="new-run-objective"
+            rows={initialObjective ? 12 : 3}
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
             autoFocus

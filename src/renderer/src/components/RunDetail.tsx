@@ -226,7 +226,8 @@ export function RunDetail({
   onClose,
   runtimeId,
   door,
-  onOpenAuditLogs
+  onOpenAuditLogs,
+  onDraftRepair
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
@@ -251,6 +252,9 @@ export function RunDetail({
   /** Settings › Security & Access › Audit Logs with this Run's calls only (observe mode design §11), or a Job row's with
    *  no Run of its own. This computer's Runs only: a Runtime's records stay on the Runtime, and no controller reads them. */
   onOpenAuditLogs?: (focus: AuditFocus) => void
+  /** A hunk of this Run's diff to a repair Job draft (spec W4). This computer's Runs only, as the form it opens makes a
+   *  Job in the explorer's project. */
+  onDraftRepair?: (file: string, diff: string, rowIndex: number) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   /** Why the controls are off: a read-only pairing (Phase 7). They are drawn disabled with it as their title, and it
@@ -1238,7 +1242,7 @@ export function RunDetail({
                 )}
                 {/* What the Task, or with none chosen the whole Run, changed (Phase 10): from git where the Run lives,
                     beside what its workers reported. */}
-                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} />
+                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} onDraftRepair={onDraftRepair} />
                 <JournalBusy journal={detail?.journal} />
                 <div className="detail-list">
                   {/* 목록은 오래된 것이 위다 — 더 오래된 저널 줄을 부르는 자리도 맨 위다 */}
