@@ -289,6 +289,9 @@ const api = {
     getDefaultSessionKind: invoke('settings.getDefaultSessionKind'),
     setDefaultSessionKind: invoke('settings.setDefaultSessionKind')
   },
+  problems: {
+    list: invoke('problems.list')
+  },
   files: {
     list: invoke('files.list'),
     read: invoke('files.read'),

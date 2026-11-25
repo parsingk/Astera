@@ -241,6 +241,7 @@ import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
 import { createQuickOpen } from './quickOpen'
 import { createTextSearch } from './textSearch'
+import { completionProducer, createProblems, statMtime } from './problems'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
@@ -5162,6 +5163,22 @@ export function registerIpc(
   ipcMain.handle('orch.completion', (_e, projectPath: string, runId: string, taskId: string, runtimeId?: string) =>
     orchRouter.completion(projectPath, runId, taskId, runtimeId)
   )
+  // The Problems list (spec W5): what this project's Jobs' completion found, read from the state main holds, behind the
+  // files path guard; LSP, build, lint and test producers join `producers` later (main/problems.ts).
+  const problems = createProblems({
+    producers: [
+      completionProducer({
+        state: () => orch?.deps.getState() ?? null,
+        runIdsOf: (p) => {
+          const s = orch?.deps.getState()
+          return s ? idsOfProject(s, repoPathOf(core.worktrees.list(), p), core.worktrees.list()) : new Set<string>()
+        },
+        stat: statMtime
+      })
+    ],
+    allowedRoot: assertAllowedPath
+  })
+  ipcMain.handle('problems.list', (_e, project: unknown) => problems(project))
   ipcMain.handle('orch.command', (_e, projectPath: string, cmd: string, args: Record<string, unknown>, runtimeId?: string) =>
     orchRouter.command(projectPath, cmd, args, runtimeId)
   )
