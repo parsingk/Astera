@@ -20,6 +20,7 @@ import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
 import { KubeObjectTab, type KubeTabHost } from './kube/cluster/KubeObjectTab'
 import { HeldTab } from './HeldTab'
+import { PluginPanelTab } from './PluginPanelTab'
 import { useDocumentShown } from '../hooks/useDocumentShown'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
@@ -40,6 +41,7 @@ import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
   type BrowserTab,
+  type PluginPanelTabInfo,
   type RecordTab,
   type FileTab,
   type WorkbenchTab
@@ -73,6 +75,7 @@ export function PaneGrid({
   recordTabs,
   recordStatuses,
   browserTabs,
+  pluginTabs,
   browserLoading,
   agentBusy,
   rollStates,
@@ -139,6 +142,8 @@ export function PaneGrid({
   recordStatuses: Record<string, RecordStatus>
   /** Every open browser (preview) tab, whichever pane holds it — same place, same reason as fileTabs. */
   browserTabs: BrowserTab[]
+  /** Every open plugin panel tab (Phase 2 step 3), whichever pane holds it: its title and project come from here. */
+  pluginTabs: readonly PluginPanelTabInfo[]
   /** Browser tab id → the page is loading. Chip state, kept beside the tabs rather than in them. */
   browserLoading: Record<string, boolean>
   /** Session id → a script is running in its agent tab. Same shape and reason as browserLoading. */
@@ -234,6 +239,8 @@ export function PaneGrid({
   const paneOfMedia = new Map<string, PaneLeaf>()
   // Kube tab id → its pane. Same as media: the id names the cluster object, so the tree is the only list
   const paneOfKube = new Map<string, PaneLeaf>()
+  // Plugin panel tab id → its pane. Its record (title, project) is pluginTabOf's
+  const paneOfPlugin = new Map<string, PaneLeaf>()
   for (const l of paneLeaves)
     for (const tabId of l.tabIds) {
       const ref = parseTab(tabId)
@@ -241,6 +248,7 @@ export function PaneGrid({
       else if (ref?.kind === 'browser') paneOfBrowser.set(tabId, l)
       else if (ref?.kind === 'media') paneOfMedia.set(tabId, l)
       else if (ref?.kind === 'kube') paneOfKube.set(tabId, l)
+      else if (ref?.kind === 'plugin') paneOfPlugin.set(tabId, l)
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
@@ -252,6 +260,8 @@ export function PaneGrid({
   const recordTabOf = new Map(recordTabs.map((r) => [r.id, r]))
   // Browser tab id → that tab. Same shape as fileTabOf
   const browserTabOf = new Map(browserTabs.map((b) => [b.id, b]))
+  // Plugin panel tab id → its record. Same shape as fileTabOf
+  const pluginTabOf = new Map(pluginTabs.map((p) => [p.id, p]))
   // The name hint is computed **over every open file tab at once**, not per pane — two files with the
   // same name in different panes still have to be told apart
   const labels = tabLabels(fileTabs.map((f) => f.path))
@@ -597,6 +607,40 @@ export function PaneGrid({
           </div>
         )
       })}
+      {/* Plugin panel slots (Phase 2 step 3) — the kube slots' rule: one per open plugin tab for the tab's whole life,
+          display:none unless it is its pane's active tab, in tab-id order so a drag to another pane does not move its node
+          (a <webview> moved in the DOM reattaches, and a used token admits no second guest). The guest keeps its page
+          across a switch; closing the tab unmounts the slot, which ends the guest (ADR-008 §6). */}
+      {[...paneOfPlugin.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([tabId, pane]) => {
+        const info = pluginTabOf.get(tabId)
+        if (!info) return null
+        const rect = rects.get(pane.id)
+        const visible = rect != null && pane.activeTabId === tabId
+        return (
+          <div
+            key={tabId}
+            className="terminal-slot"
+            style={
+              visible
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
+            }
+            onMouseDown={() => onFocusPane(pane.id)}
+          >
+            {held.has(tabId) ? (
+              <HeldTab name={info.title} onLoad={() => onRelease(tabId)} />
+            ) : (
+              <PluginPanelTab pluginId={info.pluginId} panelId={info.panelId} projectRoot={info.projectRoot} onFocus={() => onFocusPane(pane.id)} />
+            )}
+          </div>
+        )
+      })}
       {/* The pane bodies' drop targets — one per pane, whichever kind of tab that pane is showing. They
           cannot live on the slots: a session slot is display:none unless it is the active tab, so a pane
           showing a file had no target, and putting them on the editor slot as well would give one pane two
@@ -718,6 +762,11 @@ export function PaneGrid({
               const obj = parseKubeTab(ref.id)
               if (!obj) return null
               return { tabId, kind: 'kube', title: `${obj.kind} ${obj.name}`, context: obj.context }
+            }
+            if (ref?.kind === 'plugin') {
+              const info = pluginTabOf.get(tabId)
+              if (!info) return null
+              return { tabId, kind: 'plugin', title: info.title, pluginName: info.pluginName }
             }
             if (ref?.kind === 'app') {
               const info = appTabInfo(ref.id)

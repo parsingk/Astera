@@ -37,3 +37,17 @@ describe('held preview and cluster tabs (spec W3)', () => {
     expect(app).toMatch(/held=\{heldTabs\}\s*onRelease=\{releaseTab\}/)
   })
 })
+
+// Phase 2 step 3: a plugin's panel slot follows the kube slot's rule (one per open tab, in id order so a drag does not
+// move its node and reload its guest, display:none unless active), held until loaded
+describe('plugin panel slots', () => {
+  it('mounts one slot per open plugin tab, in id order, held while held', () => {
+    expect(grid).toMatch(/\[\.\.\.paneOfPlugin\.entries\(\)\]\.sort\(\(\[a\], \[b\]\) => \(a < b \? -1 : a > b \? 1 : 0\)\)\.map\(\(\[tabId, pane\]\) => \{/)
+    expect(grid).toMatch(/held\.has\(tabId\) \? \(\s*<HeldTab name=\{info\.title\} onLoad=\{\(\) => onRelease\(tabId\)\} \/>\s*\) : \(\s*<PluginPanelTab pluginId=\{info\.pluginId\} panelId=\{info\.panelId\} projectRoot=\{info\.projectRoot\} onFocus=\{\(\) => onFocusPane\(pane\.id\)\} \/>/)
+    expect(grid).toMatch(/else if \(ref\?\.kind === 'plugin'\) paneOfPlugin\.set\(tabId, l\)/)
+  })
+
+  it('lists a plugin tab on its pane’s tab bar from its record', () => {
+    expect(grid).toMatch(/if \(ref\?\.kind === 'plugin'\) \{\s*const info = pluginTabOf\.get\(tabId\)\s*if \(!info\) return null\s*return \{ tabId, kind: 'plugin', title: info\.title, pluginName: info\.pluginName \}/)
+  })
+})

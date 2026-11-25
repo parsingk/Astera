@@ -95,3 +95,25 @@ describe('the window layout (spec W3)', () => {
     expect(css).toMatch(/\.sidebar \{[^}]*max-width: calc\(100vw - 360px\)/)
   })
 })
+
+// Phase 2 step 3: a plugin panel tab comes back held with its record, its record is saved, and its project is the tab's
+describe('plugin panel tabs across a restart', () => {
+  it('restores a kept plugin tab held, with the record saved beside it', () => {
+    expect(app).toMatch(/if \(kind === 'browser' \|\| kind === 'kube' \|\| kind === 'plugin'\) held\.push\(id\)/)
+    expect(app).toMatch(/const plugins = kept\.flatMap\(\(id\) => \{\s*const ids = parsePluginTab\(id\.slice\('plugin:'\.length\)\)\s*const info = saved\.tabs\.plugins\[id\]\s*return ids && info \? \[\{ id, \.\.\.ids, \.\.\.info \}\] : \[\]\s*\}\)/)
+    expect(app).toMatch(/if \(plugins\.length > 0\) setPluginTabs\(\(prev\) => \[\.\.\.prev, \.\.\.plugins\.filter\(\(p\) => !prev\.some\(\(x\) => x\.id === p\.id\)\)\]\)/)
+  })
+
+  it('saves each plugin tab’s title, plugin name and project', () => {
+    expect(app).toMatch(/plugins: Object\.fromEntries\(pluginTabs\.map\(\(p\) => \[p\.id, \{ title: p\.title, pluginName: p\.pluginName, projectRoot: p\.projectRoot \}\]\)\)/)
+    expect(app).toMatch(/\}, \[[^\]]*browserTabs, pluginTabs\]\)/)
+  })
+
+  it('takes a plugin tab’s project as the current one while it is active', () => {
+    expect(app).toMatch(/activeTab\?\.kind === 'plugin'\s*\? pluginTabs\.find\(\(t\) => t\.id === activeTabId\)\?\.projectRoot \|\| undefined/)
+  })
+
+  it('hands the plugin tabs to the pane grid', () => {
+    expect(app).toMatch(/pluginTabs=\{pluginTabs\}/)
+  })
+})

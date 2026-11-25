@@ -157,7 +157,7 @@ import {
   type PaneLeaf,
   type PaneNode
 } from '../../core/panes/tree'
-import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parseTab, pluginTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parsePluginTab, parseTab, pluginTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { panelCommands, pluginRowsOf, type PanelCommand } from '../../core/plugins/pluginRows'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
@@ -1376,12 +1376,18 @@ export default function App(): React.JSX.Element {
             const kind = parseTab(id)?.kind
             const file = kind === 'file' ? saved.tabs.files[id] : undefined
             if (file && !fileTabsRef.current.some((t) => t.id === id)) loadFileTab(id, file.path, file.projectRoot)
-            if (kind === 'browser' || kind === 'kube') held.push(id)
+            if (kind === 'browser' || kind === 'kube' || kind === 'plugin') held.push(id)
           }
           const records = kept.flatMap((id) => (saved.tabs.records[id] ? [{ id, ...saved.tabs.records[id] }] : []))
           const browsers = kept.flatMap((id) => (saved.tabs.browsers[id] ? [{ id, ...saved.tabs.browsers[id] }] : []))
           if (records.length > 0) setRecordTabs((prev) => [...prev, ...records.filter((r) => !prev.some((x) => x.id === r.id))])
           if (browsers.length > 0) setBrowserTabs((prev) => [...prev, ...browsers.filter((b) => !prev.some((x) => x.id === b.id))])
+          const plugins = kept.flatMap((id) => {
+            const ids = parsePluginTab(id.slice('plugin:'.length))
+            const info = saved.tabs.plugins[id]
+            return ids && info ? [{ id, ...ids, ...info }] : []
+          })
+          if (plugins.length > 0) setPluginTabs((prev) => [...prev, ...plugins.filter((p) => !prev.some((x) => x.id === p.id))])
           if (held.length > 0) setHeldTabs(new Set(held))
         }
         const named = new Set(root ? leaves(root).flatMap((l) => l.tabIds) : [])
@@ -2829,7 +2835,7 @@ export default function App(): React.JSX.Element {
             .filter((b) => !b.agentSessionId)
             .map((b) => [b.id, { url: b.url, title: b.title, projectRoot: b.projectRoot }])
         ),
-        plugins: {}
+        plugins: Object.fromEntries(pluginTabs.map((p) => [p.id, { title: p.title, pluginName: p.pluginName, projectRoot: p.projectRoot }]))
       }
     )
   // Written a moment after the last change, only once the restore has run (layoutRestoredRef) and only while layout
@@ -2840,7 +2846,7 @@ export default function App(): React.JSX.Element {
       if (workspaceFeaturesRef.current?.layoutMemory === true) writeLayout(layoutRecordRef.current())
     }, 300)
     return () => clearTimeout(timer)
-  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
+  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs])
   // ...and at once when the window goes, so a change in the last 300 ms is not lost
   useEffect(() => {
     const flush = (): void => {
@@ -3052,9 +3058,12 @@ export default function App(): React.JSX.Element {
         : activeTab?.kind === 'browser'
           ? // A browser tab names its project the same way a file tab does
             browserTabs.find((t) => t.id === activeTabId)?.projectRoot
-          : activeTab?.kind === 'app' || activeTab?.kind === 'session'
-            ? sessions.find((s) => s.id === activeTab.id)?.cwd
-            : undefined) ?? null
+          : // A plugin's panel names the project it was opened in, and none when it was opened without one
+            activeTab?.kind === 'plugin'
+            ? pluginTabs.find((t) => t.id === activeTabId)?.projectRoot || undefined
+            : activeTab?.kind === 'app' || activeTab?.kind === 'session'
+              ? sessions.find((s) => s.id === activeTab.id)?.cwd
+              : undefined) ?? null
 
   /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
    *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
@@ -5747,6 +5756,7 @@ export default function App(): React.JSX.Element {
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
+                pluginTabs={pluginTabs}
                 browserLoading={browserLoading}
                 agentBusy={agentBusy}
                 renderEditor={renderEditor}

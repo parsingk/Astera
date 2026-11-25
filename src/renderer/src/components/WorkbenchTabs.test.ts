@@ -120,3 +120,14 @@ describe('the shield on a sandboxed agent browser tab', () => {
     for (const lang of LANGS) expect(translate(lang, 'preview.agent.sandboxed'), lang).not.toBe('preview.agent.sandboxed')
   })
 })
+
+// Phase 2 step 3: a plugin's panel tab shows its title, its plugin's name dimmed after it and in its tooltip
+describe('a plugin panel tab', () => {
+  it('draws its title and plugin, with the plugin icon', () => {
+    const html = render([{ tabId: 'plugin:hello-panel:hello', kind: 'plugin', title: 'Hello', pluginName: 'Hello panel' }])
+    expect(html).toContain('Hello')
+    expect(html).toContain('<span class="tab-hint">Hello panel</span>')
+    expect(html).toContain('title="Hello\nHello panel"')
+    expect(html).toMatch(/lucide-puzzle/)
+  })
+})

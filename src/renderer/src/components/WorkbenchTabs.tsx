@@ -5,7 +5,7 @@ import type { KubeFileKind } from '../../../core/kube/types'
 import { displayContextName } from '../../../core/kube/contextName'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, Terminal } from 'lucide-react'
+import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Puzzle, Repeat, Shield, Terminal } from 'lucide-react'
 import { SandboxMarker } from './SandboxMarker'
 import { endRenameOnce } from '../lib/renameOnce'
 import { scrollThumb, tabFloor, wheelShift } from './tabStrip'
@@ -149,6 +149,14 @@ export type WorkbenchTab =
       title: string
       /** The object's kubeconfig context, whole: the tab shows its short name dimmed after the title, the tooltip all of it. */
       context: string
+    }
+  | {
+      tabId: string
+      kind: 'plugin'
+      /** The panel's title as its plugin wrote it. */
+      title: string
+      /** Its plugin's name: dimmed after the title, and in the tooltip. */
+      pluginName: string
     }
   | {
       tabId: string
@@ -340,6 +348,9 @@ export function WorkbenchTabs({
                 : tab.kind === 'kube'
                   ? `${tab.title}
 ${tab.context}`
+                  : tab.kind === 'plugin'
+                    ? `${tab.title}
+${tab.pluginName}`
                   : tab.kind === 'session' && tab.profileTooltip !== null
                     ? `${tab.title}
 ${tab.profileTooltip}`
@@ -392,6 +403,10 @@ ${tab.profileTooltip}`
             </span>
           ) : tab.kind === 'kube' ? (
             <FileIcon id="kubernetes" tone="blue" />
+          ) : tab.kind === 'plugin' ? (
+            <span className="tab-glyph" aria-hidden="true">
+              <Puzzle size={11} />
+            </span>
           ) : tab.kind === 'record' ? (
             // Same glyph as the sidebar row's .hiw-g — the same record must not wear two different
             // labels in two places. When the status is unknown, no span is left either — an empty
@@ -459,6 +474,7 @@ ${tab.profileTooltip}`
           {tab.kind === 'app' && <span className="run-tag" title={t('workspace.tab.tag')}>{t('workspace.tab.tag')}</span>}
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
           {tab.kind === 'kube' && <span className="tab-hint">{displayContextName(tab.context).short}</span>}
+          {tab.kind === 'plugin' && <span className="tab-hint">{tab.pluginName}</span>}
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')} />
           )}
