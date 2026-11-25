@@ -1,3 +1,5 @@
+import { FORCED_SELECTION_OPTIONS } from '../terminal/forcedSelection'
+
 const HEX6 = /^#[0-9a-f]{6}$/i
 
 /** Parses a `#RRGGBB` string into its three channels, or null if it is not that shape. */
@@ -74,6 +76,7 @@ export function consoleTerminalOptions(a: {
   fontFamily: string
   scrollback: number
   allowProposedApi: true
+  macOptionClickForcesSelection: true
   theme: { background: string; foreground: string; cursor: string; selectionBackground: string }
 } {
   const { selectionBackground } = findHighlightPaint({
@@ -87,6 +90,8 @@ export function consoleTerminalOptions(a: {
     scrollback: 5000,
     // The search addon's decorations are proposed API — see this module's own comment
     allowProposedApi: true,
+    // Option-drag selects over a program that takes the mouse (core/terminal/forcedSelection.ts)
+    ...FORCED_SELECTION_OPTIONS,
     theme: { ...a.theme, selectionBackground }
   }
 }

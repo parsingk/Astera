@@ -18,6 +18,7 @@ describe('consoleTerminalOptions', () => {
       fontFamily: 'JetBrains Mono',
       scrollback: 5000,
       allowProposedApi: true,
+      macOptionClickForcesSelection: true,
       theme: { ...theme, selectionBackground: '#d9a44166' }
     })
   })

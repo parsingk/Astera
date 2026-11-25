@@ -4,6 +4,7 @@
 // local file (D8.2): the Runtime's paths are not this machine's.
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
+import { FORCED_SELECTION_OPTIONS } from '../../../core/terminal/forcedSelection'
 import '@xterm/xterm/css/xterm.css'
 import { nextResize, type Dims } from '../../../core/terminal/resize'
 import { xtermThemeOf } from '../../../core/theme/apply'
@@ -56,7 +57,8 @@ export function RemoteTerminalView({
     const host = hostRef.current!
     // An OSC 8 hyperlink opens nothing either: without a handler xterm would ask with a blocking confirm() and try
     // window.open() (terminalLinks.ts, 2026-11-19)
-    const term = new Terminal({ fontSize: 14, fontFamily: family, scrollback: 5000, theme: xtermThemeOf(theme), linkHandler: { activate: () => {} } })
+    // Option-drag selects over a program that takes the mouse (core/terminal/forcedSelection.ts)
+    const term = new Terminal({ fontSize: 14, fontFamily: family, scrollback: 5000, theme: xtermThemeOf(theme), linkHandler: { activate: () => {} }, ...FORCED_SELECTION_OPTIONS })
     const blinkGuard = pinCursorBlinkOff(term)
     term.open(host)
     termRef.current = term
