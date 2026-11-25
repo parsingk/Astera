@@ -58,7 +58,8 @@ describe('packFolder', () => {
     const later = new Date('2030-01-02T03:04:05Z')
     for (const rel of ['package.json', 'b.js', 'a/z.js']) await fs.utimes(path.join(copy, rel), later, later)
     expect((await packFolder(copy)).tgz.equals(first.tgz)).toBe(true)
-    // gzip's header names no system: the same bytes on Windows, macOS and Linux
+    // gzip's header names no system: zlib writes another system byte on each platform, which would make the same files
+    // packed by the same Astera differ by machine
     expect(first.tgz[9]).toBe(3)
   })
 
@@ -117,5 +118,27 @@ describe('leftOutOfPackage', () => {
     expect(leftOutOfPackage('id_ed25519.pub')).toBe(true)
     expect(leftOutOfPackage('lib/old.tgz')).toBe(false)
     expect(leftOutOfPackage('node_modules/a/server.key')).toBe(false)
+  })
+})
+
+// Final review I4, m12: more credential files, wherever they are; a dependency keeps only its certificates and keys
+describe('what a package leaves out, final review', () => {
+  it('leaves out credential files anywhere, and keys outside node_modules', () => {
+    for (const rel of ['.envrc', '.netrc', '_netrc', '.pypirc', '.yarnrc.yml', 'sign.ppk', 'release.jks', 'app.keystore', '.ssh/config', 'home/.aws/credentials'])
+      expect(leftOutOfPackage(rel), rel).toBe(true)
+    for (const rel of ['node_modules/dep/.env', 'node_modules/dep/.npmrc', 'node_modules/dep/id_rsa', 'node_modules/dep/.git-credentials', 'node_modules/dep/.netrc'])
+      expect(leftOutOfPackage(rel), rel).toBe(true)
+    for (const rel of ['node_modules/dep/cert.pem', 'node_modules/dep/server.key', 'node_modules/dep/ca.p12']) expect(leftOutOfPackage(rel), rel).toBe(false)
+    for (const rel of ['desktop.ini', 'ui/._panel.js', 'node_modules/x/._index.js']) expect(leftOutOfPackage(rel), rel).toBe(true)
+  })
+
+  // Final review m6: a bundled program a plugin starts stays executable through --file, as through --path
+  it.skipIf(process.platform === 'win32')('keeps a file executable', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, { 'package.json': '{}', 'bin/tool': '#!/bin/sh' })
+    await fs.chmod(path.join(copy, 'bin', 'tool'), 0o755)
+    await fs.writeFile(path.join(dir, 'p.tgz'), (await packFolder(copy)).tgz)
+    await extractPackage(path.join(dir, 'p.tgz'), path.join(dir, 'out'))
+    expect((await fs.stat(path.join(dir, 'out', 'bin', 'tool'))).mode & 0o111).not.toBe(0)
   })
 })

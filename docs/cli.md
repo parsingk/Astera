@@ -624,13 +624,20 @@ astera plugins pack --path ./my-plugin               writes my-plugin-0.1.0.tgz 
 ```
 
 `plugins validate`, `plugins init` and `plugins pack` are for whoever writes a plugin: they start no Host and change
-nothing in Astera, so they work without the app and inside an agent session. `init` writes a new folder from a template (`ui`, a
-panel; `host`, a plugin Astera runs; `check`, a completion check; `source`, a job source) and refuses a folder that
-already holds files. `pack` makes a package of a folder that validates, the same bytes every time (npm's layout,
-entries in order, one fixed time), leaves out and names `.git`, OS junk and, outside `node_modules`, files that look
-like secrets (`.env` but `.env.example`, `.npmrc`, keys, certificates), and answers its sha256 and npm integrity. Each problem has a code (`MANIFEST_INVALID`, `INCOMPATIBLE`, `ENTRY_MISSING`, `UI_MISSING`,
-`LINK_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), the manifest field it is about when there is one, and the
-sentence an install would give.
+nothing in Astera, so they work without the app and inside an agent session.
+
+`validate` names each problem by a code (`MANIFEST_INVALID`, `ENTRY_MISSING`, `UI_MISSING`, `COPY_REFUSED`,
+`LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), the manifest field it is about when there is one, and the sentence an install
+would give. A plugin this Astera would not run, which an install still takes, is a warning (`INCOMPATIBLE`), not a
+problem.
+
+`init` writes a new folder from a template (`ui`, a panel; `host`, a plugin Astera runs; `check`, a completion check;
+`source`, a job source) and refuses a folder that already holds files.
+
+`pack` makes a package of a folder that validates: the same bytes each time the same Astera packs it (npm's layout,
+entries in order, one fixed time). It reads the package back as `install --file` will before writing it, leaves out and
+names `.git`, OS junk and credentials (`.env` but `.env.example`, `.npmrc`, `.netrc`, SSH keys and the like) and, outside
+`node_modules`, keys and certificates, and answers its sha256 and npm integrity.
 
 **A plugin with a host entry runs trusted code on this machine.** It can do anything you can, and its permissions
 limit only what it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program. A

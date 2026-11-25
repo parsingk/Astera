@@ -56,13 +56,22 @@ export async function copyPluginFolder(src: string, dest: string): Promise<void>
   if (within(path.resolve(src), target) || within(root, target) || within(root, await realOf(target)))
     throw new PluginCopyRefused(`${dest} is inside the folder it copies`)
   await fs.mkdir(target, { recursive: true })
-  await copyInto(root, [root], target, '')
+  await copyInto(root, [root], target, '', true)
+}
+
+/** Walks `src` by copyPluginFolder's own rules and copies nothing: throws PluginCopyRefused where a copy would. What
+ *  `plugins validate` asks, so a large node_modules is not copied on every check (plugin CLI final review m13). */
+export async function checkPluginTree(src: string): Promise<void> {
+  const layout = await layoutProblem(src)
+  if (layout !== null) throw new PluginCopyRefused(layout)
+  const root = await fs.realpath(src)
+  await copyInto(root, [root], root, '', false)
 }
 
 /** Copies the folder at the end of `chain` into `to`. `chain` is the real path of every folder the walk is inside, from
  *  the root down, so a link back to any of them is a loop however many links it took to get there. `rel` is the path
  *  from the plugin's root, with `/`, for messages. */
-async function copyInto(root: string, chain: readonly string[], to: string, rel: string): Promise<void> {
+async function copyInto(root: string, chain: readonly string[], to: string, rel: string, write: boolean): Promise<void> {
   const from = chain[chain.length - 1]
   for (const e of await fs.readdir(from, { withFileTypes: true })) {
     // Git's own folder at the top is history, not the plugin; a dependency's deeper down is whatever it shipped.
@@ -83,14 +92,16 @@ async function copyInto(root: string, chain: readonly string[], to: string, rel:
       if (st.isDirectory()) {
         // Following a link to a folder this one sits in would copy forever.
         if (chain.some((c) => within(real, c))) throw new PluginCopyRefused(`${at} is a link back to a folder it sits in`)
-        await fs.mkdir(into)
-        await copyInto(root, [...chain, real], into, at)
-      } else if (st.isFile()) await fs.copyFile(real, into)
-      else throw new PluginCopyRefused(`${at} is not a file or a folder`)
+        if (write) await fs.mkdir(into)
+        await copyInto(root, [...chain, real], into, at, write)
+      } else if (st.isFile()) {
+        if (write) await fs.copyFile(real, into)
+      } else throw new PluginCopyRefused(`${at} is not a file or a folder`)
     } else if (e.isDirectory()) {
-      await fs.mkdir(into)
-      await copyInto(root, [...chain, full], into, at)
-    } else if (e.isFile()) await fs.copyFile(full, into)
-    else throw new PluginCopyRefused(`${at} is not a file or a folder`)
+      if (write) await fs.mkdir(into)
+      await copyInto(root, [...chain, full], into, at, write)
+    } else if (e.isFile()) {
+      if (write) await fs.copyFile(full, into)
+    } else throw new PluginCopyRefused(`${at} is not a file or a folder`)
   }
 }

@@ -131,6 +131,12 @@ describe('installPlugin', () => {
 })
 
 describe('approvalMessage', () => {
+  // Final review m8: a package file is approved by what it is: the file and the sha256 of the bytes that will install
+  it('names the package file and its sha256', () => {
+    const m = approvalMessage({ ...INSPECTION, source: { file: '/w/jira-1.0.0.tgz', sha256: 'ab12' } })
+    expect(m).toContain('From /w/jira-1.0.0.tgz, sha256 ab12.')
+  })
+
   it('says what the plugin is and asks for, that it is trusted code, and how to approve', () => {
     expect(approvalMessage(INSPECTION)).toBe(
       `Jira 1.0.0 (@acme/astera-jira) asks for: jobs.read, jobs.create. ${PLUGIN_TRUST_WARNING} Approve with --yes, or name what to grant with --grant <list>.`

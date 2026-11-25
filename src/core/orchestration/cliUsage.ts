@@ -323,7 +323,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'plugins-validate': {
     summary: 'check a plugin folder the way an install would, naming each problem by its code',
     detail:
-      'Starts no Host and changes nothing: it reads the folder, checks its package.json, whether this Astera runs it, its links and node_modules layout, and that its entry and ui are files in it. Exits 0 when it would install, 1 naming each problem (code, the manifest field it is about, the sentence) with the problems in the details, 2 when the folder is not there.',
+      'Starts no Host and changes nothing: it reads the folder, checks its package.json, its links and node_modules layout, and that its entry and ui are files in it. Exits 0 when it would install (with a warning when this Astera would not run it), 1 naming each problem (code, the manifest field it is about, the sentence) with the problems in the details, 2 when the folder is not there.',
     flags: [{ name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true }]
   },
   'plugins-init': {
@@ -336,7 +336,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'plugins-pack': {
     summary: 'make a package of a plugin folder that validates: the same bytes every time, with its checksums',
     detail:
-      'Starts no Host and installs nothing. Refused with 1, as validate refuses, when the folder would not install. Writes <name>-<version>.tgz beside the folder (npm\'s layout and file name), or where --out says, never inside the folder. Leaves out, and names, a .git folder, .DS_Store, Thumbs.db and npm-debug.log anywhere, and outside node_modules .env files but .env.example, .npmrc, .git-credentials, keys and certificates, SSH keys and an old package at the top. Answers its sha256 and its npm integrity (sha512). `plugins install --file` installs it.',
+      'Starts no Host and installs nothing. Refused with 1, as validate refuses, when the folder would not install, or when install --file would refuse the package it made (it is read back first). Writes <name>-<version>.tgz beside the folder (npm\'s layout and file name), or where --out says, never inside the folder; the same Astera packing the same files gives the same bytes. Leaves out, and names, a .git folder and OS junk, credentials anywhere (.env files but .env.example, .envrc, .npmrc, .netrc, .pypirc, .yarnrc.yml, .git-credentials, SSH keys, .ssh and .aws), and outside node_modules keys, certificates and an old package at the top. Answers its sha256 and its npm integrity (sha512). `plugins install --file` installs it.',
     flags: [
       { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
       { name: 'out', value: '<file>', about: 'where to write the package (default: beside the folder)' }

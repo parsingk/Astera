@@ -78,9 +78,18 @@ describe('checkPluginFolder', () => {
     expect(r.problems.find((p) => p.field === 'version')?.message).toMatch(/^version "one" is not a semver version/)
   })
 
-  it('says a plugin this Astera will not run is incompatible', async () => {
+  // Final review m2: an install takes a plugin this Astera will not run (it says so), so it is a warning, not a problem
+  it('warns that a plugin this Astera will not run is incompatible, which an install still takes', async () => {
     const r = await checkPluginFolder(await folder(uiPlugin({ engines: { astera: '>=9.0.0' } })), host)
-    expect(r.problems).toEqual([{ code: 'INCOMPATIBLE', message: 'the plugin needs Astera >=9.0.0; this is 1.6.0' }])
+    expect(r.problems).toEqual([])
+    expect(r.warnings).toEqual([{ code: 'INCOMPATIBLE', message: 'the plugin needs Astera >=9.0.0; this is 1.6.0' }])
+  })
+
+  // Final review m3: a settings key with an underscore is named whole, as one without is
+  it('names a settings field by its whole key', async () => {
+    const trusted = { name: 'runner', version: '0.1.0', astera: { apiVersion: '1', entry: 'index.mjs', permissions: [], settingsSchema: { type: 'object', properties: { api_key: { type: 'list' } } } } }
+    const r = await checkPluginFolder(await folder(trusted, { 'index.mjs': '' }), host)
+    expect(r.problems.map((p) => p.field)).toEqual([expect.stringMatching(/^astera\.settingsSchema\..*api_key/)])
   })
 
   it('says a node_modules layout a copy cannot keep is refused', async () => {
@@ -93,7 +102,7 @@ describe('checkPluginFolder', () => {
     const f = await folder(uiPlugin())
     await fs.mkdir(path.join(dir, 'outside'), { recursive: true })
     await fs.symlink(path.join(dir, 'outside'), path.join(f, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
-    expect(codes(await checkPluginFolder(f, host))).toEqual(['LINK_REFUSED'])
+    expect(codes(await checkPluginFolder(f, host))).toEqual(['COPY_REFUSED'])
   })
 
   it('says an entry or a ui that is not a file in the plugin is missing', async () => {
@@ -110,20 +119,17 @@ describe('checkPluginFolder', () => {
     expect(r.problems).toEqual([])
     expect(r.copy).toBe(keep)
     expect(await fs.readFile(path.join(keep, 'ui', 'index.html'), 'utf8')).toBe('<!doctype html>')
-    // The temporary folder this call makes, and only it: other test files check folders at the same time
-    const made: string[] = []
-    const real = fs.mkdtemp.bind(fs)
-    const spy = vi.spyOn(fs, 'mkdtemp').mockImplementation(async (prefix: string) => {
-      const at = await real(prefix)
-      made.push(at)
-      return at
-    })
+    // Final review m13: a check that keeps no copy makes none, walking the folder by the copier's rules instead (a large
+    // node_modules is not copied into TEMP on every validate)
+    const spy = vi.spyOn(fs, 'mkdtemp')
+    const copyFile = vi.spyOn(fs, 'copyFile')
     try {
-      await checkPluginFolder(f, host)
+      expect((await checkPluginFolder(f, host)).problems).toEqual([])
+      expect(spy).not.toHaveBeenCalled()
+      expect(copyFile).not.toHaveBeenCalled()
     } finally {
       spy.mockRestore()
+      copyFile.mockRestore()
     }
-    expect(made.filter((p) => path.basename(p).startsWith('astera-plugin-check-'))).toHaveLength(1)
-    for (const p of made) expect(await fs.stat(p).then(() => 'there', () => 'gone')).toBe('gone')
   })
 })

@@ -618,10 +618,12 @@ how).
 ### From a package file
 
 `astera plugins pack --path <folder>` makes a package of a folder that validates: npm's layout and file name
-(`<name>-<version>.tgz`, beside the folder unless `--out` says where), the same bytes each time it is packed, and its
-sha256 and npm integrity in the answer, to publish beside it. It leaves out, and names, a `.git` folder, `.DS_Store`,
-`Thumbs.db` and `npm-debug.log` anywhere, and outside `node_modules` files that look like secrets (`.env` files but
-`.env.example`, `.npmrc`, `.git-credentials`, keys and certificates, SSH keys) and an old package at the top.
+(`<name>-<version>.tgz`, beside the folder unless `--out` says where), the same bytes each time the same Astera packs
+it, and its sha256 and npm integrity in the answer, to publish beside it. It reads the package back as `install --file`
+will before writing it, so a package it writes is one Astera installs. It leaves out, and names, a `.git` folder and OS
+junk (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._` files, `npm-debug.log`), credentials anywhere (`.env` files but
+`.env.example`, `.envrc`, `.npmrc`, `.netrc`, `.pypirc`, `.yarnrc.yml`, `.git-credentials`, SSH keys, whatever is under
+`.ssh` or `.aws`), and outside `node_modules` keys and certificates and an old package at the top.
 `node_modules` goes in as a folder install copies it, so the package runs as the folder did.
 
 ```sh
@@ -684,8 +686,9 @@ Bundle to CommonJS, as here, and point `astera.entry` at `dist/index.cjs`. Many 
 `astera plugins init <name> --template <kind>` writes a starting folder: `ui` (a panel, Plugin API 2), `host` (a
 plugin Astera runs), `check` (a completion check) or `source` (a job source), each the smallest that installs, in plain
 JavaScript with no dependency. `astera plugins validate --path <folder>` checks a folder the way an install would and
-names each problem by a code (`MANIFEST_INVALID` with the field it is about, `INCOMPATIBLE`, `ENTRY_MISSING`,
-`UI_MISSING`, `LINK_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), exit 1 when there is one. Neither starts a Host
+names each problem by a code (`MANIFEST_INVALID` with the field it is about, `ENTRY_MISSING`, `UI_MISSING`,
+`COPY_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), exit 1 when there is one; that this Astera would not run it is
+a warning (`INCOMPATIBLE`), since an install still takes it. Neither starts a Host
 or changes anything in Astera.
 
 ```sh

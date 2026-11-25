@@ -4,7 +4,7 @@
 import { promises as fs } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginCapability, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES } from '../../core/plugins/manifest'
+import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
 import { readPackage } from './packageFile'
 import { parseNpmSpec } from '../../core/plugins/npmSpec'
@@ -114,6 +114,10 @@ const stranded = (first: unknown, retired: string): Error =>
 
 /** Removes a folder the Host no longer needs; a failure leaves it behind rather than failing the change it followed. */
 const discard = (p: string): Promise<void> => fs.rm(p, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
+
+/** The largest package file `install --file` reads: the most a package may unpack to (tarball.ts), as no gzip of it is
+ *  larger. */
+const PACKAGE_FILE_MAX = 256 * 1024 * 1024
 
 /** The plugin capabilities this Host serves: core/plugins/manifest.ts holds the list, which the CLI's folder check
  *  (`plugins validate`) reads too. */
@@ -339,8 +343,10 @@ export function createPluginManager(d: {
     if ([a.path, a.npm, a.file].filter((v) => v !== undefined).length > 1) throw new Refused(400, `${cmd} takes one of --path, --npm and --file`)
     if (a.file !== undefined) {
       if (typeof a.file !== 'string' || !path.isAbsolute(a.file)) throw new Refused(400, `${cmd}: ${String(a.file)} is not an absolute path`)
-      const isFile = await fs.stat(a.file).then((s) => s.isFile(), () => false)
-      if (!isFile) throw new Refused(400, `${cmd}: ${a.file} is not a file`)
+      const st = await fs.stat(a.file).catch(() => null)
+      if (!st?.isFile()) throw new Refused(400, `${cmd}: ${a.file} is not a file`)
+      // Refused by its size before it is read into the Host: no package unpacks to more than the npm path's limit
+      if (st.size > PACKAGE_FILE_MAX) throw new Refused(400, `${cmd}: ${a.file} is larger than any plugin package (${PACKAGE_FILE_MAX / 1024 / 1024} MiB)`)
       return { kind: 'file', file: a.file }
     }
     if (a.npm !== undefined) {

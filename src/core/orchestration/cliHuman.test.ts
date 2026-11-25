@@ -189,6 +189,10 @@ describe('humanFor', () => {
     expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'run', name: 'run', version: '1.0.0', trust: 'trusted' }, problems: [] })).toBe(
       'run 1.0.0, trusted code: no problem found'
     )
+    // What an install takes but this Astera would not run is a warning line under it
+    expect(
+      humanFor('plugins-validate', { valid: true, plugin: { id: 'run', version: '1.0.0', trust: 'trusted' }, problems: [], warnings: [{ code: 'INCOMPATIBLE', message: 'the plugin needs Astera >=9.0.0; this is 1.6.0' }] })
+    ).toBe(['run 1.0.0, trusted code: no problem found', 'warning INCOMPATIBLE: the plugin needs Astera >=9.0.0; this is 1.6.0'].join(String.fromCharCode(10)))
   })
 
   it('plugins init says where it wrote the plugin, then what to run next', () => {

@@ -1351,3 +1351,14 @@ describe('install from a package file', () => {
     expect(await leftovers()).toEqual([])
   })
 })
+
+describe('install from a package file, final review', () => {
+  // m5: refused by its size before it is read into the Host
+  it('refuses a file larger than any package could be', async () => {
+    const big = path.join(dir, 'big.tgz')
+    const h = await fs.open(big, 'w')
+    await h.truncate(257 * 1024 * 1024)
+    await h.close()
+    expect(await manager.inspect({ file: big })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/is larger than any plugin package/) } })
+  })
+})

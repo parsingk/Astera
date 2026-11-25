@@ -33,7 +33,9 @@ describe('astera plugins validate', () => {
     await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'bad', version: '1.0.0', engines: { astera: '>=9.0.0' }, astera: { apiVersion: '2', ui: 'ui/index.html' } }))
     const both = await pluginDevCommand({ cmd: 'plugins-validate', args: { path: dir }, cwd: here, version: '1.6.0' })
     if (both.ok) throw new Error('expected a failure')
-    expect(both.error.message).toMatch(/^bad would not install: INCOMPATIBLE: .*; UI_MISSING: the ui ui\/index\.html is not a file in the plugin$/)
+    // That this Astera would not run it is a warning beside the problems, not one of them (final review m2)
+    expect(both.error.message).toMatch(/^bad would not install: UI_MISSING: the ui ui\/index\.html is not a file in the plugin$/)
+    expect(both.error.details).toMatchObject({ warnings: [{ code: 'INCOMPATIBLE' }] })
   })
 
   it('needs --path, and says a folder that is not there is not one (exit 2)', async () => {
@@ -121,5 +123,52 @@ describe('astera plugins pack', () => {
     expect(inside).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringMatching(/inside the folder it packs/) } })
     const chosen = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'outed', out: 'build/outed.tgz' }, cwd: dir, version: '1.6.0' })
     expect(chosen).toMatchObject({ ok: true, body: { file: path.join(dir, 'build', 'outed.tgz') } })
+  })
+})
+
+describe('astera plugins pack, final review', () => {
+  // I1: what pack writes is checked as install --file will read it
+  it('refuses a folder whose package would lose its entry to the left-out rules, writing nothing', async () => {
+    await fs.mkdir(path.join(dir, 'keyed'))
+    await fs.writeFile(path.join(dir, 'keyed', 'package.json'), JSON.stringify({ name: 'keyed', version: '1.0.0', astera: { apiVersion: '1', entry: 'boot.key', permissions: [] } }))
+    await fs.writeFile(path.join(dir, 'keyed', 'boot.key'), 'export default {}')
+    const r = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'keyed' }, cwd: dir, version: '1.6.0' })
+    expect(r).toMatchObject({ ok: false, error: { code: 'FAILED', message: expect.stringMatching(/ENTRY_MISSING: the entry boot\.key is left out of the package/) } })
+    expect((await fs.readdir(dir)).sort()).toEqual(['keyed'])
+  })
+
+  // I3: a file system error is an answer, not a stack trace
+  it('answers an --out that is a folder, or that cannot be written, and leaves no part file', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'outs', template: 'host' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    await fs.mkdir(path.join(dir, 'dist'))
+    const folder = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'outs', out: 'dist' }, cwd: dir, version: '1.6.0' })
+    expect(folder).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringMatching(/is a folder; give the package's file name/) } })
+    await fs.writeFile(path.join(dir, 'plain.txt'), 'x')
+    const blocked = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'outs', out: 'plain.txt/x.tgz' }, cwd: dir, version: '1.6.0' })
+    expect(blocked).toMatchObject({ ok: false, error: { code: 'FAILED', message: expect.stringMatching(/^plugins pack could not write/) } })
+    expect((await fs.readdir(dir)).filter((n) => n.endsWith('.part'))).toEqual([])
+  })
+
+  // m4: the top-level .git the copier never copies is named as left out too
+  it('names a top-level .git among what it left out', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'gitted', template: 'host' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    await fs.mkdir(path.join(dir, 'gitted', '.git'))
+    await fs.writeFile(path.join(dir, 'gitted', '.git', 'HEAD'), 'ref')
+    const r = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'gitted' }, cwd: dir, version: '1.6.0' })
+    expect(r).toMatchObject({ ok: true, body: { leftOut: ['.git'] } })
+  })
+
+  // m2: a package may be meant for another Astera than the one packing it
+  it('packs a plugin this Astera will not run, warning so', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'later', template: 'ui' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    const pkgFile = path.join(dir, 'later', 'package.json')
+    await fs.writeFile(pkgFile, JSON.stringify({ ...JSON.parse(await fs.readFile(pkgFile, 'utf8')), engines: { astera: '>=9.0.0' } }))
+    const v = await pluginDevCommand({ cmd: 'plugins-validate', args: { path: 'later' }, cwd: dir, version: '1.6.0' })
+    expect(v).toMatchObject({ ok: true, body: { valid: true, warnings: [{ code: 'INCOMPATIBLE' }] } })
+    const p = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'later' }, cwd: dir, version: '1.6.0' })
+    expect(p).toMatchObject({ ok: true, body: { warnings: [{ code: 'INCOMPATIBLE' }] } })
   })
 })
