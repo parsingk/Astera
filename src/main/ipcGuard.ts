@@ -13,7 +13,13 @@ import { ipcMain as electronIpcMain, type IpcMainEvent, type IpcMainInvokeEvent 
 export type GuardedIpcMain = {
   handle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void
   on(channel: string, listener: (event: IpcMainEvent, ...args: any[]) => void): void
+  /** A channel only a trusted plugin panel guest answers (ADR-008): its top frame, on its own plugin host. The listener is
+   *  handed the guest's identity as main recorded it when the guest attached, never anything from the message. */
+  handleGuest(channel: string, listener: (event: IpcMainInvokeEvent, guest: GuestIdentity, ...args: any[]) => unknown): void
 }
+
+/** A plugin panel guest as main recorded it when it attached (main/plugins/panelGuests.ts). */
+export type GuestIdentity = { pluginId: string; host: string }
 
 /** What the guard registers on: electron's ipcMain, or a fake in the tests. */
 type Target = {
@@ -27,8 +33,20 @@ type SenderEvent = { sender: { id: number }; senderFrame: { url: string; parent:
 export function createIpcGuard(
   target: Target,
   log: (message: string) => void
-): { ipcMain: GuardedIpcMain; trust: (contents: TrustedContents, isOwnDocument: (url: string) => boolean) => void } {
+): {
+  ipcMain: GuardedIpcMain
+  trust: (contents: TrustedContents, isOwnDocument: (url: string) => boolean) => void
+  trustGuest: (contents: TrustedContents, guest: GuestIdentity) => void
+} {
   const trusted = new Map<number, (url: string) => boolean>()
+  const guests = new Map<number, GuestIdentity>()
+  /** A trusted guest's top frame on its own plugin host; the guest it is, or null. */
+  const guestOf = (e: SenderEvent): GuestIdentity | null => {
+    const guest = guests.get(e.sender.id)
+    const frame = e.senderFrame
+    if (!guest || !frame || frame.parent !== null || !frame.url.startsWith(`astera-plugin://${guest.host}/`)) return null
+    return guest
+  }
   const logged = new Set<string>()
   const allowed = (e: SenderEvent): boolean => {
     const frame = e.senderFrame
@@ -62,6 +80,16 @@ export function createIpcGuard(
         }
         ;(listener as (e: unknown, ...a: unknown[]) => void)(e, ...args)
       })
+    },
+    handleGuest(channel, listener) {
+      target.handle(channel, (e: SenderEvent, ...args: unknown[]) => {
+        const guest = guestOf(e)
+        if (guest === null) {
+          refuse(channel, e)
+          throw new Error(`IPC_SENDER_REFUSED: ${channel}`)
+        }
+        return (listener as (e: unknown, g: GuestIdentity, ...a: unknown[]) => unknown)(e, guest, ...args)
+      })
     }
   }
   return {
@@ -69,6 +97,10 @@ export function createIpcGuard(
     trust(contents, isOwnDocument) {
       trusted.set(contents.id, isOwnDocument)
       contents.once('destroyed', () => trusted.delete(contents.id))
+    },
+    trustGuest(contents, guest) {
+      guests.set(contents.id, guest)
+      contents.once('destroyed', () => guests.delete(contents.id))
     }
   }
 }
@@ -80,3 +112,6 @@ export const ipcMain = guard.ipcMain
 
 /** Lets one webContents (the main window) reach the handlers while its top frame shows the app's own document. */
 export const trustWebContents = guard.trust
+
+/** Lets one plugin panel guest reach the guest channels while its top frame is on its plugin host (ADR-008). */
+export const trustPluginGuest = guard.trustGuest

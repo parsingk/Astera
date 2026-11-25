@@ -2,6 +2,7 @@
 // <webview> in a browser tab is the developer's dev server, plus whatever that page pulls in — so it
 // runs sandboxed, in its own partition, with no preload, and cannot open windows or leave http(s).
 import { app, session, type BrowserWindow } from 'electron'
+import type { PanelGuests } from '../plugins/panelGuests'
 import {
   PREVIEW_PARTITION,
   agentNavigationAllowed,
@@ -22,10 +23,18 @@ export function guardPartition(partition: string): void {
   )
 }
 
-export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webContentsId: number) => boolean): void {
+export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webContentsId: number) => boolean, plugins?: PanelGuests): void {
   // The renderer's <webview> tag can carry any attribute; whatever it says, the guest gets these
   // preferences and no preload. A src outside http(s)/blank, or a foreign partition, never attaches.
   win.webContents.on('will-attach-webview', (e, prefs, params) => {
+    // A plugin partition is the panel guests' (ADR-008): a prepared panel attaches with Astera's bridge, anything else in
+    // one never does; every other partition keeps the preview rule below
+    const decision = plugins ? plugins.decideAttach(params, prefs) : 'preview'
+    if (decision === 'refuse') {
+      e.preventDefault()
+      return
+    }
+    if (decision === 'plugin') return
     delete prefs.preload
     prefs.nodeIntegration = false
     prefs.contextIsolation = true
@@ -34,6 +43,8 @@ export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webConte
     if (!guestAttachAllowed(params)) e.preventDefault()
   })
   win.webContents.on('did-attach-webview', (_e, guest) => {
+    // A plugin panel's guest is the panel guests' to hold; it never reaches the preview's popup routing
+    if (plugins?.attached(guest)) return
     // No windows of its own. The address goes to the renderer, whose link rule routes it — the same
     // shape as ipc.ts's `send`, guarded the same way.
     guest.setWindowOpenHandler(({ url }) => {

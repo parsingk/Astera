@@ -439,6 +439,7 @@ const api = {
   },
   plugins: {
     list: invoke('plugins.list'),
+    preparePanel: invoke('plugins.preparePanel'),
     inspect: invoke('plugins.inspect'),
     install: invoke('plugins.install'),
     setEnabled: invoke('plugins.setEnabled'),

@@ -2174,6 +2174,15 @@ export interface SourcesApi {
 
 /** Settings › Plugins (plugin runtime design slice 2d): the Host's `plugins-*` commands the tab uses, as the app, and
  *  no other (design P5). */
+/** Plugin panels (ADR-008): main agrees to show a panel and answers the page and partition its guest must use. */
+export interface PluginPanelsApi {
+  preparePanel(
+    pluginId: string,
+    panelId: string,
+    projectRoot: string | null
+  ): Promise<{ ok: true; url: string; partition: string } | { ok: false; reason: string }>
+}
+
 export interface PluginsApi {
   list(): Promise<PluginsCallAnswer>
   /** What a folder or an npm package holds, to show before it is installed. */
@@ -2485,7 +2494,7 @@ export type RendererApi = CoreApi & {
   orch: OrchApi
   /** Remote Runtimes (remote runtime design Phase 6): Settings › Remote Runtimes and the Jobs view's selectors. */
   remote: RemoteApi
-  plugins: PluginsApi
+  plugins: PluginsApi & PluginPanelsApi
   extensions: ExtensionsApi
   /** Settings › Agent profiles and the profile pickers: the Host's agent profiles, as the app. */
   agentProfiles: AgentProfilesApi

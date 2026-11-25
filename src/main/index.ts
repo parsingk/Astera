@@ -4,6 +4,7 @@ import {
   Tray,
   Menu,
   nativeImage,
+  session,
   shell,
   webContents,
   Notification,
@@ -35,8 +36,10 @@ import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { handleMediaRequest } from './media/protocol'
 import { mediaAllowlist } from './media/allowlist'
 import { MEDIA_SCHEME } from '../core/files/media'
+import { PLUGIN_SCHEME } from '../core/plugins/panelGuest'
+import { createPanelGuests } from './plugins/panelGuests'
 import { isOwnDocument } from './navigationGuard'
-import { ipcMain, trustWebContents } from './ipcGuard'
+import { ipcMain, trustPluginGuest, trustWebContents } from './ipcGuard'
 import { installPreviewGuards } from './preview/guest'
 import { AgentGuestRegistry } from './agentBrowser/registry'
 import { registerPreviewDevTools } from './preview/devtools'
@@ -133,7 +136,10 @@ const ENTER = String.fromCharCode(13)
 // name this scheme in media-src/img-src rather than have it slip past. No supportFetchAPI either:
 // only <video> and <img> load it and nothing fetch()es it, so the privilege would only widen access.
 protocol.registerSchemesAsPrivileged([
-  { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true } }
+  { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true } },
+  // A plugin's pages (ADR-008): standard for a host per plugin, secure for an origin of its own; handled on each plugin's
+  // session only, never on the app's
+  { scheme: PLUGIN_SCHEME, privileges: { standard: true, secure: true } }
 ])
 
 let core: Core | null = null
@@ -248,6 +254,15 @@ function buildMacMenu(): Menu {
  *  guest belongs to an agent — the guard would let an agent's tab walk off this machine. */
 const agentGuests = new AgentGuestRegistry((id) => webContents.fromId(id))
 
+/** Plugin panel guests (ADR-008), built here for the same reason as agentGuests: createWindow's attach guard asks it, and
+ *  registerIpc gives it the Host's plugin list and answers its bridge. */
+const panelGuests = createPanelGuests({
+  fromPartition: (partition) => session.fromPartition(partition) as never,
+  bridgePreload: path.join(__dirname, '../preload/pluginBridge.js'),
+  trustGuest: trustPluginGuest,
+  now: Date.now
+})
+
 /** Loads the app's own page into the window. Split from createWindow because on macOS/Linux the
  *  window opens before core exists (startup.ts) and shows a start-up page until this runs — which it
  *  does right where the window used to be created, ahead of registerIpc with no await in between. */
@@ -351,7 +366,7 @@ function createWindow(startingText: string | null = null, theme?: Theme): Browse
   // The guest id the guard is handed is the webContents id of the <webview>, which is the same number
   // BrowserPane reports through preview.registerAgentGuest — so the agent's tab, and only it, is held
   // to the loopback rule.
-  installPreviewGuards(win, (id) => agentGuests.isAgentGuest(id))
+  installPreviewGuards(win, (id) => agentGuests.isAgentGuest(id), panelGuests)
   // Hosts the preview's DevTools in a window this app creates, so it carries the app icon and a
   // title naming the page — Electron's own DevTools window carries neither.
   registerPreviewDevTools(APP_ICON)
@@ -1306,7 +1321,8 @@ app.whenReady().then(async () => {
         hostClientRetireRef = retire
         hostSurvivesUpdateRef = survivesUpdate
       }
-    }
+    },
+    panelGuests
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the
