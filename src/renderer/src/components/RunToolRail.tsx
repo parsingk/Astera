@@ -29,7 +29,8 @@ export function RunToolRail({
   onScrollToEnd: () => void
   onClear: () => void
   onToggleFind: () => void
-  onSendToAgent: (runId: string) => void
+  /** Omitted while sending to an agent is turned off in Settings > General (Phase 1 gate): no button then. */
+  onSendToAgent?: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const none = run === null
@@ -59,9 +60,11 @@ export function RunToolRail({
       <button type="button" className={`run-rail-btn${findOpen ? ' on' : ''}`} title={t('run.rail.find')} aria-label={t('run.rail.find')} aria-pressed={findOpen} disabled={none} onClick={onToggleFind}>
         <Search size={14} />
       </button>
-      <button type="button" className="run-rail-btn" title={t('context.run.send')} aria-label={t('context.run.send')} disabled={none} onClick={() => run && onSendToAgent(run.runId)}>
-        <MessageSquareShare size={14} />
-      </button>
+      {onSendToAgent && (
+        <button type="button" className="run-rail-btn" title={t('context.run.send')} aria-label={t('context.run.send')} disabled={none} onClick={() => run && onSendToAgent(run.runId)}>
+          <MessageSquareShare size={14} />
+        </button>
+      )}
     </div>
   )
 }

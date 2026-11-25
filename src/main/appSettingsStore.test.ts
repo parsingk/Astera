@@ -6,6 +6,7 @@ import { AppSettingsStore, readSkillSettings } from './appSettingsStore'
 import { GITHUB_LIFECYCLE_DEFAULTS } from '../core/github/lifecycle'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import { WORKSPACE_FEATURES_DEFAULTS } from '../core/settings/workspaceFeatures'
 
 let dir: string
 beforeEach(async () => {
@@ -1191,5 +1192,53 @@ describe('kubectl settings', () => {
     await a.load()
     expect(a.getKubectlPath()).toBeNull()
     expect(a.getKubeconfigFiles()).toEqual([])
+  })
+})
+
+// The Phase 1 gate's switches (core/settings/workspaceFeatures.ts): stored as one object like desktopNotify.
+describe('workspaceFeatures', () => {
+  it('reads every switch on in a profile that never saved one', async () => {
+    const s = new AppSettingsStore(file())
+    await s.load()
+    expect(s.getWorkspaceFeatures()).toEqual(WORKSPACE_FEATURES_DEFAULTS)
+  })
+
+  it('keeps a switch turned off across a reload', async () => {
+    const f = file()
+    const a = new AppSettingsStore(f)
+    await a.load()
+    await a.setWorkspaceFeatures({ ...WORKSPACE_FEATURES_DEFAULTS, problemsTab: false })
+    const b = new AppSettingsStore(f)
+    await b.load()
+    expect(b.getWorkspaceFeatures()).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true })
+  })
+
+  it('leaves the key out of the file while every switch is on', async () => {
+    const f = file()
+    const s = new AppSettingsStore(f)
+    await s.load()
+    await s.setWorkspaceFeatures({ ...WORKSPACE_FEATURES_DEFAULTS })
+    const parsed = JSON.parse(await fs.readFile(f, 'utf8')) as Record<string, unknown>
+    expect(parsed.workspaceFeatures).toBeUndefined()
+  })
+
+  it('a non-object workspaceFeatures in the file is the defaults', async () => {
+    for (const raw of ['[]', '"off"', 'null', '0']) {
+      const f = file()
+      await fs.writeFile(f, `{"workspaceFeatures": ${raw}}`, 'utf8')
+      const s = new AppSettingsStore(f)
+      await s.load()
+      expect(s.getWorkspaceFeatures()).toEqual(WORKSPACE_FEATURES_DEFAULTS)
+    }
+  })
+
+  it('a corrupt file recovers to the defaults, not to the previous values', async () => {
+    const f = file()
+    const s = new AppSettingsStore(f)
+    await s.load()
+    await s.setWorkspaceFeatures({ layoutMemory: false, problemsTab: false, contextBridge: false })
+    await fs.writeFile(f, '{ not json', 'utf8')
+    expect((await s.load()).recovered).toBe(true)
+    expect(s.getWorkspaceFeatures()).toEqual(WORKSPACE_FEATURES_DEFAULTS)
   })
 })

@@ -147,6 +147,19 @@ describe('saved layout', () => {
     expect(mergeTabs(back.root, null)).toBe(back.root)
   })
 
+  // Phase 1 gate screen check: an app's mirror tab reaches the window while the restore waits, and went to the first
+  // group, away from its session (applySaved already puts it beside its session)
+  it('merges an app mirror tab into its session’s group, and into the first group when its session is not there', () => {
+    const restored: SavedNode = { kind: 'split', dir: 'row', ratio: 0.5, a: leaf(['file:/p/a.ts']), b: leaf(['session:s1']) }
+    const back = restoreTree(restored, 0, keepAll)!
+    const g = createGroup('app:s1')
+    const now = addTab(g, g.id, 'app:s9')
+    expect(shape(mergeTabs(back.root, now))).toEqual([
+      [['file:/p/a.ts', 'app:s9'], 'file:/p/a.ts'],
+      [['session:s1', 'app:s1'], 'session:s1']
+    ])
+  })
+
   it('saves no app mirror or remote session tab, and no info for a tab not in the tree', () => {
     const g = createGroup('session:s1')
     const root = addTab(addTab(g, g.id, 'app:s1'), g.id, 'session:rt1:s5')

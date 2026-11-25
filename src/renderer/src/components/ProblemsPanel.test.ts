@@ -56,13 +56,13 @@ describe('the Problems tab', () => {
 
   it('is asked again when the project or its Jobs change and when the window comes back', () => {
     expect(app).toMatch(/window\.api\.problems\s*\.list\(currentProject\)/)
-    expect(app).toMatch(/\}, \[currentProject, orchSnapshot, problemsAsk\]\)/)
+    expect(app).toMatch(/\}, \[problemsOn, currentProject, orchSnapshot, problemsAsk\]\)/)
     expect(app).toMatch(/window\.addEventListener\('focus', again\)/)
   })
 
   it('opens a problem in the editor at its line, and has an action that opens the tab', () => {
     expect(app).toMatch(/onOpenProblem=\{\(file, line\) => openFile\(file, line !== undefined \? \{ line \} : undefined\)\}/)
-    expect(app).toMatch(/'problems\.open': \{\s*blockedBy: \(\) => \(currentProject \? null : 'action\.blocked\.noProject'\),\s*run: \(\) => \{\s*setRunPanelOpen\(true\)\s*setBottomTab\('problems'\)/)
+    expect(app).toMatch(/'problems\.open': \{\s*blockedBy: \(\) =>\s*workspaceFeaturesRef\.current\?\.problemsTab !== true \? 'action\.blocked\.featureOff' : currentProject \? null : 'action\.blocked\.noProject',\s*run: \(\) => \{\s*setRunPanelOpen\(true\)\s*setBottomTab\('problems'\)/)
   })
 })
 

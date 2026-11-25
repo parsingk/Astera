@@ -56,11 +56,14 @@ const render = ({
   logTabs = [] as KubeLogTab[],
   shellTabs = [] as KubeShellTab[],
   terminals = [] as TerminalBuffer[],
-  kubeForwardCount = 0
+  kubeForwardCount = 0,
+  runAvailable = false,
+  problemsEnabled = true,
+  contextEnabled = true
 } = {}): string =>
   renderToStaticMarkup(
     React.createElement(BottomPanel, {
-      runAvailable: false,
+      runAvailable,
       runs: [],
       configIds: [],
       selectedRunId: null,
@@ -72,6 +75,8 @@ const render = ({
       onOpenUrl: noop,
       onOpenPreview: noop,
       onSendRunLog: noop,
+      contextEnabled,
+      problemsEnabled,
       problemsRoot: null,
       problems: [],
       onOpenProblem: noop,
@@ -353,5 +358,30 @@ describe('BottomPanel tab ids', () => {
       React.createElement(BottomPanel, { runAvailable: true, runs: [], configIds: [], selectedRunId: null, activeTab: 'run', terminals: [], logTabs: [], shellTabs: [], kubeLog: [], kubeAvailable: false, kubeSegment: 'cluster' } as never)
     )
     expect(html).toContain('data-tab-id="run"')
+  })
+})
+
+// Phase 1 gate: the Problems tab can be turned off in Settings > General
+describe('BottomPanel Problems tab switch', () => {
+  it('has the Problems tab and its body while the switch is on', () => {
+    const html = render({ runAvailable: true, activeTab: 'run' })
+    expect(html).toContain('data-tab-id="problems"')
+    expect(html).toContain('problems-body')
+  })
+
+  it('has neither while the switch is off', () => {
+    const html = render({ runAvailable: true, activeTab: 'run', problemsEnabled: false })
+    expect(html).not.toContain('data-tab-id="problems"')
+    expect(html).not.toContain('problems-body')
+  })
+})
+
+// Phase 1 gate: sending to an agent can be turned off in Settings > General, and the rail's send button goes with it
+describe('BottomPanel send to agent switch', () => {
+  it('has the rail send button while the switch is on, and not while it is off', () => {
+    const on = render({ runAvailable: true, activeTab: 'run' })
+    const off = render({ runAvailable: true, activeTab: 'run', contextEnabled: false })
+    expect(on).toContain('context.run.send')
+    expect(off).not.toContain('context.run.send')
   })
 })

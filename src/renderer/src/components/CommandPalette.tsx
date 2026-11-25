@@ -44,7 +44,8 @@ type Row = {
  * (main/quickOpen.ts, main/textSearch.ts).
  *
  * Keyboard only is enough: the box keeps focus, ↑/↓ move, Enter picks, Escape closes (lib/paletteKey.ts). A blocked
- * action is listed with its reason rather than hidden, and Enter on it says the reason instead of doing nothing.
+ * action is listed with its reason rather than hidden, and Enter on it says the reason instead of doing nothing; an
+ * action whose feature is turned off in Settings is not among the entries at all.
  * Closing gives focus back to where it was (a terminal, usually), unless whatever was picked has taken it.
  */
 export function CommandPalette({
@@ -55,9 +56,13 @@ export function CommandPalette({
   projectRoot,
   onOpenFile,
   onOpenAt,
-  restoreTo
+  restoreTo,
+  actionIds
 }: {
   entries: readonly PaletteEntry[]
+  /** Every action this version knows, shown or not: the recent list is kept against it, so an action hidden while its
+   *  feature is turned off keeps its place for when it is back. */
+  actionIds: readonly ActionId[]
   onRun: (id: ActionId) => void
   onClose: () => void
   /** `'>'` to open on actions, `''` on files, `'%'` on text in files. */
@@ -76,7 +81,7 @@ export function CommandPalette({
   const listId = useId()
   const [query, setQuery] = useState(initialQuery)
   const [selected, setSelected] = useState(0)
-  const known = entries.map((e) => e.id)
+  const known = actionIds
   const [recent] = useState(() => readRecentActions(known))
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)

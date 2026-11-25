@@ -79,6 +79,8 @@ import { GithubSettings } from './components/GithubSettings'
 import { KubernetesSettings } from './components/KubernetesSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
+import { WorkspaceFeatureSettings } from './components/WorkspaceFeatureSettings'
+import { WORKSPACE_FEATURES_DEFAULTS, type WorkspaceFeatures } from '../../core/settings/workspaceFeatures'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
 import { CliInstallRows } from './components/CliInstallRows'
@@ -160,7 +162,7 @@ import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placeTab } from '../../core/panes/place'
 import { asBottomTab, mergeTabs, restoreTree, toSaved, type SavedPanels } from '../../core/panes/savedLayout'
 import { applySaved, presetPanels, presetTree, withPreset, withoutPreset, type PresetId, type SavedPreset } from '../../core/panes/presets'
-import { readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
+import { clearLayout, readLayout, readSavedPresets, writeLayout, writeSavedPresets } from './lib/layoutStore'
 import { LayoutPresetsDialog } from './components/LayoutPresetsDialog'
 import { checkSavedTabs, keepSavedTab } from './lib/restoreLayout'
 import { mediaKindOf } from '../../core/files/media'
@@ -852,6 +854,33 @@ export default function App(): React.JSX.Element {
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   const [agentAppEnabled, setAgentAppEnabled] = useState(false) // the agent app workspace toggle
+  /** Which Phase 1 workspace features are on (core/settings/workspaceFeatures.ts): null until main answers, and a
+   *  surface shows only on an explicit true, so a turned off Problems tab or send button never appears for a moment. */
+  const [workspaceFeatures, setWorkspaceFeaturesState] = useState<WorkspaceFeatures | null>(null)
+  /** The one read of the switches, shared by this state and the layout restore so the two cannot disagree. A failed
+   *  read is the defaults, every feature on, as a missing settings file is. */
+  const [featuresAsked] = useState(() =>
+    window.api.settings.getWorkspaceFeatures().catch(() => ({ ...WORKSPACE_FEATURES_DEFAULTS }))
+  )
+  const workspaceFeaturesRef = useRef(workspaceFeatures)
+  const setWorkspaceFeatures = useMemo(() => writeThrough(workspaceFeaturesRef, setWorkspaceFeaturesState), [])
+  /** A switch in Settings > General: applied at once, and only that switch is put back when main cannot save it (a
+   *  second switch flipped meanwhile keeps its new value). */
+  const toggleWorkspaceFeature = (key: keyof WorkspaceFeatures, next: boolean): void => {
+    const current = workspaceFeaturesRef.current
+    if (!current) return
+    const updated = { ...current, [key]: next }
+    setWorkspaceFeatures(updated)
+    if (key === 'layoutMemory' && !next) clearLayout()
+    void window.api.settings.setWorkspaceFeatures(updated).catch((err) => {
+      setWorkspaceFeatures((f) => (f ? { ...f, [key]: !next } : f))
+      toast.error(
+        t('settings.workspace.saveFailed', {
+          detail: err instanceof Error ? err.message : String(err)
+        })
+      )
+    })
+  }
   // The mirror panes' sizes, one reporter per session however many panes show it. A size the Host
   // could not take leaves the app at its own size: nothing to tell the person.
   const [mirrorSizes] = useState(() => createSessionSizeReporters((id, size) => void window.api.workspace.size(id, size).catch(() => undefined)))
@@ -1240,6 +1269,8 @@ export default function App(): React.JSX.Element {
     // Both session dialogs seed their kind from this, so it has to be loaded before either can open —
     // it cannot wait for the settings modal.
     void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
+    // The workspace feature switches decide what the bottom panel and the run views draw
+    void featuresAsked.then(setWorkspaceFeatures)
     // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
     // someone who has used the app for months while an answer is in flight.
     void window.api.settings
@@ -1282,21 +1313,37 @@ export default function App(): React.JSX.Element {
     // reached the window meanwhile (a session, a file the person opened, an agent's preview) is merged in, never
     // replaced (final review C1, I1). StrictMode runs this effect twice in development: only the one still mounted
     // applies (restoreLive).
+    //
+    // With layout memory off (Settings > General) nothing saved comes back and a record still in storage goes; the
+    // switch is asked beside the take back, so it adds no wait, and a failed read is the default, on. Turned off while the
+    // restore waited (Settings can open before the Host has handed its sessions back), nothing comes back either.
     let restoreLive = true
     void window.api.sessions
       .list({ afterTakeBack: true })
       .catch((): SessionInfo[] => [])
-      .then(() => checkSavedTabs(savedAtStart))
-      .then((checked) =>
+      .then(() => featuresAsked)
+      .then(async (features) => {
+        if (!features.layoutMemory) clearLayout()
+        const saved = features.layoutMemory ? savedAtStart : null
+        return { saved, checked: await checkSavedTabs(saved) }
+      })
+      .then(({ saved, checked }) =>
         window.api.sessions
           .list()
           // No list: the rest of the layout still comes back, and the sessions arrive as session:created
           .catch((): SessionInfo[] => [])
-          .then((all) => ({ checked, all }))
+          .then((all) => ({ saved, checked, all }))
       )
-      .then(({ checked, all }) => {
+      .then(({ saved: savedThen, checked, all }) => {
         if (!restoreLive) return
         layoutRestoredRef.current = true
+        const saved = workspaceFeaturesRef.current?.layoutMemory === false ? null : savedThen
+        // A record left in storage while layout memory is off (a hand-edited settings file) opened the panels its way
+        // at first paint; they go back to the start, as the tree does
+        if (savedAtStart && !saved) {
+          applyPanels(presetPanels('default'))
+          setKubeHeld(false)
+        }
         // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back. One the
         // app lost sight of is left out too: if the Host still runs it, its hand-back places a tab again (session:created)
         const list = all.filter((s) => !closesWhenEnded(s, { afterLostSight: true }))
@@ -1305,23 +1352,23 @@ export default function App(): React.JSX.Element {
         const arrived = sessionsRef.current.filter((s) => !listed.has(s.id))
         setSessions([...list, ...arrived])
         for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
-        const keep = keepSavedTab(savedAtStart, checked, new Set([...listed, ...arrived.map((s) => s.id)]))
-        const restored = restoreTree(savedAtStart?.tree ?? null, savedAtStart?.active ?? -1, keep)
+        const keep = keepSavedTab(saved, checked, new Set([...listed, ...arrived.map((s) => s.id)]))
+        const restored = restoreTree(saved?.tree ?? null, saved?.active ?? -1, keep)
         let root: PaneNode | null = restored?.root ?? null
         let paneId: string | null = restored?.activePaneId ?? null
-        if (root && savedAtStart) {
+        if (root && saved) {
           // Each kept tab's row, from what the layout saved beside its id; a row the window already has (a file the person
           // opened while the restore waited) is not added twice
           const kept = leaves(root).flatMap((l) => l.tabIds)
           const held: string[] = []
           for (const id of kept) {
             const kind = parseTab(id)?.kind
-            const file = kind === 'file' ? savedAtStart.tabs.files[id] : undefined
+            const file = kind === 'file' ? saved.tabs.files[id] : undefined
             if (file && !fileTabsRef.current.some((t) => t.id === id)) loadFileTab(id, file.path, file.projectRoot)
             if (kind === 'browser' || kind === 'kube') held.push(id)
           }
-          const records = kept.flatMap((id) => (savedAtStart.tabs.records[id] ? [{ id, ...savedAtStart.tabs.records[id] }] : []))
-          const browsers = kept.flatMap((id) => (savedAtStart.tabs.browsers[id] ? [{ id, ...savedAtStart.tabs.browsers[id] }] : []))
+          const records = kept.flatMap((id) => (saved.tabs.records[id] ? [{ id, ...saved.tabs.records[id] }] : []))
+          const browsers = kept.flatMap((id) => (saved.tabs.browsers[id] ? [{ id, ...saved.tabs.browsers[id] }] : []))
           if (records.length > 0) setRecordTabs((prev) => [...prev, ...records.filter((r) => !prev.some((x) => x.id === r.id))])
           if (browsers.length > 0) setBrowserTabs((prev) => [...prev, ...browsers.filter((b) => !prev.some((x) => x.id === b.id))])
           if (held.length > 0) setHeldTabs(new Set(held))
@@ -1349,8 +1396,8 @@ export default function App(): React.JSX.Element {
         // Nothing to restore: the window keeps whatever it already shows
         if (!root || !paneId) return
         // This tree is built from scratch, so what the window drew while the restore waited goes back in behind the first
-        // group's tab (mergeTabs), and so do the mirror tabs a workspace.list that answered first has already placed (fix
-        // round 1: they were wiped). setLayout moves the ref at once, so a list that answers after this, before the
+        // group's tab, a mirror tab beside its session (mergeTabs), and so do the mirror tabs a workspace.list that
+        // answered first has already placed (fix round 1: they were wiped). setLayout moves the ref at once, so a list that answers after this, before the
         // render, builds on this tree.
         const withMirrors = placeAppTabs(mergeTabs(root, layoutRef.current), openSessionIds(mirrorsRef.current), paneId)
         setLayout(withMirrors)
@@ -2705,16 +2752,19 @@ export default function App(): React.JSX.Element {
         )
       }
     )
-  // Written a moment after the last change, and only once the restore has run (layoutRestoredRef)
+  // Written a moment after the last change, only once the restore has run (layoutRestoredRef) and only while layout
+  // memory is on. Turning it on saves the screen as it is then.
   useEffect(() => {
-    if (!layoutRestoredRef.current) return
-    const timer = setTimeout(() => writeLayout(layoutRecordRef.current()), 300)
+    if (!layoutRestoredRef.current || workspaceFeaturesRef.current?.layoutMemory !== true) return
+    const timer = setTimeout(() => {
+      if (workspaceFeaturesRef.current?.layoutMemory === true) writeLayout(layoutRecordRef.current())
+    }, 300)
     return () => clearTimeout(timer)
-  }, [layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
+  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs])
   // ...and at once when the window goes, so a change in the last 300 ms is not lost
   useEffect(() => {
     const flush = (): void => {
-      if (layoutRestoredRef.current) writeLayout(layoutRecordRef.current())
+      if (layoutRestoredRef.current && workspaceFeaturesRef.current?.layoutMemory === true) writeLayout(layoutRecordRef.current())
     }
     window.addEventListener('pagehide', flush)
     return () => window.removeEventListener('pagehide', flush)
@@ -3906,7 +3956,13 @@ export default function App(): React.JSX.Element {
   /** 아래쪽 패널에 실제로 넘길 탭. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. 없는 탭을
    *  어디로 떨어뜨리는지는 shownBottomTab(lib/bottomTab.ts)이 정한다. */
-  const bottomTabShown = shownBottomTab({ wanted: bottomTab, runAvailable, kubeAvailable, terminalIds: terminals.map((x) => x.id) })
+  const bottomTabShown = shownBottomTab({
+    wanted: bottomTab,
+    runAvailable,
+    kubeAvailable,
+    problemsAvailable: workspaceFeatures?.problemsTab === true,
+    terminalIds: terminals.map((x) => x.id)
+  })
   const windowShown = useDocumentShown()
   /** The cluster view follows the cluster only while it is seen (K4). */
   const clusterVisible = clusterSeen({
@@ -3924,11 +3980,16 @@ export default function App(): React.JSX.Element {
    *  window comes back, and on the tab's refresh; a quarter second after the last of them. */
   const [problems, setProblems] = useState<Diagnostic[] | null | undefined>(undefined)
   const [problemsAsk, setProblemsAsk] = useState(0)
+  /** The Problems tab is turned on in Settings > General (Phase 1 gate). Off, or not known yet: no tab and nothing asked. */
+  const problemsOn = workspaceFeatures?.problemsTab === true
+  /** Sending to an agent is turned on (Phase 1 gate). Off, or not known yet: no rail button and no diff hunk button. */
+  const contextOn = workspaceFeatures?.contextBridge === true
   // A project just opened shows no other project's list while its own is asked for
   useEffect(() => {
     setProblems(undefined)
   }, [currentProject])
   useEffect(() => {
+    if (!problemsOn) return
     if (!currentProject) {
       setProblems([])
       return
@@ -3950,7 +4011,11 @@ export default function App(): React.JSX.Element {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [currentProject, orchSnapshot, problemsAsk])
+  }, [problemsOn, currentProject, orchSnapshot, problemsAsk])
+  // A bottom panel on the Problems tab (saved so, or showing it when the switch went off) moves to Run
+  useEffect(() => {
+    if (workspaceFeatures?.problemsTab === false) setBottomTab((cur) => (cur === 'problems' ? 'run' : cur))
+  }, [workspaceFeatures?.problemsTab])
   useEffect(() => {
     const again = (): void => setProblemsAsk((n) => n + 1)
     window.addEventListener('focus', again)
@@ -4857,7 +4922,8 @@ export default function App(): React.JSX.Element {
     'search.text': { run: () => openPalette('%') },
     // The bottom panel on the Problems tab (spec W5); there is no tab without a project
     'problems.open': {
-      blockedBy: () => (currentProject ? null : 'action.blocked.noProject'),
+      blockedBy: () =>
+        workspaceFeaturesRef.current?.problemsTab !== true ? 'action.blocked.featureOff' : currentProject ? null : 'action.blocked.noProject',
       run: () => {
         setRunPanelOpen(true)
         setBottomTab('problems')
@@ -4865,7 +4931,8 @@ export default function App(): React.JSX.Element {
     },
     // The editor selection to an agent, after a preview (spec W4).
     'context.attachSelection': {
-      blockedBy: () => (activeEditorSelection() ? null : 'action.blocked.noSelection'),
+      blockedBy: () =>
+        workspaceFeaturesRef.current?.contextBridge !== true ? 'action.blocked.featureOff' : activeEditorSelection() ? null : 'action.blocked.noSelection',
       run: () => openSelectionContext()
     }
   }
@@ -5719,6 +5786,7 @@ export default function App(): React.JSX.Element {
                     onOpenFolder={openLinkedFolder}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
+                    problemsEnabled={problemsOn}
                     problemsRoot={currentProject}
                     problems={problems}
                     onOpenProblem={(file, line) => openFile(file, line !== undefined ? { line } : undefined)}
@@ -5739,6 +5807,7 @@ export default function App(): React.JSX.Element {
                       // A tail keeps its end when it has to be cut: the failure is on the last lines
                       openContextPreview(made.ref, contextText(made.ref, made.excerpt, '', { keepEnd: made.fromTail }), { keepEnd: made.fromTail })
                     }}
+                    contextEnabled={contextOn}
                     terminals={terminals}
                     terminalCwd={bottomRoot}
                     activeTab={bottomTabShown}
@@ -6169,6 +6238,8 @@ export default function App(): React.JSX.Element {
                       />
                     </div>
                     <p className="settings-hint">{t('settings.defaultKind.hint')}</p>
+                    {/* The Phase 1 workspace features that act without a key (the spec's Phase 1 gate) */}
+                    <WorkspaceFeatureSettings value={workspaceFeatures} onToggle={toggleWorkspaceFeature} />
                   </div>
                 )}
                 {settingsTab === 'cli' && (
@@ -6747,8 +6818,13 @@ export default function App(): React.JSX.Element {
                   setSettingsTab('security')
                   setShowSettings(true)
                 },
-                // A hunk of its diff to a repair Job draft (spec W4): this computer's Runs only, as the form is local
-                onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
+                // A hunk of its diff to a repair Job draft (spec W4): this computer's Runs only, as the form is local, and
+                // only while sending to an agent is on (Phase 1 gate)
+                ...(contextOn
+                  ? {
+                      onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
+                    }
+                  : {})
               }
             : {})}
         />
@@ -6805,10 +6881,13 @@ export default function App(): React.JSX.Element {
           initialQuery={paletteOpen.query}
           projectRoot={currentProject}
           restoreTo={paletteRestoreRef.current}
-          entries={ACTIONS.filter((a) => a.id !== 'palette.open').map((a) => {
-            const chord = bindingsRef.current[a.id]?.[0]
+          actionIds={ACTIONS.map((a) => a.id)}
+          entries={ACTIONS.filter((a) => a.id !== 'palette.open').flatMap((a) => {
             const state = actionRegistry.state(a.id)
-            return { id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }
+            // A feature turned off in Settings > General (Phase 1 gate) is not offered, rather than offered as blocked
+            if (!state.ok && state.reason === 'action.blocked.featureOff') return []
+            const chord = bindingsRef.current[a.id]?.[0]
+            return [{ id: a.id, descKey: a.descKey, chord: chord ? formatChord(chord) : undefined, blocked: state.ok ? null : state.reason }]
           })}
           onRun={(id) => {
             setPaletteOpen(null)

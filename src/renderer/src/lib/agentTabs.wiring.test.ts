@@ -50,7 +50,7 @@ describe('an agent’s session closes its tab when it ends', () => {
   })
 
   it('a reload does not bring an ended agent’s session back as a tab', () => {
-    const reload = between('.then(({ checked, all }) => {', 'setSessions([...list, ...arrived])')
+    const reload = between('.then(({ saved: savedThen, checked, all }) => {', 'setSessions([...list, ...arrived])')
     expect(reload).toContain('.filter((s) => !closesWhenEnded(s, { afterLostSight: true }))')
   })
 })

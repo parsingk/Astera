@@ -26,6 +26,7 @@ import { codexRolloutFromNote, noteRolloutPath, type CodexRolloutWatcher } from 
 import type { DesktopNotifier } from './desktopNotifier'
 import type { SessionSignalForwarder } from './sessionSignals'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import type { WorkspaceFeatures } from '../core/settings/workspaceFeatures'
 import type { AttentionState, Attention } from '../core/sessions/attention'
 import { createRendererGate } from './rendererGate'
 import type { PendingPromptState } from '../core/sessions/pendingPrompt'
@@ -4522,6 +4523,16 @@ export function registerIpc(
     for (const k of ['inputNeeded', 'limitWaiting', 'accountSwitched'])
       if (typeof o[k] !== 'boolean') throw new Error(`INVALID_DESKTOP_NOTIFY: ${k}=${String(o[k])}`)
     await core.appSettings.setDesktopNotify(next as DesktopNotifySettings)
+  })
+  // The Phase 1 gate's switches (core/settings/workspaceFeatures.ts), read and written as one record
+  ipcMain.handle('settings.getWorkspaceFeatures', () => core.appSettings.getWorkspaceFeatures())
+  ipcMain.handle('settings.setWorkspaceFeatures', async (_e, next: unknown) => {
+    if (next === null || typeof next !== 'object' || Array.isArray(next))
+      throw new Error(`INVALID_WORKSPACE_FEATURES: ${String(next)}`)
+    const o = next as Record<string, unknown>
+    for (const k of ['layoutMemory', 'problemsTab', 'contextBridge'])
+      if (typeof o[k] !== 'boolean') throw new Error(`INVALID_WORKSPACE_FEATURES: ${k}=${String(o[k])}`)
+    await core.appSettings.setWorkspaceFeatures(next as WorkspaceFeatures)
   })
 
   // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in

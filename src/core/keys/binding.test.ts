@@ -394,6 +394,7 @@ describe('action wording', () => {
       'action.blocked.noLocalCli',
       'action.blocked.noKubectl',
       'action.blocked.noSelection',
+      'action.blocked.featureOff',
       'quickOpen.placeholder',
       'quickOpen.empty',
       'quickOpen.indexing',

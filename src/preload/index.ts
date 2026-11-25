@@ -258,6 +258,8 @@ const api = {
     setGithubPolling: invoke('settings.setGithubPolling'),
     getDesktopNotify: invoke('settings.getDesktopNotify'),
     setDesktopNotify: invoke('settings.setDesktopNotify'),
+    getWorkspaceFeatures: invoke('settings.getWorkspaceFeatures'),
+    setWorkspaceFeatures: invoke('settings.setWorkspaceFeatures'),
     getGenerator: invoke('settings.getGenerator'),
     setGenerator: invoke('settings.setGenerator'),
     listModels: invoke('settings.listModels'),

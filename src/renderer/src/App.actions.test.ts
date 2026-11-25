@@ -58,7 +58,7 @@ describe('App.tsx runs shortcuts through the action registry', () => {
 
   // W4: the active pane's editor selection goes to an agent after a preview, pasted into its input and never submitted.
   it('sends the active editor selection through a preview, into a fitting session, unsubmitted', () => {
-    expect(src).toMatch(/'context\.attachSelection': \{\s*blockedBy: \(\) => \(activeEditorSelection\(\) \? null : 'action\.blocked\.noSelection'\),\s*run: \(\) => openSelectionContext\(\)/)
+    expect(src).toMatch(/'context\.attachSelection': \{\s*blockedBy: \(\) =>\s*workspaceFeaturesRef\.current\?\.contextBridge !== true \? 'action\.blocked\.featureOff' : activeEditorSelection\(\) \? null : 'action\.blocked\.noSelection',\s*run: \(\) => openSelectionContext\(\)/)
     expect(src).toMatch(/const paneId = activePaneIdRef\.current\s*const view = paneId \? mdViews\[paneId\] : undefined/)
     expect(src).toMatch(/sessionsRef\.current\s*\.filter\(\(s\) => sessionFits\(ref, \{ cwd: s\.cwd, alive: s\.status !== 'exited' \}\)\)/)
     const attach = src.slice(src.indexOf('const attachContext = '), src.indexOf('const attachContext = ') + 2500)

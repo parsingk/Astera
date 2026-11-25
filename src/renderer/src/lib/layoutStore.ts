@@ -27,5 +27,13 @@ function write(key: string, value: unknown): void {
 
 export const readLayout = (): SavedLayout | null => readSaved(read(LAYOUT_KEY))
 export const writeLayout = (layout: SavedLayout): void => write(LAYOUT_KEY, layout)
+/** Layout memory turned off (Settings > General): the window layout goes, the saved presets stay. */
+export const clearLayout = (): void => {
+  try {
+    localStorage.removeItem(LAYOUT_KEY)
+  } catch {
+    // Storage off: there is nothing it could have kept either.
+  }
+}
 export const readSavedPresets = (): SavedPreset[] => readPresets(read(PRESETS_KEY))
 export const writeSavedPresets = (list: readonly SavedPreset[]): void => write(PRESETS_KEY, toPresetsRecord(list))

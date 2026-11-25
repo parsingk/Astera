@@ -45,6 +45,25 @@ describe('the READMEs and the command palette', () => {
     }
   })
 
+  // Phase 1 gate: where each workspace feature is turned off, in the app's words
+  it.each(READMES)('%s says where the workspace features are turned off, as the app names them', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    const m = CATALOGS[lang].messages
+    for (const key of ['settings.workspace.layoutMemory', 'settings.workspace.problemsTab', 'settings.workspace.contextBridge', 'shortcut.unbind', 'shortcut.resetOne'] as const) {
+      expect(text).toContain(`**${m[key]}**`)
+    }
+    expect(text).toContain(`${m['settings.title']} › ${m['settings.tab.general']}`)
+    expect(text).toContain(`${m['settings.title']} › ${m['settings.tab.shortcuts']}`)
+  })
+
+  // Final review M3: the palette, go to file and find in files are one box, so one key alone does not turn it off
+  const ALL_THREE: Record<Lang, string> = { en: 'all three', ko: '세 키를 모두', ja: '3 つのキーをすべて', es: 'sus tres teclas' }
+  it.each(READMES)('%s and the settings hint say all three keys go to turn the box off', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    expect(text).toContain(ALL_THREE[lang])
+    expect(CATALOGS[lang].messages['settings.workspace.hint']).toContain(ALL_THREE[lang])
+  })
+
   it.each(READMES)('%s names sending a selection to an agent as the app does', (file, lang) => {
     const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
     expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.context.attachSelection']}:**`)
