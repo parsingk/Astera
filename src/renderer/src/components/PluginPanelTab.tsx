@@ -5,6 +5,10 @@ import type { PanelRefusalCode } from '../../../core/plugins/pluginRows'
 import { useI18n } from '../i18n/I18nProvider'
 
 /** Where a panel tab is: asking main, showing the guest main agreed to, refused with a reason, or its guest gone. */
+/** How many times in a row a tab asks main again, by itself, for a guest main ended without a page loading between:
+ *  enough for a reinstall, never a loop. */
+const AUTO_REOPEN_MAX = 3
+
 export type PanelState =
   | { phase: 'preparing' }
   | { phase: 'shown'; url: string; partition: string }
@@ -41,6 +45,15 @@ export function PluginPanelTab({
   const [attempt, setAttempt] = useState(0)
   const stateRef = useRef(state)
   stateRef.current = state
+  const mounted = useRef(true)
+  useEffect(
+    () => () => {
+      mounted.current = false
+    },
+    []
+  )
+  /** Asks made by itself since a page last loaded. */
+  const autoReopens = useRef(0)
 
   // The command run again is the person asking for the panel (final review I1): a refusal or a gone guest is asked
   // about again; a page already showing is left as it is, not reloaded
@@ -75,6 +88,18 @@ export function PluginPanelTab({
       title={title}
       onReopen={() => setAttempt((n) => n + 1)}
       onGone={() => setState({ phase: 'gone' })}
+      // Main ended the guest (the plugin installed again, turned off or removed): ask again, so the tab shows the new
+      // page or says why not (Phase 2 step 4b); a closed tab asks nothing
+      onEnded={() => {
+        if (!mounted.current) return
+        if (autoReopens.current < AUTO_REOPEN_MAX) {
+          autoReopens.current += 1
+          setAttempt((n) => n + 1)
+        } else setState({ phase: 'gone' })
+      }}
+      onLoaded={() => {
+        autoReopens.current = 0
+      }}
       onFocus={onFocus}
     />
   )
@@ -86,17 +111,26 @@ export function PluginPanelView({
   title,
   onReopen,
   onGone,
+  onEnded = onGone,
+  onLoaded = () => {},
   onFocus
 }: {
   state: PanelState
   title: string
   onReopen: () => void
+  /** The page crashed. */
   onGone: () => void
+  /** Main ended the guest. */
+  onEnded?: () => void
+  /** A page loaded in the guest. */
+  onLoaded?: () => void
   onFocus: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   if (state.phase === 'shown')
-    return <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} onGone={onGone} onFocus={onFocus} />
+    return (
+      <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} onGone={onGone} onEnded={onEnded} onLoaded={onLoaded} onFocus={onFocus} />
+    )
   if (state.phase === 'preparing') return <div className="plugin-panel-note">{t('plugin.panel.preparing')}</div>
   const note: MessageKey = state.phase === 'gone' ? 'plugin.panel.gone' : `plugin.panel.refused.${state.code}`
   return (
@@ -116,30 +150,38 @@ function PluginGuest({
   partition,
   title,
   onGone,
+  onEnded,
+  onLoaded,
   onFocus
 }: {
   url: string
   partition: string
   title: string
   onGone: () => void
+  onEnded: () => void
+  onLoaded: () => void
   onFocus: () => void
 }): React.JSX.Element {
   const viewRef = useRef<WebviewTag>(null)
-  const latest = useRef({ onGone, onFocus })
-  latest.current = { onGone, onFocus }
+  const latest = useRef({ onGone, onEnded, onLoaded, onFocus })
+  latest.current = { onGone, onEnded, onLoaded, onFocus }
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const gone = (): void => latest.current.onGone()
+    const ended = (): void => latest.current.onEnded()
+    const loaded = (): void => latest.current.onLoaded()
     const focus = (): void => latest.current.onFocus()
-    // Main ending the guest (its plugin turned off, removed or replaced) reaches the element as `destroyed`; a page that
-    // crashes while its guest stays as `render-process-gone` (measured in the app)
-    view.addEventListener('destroyed', gone)
+    // Main ending the guest (its plugin turned off, removed or installed again), or refusing its attach, reaches the
+    // element as `destroyed`; a page that crashes while its guest stays as `render-process-gone` (measured in the app)
+    view.addEventListener('destroyed', ended)
     view.addEventListener('render-process-gone', gone)
+    view.addEventListener('dom-ready', loaded)
     view.addEventListener('focus', focus)
     return () => {
-      view.removeEventListener('destroyed', gone)
+      view.removeEventListener('destroyed', ended)
       view.removeEventListener('render-process-gone', gone)
+      view.removeEventListener('dom-ready', loaded)
       view.removeEventListener('focus', focus)
     }
   }, [])

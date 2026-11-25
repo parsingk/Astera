@@ -14,6 +14,8 @@ export interface PluginRow {
   permissions: string[]
   /** The name the plugin shows people; absent when its manifest gives none. */
   displayName?: string
+  /** When this copy was installed: a later one is a reinstall (`plugins dev`, the CLI), whose old pages are stale. */
+  installedAt?: number
   contributes?: { commands: { id: string; title: string; panel: string }[]; panels: { id: string; title: string }[] }
 }
 
@@ -36,6 +38,7 @@ export function pluginRowsOf(body: unknown): PluginRow[] {
       permissions: strings(o.permissions),
       ...(typeof o.ui === 'string' ? { ui: o.ui } : {}),
       ...(typeof o.displayName === 'string' ? { displayName: o.displayName } : {}),
+      ...(typeof o.installedAt === 'number' ? { installedAt: o.installedAt } : {}),
       ...(c && Array.isArray(c.panels) && Array.isArray(c.commands) ? { contributes: c } : {})
     })
   }

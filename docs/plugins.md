@@ -791,8 +791,10 @@ nothing after the app quits:
 - Every Astera theme is dark, and the page does not follow it on its own: a page that follows the system's light mode
   stands white beside the app. Declaring `color-scheme: dark`, as the sample does, keeps it dark.
 
-Turning the plugin off, removing it or installing it again from the app closes its open panels; their tabs say so and
-offer to open the panel again. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
+Turning the plugin off, removing it or installing it again closes its open panels, from the app at once and from the CLI
+within a few seconds; each tab then asks again by itself, so a plugin installed again shows its new page and one turned
+off or removed says so. A page that crashes is not opened again by itself: its tab says it stopped and offers to open
+it. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
 
 ## Not yet
 

@@ -81,8 +81,9 @@ const KEPT_PREFERENCES = new Set(['partition', 'zoomFactor'])
  *  leave the page goes nowhere (review I4, measured with the WebRTC policy below: no candidate, nothing sent). */
 const DEAD_PROXY = { proxyRules: 'http://127.0.0.1:9', proxyBypassRules: '<-loopback>' }
 
-type Prepared = PreparedPanel & { host: string; project?: { root: string; name: string }; at: number }
-type Snapshot = { pluginId: string; panelId: string; host: string; project?: { root: string; name: string } }
+/** `installedAt` is the copy a page was prepared from: a reinstall since makes it stale (Phase 2 step 4b). */
+type Prepared = PreparedPanel & { host: string; project?: { root: string; name: string }; at: number; installedAt?: number }
+type Snapshot = { pluginId: string; panelId: string; host: string; project?: { root: string; name: string }; installedAt?: number }
 
 export function createPanelGuests(d: {
   /** The Host's plugin list, or null when it could not be read. */
@@ -193,7 +194,17 @@ export function createPanelGuests(d: {
       for (const [u, x] of prepared) if (now - x.at > PREPARED_TTL_MS) prepared.delete(u)
       const workspaceRead = p.permissions.includes('workspace.read')
       const project = workspaceRead && projectRoot !== null ? { root: projectRoot, name: path.basename(projectRoot) } : undefined
-      prepared.set(url, { key: contributionKey(pluginId, panelId), pluginId, panelId, partition, url, host, at: now, ...(project ? { project } : {}) })
+      prepared.set(url, {
+        key: contributionKey(pluginId, panelId),
+        pluginId,
+        panelId,
+        partition,
+        url,
+        host,
+        at: now,
+        ...(project ? { project } : {}),
+        ...(p.installedAt !== undefined ? { installedAt: p.installedAt } : {})
+      })
       return { ok: true, url, partition }
     },
 
@@ -239,7 +250,13 @@ export function createPanelGuests(d: {
         guest.on('will-redirect', nowhere)
         return true
       }
-      const snapshot: Snapshot = { pluginId: entry.pluginId, panelId: entry.panelId, host: entry.host, ...(entry.project ? { project: entry.project } : {}) }
+      const snapshot: Snapshot = {
+        pluginId: entry.pluginId,
+        panelId: entry.panelId,
+        host: entry.host,
+        ...(entry.project ? { project: entry.project } : {}),
+        ...(entry.installedAt !== undefined ? { installedAt: entry.installedAt } : {})
+      }
       // close() alone leaves a guest's page drawn with its scripts running (measured): its renderer is ended first
       guests.set(guest.id, {
         snapshot,
@@ -290,6 +307,15 @@ export function createPanelGuests(d: {
       for (const p of list) if (roots.has(pluginSchemeHost(p.id))) watched.add(p.id)
       for (const host of roots.keys()) if (!list.some((p) => pluginSchemeHost(p.id) === host)) roots.delete(host)
       for (const id of watched) if (unusablePlugin(id, list.find((r) => r.id === id)) !== null) forget(id)
+      // Installed again since a page was prepared (plugins dev, the CLI): its panels end, and each asks for the new page
+      const stale = (pluginId: string, installedAt: number | undefined): boolean => {
+        const now = list.find((r) => r.id === pluginId)?.installedAt
+        return installedAt !== undefined && now !== undefined && now !== installedAt
+      }
+      const reinstalled = new Set<string>()
+      for (const g of guests.values()) if (stale(g.snapshot.pluginId, g.snapshot.installedAt)) reinstalled.add(g.snapshot.pluginId)
+      for (const p of prepared.values()) if (stale(p.pluginId, p.installedAt)) reinstalled.add(p.pluginId)
+      for (const id of reinstalled) forget(id)
     }
   }
 }

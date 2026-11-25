@@ -68,7 +68,7 @@ describe('PluginPanelTab wiring', () => {
   // Screen check, measured: main's forget (renderer ended, then the guest closed) reaches the element as `close` and
   // `destroyed`, never as `render-process-gone`, which a page crash with its guest still there gives
   it('notices its guest is gone, and that the person moved into it', () => {
-    expect(src).toMatch(/view\.addEventListener\('destroyed', gone\)/)
+    expect(src).toMatch(/view\.addEventListener\('destroyed', ended\)/)
     expect(src).toMatch(/view\.addEventListener\('render-process-gone', gone\)/)
     expect(src).toMatch(/view\.addEventListener\('focus', focus\)/)
   })
@@ -90,3 +90,18 @@ describe('running the command again', () => {
     expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(nonce === 0\) return\s*const phase = stateRef\.current\.phase\s*if \(phase === 'refused' \|\| phase === 'gone'\) setAttempt\(\(n\) => n \+ 1\)\s*\}, \[nonce\]\)/)
   })
 })
+
+// Phase 2 step 4b: main ends a guest when its plugin is installed again, turned off or removed; the tab asks main again by
+// itself, so it shows the new page or says why not. A page that crashes is not asked again, and three asks in a row
+// without a page loading stop, so nothing loops.
+describe('a guest main ended', () => {
+  it('asks main again on destroyed, at most three times without a page loading, and not after the tab closed', () => {
+    expect(src).toMatch(/const AUTO_REOPEN_MAX = 3/)
+    expect(src).toMatch(/onEnded=\{\(\) => \{\s*if \(!mounted\.current\) return\s*if \(autoReopens\.current < AUTO_REOPEN_MAX\) \{\s*autoReopens\.current \+= 1\s*setAttempt\(\(n\) => n \+ 1\)\s*\} else setState\(\{ phase: 'gone' \}\)/)
+    expect(src).toMatch(/onLoaded=\{\(\) => \{\s*autoReopens\.current = 0\s*\}\}/)
+    expect(src).toMatch(/view\.addEventListener\('destroyed', ended\)/)
+    expect(src).toMatch(/view\.addEventListener\('render-process-gone', gone\)/)
+    expect(src).toMatch(/view\.addEventListener\('dom-ready', loaded\)/)
+  })
+})
+
