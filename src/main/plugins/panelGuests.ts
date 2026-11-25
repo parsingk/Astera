@@ -153,7 +153,8 @@ export function createPanelGuests(d: {
       if (!p.enabled) return refuse(`${pluginId} is disabled`)
       if (p.status !== 'ready' && p.status !== 'running') return refuse(`${pluginId} is ${p.status}`)
       if (p.ui === undefined) return refuse(`${pluginId} has no ui page`)
-      if (!p.contributes?.panels.some((x) => x.id === panelId)) return refuse(`${pluginId} contributes no panel ${panelId}`)
+      // An unknown panel of a usable plugin is refused alone: its other panels and its files stay as they were
+      if (!p.contributes?.panels.some((x) => x.id === panelId)) return { ok: false, reason: `${pluginId} contributes no panel ${panelId}` }
       const host = pluginSchemeHost(pluginId)
       const partition = pluginPartition(pluginId)
       const url = pluginPageUrl(pluginId, p.ui, panelId)

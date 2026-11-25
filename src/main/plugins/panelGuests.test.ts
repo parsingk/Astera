@@ -218,3 +218,15 @@ describe('pluginRowsOf', () => {
     expect(pluginRowsOf(null)).toEqual([])
   })
 })
+
+// Screen check: a refused panel of a ready plugin took the plugin's other panels and files with it
+describe('a refused panel of a usable plugin', () => {
+  it('leaves the plugin’s prepared panels and files as they were', async () => {
+    const m = make([row()])
+    const p = await m.guests.prepare('hello-panel', 'main', null)
+    if (!p.ok) throw new Error(p.reason)
+    expect(await m.guests.prepare('hello-panel', 'side', null)).toEqual({ ok: false, reason: 'hello-panel contributes no panel side' })
+    expect((await m.sessions.handlers.get('plugin-hello-panel')!({ url: p.url })).status).toBe(200)
+    expect(m.guests.decideAttach({ partition: p.partition, src: p.url }, {})).toBe('plugin')
+  })
+})
