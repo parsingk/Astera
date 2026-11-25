@@ -114,8 +114,13 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   // plugin's name, and run through the registry like them.
   it('lists and runs the commands plugins contribute through the registry', () => {
     const load = src.slice(src.indexOf('// The commands plugins contribute, read each time the palette opens'))
-    expect(load).toMatch(/if \(paletteOpen === null\) return[\s\S]*?window\.api\.plugins\s*\.list\(\)[\s\S]*?if \(current && r\.ok\) setPluginCommands\(panelCommands\(pluginRowsOf\(r\.body\)\)\)/)
-    expect(src).toMatch(/pluginCommands\.map\(\(c\) =>\s*actionRegistry\.register\(c\.pluginId, c\.key, \{ run: \(\) => openPluginPanelRef\.current\(c\) \}\)\s*\)/)
+    expect(load).toMatch(/if \(paletteOpen === null\) return[\s\S]*?window\.api\.plugins\s*\.list\(\)[\s\S]*?if \(current && r\.ok\) applyPluginCommands\(panelCommands\(pluginRowsOf\(r\.body\)\)\)/)
+    // Screen check: registered in an effect, after the render that drew the palette's rows, every plugin row read the
+    // registry before its handler was there and stayed blocked. The registry has them before the rows are drawn.
+    expect(src).toMatch(
+      /const applyPluginCommands = \(cmds: PanelCommand\[\]\): void => \{\s*for \(const dispose of pluginDisposersRef\.current\) dispose\(\)\s*pluginDisposersRef\.current = cmds\.map\(\(c\) =>\s*actionRegistry\.register\(c\.pluginId, c\.key, \{ run: \(\) => openPluginPanelRef\.current\(c\) \}\)\s*\)\s*setPluginCommands\(cmds\)/
+    )
+    expect(src).not.toMatch(/pluginCommands\.map\(\(c\) =>\s*actionRegistry\.register/)
     expect(src).toMatch(/actionIds=\{\[\.\.\.ACTIONS\.map\(\(a\) => a\.id\), \.\.\.pluginCommands\.map\(\(c\) => c\.key\)\]\}/)
     expect(src).toMatch(/\.\.\.pluginCommands\.map\(\(c\) => \{\s*const state = actionRegistry\.state\(c\.key\)\s*return \{ id: c\.key, title: c\.title, source: c\.pluginName, blocked: state\.ok \? null : state\.reason \}/)
   })
@@ -128,7 +133,9 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   })
 
   it('opens a plugin panel in its tab, recorded with the project it was opened in', () => {
-    expect(src).toMatch(/const openPluginPanel = \(c: \{ pluginId: string; panelId: string; title: string; pluginName: string \}\): void => \{\s*const id = pluginTab\(c\.pluginId, c\.panelId\)\s*releaseTab\(id\)/)
+    expect(src).toMatch(/const openPluginPanel = \(c: \{ pluginId: string; panelId: string; panelTitle: string; pluginName: string \}\): void => \{\s*const id = pluginTab\(c\.pluginId, c\.panelId\)\s*releaseTab\(id\)/)
+    // Screen check: the tab took the command's title; it is the panel's
+    expect(src).toMatch(/\{ id, pluginId: c\.pluginId, panelId: c\.panelId, title: c\.panelTitle, pluginName: c\.pluginName, projectRoot: currentProject \?\? '' \}/)
     expect(src).toMatch(/placePluginTab\(layoutRef\.current, c\.pluginId, c\.panelId, \{ activePaneId: activePaneIdRef\.current \}\)/)
     expect(src).toMatch(/projectRoot: currentProject \?\? ''/)
     expect(src).toMatch(/openPluginPanelRef\.current = openPluginPanel/)

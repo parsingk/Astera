@@ -757,8 +757,10 @@ export default function App(): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState<{ query: PaletteStart } | null>(null)
   /** The commands plugins contribute, as the Host last listed them (read each time the palette opens). */
   const [pluginCommands, setPluginCommands] = useState<PanelCommand[]>([])
-  /** openPluginPanel as of the latest render, for the registry's plugin delegates registered by an effect. */
+  /** openPluginPanel as of the latest render, for the registry's plugin delegates (applyPluginCommands). */
   const openPluginPanelRef = useRef<(c: PanelCommand) => void>(() => {})
+  /** Disposers of the plugin commands in the registry now, one per command. */
+  const pluginDisposersRef = useRef<Array<() => void>>([])
   /** Where focus was before the palette opened (openPalette), given back when it closes. */
   const paletteRestoreRef = useRef<HTMLElement | null>(null)
   /** A piece of the workbench on its way to an agent (spec W4), shown in ContextPreview until attached or dropped. A
@@ -1689,6 +1691,18 @@ export default function App(): React.JSX.Element {
     return () => disposers.forEach((dispose) => dispose())
   }, [actionRegistry])
 
+  /** Puts the plugin commands the Host listed in the registry, under their plugin as owner and their contribution key as
+   *  id (ADR-007, ADR-008), in place of the last list's: a plugin turned off or removed loses its commands. Registered
+   *  before the state that draws their rows, so a row never reads the registry ahead of its handler (screen check: an
+   *  effect registered them after that render, and every plugin row stayed blocked). */
+  const applyPluginCommands = (cmds: PanelCommand[]): void => {
+    for (const dispose of pluginDisposersRef.current) dispose()
+    pluginDisposersRef.current = cmds.map((c) =>
+      actionRegistry.register(c.pluginId, c.key, { run: () => openPluginPanelRef.current(c) })
+    )
+    setPluginCommands(cmds)
+  }
+
   // The commands plugins contribute, read each time the palette opens (Phase 2 step 3): the Host's plugin list has no
   // change event, and the palette is where they are offered. An answer that arrives after the palette closed or opened
   // again is dropped; a list that cannot be read keeps the last one.
@@ -1698,22 +1712,15 @@ export default function App(): React.JSX.Element {
     void window.api.plugins
       .list()
       .then((r) => {
-        if (current && r.ok) setPluginCommands(panelCommands(pluginRowsOf(r.body)))
+        if (current && r.ok) applyPluginCommands(panelCommands(pluginRowsOf(r.body)))
       })
       .catch(() => {})
     return () => {
       current = false
     }
+    // applyPluginCommands reads only refs, the registry and a state setter, all stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paletteOpen])
-
-  // Each plugin command in the registry under its plugin as owner and its contribution key as id (ADR-007, ADR-008),
-  // registered again whenever the list changes: a plugin turned off or removed loses its commands.
-  useEffect(() => {
-    const disposers = pluginCommands.map((c) =>
-      actionRegistry.register(c.pluginId, c.key, { run: () => openPluginPanelRef.current(c) })
-    )
-    return () => disposers.forEach((dispose) => dispose())
-  }, [actionRegistry, pluginCommands])
 
   useEffect(() => {
     // Rolling: swap the session in place in the same tab, plus the progress banner state
@@ -2085,13 +2092,13 @@ export default function App(): React.JSX.Element {
   /** Opens a plugin's panel in its tab, or focuses the tab already showing it (placePluginTab; Phase 2 step 3). The
    *  tab keeps the project open now: its page may ask which project it was opened in (main/plugins/panelGuests.ts).
    *  Running the command is the person asking for it, so a held tab of it loads. */
-  const openPluginPanel = (c: { pluginId: string; panelId: string; title: string; pluginName: string }): void => {
+  const openPluginPanel = (c: { pluginId: string; panelId: string; panelTitle: string; pluginName: string }): void => {
     const id = pluginTab(c.pluginId, c.panelId)
     releaseTab(id)
     setPluginTabs((prev) =>
       prev.some((x) => x.id === id)
         ? prev
-        : [...prev, { id, pluginId: c.pluginId, panelId: c.panelId, title: c.title, pluginName: c.pluginName, projectRoot: currentProject ?? '' }]
+        : [...prev, { id, pluginId: c.pluginId, panelId: c.panelId, title: c.panelTitle, pluginName: c.pluginName, projectRoot: currentProject ?? '' }]
     )
     const placed = placePluginTab(layoutRef.current, c.pluginId, c.panelId, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)

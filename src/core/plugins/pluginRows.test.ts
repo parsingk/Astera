@@ -53,8 +53,8 @@ describe('panelCommands', () => {
       row({ id: 'old', ui: undefined, contributes: undefined })
     ]
     expect(panelCommands(rows)).toEqual([
-      { key: 'hello-panel:open', pluginId: 'hello-panel', panelId: 'hello', title: 'Open Hello panel', pluginName: 'Hello' },
-      { key: 'nameless:go', pluginId: 'nameless', panelId: 'p', title: 'Go', pluginName: 'nameless' }
+      { key: 'hello-panel:open', pluginId: 'hello-panel', panelId: 'hello', title: 'Open Hello panel', panelTitle: 'Hello', pluginName: 'Hello' },
+      { key: 'nameless:go', pluginId: 'nameless', panelId: 'p', title: 'Go', panelTitle: 'P', pluginName: 'nameless' }
     ])
   })
 

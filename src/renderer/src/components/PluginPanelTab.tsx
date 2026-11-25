@@ -100,9 +100,13 @@ function PluginGuest({ url, partition, onGone, onFocus }: { url: string; partiti
     if (!view) return
     const gone = (): void => latest.current.onGone()
     const focus = (): void => latest.current.onFocus()
+    // Main ending the guest (its plugin turned off, removed or replaced) reaches the element as `destroyed`; a page that
+    // crashes while its guest stays as `render-process-gone` (measured in the app)
+    view.addEventListener('destroyed', gone)
     view.addEventListener('render-process-gone', gone)
     view.addEventListener('focus', focus)
     return () => {
+      view.removeEventListener('destroyed', gone)
       view.removeEventListener('render-process-gone', gone)
       view.removeEventListener('focus', focus)
     }

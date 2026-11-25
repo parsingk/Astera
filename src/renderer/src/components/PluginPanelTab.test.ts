@@ -63,7 +63,10 @@ describe('PluginPanelTab wiring', () => {
   })
 
   // Main ends a guest's renderer when its plugin is turned off, removed or replaced (main/plugins/panelGuests.ts forget)
+  // Screen check, measured: main's forget (renderer ended, then the guest closed) reaches the element as `close` and
+  // `destroyed`, never as `render-process-gone`, which a page crash with its guest still there gives
   it('notices its guest is gone, and that the person moved into it', () => {
+    expect(src).toMatch(/view\.addEventListener\('destroyed', gone\)/)
     expect(src).toMatch(/view\.addEventListener\('render-process-gone', gone\)/)
     expect(src).toMatch(/view\.addEventListener\('focus', focus\)/)
   })

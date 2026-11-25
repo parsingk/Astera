@@ -61,7 +61,10 @@ export interface PanelCommand {
   key: ContributionKey
   pluginId: string
   panelId: string
+  /** The command's title, as the palette lists it. */
   title: string
+  /** The title of the panel it opens, which that panel's tab shows. */
+  panelTitle: string
   /** The plugin's display name, or its id when it has none. */
   pluginName: string
 }
@@ -71,10 +74,13 @@ export interface PanelCommand {
 export function panelCommands(rows: readonly PluginRow[]): PanelCommand[] {
   return rows.flatMap((p) => {
     if (unusablePlugin(p.id, p) !== null || !p.contributes) return []
-    const panels = new Set(p.contributes.panels.map((x) => x.id))
-    return p.contributes.commands
-      .filter((c) => panels.has(c.panel))
-      .map((c) => ({ key: contributionKey(p.id, c.id), pluginId: p.id, panelId: c.panel, title: c.title, pluginName: p.displayName ?? p.id }))
+    const panels = new Map(p.contributes.panels.map((x) => [x.id, x.title]))
+    return p.contributes.commands.flatMap((c) => {
+      const panelTitle = panels.get(c.panel)
+      return panelTitle === undefined
+        ? []
+        : [{ key: contributionKey(p.id, c.id), pluginId: p.id, panelId: c.panel, title: c.title, panelTitle, pluginName: p.displayName ?? p.id }]
+    })
   })
 }
 
