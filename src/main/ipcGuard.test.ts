@@ -167,3 +167,59 @@ describe('every handler goes through the guard', () => {
     expect(index).toMatch(/trustWebContents\(win\.webContents, \(url\) => isOwnDocument\(url, process\.env\['ELECTRON_RENDERER_URL'\], indexFileUrl\)\)/)
   })
 })
+
+// Plugin panel guests (ADR-008): the bridge channel answers a trusted guest's own top frame on its plugin host, and the
+// main window's channels never answer a guest
+describe('the guest channel', () => {
+  const guestEvent = (id: number, url: string, parent: unknown = null): unknown => ({ sender: { id }, senderFrame: { url, parent } })
+
+  it('answers a trusted guest’s top frame on its plugin host, handing the handler the guest it trusted', async () => {
+    const target = fakeIpc()
+    const guard = createIpcGuard(target, () => {})
+    const seen: unknown[] = []
+    guard.ipcMain.handleGuest('plugin-ui.call', ((_e: unknown, guest: unknown, method: unknown) => {
+      seen.push([guest, method])
+      return 'ok'
+    }) as never)
+    guard.trustGuest(webContents(9), { pluginId: 'hello-panel', host: 'hello-panel' })
+    expect(await target.handlers.get('plugin-ui.call')!(guestEvent(9, 'astera-plugin://hello-panel/dist/ui/index.html?panel=main'), 'context')).toBe('ok')
+    expect(seen).toEqual([[{ pluginId: 'hello-panel', host: 'hello-panel' }, 'context']])
+  })
+
+  it('refuses an untrusted guest, a guest that navigated off its host, a subframe and a guest that is gone', async () => {
+    const target = fakeIpc()
+    const guard = createIpcGuard(target, () => {})
+    guard.ipcMain.handleGuest('plugin-ui.call', (() => 'ok') as never)
+    const wc = webContents(9)
+    guard.trustGuest(wc, { pluginId: 'hello-panel', host: 'hello-panel' })
+    const call = (e: unknown): Promise<unknown> => Promise.resolve().then(() => target.handlers.get('plugin-ui.call')!(e, 'context'))
+    await expect(call(guestEvent(10, 'astera-plugin://hello-panel/x.html'))).rejects.toThrow('IPC_SENDER_REFUSED: plugin-ui.call')
+    await expect(call(guestEvent(9, 'astera-plugin://other/x.html'))).rejects.toThrow('IPC_SENDER_REFUSED: plugin-ui.call')
+    await expect(call(guestEvent(9, 'astera-plugin://hello-panel/x.html', { url: 'x' }))).rejects.toThrow('IPC_SENDER_REFUSED: plugin-ui.call')
+    wc.destroy()
+    await expect(call(guestEvent(9, 'astera-plugin://hello-panel/x.html'))).rejects.toThrow('IPC_SENDER_REFUSED: plugin-ui.call')
+  })
+
+  it('never lets a trusted guest reach the main window’s channels', async () => {
+    const target = fakeIpc()
+    const guard = createIpcGuard(target, () => {})
+    guard.ipcMain.handle('files.read', (() => 'secret') as never)
+    guard.trustGuest(webContents(9), { pluginId: 'hello-panel', host: 'hello-panel' })
+    await expect(Promise.resolve().then(() => target.handlers.get('files.read')!(guestEvent(9, 'astera-plugin://hello-panel/x.html')))).rejects.toThrow(
+      'IPC_SENDER_REFUSED: files.read'
+    )
+  })
+})
+
+describe('untrusting a guest', () => {
+  it('refuses a guest main forgot, while it still lives', async () => {
+    const target = fakeIpc()
+    const guard = createIpcGuard(target, () => {})
+    guard.ipcMain.handleGuest('plugin-ui.call', (() => 'ok') as never)
+    guard.trustGuest(webContents(9), { pluginId: 'hello-panel', host: 'hello-panel' })
+    guard.untrustGuest(9)
+    await expect(
+      Promise.resolve().then(() => target.handlers.get('plugin-ui.call')!({ sender: { id: 9 }, senderFrame: { url: 'astera-plugin://hello-panel/x.html', parent: null } }, 'context'))
+    ).rejects.toThrow('IPC_SENDER_REFUSED: plugin-ui.call')
+  })
+})

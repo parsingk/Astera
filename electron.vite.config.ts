@@ -37,7 +37,11 @@ export default defineConfig({
       }
     }
   },
-  preload: { plugins: [externalizeDepsPlugin()] },
+  // The app's preload, and the bridge a plugin panel guest gets instead (preload/pluginBridge.ts, ADR-008)
+  preload: {
+    plugins: [externalizeDepsPlugin()],
+    build: { rollupOptions: { input: { index: 'src/preload/index.ts', pluginBridge: 'src/preload/pluginBridge.ts' } } }
+  },
   renderer: {
     resolve: {
       alias: {

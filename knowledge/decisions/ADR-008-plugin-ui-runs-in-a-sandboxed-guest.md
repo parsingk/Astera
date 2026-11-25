@@ -57,6 +57,23 @@ ADR-006 answered a neighbouring question for the frontend preview: the pane grid
 - Removing the element destroyed the guest: one pending call was rejected, the mapping emptied.
 - DevTools opened on the guest into a hidden window (`setDevToolsWebContents`), as the preview's DevTools does.
 
+Measured again in the app and in harnesses when main took it up (2026-11-25, the plugin panels review):
+
+- The CSP does not cover WebRTC: a plugin page's STUN and TURN reached listeners on this machine and the LAN. With
+  the plugin session's proxy set to one that refuses, loopback included (`proxyRules: 'http://127.0.0.1:9'`,
+  `proxyBypassRules: '<-loopback>'`), and the guest's WebRTC IP policy `disable_non_proxied_udp`, it gathered no
+  candidate and sent nothing, and the plugin scheme was still served.
+- With no `will-download` listener a plugin page could start a download that Electron answers with a Save As dialog;
+  with no `select-bluetooth-device` listener Electron picks the first device. The plugin session refuses downloads and
+  pairing, and its guests pick no device.
+- An element's `webpreferences` attribute can name another partition than its `partition` attribute, and Electron
+  builds the guest in that one: such an attach is refused before either rule, and a plugin guest's preferences are
+  rebuilt from Astera's own.
+- `close()` on a guest leaves its page drawn with its scripts running; ending its renderer first stops them.
+- A session without the plugin scheme's handler hands an `astera-plugin://` URL to the operating system (Windows
+  offered a Store app for it on the person's screen during the review). The app's own session and the preview sessions
+  refuse `openExternal`; links leave the app only through main's own checks.
+
 What the harness cannot answer is how the app's React renders the element: attributes React does not know can be
 dropped silently (the preview slice met that with `allowpopups`), so the first app integration checks the
 attributes on the real DOM.

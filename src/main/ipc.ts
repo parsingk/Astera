@@ -1,6 +1,8 @@
 import { dialog, app, shell, session, webContents, clipboard, type BrowserWindow, type WebContents } from 'electron'
 // Every handler here answers only the app's own window (ipcGuard.ts)
-import { ipcMain } from './ipcGuard'
+import { ipcMain, trustPluginGuest, untrustPluginGuest } from './ipcGuard'
+import { randomBytes } from 'node:crypto'
+import { createPanelGuests, pluginRowsOf, type PanelGuests } from './plugins/panelGuests'
 import { killProcessTree } from '../core/run/kill'
 import { cachedByStamp } from '../core/stampCache'
 import fsSync, { promises as fs, existsSync, readFileSync } from 'node:fs'
@@ -437,6 +439,8 @@ const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 /** How long sessions.list({ afterTakeBack: true }) waits for the Host's startup take back before answering anyway. */
 const SESSIONS_TAKEN_BACK_WAIT_MS = 5000
+/** How often an open plugin panel's plugin is checked against the Host's list, to catch one turned off from the CLI. */
+const PANEL_WATCH_MS = 5000
 const afterTakeBack = (opts: unknown): boolean =>
   typeof opts === 'object' && opts !== null && (opts as { afterTakeBack?: unknown }).afterTakeBack === true
 
@@ -925,7 +929,10 @@ export function registerIpc(
    *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
   agentGuestsIn?: AgentGuestRegistry<WebContents>,
   /** index.ts's share of the Astera Host — see HostWiring. */
-  hostWiring?: HostWiring
+  hostWiring?: HostWiring,
+  /** Plugin panel guests (ADR-008), built in index.ts beside agentGuests: its attach guard asks them. A missing one is
+   *  built, as agentGuests is. */
+  panelGuestsIn?: PanelGuests
 ): void {
   const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   // 재생 데이터는 렌더러가 귀를 열 때까지 게이트가 붙잡는다. `webContents.send` 는 들을 사람이
@@ -5114,10 +5121,48 @@ export function registerIpc(
   ipcMain.handle('findings.ignore', (_e, key: unknown, note: unknown) => findings.ignore(key as string, typeof note === 'string' ? note : undefined))
   ipcMain.handle('findings.unignore', (_e, key: unknown) => findings.unignore(key as string))
   ipcMain.handle('plugins.list', () => plugins.list())
+  // Plugin panels (ADR-008): the panel guests read the Host's plugin list, the renderer prepares a panel before its tab
+  // draws the guest, and a guest's bridge is answered through the guard's guest channel, by the guest it is
+  const panelGuests =
+    panelGuestsIn ??
+    createPanelGuests({
+      fromPartition: (partition) => session.fromPartition(partition) as never,
+      bridgePreload: path.join(__dirname, '../preload/pluginBridge.js'),
+      trustGuest: trustPluginGuest,
+      untrustGuest: untrustPluginGuest,
+      now: Date.now,
+      token: () => randomBytes(16).toString('hex')
+    })
+  panelGuests.listFrom(async () => {
+    const r = await plugins.list()
+    // A Host that cannot answer is not a Host saying the plugin is gone (plugin panels review M3)
+    return r.ok ? pluginRowsOf(r.body) : null
+  })
+  // A plugin turned off or removed outside this app (the CLI) is caught here while anything of it is served or open
+  setInterval(() => {
+    if (panelGuests.active()) void panelGuests.refresh()
+  }, PANEL_WATCH_MS).unref()
+  ipcMain.handle('plugins.preparePanel', (_e, pluginId: unknown, panelId: unknown, projectRoot: unknown) =>
+    typeof pluginId === 'string' && typeof panelId === 'string'
+      ? panelGuests.prepare(pluginId, panelId, typeof projectRoot === 'string' && path.isAbsolute(projectRoot) ? projectRoot : null)
+      : { ok: false, reason: 'plugins.preparePanel needs a plugin id and a panel id' }
+  )
+  ipcMain.handleGuest('plugin-ui.call', (e, _guest, method: unknown, payload: unknown) => panelGuests.call(e.sender.id, method, payload))
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
-  ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))
-  ipcMain.handle('plugins.setEnabled', (_e, id: unknown, enabled: unknown) => plugins.setEnabled(id as string, enabled === true))
-  ipcMain.handle('plugins.remove', (_e, id: unknown) => plugins.remove(id as string))
+  // Turning a plugin off, removing or replacing it closes its panels first (ADR-008 §6, plugin panels review I2)
+  ipcMain.handle('plugins.install', (_e, a: unknown) => {
+    const replaces = (a as { expect?: { name?: unknown } } | null)?.expect?.name
+    if (typeof replaces === 'string') panelGuests.forget(replaces)
+    return plugins.install(a as Parameters<typeof plugins.install>[0])
+  })
+  ipcMain.handle('plugins.setEnabled', (_e, id: unknown, enabled: unknown) => {
+    if (enabled !== true && typeof id === 'string') panelGuests.forget(id)
+    return plugins.setEnabled(id as string, enabled === true)
+  })
+  ipcMain.handle('plugins.remove', (_e, id: unknown) => {
+    if (typeof id === 'string') panelGuests.forget(id)
+    return plugins.remove(id as string)
+  })
   ipcMain.handle('plugins.logs', (_e, id: unknown, lines: unknown) => plugins.logs(id as string, lines as number))
   ipcMain.handle('plugins.settings', (_e, id: unknown) => plugins.settings(id as string))
   ipcMain.handle('plugins.configure', (_e, id: unknown, set: unknown, unset: unknown) =>
