@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createForwardRegistry, pickLocalPort, realAnyFreePort, realPortProbe } from './forwards'
+import { createForwardRegistry, pickLocalPort, realAnyFreePort, realPoke, realPortProbe } from './forwards'
 import { forwardArgs } from '../../core/kube/cluster/forward'
 import type { StreamExit } from '../../core/kube/stream'
 import type { ForwardMessage, ForwardSpec } from '../../core/kube/cluster/types'
@@ -14,8 +14,18 @@ const spec: ForwardSpec = {
 function setup(throwOnStream?: Error, probe: (port: number) => Promise<boolean> = async () => true) {
   const spawns: Array<{ args: string[]; h: Handlers; stops: number }> = []
   const emitted: ForwardMessage[] = []
+  const watched: Array<{ ref: ForwardSpec['ref']; gone: () => void; stops: number }> = []
+  const pokes: number[] = []
+  const clock = { now: 0 }
   const reg = createForwardRegistry({
     probe,
+    watchPods(ref, gone) {
+      const w = { ref, gone, stops: 0 }
+      watched.push(w)
+      return { stop: () => void (w.stops += 1) }
+    },
+    poke: (port) => void pokes.push(port),
+    now: () => clock.now,
     stream(args, h) {
       if (throwOnStream) throw throwOnStream
       const s = { args, h, stops: 0 }
@@ -25,7 +35,7 @@ function setup(throwOnStream?: Error, probe: (port: number) => Promise<boolean> 
     redact: (s) => s.replace(/10\.0\.0\.1/g, 'HOST'),
     emit: (m) => void emitted.push(m)
   })
-  return { reg, spawns, emitted }
+  return { reg, spawns, emitted, watched, pokes, clock }
 }
 
 describe('createForwardRegistry', () => {
@@ -184,6 +194,57 @@ describe('createForwardRegistry', () => {
     expect(spawns).toHaveLength(1)
   })
 
+  // kubectl notices a deleted Pod only when a connection arrives, so the row said Connected for a forward that could
+  // carry nothing any more (measured: a rollout restart left it Connected until the next request).
+  it('watches the Pods behind a forward once it listens', async () => {
+    const { reg, spawns, watched } = setup()
+    await reg.start('f1', spec)
+    expect(watched).toEqual([])
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    expect(watched.map((w) => w.ref)).toEqual([spec.ref])
+  })
+
+  it('opens one connection to the forward when one of its Pods is deleted', async () => {
+    const { reg, spawns, watched, pokes } = setup()
+    await reg.start('f1', spec)
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    watched[0].gone()
+    expect(pokes).toEqual([18080])
+  })
+
+  it('names the lost connection that follows a deleted Pod a replaced Pod', async () => {
+    const { reg, spawns, watched, emitted, clock } = setup()
+    await reg.start('f1', spec)
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    watched[0].gone()
+    clock.now += 1000
+    spawns[0].h.onStderr('error: lost connection to pod\n')
+    spawns[0].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(emitted[1]).toEqual({ forwardId: 'f1', kind: 'exit', message: 'error: lost connection to pod', cause: 'pod-gone' })
+  })
+
+  it('does not blame a Pod deleted long before the connection was lost', async () => {
+    const { reg, spawns, watched, emitted, clock } = setup()
+    await reg.start('f1', spec)
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    watched[0].gone()
+    clock.now += 60_000
+    spawns[0].h.onStderr('error: lost connection to pod\n')
+    spawns[0].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(emitted[1]).toEqual({ forwardId: 'f1', kind: 'exit', message: 'error: lost connection to pod' })
+  })
+
+  it('stops watching the Pods when the forward is stopped or kubectl ends', async () => {
+    const { reg, spawns, watched } = setup()
+    await reg.start('a', spec)
+    await reg.start('b', spec)
+    spawns[0].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    spawns[1].h.onStdout('Forwarding from 127.0.0.1:18080 -> 80\n')
+    reg.stop('a')
+    spawns[1].h.onExit({ code: 1, stopped: false } as StreamExit)
+    expect(watched.map((w) => w.stops)).toEqual([1, 1])
+  })
+
   it('stops every forward', async () => {
     const { reg, spawns } = setup()
     await reg.start('a', spec)
@@ -245,5 +306,31 @@ describe('the real probes', () => {
     } finally {
       await v6?.close()
     }
+  })
+})
+
+describe('realPoke', () => {
+  it('opens one connection to the local port and closes it again', async () => {
+    const { createServer } = await import('node:net')
+    const seen: string[] = []
+    const server = createServer((socket) => {
+      seen.push('connected')
+      socket.on('close', () => seen.push('closed'))
+    })
+    await new Promise<void>((r) => server.listen({ host: '127.0.0.1', port: 0 }, () => r()))
+    const { port } = server.address() as { port: number }
+    try {
+      realPoke(port)
+      await new Promise((r) => setTimeout(r, 2500))
+      expect(seen).toEqual(['connected', 'closed'])
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+    }
+  })
+
+  it('does not throw when nothing listens', async () => {
+    const port = await realAnyFreePort()
+    expect(() => realPoke(port)).not.toThrow()
+    await new Promise((r) => setTimeout(r, 100))
   })
 })
