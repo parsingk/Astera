@@ -433,3 +433,13 @@ describe('Plugin API 2: final review fixes', () => {
     expect(new URL(`astera-plugin://${pluginSchemeHost('@acme/x')}/index.html`).host).toBe('acme+x')
   })
 })
+
+// Plugin panels step: a leading ./ is how many packages write a path; the trailing-dot rule must not refuse it
+describe('Plugin API 2: a ui page written with a leading ./', () => {
+  it('reads ./dist/ui/index.html as dist/ui/index.html, and still refuses ./../x.html', () => {
+    const pkg = (ui: string): Record<string, unknown> => ({ name: 'hello-panel', version: '0.1.0', astera: { apiVersion: '2', ui, permissions: [] } })
+    expect(manifestOf(pkg('./dist/ui/index.html')).ui).toBe('./dist/ui/index.html')
+    expect(problemsOf(pkg('./../x.html')).some((p) => p.startsWith('astera.ui ./../x.html'))).toBe(true)
+    expect(problemsOf(pkg('dist/./ui.html')).some((p) => p.startsWith('astera.ui dist/./ui.html'))).toBe(true)
+  })
+})

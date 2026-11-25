@@ -157,7 +157,9 @@ const uiProblem = (v: unknown): string | null => {
   // The scheme decodes a URL path and Windows drops a trailing dot or space: what the install checks must be exactly the
   // file the panel is later served (final review M2)
   if (/[%\\]/.test(v) || CONTROL.test(v) || /\t/.test(v)) return `astera.ui ${v} holds %, a backslash or a control character: use / between folders`
-  if (v.split('/').some((part) => part === '' || /[. ]$/.test(part))) return `astera.ui ${v} has an empty part, or one ending in a dot or a space`
+  // A leading ./ is how many packages write a path; any other . part, empty part or part ending in a dot or space is not
+  if (v.replace(/^\.\//, '').split('/').some((part) => part === '' || /[. ]$/.test(part)))
+    return `astera.ui ${v} has an empty part, or one ending in a dot or a space`
   if (!/\.html$/i.test(v)) return `astera.ui ${v} is not an .html file`
   return null
 }
