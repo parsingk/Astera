@@ -8,7 +8,7 @@
 // node: no imports, the renderer imports this.
 import type { SidebarView } from '../ui/sidebar'
 import { MAX_PANES, createGroup, createSplit, firstLeaf, leaves, type PaneDir, type PaneLeaf, type PaneNode } from './tree'
-import { isRemoteSessionKey, parseTab } from './tabId'
+import { isRemoteSessionKey, parseTab, sessionTab } from './tabId'
 
 export const SAVED_LAYOUT_VERSION = 1
 /** The most tabs one stored group may hold; a longer list is not a layout a person made. */
@@ -169,19 +169,25 @@ export function readSaved(raw: string | null): SavedLayout | null {
 
 /** `target` with every tab of `from` it does not hold appended to its first group, that group's active tab unchanged:
  *  what reached the window while the restore waited on main (a session the Host handed back, a file the person opened,
- *  an agent's preview) stays on screen when the restored tree replaces the one being drawn. */
+ *  an agent's preview) stays on screen when the restored tree replaces the one being drawn. An app's mirror tab goes
+ *  to the group of its session when the tree has it, as applySaved places one (presets.ts). */
 export function mergeTabs(target: PaneNode, from: PaneNode | null): PaneNode {
   if (!from) return target
-  const held = new Set(leaves(target).flatMap((l) => l.tabIds))
+  const groups = leaves(target)
+  const held = new Set(groups.flatMap((l) => l.tabIds))
   const extra = leaves(from).flatMap((l) => l.tabIds.filter((t) => !held.has(t)))
   if (extra.length === 0) return target
-  const first = firstLeaf(target)
-  const add = (node: PaneNode): PaneNode =>
-    node.kind === 'leaf'
-      ? node.id === first.id
-        ? { ...node, tabIds: [...node.tabIds, ...extra] }
-        : node
-      : { ...node, a: add(node.a), b: add(node.b) }
+  const byGroup = new Map<string, string[]>()
+  for (const t of extra) {
+    const ref = parseTab(t)
+    const home = (ref?.kind === 'app' && groups.find((l) => l.tabIds.includes(sessionTab(ref.id)))) || groups[0]
+    byGroup.set(home.id, [...(byGroup.get(home.id) ?? []), t])
+  }
+  const add = (node: PaneNode): PaneNode => {
+    if (node.kind !== 'leaf') return { ...node, a: add(node.a), b: add(node.b) }
+    const more = byGroup.get(node.id)
+    return more ? { ...node, tabIds: [...node.tabIds, ...more] } : node
+  }
   return add(target)
 }
 
