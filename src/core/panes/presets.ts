@@ -67,9 +67,14 @@ export function presetTree(id: PresetId, tabIds: readonly string[], activeTabId:
     const count = Math.min(MAX_PANES, sessions.length)
     // Sessions are dealt round-robin; everything that is not a session (files, mirrors) stays with the first group.
     // Each group keeps tab order, so a mirror does not jump ahead of the session it shows.
+    // An app mirror goes where its session went (the rule applySaved follows too).
     const groupOf = new Map(sessions.map((s, i) => [s, i % count]))
+    const homeOf = (t: string): number => {
+      const ref = parseTab(t)
+      return groupOf.get(t) ?? (ref?.kind === 'app' ? groupOf.get(sessionTab(ref.id)) : undefined) ?? 0
+    }
     const dealt: string[][] = Array.from({ length: count }, () => [])
-    for (const t of all) dealt[groupOf.get(t) ?? 0].push(t)
+    for (const t of all) dealt[homeOf(t)].push(t)
     return placed(arrange(dealt.map((tabs) => group(tabs, activeTabId))), activeTabId)
   }
   return placed(group(all, activeTabId), activeTabId)

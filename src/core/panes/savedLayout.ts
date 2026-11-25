@@ -59,7 +59,8 @@ function saves(tabId: string): boolean {
 
 function saveNode(node: PaneNode): SavedNode | null {
   if (node.kind === 'leaf') {
-    const tabs = node.tabIds.filter(saves)
+    // Never more than readSaved accepts: a group past the bound would make the next start read no layout at all
+    const tabs = node.tabIds.filter(saves).slice(0, MAX_TABS_PER_GROUP)
     if (tabs.length === 0) return null
     return { kind: 'leaf', tabs, active: tabs.includes(node.activeTabId) ? node.activeTabId : tabs[0] }
   }
@@ -164,6 +165,24 @@ export function readSaved(raw: string | null): SavedLayout | null {
   const tabs = readTabs(data.tabs)
   if (!panels || !tabs) return null
   return { v: SAVED_LAYOUT_VERSION, tree, active: data.active, panels, tabs }
+}
+
+/** `target` with every tab of `from` it does not hold appended to its first group, that group's active tab unchanged:
+ *  what reached the window while the restore waited on main (a session the Host handed back, a file the person opened,
+ *  an agent's preview) stays on screen when the restored tree replaces the one being drawn. */
+export function mergeTabs(target: PaneNode, from: PaneNode | null): PaneNode {
+  if (!from) return target
+  const held = new Set(leaves(target).flatMap((l) => l.tabIds))
+  const extra = leaves(from).flatMap((l) => l.tabIds.filter((t) => !held.has(t)))
+  if (extra.length === 0) return target
+  const first = firstLeaf(target)
+  const add = (node: PaneNode): PaneNode =>
+    node.kind === 'leaf'
+      ? node.id === first.id
+        ? { ...node, tabIds: [...node.tabIds, ...extra] }
+        : node
+      : { ...node, a: add(node.a), b: add(node.b) }
+  return add(target)
 }
 
 /**

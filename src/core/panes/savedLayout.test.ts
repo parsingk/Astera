@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addTab, createGroup, leaves, splitAndMove, type PaneNode } from './tree'
-import { readSaved, restoreTree, toSaved, type SavedNode, type SavedPanels, type SavedTabs } from './savedLayout'
+import { mergeTabs, readSaved, restoreTree, toSaved, type SavedNode, type SavedPanels, type SavedTabs } from './savedLayout'
 
 const panels: SavedPanels = { sidebar: { open: true, view: 'explorer' }, bottom: { open: true, tab: 'problems' } }
 const noTabs: SavedTabs = { files: {}, records: {}, browsers: {} }
@@ -120,6 +120,31 @@ describe('saved layout', () => {
     const ids = [...leaves(back.root).map((l) => l.id), ...(back.root.kind === 'split' ? [back.root.id] : [])]
     expect(ids).not.toContain(later.id)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  // Final review M7: a record readSaved would refuse whole must never be written
+  it('saves at most 500 tabs a group, so a long run does not cost the next start its whole layout', () => {
+    const tabs = Array.from({ length: 600 }, (_, i) => `session:s${i}`)
+    const g = createGroup(tabs[0])
+    const root = { ...g, tabIds: tabs, activeTabId: 'session:s550' }
+    const saved = toSaved(root, g.id, panels, noTabs)
+    expect(saved.tree?.kind === 'leaf' && [saved.tree.tabs.length, saved.tree.active]).toEqual([500, 'session:s0'])
+    expect(readSaved(JSON.stringify(saved))).not.toBeNull()
+  })
+
+  // Final review C1: whatever reached the window while the restore waited stays in it
+  it('merges the tabs already on screen into a restored tree, behind its first group’s active tab', () => {
+    const restored: SavedNode = { kind: 'split', dir: 'row', ratio: 0.5, a: leaf(['file:/p/a.ts']), b: leaf(['session:s1']) }
+    const back = restoreTree(restored, 0, keepAll)!
+    // On screen meanwhile: s1 (also restored, so not added twice), and a session and an agent preview that arrived
+    const g = createGroup('session:s1')
+    const now = addTab(addTab(g, g.id, 'session:new'), g.id, 'browser:agent')
+    const merged = mergeTabs(back.root, now)
+    expect(shape(merged)).toEqual([
+      [['file:/p/a.ts', 'session:new', 'browser:agent'], 'file:/p/a.ts'],
+      [['session:s1'], 'session:s1']
+    ])
+    expect(mergeTabs(back.root, null)).toBe(back.root)
   })
 
   it('saves no app mirror or remote session tab, and no info for a tab not in the tree', () => {

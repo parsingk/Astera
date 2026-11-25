@@ -51,6 +51,14 @@ describe('built-in presets', () => {
     expect(shape(presetTree('agents', ['file:/p/a.ts'], null)!.root)).toEqual([['file:/p/a.ts']])
   })
 
+  // Final review M2: the rule cfd35fd1 gave saved presets, for the built-in one too
+  it('agents puts an app mirror in its session’s group', () => {
+    expect(shape(presetTree('agents', ['session:s1', 'session:s2', 'app:s2', 'app:s9'], null)!.root)).toEqual([
+      ['session:s1', 'app:s9'],
+      ['session:s2', 'app:s2']
+    ])
+  })
+
   it('agents keeps the first group in tab order, so a mirror or a file does not jump ahead of its session', () => {
     expect(shape(presetTree('agents', ['session:s1', 'app:s1', 'file:/p/a.ts', 'session:s2'], null)!.root)).toEqual([
       ['session:s1', 'app:s1', 'file:/p/a.ts'],
