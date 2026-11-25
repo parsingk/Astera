@@ -198,6 +198,9 @@ what to check when an explanation is missing.
   button on the console's rail), goes to a session working in that project after a preview. Values that look like
   secrets are masked, a credential file is never sent, and the text is only put in the session's input: you send it.
   In a Job's diff, each hunk can open a new Job draft to fix it
+- **Show problems:** `Ctrl`/`Cmd`+`Shift`+`M` opens the Problems tab of the bottom panel: what the checks and reviews
+  of the project's Jobs found, by file and line, with filters and sorting. A row opens its file at the line, and a
+  problem whose file changed since it was found is marked
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,

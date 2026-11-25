@@ -5,6 +5,8 @@ import { RunPanel } from './RunPanel'
 import { RunTabStrip } from './RunTabStrip'
 import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
+import { ProblemsPanel } from './ProblemsPanel'
+import { problemCounts, type Diagnostic } from '../../../core/problems/diagnostic'
 import { FileIcon } from './FileIcon'
 import { KubeLogPanel } from './kube/KubeLogPanel'
 import { KubeSegments, type KubeSegment } from './kube/KubeSegments'
@@ -37,6 +39,10 @@ export function BottomPanel({
   onOpenUrl,
   onOpenPreview,
   onSendRunLog,
+  problemsRoot,
+  problems,
+  onOpenProblem,
+  onRefreshProblems,
   terminals,
   terminalCwd,
   activeTab,
@@ -89,6 +95,12 @@ export function BottomPanel({
   onOpenPreview: (url: string) => void
   /** The rail's send-to-agent for a run (spec W4): App opens the context preview from what its console holds. */
   onSendRunLog: (runId: string) => void
+  /** The Problems tab (spec W5): the explorer's project, its problems (null when they could not be read), and what a
+   *  row and the refresh button do. */
+  problemsRoot: string | null
+  problems: Diagnostic[] | null | undefined
+  onOpenProblem: (path: string, line?: number) => void
+  onRefreshProblems: () => void
   terminals: TerminalBuffer[]
   /** The folder the terminals were opened in — a relative path link in one resolves against it */
   terminalCwd: string | null
@@ -154,6 +166,9 @@ export function BottomPanel({
   }, [activeTab])
 
   const kubeFailures = kubeFailureCount(kubeLog)
+  /** The Problems tab counts what needs a look: errors and warnings, not notes. */
+  const problemTally = problemCounts(problems ?? [])
+  const problemsShown = problemTally.error + problemTally.warning
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
   // so it is a span and keyboard access is wired by hand. A key that bubbled up from the nested ✕ has
@@ -183,6 +198,29 @@ export function BottomPanel({
             >
               {anyRunning && <span className="run-live-dot" />}
               {t('run.panel.tab')}
+            </span>
+          )}
+          {runAvailable && (
+            // The project's problems (spec W5), beside its runs: both are the project's, and both need one
+            <span
+              role="tab"
+              data-tab-id="problems"
+              aria-selected={activeTab === 'problems'}
+              tabIndex={0}
+              className={activeTab === 'problems' ? 'bottom-tab on' : 'bottom-tab'}
+              onClick={() => onSelectTab('problems')}
+              onKeyDown={tabKeyDown('problems')}
+            >
+              {t('problems.tab')}
+              {problemsShown > 0 && (
+                <span
+                  className={`bottom-tab-badge${problemTally.error === 0 ? ' quiet' : ''}`}
+                  title={t('problems.tabCount', { errors: problemTally.error, warnings: problemTally.warning })}
+                  aria-label={t('problems.tabCount', { errors: problemTally.error, warnings: problemTally.warning })}
+                >
+                  {problemsShown}
+                </span>
+              )}
             </span>
           )}
           {kubeAvailable && (
@@ -367,6 +405,16 @@ export function BottomPanel({
             hidden wraps at that width, but opening the tab makes the ResizeObserver refit and corrects it
             — cosmetic and self-correcting. The same applies to a RunPanel mounted for a tab that is not
             selected. */}
+        {runAvailable && (
+          <div className="bottom-body problems-body" style={{ display: activeTab === 'problems' ? 'flex' : 'none' }}>
+            <ProblemsPanel
+              projectRoot={problemsRoot}
+              problems={problems}
+              onOpen={onOpenProblem}
+              onRefresh={onRefreshProblems}
+            />
+          </div>
+        )}
         {kubeAvailable && (
           <div className="bottom-body kube-body" style={{ display: activeTab === 'kube' ? 'flex' : 'none' }}>
             <KubeSegments

@@ -16,6 +16,7 @@ import type { K8sObject } from './kube/objects'
 import type { CountInfo, Dependents, EditBase, ForwardMessage, ForwardSpec, KindDef, LiveOp, LivePreview, LogMessage, LogSpec, ManifestMatch, ObjectRef, Read, SecretValue, ShellMessage, ShellSpec, WatchMessage, WatchSpec } from './kube/cluster/types'
 import type { ReviewerSettings } from './settings/externalReviewers'
 import type { TextSearchAnswer } from './files/textMatch'
+import type { Diagnostic } from './problems/diagnostic'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
@@ -1067,6 +1068,8 @@ export interface CoreEvents {
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
    *  "다시 읽어라"는 신호로만 쓴다. 배경 재생성이 화면에 닿는 유일한 길이다. */
   'understanding:changed': string
+  /** The project's problems may differ: ask problems.list again (main/problems.ts createProblemsPing). */
+  'problems:changed': null
   /** The open-task section's redraw trigger. **Not folded**, unlike 'understanding:changed' above —
    *  workUnits.json (what this section reads) is keyed by the raw session cwd, a different key space
    *  from understanding.json's origin-repo fold (ipc.ts's sessionTasks.* handlers explain why). The
@@ -1688,6 +1691,11 @@ export interface CoreApi {
      *  changing the kind inside the dialog is that session's business and is not written back. */
     getDefaultSessionKind(): Promise<SessionKind>
     setDefaultSessionKind(kind: SessionKind): Promise<void>
+  }
+  /** The project's problems (spec W5): what its Jobs' completion found, each file found where the work was done and
+   *  marked stale when it changed since or is gone (main/problems.ts). `projectPath` must pass the files path guard. */
+  problems: {
+    list(projectPath: string): Promise<Diagnostic[]>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only

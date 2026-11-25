@@ -32,6 +32,12 @@ describe('the READMEs and the command palette', () => {
     expect(text).toContain('`.ignore`')
   })
 
+  it.each(READMES)('%s names the Problems tab as the app does, with its key', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.problems.open']}:**`)
+    expect(text).toContain('`Ctrl`/`Cmd`+`Shift`+`M`')
+  })
+
   it.each(READMES)('%s names sending a selection to an agent as the app does', (file, lang) => {
     const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
     expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.context.attachSelection']}:**`)

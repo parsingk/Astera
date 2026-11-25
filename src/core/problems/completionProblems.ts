@@ -1,0 +1,146 @@
+import type { OrchState } from '../orchestration/state'
+import type { CheckResult, ReviewSeverity } from '../orchestration/types'
+import type { Diagnostic, DiagnosticSeverity } from './diagnostic'
+
+/** A problem as the Job state holds it: its file as the finding wrote it (relative to wherever the check or the review
+ *  ran) and the folders to look for it in, newest worker folder first and the Job's folder last. Main resolves it. */
+export type RawProblem = Omit<Diagnostic, 'path' | 'stale'> & { file?: string; folders: string[] }
+
+const REVIEW_SEVERITY: Record<ReviewSeverity, DiagnosticSeverity> = {
+  critical: 'error',
+  high: 'error',
+  medium: 'warning',
+  low: 'info',
+  info: 'info'
+}
+
+/** A check's finding without a severity reads as the check went: an error from a check that failed, a warning else. */
+const checkSeverity = (c: CheckResult, given: 'error' | 'warning' | undefined): DiagnosticSeverity =>
+  given ?? (c.status === 'passed' ? 'warning' : 'error')
+
+/** The last line of a check's output with anything on it, the check's own last word on why it failed. */
+const lastLine = (tail: string | undefined): string | undefined =>
+  (tail ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+    .at(-1)
+
+const failed = (c: CheckResult): boolean => c.status === 'failed' || c.status === 'timed-out' || c.status === 'error'
+
+/**
+ * The first producers of the Problems list (spec W5, audit §8 item 7): what Jobs' completion found. For each Job with a
+ * run among `runIds` (the project's, as main's ownership check gives them), its latest run only, since a later run
+ * supersedes an earlier one's findings; of that run's Tasks:
+ * - the findings of the last check round (plugin checks and GitHub CI, which reaches `checks` as one), with one row for
+ *   the findings a check counted but kept no detail of;
+ * - a failed check with no findings at all (a run configuration's, an unannotated CI failure) as one row without a file,
+ *   in its own words (its summary, else its output's last line), so a red Job never reads as no problems;
+ * - the review issues that name a file.
+ *
+ * Tasks and attempts are indexed once per call: this runs on main's thread every time the list is asked for.
+ */
+export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<string>): RawProblem[] {
+  const latest = new Map<string, OrchState['runs'][number]>()
+  for (const r of state.runs) {
+    if (!runIds.has(r.id)) continue
+    const seen = latest.get(r.jobId)
+    if (!seen || r.ordinal > seen.ordinal) latest.set(r.jobId, r)
+  }
+  if (latest.size === 0) return []
+  const tasksOf = new Map<string, OrchState['tasks']>()
+  for (const t of state.tasks) {
+    if (t.runId === undefined) continue
+    const list = tasksOf.get(t.runId)
+    if (list) list.push(t)
+    else tasksOf.set(t.runId, [t])
+  }
+  const attemptsOf = new Map<string, OrchState['dispatches']>()
+  for (const d of state.dispatches) {
+    const list = attemptsOf.get(d.taskId)
+    if (list) list.push(d)
+    else attemptsOf.set(d.taskId, [d])
+  }
+  const out: RawProblem[] = []
+  for (const run of latest.values()) {
+    const jobCwd = state.jobs.find((j) => j.id === run.jobId)?.cwd
+    for (const task of tasksOf.get(run.id) ?? []) {
+      const attempts = attemptsOf.get(task.id) ?? []
+      const folders = [
+        ...new Set([...attempts].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map((d) => d.cwd)),
+        ...(jobCwd !== undefined ? [jobCwd] : [])
+      ].filter((f, i, all) => all.indexOf(f) === i)
+      const origin = { runId: run.id, taskId: task.id, task: task.title }
+      for (const c of task.checks ?? []) {
+        const source = { kind: 'check' as const, id: c.configId, label: c.name }
+        const at = c.endedAt !== undefined ? { producedAt: c.endedAt } : {}
+        const findings = c.diagnostics ?? []
+        findings.forEach((dg, i) => {
+          out.push({
+            schemaVersion: 1,
+            id: `check:${task.id}:${c.configId}:${i}`,
+            source,
+            severity: checkSeverity(c, dg.severity),
+            message: dg.message,
+            file: dg.file,
+            ...(dg.line !== undefined ? { line: dg.line } : {}),
+            ...at,
+            origin,
+            folders
+          })
+        })
+        const unlisted = (c.diagnosticsTotal ?? findings.length) - findings.length
+        if (unlisted > 0) {
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, source, severity: 'info', message: '', unlisted, ...at, origin, folders })
+        }
+        if (findings.length === 0 && failed(c)) {
+          const said = c.summary !== undefined && c.summary.trim() !== '' && c.summary !== c.status ? c.summary.trim() : lastLine(c.outputTail)
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, source, severity: 'error', message: said ?? '', ...at, origin, folders })
+        }
+      }
+      // The last review attempt's end; with none on record (an external reviewer writes its issues without one), the
+      // Task's last change, an upper bound on when its issues were written: a later status move can push it past an
+      // edit, so such a review can read fresh when it is not. Real reviews close their attempt with an end.
+      const reviewedAt =
+        attempts
+          .filter((d) => d.review === true && d.endedAt !== undefined)
+          .map((d) => d.endedAt as string)
+          .sort()
+          .at(-1) ?? task.updatedAt
+      for (const issue of task.reviewIssues ?? []) {
+        if (issue.file === undefined) continue
+        out.push({
+          schemaVersion: 1,
+          id: `review:${task.id}:${issue.id}`,
+          source: { kind: 'review', id: 'review', label: 'Review' },
+          severity: REVIEW_SEVERITY[issue.severity] ?? 'warning',
+          message: issue.title,
+          file: issue.file,
+          ...(issue.line !== undefined ? { line: issue.line } : {}),
+          ...(reviewedAt !== undefined ? { producedAt: reviewedAt } : {}),
+          origin,
+          folders
+        })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * What the Problems list is made of, as a key that moves when it does: the runs, and each Task's check rounds (by when
+ * they ended and what they found) and review issues. main compares it on every orchestration write and tells the
+ * renderer to ask again only when it moved, whatever view is open; a status move alone does not move it.
+ */
+export function problemsKeyOf(state: OrchState): string {
+  const runs = state.runs.map((r) => `${r.id}:${r.jobId}:${r.ordinal}`).join(',')
+  const tasks = state.tasks
+    .filter((t) => t.runId !== undefined && ((t.checks?.length ?? 0) > 0 || (t.reviewIssues?.length ?? 0) > 0))
+    .map((t) => {
+      const checks = (t.checks ?? []).map((c) => `${c.configId}/${c.status}/${c.endedAt ?? ''}/${c.diagnostics?.length ?? 0}/${c.diagnosticsTotal ?? ''}`).join('+')
+      const reviews = (t.reviewIssues ?? []).map((i) => `${i.id}/${i.file ?? ''}/${i.line ?? ''}`).join('+')
+      return `${t.id}:${checks}:${reviews}`
+    })
+    .join(';')
+  return `${runs}|${tasks}`
+}

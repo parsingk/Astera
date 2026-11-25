@@ -42,6 +42,7 @@ const EVENT_CHANNELS = [
   'accounts:ghostsChanged',
   'files:changed',
   'files:changedBatch',
+  'problems:changed',
   'files:opProgress',
   'worktree:createProgress',
   'git:changed',
@@ -288,6 +289,9 @@ const api = {
     takeRecoveryNotice: invoke('settings.takeRecoveryNotice'),
     getDefaultSessionKind: invoke('settings.getDefaultSessionKind'),
     setDefaultSessionKind: invoke('settings.setDefaultSessionKind')
+  },
+  problems: {
+    list: invoke('problems.list')
   },
   files: {
     list: invoke('files.list'),

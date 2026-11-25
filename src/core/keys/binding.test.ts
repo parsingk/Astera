@@ -341,6 +341,14 @@ describe('actions with no default key, and the palette', () => {
     expect(makeActions('darwin').find((x) => x.id === 'search.text')?.defaults).toEqual(['Cmd+Shift+F'])
   })
 
+  // VS Code's key for its Problems panel. Nothing in Astera takes it, and the shell sees Ctrl+M (Enter) only without Shift.
+  it('shows problems with Ctrl+Shift+M, Cmd+Shift+M on macOS, over a focused terminal too', () => {
+    const win = makeActions('win32').find((a) => a.id === 'problems.open')
+    expect(win?.defaults).toEqual(['Ctrl+Shift+M'])
+    expect(win?.yieldsToTerminal).toBe(false)
+    expect(makeActions('darwin').find((a) => a.id === 'problems.open')?.defaults).toEqual(['Cmd+Shift+M'])
+  })
+
   it('no two actions share a default key, on any platform', () => {
     for (const platform of ['win32', 'linux', 'darwin']) {
       const actions = makeActions(platform)

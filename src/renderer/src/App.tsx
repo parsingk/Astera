@@ -38,6 +38,7 @@ import { logContext, selectionContext } from './lib/contextSources'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
+import type { Diagnostic } from '../../core/problems/diagnostic'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -1935,6 +1936,7 @@ export default function App(): React.JSX.Element {
       () => {
         setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev))
         onFileSavedRef.current(tab.path)
+        setProblemsAsk((n) => n + 1)
         return true
       },
       (err) => {
@@ -3766,6 +3768,49 @@ export default function App(): React.JSX.Element {
     windowShown
   })
   const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
+  /** The explorer's project's problems (spec W5, main/problems.ts): null when they could not be read, undefined while
+   *  they are not known yet for this project. Asked again when main says they may differ (an orchestration write that
+   *  moved them, a file batch under the explorer), when the Jobs snapshot changes, after a save in the editor, when the
+   *  window comes back, and on the tab's refresh; a quarter second after the last of them. */
+  const [problems, setProblems] = useState<Diagnostic[] | null | undefined>(undefined)
+  const [problemsAsk, setProblemsAsk] = useState(0)
+  // A project just opened shows no other project's list while its own is asked for
+  useEffect(() => {
+    setProblems(undefined)
+  }, [currentProject])
+  useEffect(() => {
+    if (!currentProject) {
+      setProblems([])
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      void window.api.problems
+        .list(currentProject)
+        .then(
+          (list) => {
+            if (!cancelled) setProblems(list)
+          },
+          () => {
+            if (!cancelled) setProblems(null)
+          }
+        )
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [currentProject, orchSnapshot, problemsAsk])
+  useEffect(() => {
+    const again = (): void => setProblemsAsk((n) => n + 1)
+    window.addEventListener('focus', again)
+    const off = window.api.on('problems:changed', again)
+    return () => {
+      window.removeEventListener('focus', again)
+      off()
+    }
+  }, [])
+
   /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
   const kubeRail = (): void => {
     const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
@@ -4102,7 +4147,7 @@ export default function App(): React.JSX.Element {
         setTerminals(list)
         // If a tab that does not belong to this project is still active, fall back to Run. The Kubernetes and logs
         // tabs belong to none.
-        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || isLogTabId(cur) || isShellTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || cur === 'problems' || isLogTabId(cur) || isShellTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])
@@ -4571,6 +4616,14 @@ export default function App(): React.JSX.Element {
     'file.quickOpen': { run: () => openPalette('') },
     // The same box on text in the project's files (spec W2), with or without a project for the same reason.
     'search.text': { run: () => openPalette('%') },
+    // The bottom panel on the Problems tab (spec W5); there is no tab without a project
+    'problems.open': {
+      blockedBy: () => (currentProject ? null : 'action.blocked.noProject'),
+      run: () => {
+        setRunPanelOpen(true)
+        setBottomTab('problems')
+      }
+    },
     // The editor selection to an agent, after a preview (spec W4).
     'context.attachSelection': {
       blockedBy: () => (activeEditorSelection() ? null : 'action.blocked.noSelection'),
@@ -5423,6 +5476,10 @@ export default function App(): React.JSX.Element {
                     onOpenFolder={openLinkedFolder}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
+                    problemsRoot={currentProject}
+                    problems={problems}
+                    onOpenProblem={(file, line) => openFile(file, line !== undefined ? { line } : undefined)}
+                    onRefreshProblems={() => setProblemsAsk((n) => n + 1)}
                     onSendRunLog={(runId) => {
                       // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
                       const run = runs.find((r) => r.runId === runId)
