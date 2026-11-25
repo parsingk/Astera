@@ -3515,6 +3515,7 @@ export const ko = {
   'kube.forward.lostPod': 'Pod가 바뀌었거나 사라졌습니다',
   'kube.forward.lost': 'Pod와의 연결이 끊겼습니다',
   'kube.forward.refused': 'Pod가 연결을 거부했습니다',
+  'kube.forward.portBusy': '다른 프로그램이 로컬 포트를 쓰고 있습니다',
   'kube.forward.openBrowser': '브라우저로 열기',
   'kube.forward.stop': '끄기',
   'kube.forward.reconnect': '다시 연결',

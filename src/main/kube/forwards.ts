@@ -1,7 +1,7 @@
 /** The live `kubectl port-forward` processes of the forwards: each reports once that it listens and once when it ends,
  *  and the local port a new forward proposes is checked here, where the network stack is. */
 import { connect, createServer } from 'node:net'
-import { forwardArgs, listeningPort, lostCause } from '../../core/kube/cluster/forward'
+import { FORWARD_ADDRESS, forwardArgs, listeningPort, lostCause } from '../../core/kube/cluster/forward'
 import type { ForwardMessage, ForwardSpec } from '../../core/kube/cluster/types'
 import type { KubectlStream, StreamExit } from '../../core/kube/stream'
 import { firstStderrLine, streamFailureMessage } from './cluster'
@@ -27,8 +27,10 @@ export function createForwardRegistry(deps: {
   stream(args: string[], h: Handlers): KubectlStream
   redact(stderr: string): string
   emit(m: ForwardMessage): void
+  /** Whether the local port is free (realPortProbe), asked before every start, the typed port and a reconnect too. */
+  probe: PortProbe
 }): {
-  start(forwardId: string, spec: ForwardSpec): void
+  start(forwardId: string, spec: ForwardSpec): Promise<void>
   stop(forwardId: string): void
   stopAll(): void
   size(): number
@@ -91,11 +93,25 @@ export function createForwardRegistry(deps: {
   }
 
   return {
-    start(forwardId, spec) {
+    async start(forwardId, spec) {
       const old = entries.get(forwardId)
       if (old) halt(old)
-      const e: Entry = { run: {}, stream: null }
+      const checking = {}
+      const e: Entry = { run: checking, stream: null }
       entries.set(forwardId, e)
+      // The port is checked before kubectl gets it, because kubectl's own bind does not tell: on macOS (and Windows) a
+      // 127.0.0.1 bind succeeds beside another program's 0.0.0.0 or :: listener, and the forward would then say it is
+      // connected while it shadows that program for 127.0.0.1 only. A check that breaks leaves the port to kubectl.
+      const free = await deps.probe(spec.local).catch(() => true)
+      // Stopped, stopped all, or started again under the same id while the port was being checked.
+      if (entries.get(forwardId) !== e || e.run !== checking) return
+      if (!free) {
+        entries.delete(forwardId)
+        e.run = {}
+        const message = `${FORWARD_ADDRESS}:${spec.local} is in use by another program`
+        deps.emit({ forwardId, kind: 'exit', message, cause: 'port-busy' })
+        return
+      }
       // The stream reads kubectl's path and environment from the settings before it starts, which can throw: the
       // forward then ends as one whose kubectl could not start does.
       try {

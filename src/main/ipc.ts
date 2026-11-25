@@ -4610,7 +4610,8 @@ export function registerIpc(
         ...h
       }),
     redact: redactKubectlStderr,
-    emit: (m) => send('kube:forward', m)
+    emit: (m) => send('kube:forward', m),
+    probe: realPortProbe
   })
   const kubeWrites = createLiveWrites({ run: kubeService.kubectl, counts: kubeCluster.counts, now: () => new Date() })
   registerKubeIpc(ipcMain, {

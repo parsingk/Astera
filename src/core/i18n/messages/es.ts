@@ -3170,6 +3170,7 @@ export const es: Catalog = {
   'kube.forward.lostPod': 'el Pod fue reemplazado o desapareció',
   'kube.forward.lost': 'se perdió la conexión con el Pod',
   'kube.forward.refused': 'el Pod rechazó la conexión',
+  'kube.forward.portBusy': 'otro programa está usando el puerto local',
   'kube.forward.openBrowser': 'Abrir en el navegador',
   'kube.forward.stop': 'Detener',
   'kube.forward.reconnect': 'Reconectar',

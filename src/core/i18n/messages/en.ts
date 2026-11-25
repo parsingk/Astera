@@ -3261,6 +3261,7 @@ export const en: Record<keyof typeof ko, string> = {
   'kube.forward.lostPod': 'the Pod was replaced or went away',
   'kube.forward.lost': 'the connection to the Pod was lost',
   'kube.forward.refused': 'the Pod refused the connection',
+  'kube.forward.portBusy': 'another program is using the local port',
   'kube.forward.openBrowser': 'Open in browser',
   'kube.forward.stop': 'Stop',
   'kube.forward.reconnect': 'Reconnect',
