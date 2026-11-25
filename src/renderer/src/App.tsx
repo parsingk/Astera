@@ -79,6 +79,8 @@ import { GithubSettings } from './components/GithubSettings'
 import { KubernetesSettings } from './components/KubernetesSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
+import { WorkspaceFeatureSettings } from './components/WorkspaceFeatureSettings'
+import { WORKSPACE_FEATURES_DEFAULTS, type WorkspaceFeatures } from '../../core/settings/workspaceFeatures'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
 import { CliInstallRows } from './components/CliInstallRows'
@@ -852,6 +854,27 @@ export default function App(): React.JSX.Element {
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   const [agentAppEnabled, setAgentAppEnabled] = useState(false) // the agent app workspace toggle
+  /** Which Phase 1 workspace features are on (core/settings/workspaceFeatures.ts): null until main answers, and a
+   *  surface shows only on an explicit true, so a turned off Problems tab or send button never appears for a moment. */
+  const [workspaceFeatures, setWorkspaceFeaturesState] = useState<WorkspaceFeatures | null>(null)
+  const workspaceFeaturesRef = useRef(workspaceFeatures)
+  const setWorkspaceFeatures = useMemo(() => writeThrough(workspaceFeaturesRef, setWorkspaceFeaturesState), [])
+  /** A switch in Settings > General: applied at once, and only that switch is put back when main cannot save it (a
+   *  second switch flipped meanwhile keeps its new value). */
+  const toggleWorkspaceFeature = (key: keyof WorkspaceFeatures, next: boolean): void => {
+    const current = workspaceFeaturesRef.current
+    if (!current) return
+    const updated = { ...current, [key]: next }
+    setWorkspaceFeatures(updated)
+    void window.api.settings.setWorkspaceFeatures(updated).catch((err) => {
+      setWorkspaceFeatures((f) => (f ? { ...f, [key]: !next } : f))
+      toast.error(
+        t('settings.workspace.saveFailed', {
+          detail: err instanceof Error ? err.message : String(err)
+        })
+      )
+    })
+  }
   // The mirror panes' sizes, one reporter per session however many panes show it. A size the Host
   // could not take leaves the app at its own size: nothing to tell the person.
   const [mirrorSizes] = useState(() => createSessionSizeReporters((id, size) => void window.api.workspace.size(id, size).catch(() => undefined)))
@@ -1240,6 +1263,12 @@ export default function App(): React.JSX.Element {
     // Both session dialogs seed their kind from this, so it has to be loaded before either can open —
     // it cannot wait for the settings modal.
     void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
+    // The workspace feature switches decide what the bottom panel and the run views draw. A failed read is the
+    // defaults, every feature on, as a missing settings file is
+    void window.api.settings
+      .getWorkspaceFeatures()
+      .then(setWorkspaceFeatures)
+      .catch(() => setWorkspaceFeatures({ ...WORKSPACE_FEATURES_DEFAULTS }))
     // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
     // someone who has used the app for months while an answer is in flight.
     void window.api.settings
@@ -6169,6 +6198,8 @@ export default function App(): React.JSX.Element {
                       />
                     </div>
                     <p className="settings-hint">{t('settings.defaultKind.hint')}</p>
+                    {/* The Phase 1 workspace features that act without a key (the spec's Phase 1 gate) */}
+                    <WorkspaceFeatureSettings value={workspaceFeatures} onToggle={toggleWorkspaceFeature} />
                   </div>
                 )}
                 {settingsTab === 'cli' && (
