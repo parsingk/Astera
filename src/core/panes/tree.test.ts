@@ -7,6 +7,7 @@ import {
   computeRects,
   countLeaves,
   createGroup,
+  createSplit,
   dropZoneOf,
   findNeighbor,
   firstLeaf,
@@ -501,6 +502,14 @@ describe('종류가 섞인 트리', () => {
     const next = removeTab(r.root, 'file:D:\\r\\a.ts')!
     expect(countLeaves(next)).toBe(1)
     assertInvariants(next, ['session:s1'])
+  })
+
+  it('createSplit 은 새 id 를 받는다', () => {
+    const a = createGroup('session:s1')
+    const b = createGroup('session:s2')
+    const s = createSplit('row', 0.4, a, b)
+    expect(s).toMatchObject({ kind: 'split', dir: 'row', ratio: 0.4, a, b })
+    expect([a.id, b.id]).not.toContain(s.id)
   })
 
   // 롤링은 세션 id만 갈아끼운다 — 파일 탭이 섞여 있어도 건드리면 안 된다
