@@ -197,6 +197,13 @@ describe('humanFor', () => {
     )
   })
 
+  it('plugins pack says where the package is, its checksum, and what it left out', () => {
+    expect(humanFor('plugins-pack', { file: '/w/a-0.1.0.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: ['.env'] })).toBe(
+      ['wrote /w/a-0.1.0.tgz (4 files, 900 bytes)', 'sha256 ab12', 'left out: .env'].join(String.fromCharCode(10))
+    )
+    expect(humanFor('plugins-pack', { file: '/w/a-0.1.0.tgz', files: 4, bytes: 900, sha256: 'ab12', leftOut: [] })).not.toContain('left out')
+  })
+
   it('plugins doctor prints one line per check, a failure in capitals', () => {
     expect(
       humanFor('plugins-doctor', {

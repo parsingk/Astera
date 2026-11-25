@@ -640,6 +640,7 @@ const NOT_SWITCHED = [
   // The plugin author's, answered in the CLI process (src/cli/pluginDev.ts)
   'plugins-validate',
   'plugins-init',
+  'plugins-pack',
   // Answered before the switch by the job-source commands (plugin Phase 4, src/core/orchestration/commandSources.ts).
   'sources-list',
   'sources-items',

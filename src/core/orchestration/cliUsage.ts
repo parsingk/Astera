@@ -332,6 +332,15 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     operand: { name: 'name', value: '<name>', about: 'the plugin\'s npm name, as its package.json will hold it' },
     flags: [{ name: 'template', value: '<kind>', about: 'ui, host, check or source', required: true }]
   },
+  'plugins-pack': {
+    summary: 'make a package of a plugin folder that validates: the same bytes every time, with its checksums',
+    detail:
+      'Starts no Host and installs nothing. Refused with 1, as validate refuses, when the folder would not install. Writes <name>-<version>.tgz beside the folder (npm\'s layout and file name), or where --out says, never inside the folder. Leaves out, and names, a .git folder, .DS_Store, Thumbs.db and npm-debug.log anywhere, and outside node_modules .env files but .env.example, .npmrc, .git-credentials, keys and certificates, SSH keys and an old package at the top. Answers its sha256 and its npm integrity (sha512). `plugins install --file` installs it.',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'out', value: '<file>', about: 'where to write the package (default: beside the folder)' }
+    ]
+  },
   'plugins-doctor': {
     summary: 'what could keep a plugin from running: its manifest, compatibility, entry, native addons and its last run',
     detail: 'Exits 1 when a check fails, naming each failing check.',

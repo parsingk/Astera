@@ -619,12 +619,15 @@ astera plugins configure --id <pluginId> --set baseUrl=https://jira.example.com
 printf %s "$TOKEN" | astera plugins configure --id <pluginId> --stdin token   a secret, off the command line
 astera plugins validate --path ./my-plugin           checks the folder as an install would; exit 1 naming each problem
 astera plugins init my-plugin --template ui          writes ./my-plugin: ui, host, check or source
+astera plugins pack --path ./my-plugin               writes my-plugin-0.1.0.tgz beside it, with its sha256
 ```
 
-`plugins validate` and `plugins init` are for whoever writes a plugin: they start no Host and change nothing in
-Astera, so they work without the app and inside an agent session. `init` writes a new folder from a template (`ui`, a
+`plugins validate`, `plugins init` and `plugins pack` are for whoever writes a plugin: they start no Host and change
+nothing in Astera, so they work without the app and inside an agent session. `init` writes a new folder from a template (`ui`, a
 panel; `host`, a plugin Astera runs; `check`, a completion check; `source`, a job source) and refuses a folder that
-already holds files. Each problem has a code (`MANIFEST_INVALID`, `INCOMPATIBLE`, `ENTRY_MISSING`, `UI_MISSING`,
+already holds files. `pack` makes a package of a folder that validates, the same bytes every time (npm's layout,
+entries in order, one fixed time), leaves out and names `.git`, OS junk and, outside `node_modules`, files that look
+like secrets (`.env` but `.env.example`, `.npmrc`, keys, certificates), and answers its sha256 and npm integrity. Each problem has a code (`MANIFEST_INVALID`, `INCOMPATIBLE`, `ENTRY_MISSING`, `UI_MISSING`,
 `LINK_REFUSED`, `LAYOUT_REFUSED`, `MANIFEST_UNREADABLE`), the manifest field it is about when there is one, and the
 sentence an install would give.
 
@@ -768,6 +771,7 @@ astera plugins settings  --id <pluginId>
 astera plugins configure --id <pluginId> [--set <key=value>] [--unset <key>] [--stdin <key>]
 astera plugins validate --path <folder>
 astera plugins init <name> --template <kind>
+astera plugins pack --path <folder> [--out <file>]
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

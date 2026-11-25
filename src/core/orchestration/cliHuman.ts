@@ -618,6 +618,11 @@ export function humanFor(
     // A new plugin folder: where it is, then what to run next
     case 'plugins-init':
       return [`wrote ${str(data.folder)} (${str(data.template)})`, ...(Array.isArray(data.next) ? (data.next as unknown[]).map((l) => `next: ${str(l)}`) : [])].join('\n')
+    // A package: where it is, its checksum, and what was left out of it
+    case 'plugins-pack': {
+      const left = Array.isArray(data.leftOut) ? (data.leftOut as unknown[]).map(str) : []
+      return [`wrote ${str(data.file)} (${str(data.files)} files, ${str(data.bytes)} bytes)`, `sha256 ${str(data.sha256)}`, ...(left.length > 0 ? [`left out: ${left.join(', ')}`] : [])].join('\n')
+    }
     case 'plugins-doctor':
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])

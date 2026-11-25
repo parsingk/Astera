@@ -1,0 +1,121 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { copyPluginFolder } from './copyFolder'
+import { extractPackage } from './tarball'
+import { leftOutOfPackage, packFolder } from './pack'
+
+// Phase 2 step 4a (spec E4 pack): a deterministic package of a checked copy, npm's layout so the Host's own extractor
+// reads it, secrets and junk left out and named.
+const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../examples/plugins')
+let dir: string
+beforeEach(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-pack-'))
+})
+afterEach(async () => {
+  await fs.rm(dir, { recursive: true, force: true })
+})
+
+/** Every file under `root`, by its path with `/`, with its bytes. */
+async function filesOf(root: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {}
+  const walk = async (at: string, rel: string): Promise<void> => {
+    for (const e of await fs.readdir(at, { withFileTypes: true })) {
+      const r = rel === '' ? e.name : `${rel}/${e.name}`
+      if (e.isDirectory()) await walk(path.join(at, e.name), r)
+      else out[r] = (await fs.readFile(path.join(at, e.name))).toString('base64')
+    }
+  }
+  await walk(root, '')
+  return out
+}
+const write = async (root: string, files: Record<string, string>): Promise<void> => {
+  for (const [rel, body] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, rel)), { recursive: true })
+    await fs.writeFile(path.join(root, rel), body)
+  }
+}
+
+describe('packFolder', () => {
+  it('makes a package the Host’s extractor reads back to the same files', async () => {
+    const copy = path.join(dir, 'copy')
+    await copyPluginFolder(path.join(examples, 'hello-panel'), copy)
+    const packed = await packFolder(copy)
+    await fs.writeFile(path.join(dir, 'p.tgz'), packed.tgz)
+    await extractPackage(path.join(dir, 'p.tgz'), path.join(dir, 'out'))
+    expect(await filesOf(path.join(dir, 'out'))).toEqual(await filesOf(copy))
+    expect(packed.files).toEqual(['README.md', 'package.json', 'ui/index.html', 'ui/panel.css', 'ui/panel.js'])
+  })
+
+  it('gives the same bytes twice, and after only file times changed', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, { 'package.json': '{}', 'b.js': 'b', 'a/z.js': 'z', 'a/y.js': 'y' })
+    const first = await packFolder(copy)
+    const second = await packFolder(copy)
+    expect(second.tgz.equals(first.tgz)).toBe(true)
+    const later = new Date('2030-01-02T03:04:05Z')
+    for (const rel of ['package.json', 'b.js', 'a/z.js']) await fs.utimes(path.join(copy, rel), later, later)
+    expect((await packFolder(copy)).tgz.equals(first.tgz)).toBe(true)
+    // gzip's header names no system: the same bytes on Windows, macOS and Linux
+    expect(first.tgz[9]).toBe(3)
+  })
+
+  it('keeps a path past 100 bytes and a Hangul name through a pax header', async () => {
+    const copy = path.join(dir, 'copy')
+    const long = `${'deep/'.repeat(22)}file.js`
+    await write(copy, { 'package.json': '{}', [long]: 'x', '한글/파일.txt': '안녕' })
+    await fs.writeFile(path.join(dir, 'p.tgz'), (await packFolder(copy)).tgz)
+    await extractPackage(path.join(dir, 'p.tgz'), path.join(dir, 'out'))
+    expect(await filesOf(path.join(dir, 'out'))).toEqual(await filesOf(copy))
+  })
+
+  it('leaves out secrets and junk, naming each, and keeps a dependency’s own files', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, {
+      'package.json': '{}',
+      'index.js': 'x',
+      '.env': 'TOKEN=1',
+      '.env.local': 'TOKEN=2',
+      '.env.example': 'TOKEN=',
+      '.npmrc': '//registry/:_authToken=1',
+      'keys/deploy.pem': 'k',
+      'keys/sign.key': 'k',
+      id_rsa: 'k',
+      '.DS_Store': 'x',
+      'ui/Thumbs.db': 'x',
+      'npm-debug.log': 'x',
+      'old-0.0.1.tgz': 'x',
+      'node_modules/dep/cert.pem': 'needed at run time',
+      'node_modules/dep/.DS_Store': 'x',
+      'node_modules/dep/.git/HEAD': 'x'
+    })
+    const packed = await packFolder(copy)
+    expect(packed.files).toEqual(['.env.example', 'index.js', 'node_modules/dep/cert.pem', 'package.json'])
+    expect(packed.leftOut).toEqual([
+      '.DS_Store',
+      '.env',
+      '.env.local',
+      '.npmrc',
+      'id_rsa',
+      'keys/deploy.pem',
+      'keys/sign.key',
+      'node_modules/dep/.DS_Store',
+      'node_modules/dep/.git/HEAD',
+      'npm-debug.log',
+      'old-0.0.1.tgz',
+      'ui/Thumbs.db'
+    ])
+  })
+})
+
+describe('leftOutOfPackage', () => {
+  it('reads a path by its parts', () => {
+    expect(leftOutOfPackage('src/.env.production')).toBe(true)
+    expect(leftOutOfPackage('.env.example')).toBe(false)
+    expect(leftOutOfPackage('id_ed25519.pub')).toBe(true)
+    expect(leftOutOfPackage('lib/old.tgz')).toBe(false)
+    expect(leftOutOfPackage('node_modules/a/server.key')).toBe(false)
+  })
+})

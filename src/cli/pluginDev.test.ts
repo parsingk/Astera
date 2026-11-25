@@ -51,7 +51,7 @@ describe('run.ts answers the plugin author’s commands without a Host', () => {
     expect(block).toMatch(/if \(presented\)\s*fail\(\{\s*code: 'INVALID_ARGUMENTS',[\s\S]*?cannot carry a request id/)
     expect(block).toMatch(/const done = await pluginDevCommand\(\{ cmd: parsed\.cmd, args, cwd: process\.cwd\(\), version: CLI_VERSION \}\)/)
     expect(run.indexOf("if (PLUGIN_DEV_COMMANDS.includes(parsed.cmd))")).toBeLessThan(run.indexOf("if (parsed.cmd === 'plugins-install') {"))
-    expect(run).toMatch(/const PLUGIN_DEV_COMMANDS: readonly string\[\] = \['plugins-validate', 'plugins-init'/)
+    expect(run).toMatch(/const PLUGIN_DEV_COMMANDS: readonly string\[\] = \['plugins-validate', 'plugins-init', 'plugins-pack'\]/)
   })
 })
 
@@ -84,5 +84,42 @@ describe('astera plugins init', () => {
     const none = await pluginDevCommand({ cmd: 'plugins-init', args: { template: 'ui' }, cwd: dir, version: '1.6.0' })
     expect(none).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: 'plugins init needs the plugin name: astera plugins init <name> --template <kind>' } })
     expect(await fs.readdir(dir)).toEqual([])
+  })
+})
+
+describe('astera plugins pack', () => {
+  it('writes <name>-<version>.tgz beside the folder and answers its checksums and what it left out', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: '@acme/packed', template: 'ui' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    await fs.writeFile(path.join(dir, 'packed', '.env'), 'TOKEN=1')
+    const r = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'packed' }, cwd: dir, version: '1.6.0' })
+    if (!r.ok) throw new Error(r.error.message)
+    const file = path.join(dir, 'acme-packed-0.1.0.tgz')
+    expect(r.body).toMatchObject({ file, plugin: { name: '@acme/packed', version: '0.1.0' }, leftOut: ['.env'] })
+    const bytes = await fs.readFile(file)
+    expect(r.body.bytes).toBe(bytes.length)
+    const { createHash } = await import('node:crypto')
+    expect(r.body.sha256).toBe(createHash('sha256').update(bytes).digest('hex'))
+    expect(r.body.integrity).toBe(`sha512-${createHash('sha512').update(bytes).digest('base64')}`)
+    // Packed again, the same bytes
+    const again = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'packed' }, cwd: dir, version: '1.6.0' })
+    expect(again.ok && again.body.sha256).toBe(r.body.sha256)
+  })
+
+  it('refuses a folder validate refuses, writing nothing', async () => {
+    await fs.mkdir(path.join(dir, 'bad'))
+    await fs.writeFile(path.join(dir, 'bad', 'package.json'), JSON.stringify({ name: 'bad', version: '1.0.0', astera: { apiVersion: '2', ui: 'ui/index.html' } }))
+    const r = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'bad' }, cwd: dir, version: '1.6.0' })
+    expect(r).toMatchObject({ ok: false, error: { code: 'FAILED', message: expect.stringMatching(/^bad would not install: UI_MISSING/) } })
+    expect((await fs.readdir(dir)).sort()).toEqual(['bad'])
+  })
+
+  it('takes --out, and refuses one inside the folder it packs', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'outed', template: 'host' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    const inside = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'outed', out: 'outed/dist/x.tgz' }, cwd: dir, version: '1.6.0' })
+    expect(inside).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringMatching(/inside the folder it packs/) } })
+    const chosen = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'outed', out: 'build/outed.tgz' }, cwd: dir, version: '1.6.0' })
+    expect(chosen).toMatchObject({ ok: true, body: { file: path.join(dir, 'build', 'outed.tgz') } })
   })
 })
