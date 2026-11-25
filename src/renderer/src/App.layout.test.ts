@@ -21,8 +21,10 @@ describe('the window layout (spec W3)', () => {
   })
 
   it('rebuilds the tree with what main says can come back, then adds the live sessions it did not name', () => {
-    // Final review C1, I1: the list is asked after the checks and after the Host's take back, so it is fresh when applied
-    expect(app).toMatch(/void checkSavedTabs\(savedAtStart\)\s*\.then\(\(checked\) =>\s*window\.api\.sessions\s*\.list\(\{ afterTakeBack: true \}\)/)
+    // Final review C1, I1: the checks wait for the Host's take back (the project guard counts the sessions' folders), and
+    // the list is asked after the checks, so it is fresh when applied (screen re-check: a file of a project known only
+    // through a session's folder was dropped when checked before the take back)
+    expect(app).toMatch(/void window\.api\.sessions\s*\.list\(\{ afterTakeBack: true \}\)\s*\.catch\(\(\): SessionInfo\[\] => \[\]\)\s*\.then\(\(\) => checkSavedTabs\(savedAtStart\)\)\s*\.then\(\(checked\) =>\s*window\.api\.sessions\s*\.list\(\)/)
     expect(app).toMatch(/const keep = keepSavedTab\(savedAtStart, checked, new Set\(\[\.\.\.listed, \.\.\.arrived\.map\(\(s\) => s\.id\)\]\)\)/)
     expect(app).toMatch(/restoreTree\(savedAtStart\?\.tree \?\? null, savedAtStart\?\.active \?\? -1, keep\)/)
     // A session the layout did not name joins the first group without taking its active tab

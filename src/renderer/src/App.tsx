@@ -1276,15 +1276,20 @@ export default function App(): React.JSX.Element {
     // design), in the layout the window closed with (spec W3): what main says can come back is put back where it was,
     // and nothing is started, opened anew or loaded to get there.
     //
-    // The list is asked once the saved tabs are checked and the Host has handed its sessions back (sessions.list's note
-    // in main), so it is as fresh as the moment it is applied; whatever reached the window meanwhile (a session, a file
-    // the person opened, an agent's preview) is merged in, never replaced (final review C1, I1). StrictMode runs this
-    // effect twice in development: only the one still mounted applies (restoreLive).
+    // First the Host hands its sessions back (sessions.list's note in main): a session it still runs then keeps its
+    // saved place, and main's project guard, which the file checks go through, counts that session's folder. Then the
+    // saved tabs are checked, and the list is asked last, so it is as fresh as the moment it is applied; whatever
+    // reached the window meanwhile (a session, a file the person opened, an agent's preview) is merged in, never
+    // replaced (final review C1, I1). StrictMode runs this effect twice in development: only the one still mounted
+    // applies (restoreLive).
     let restoreLive = true
-    void checkSavedTabs(savedAtStart)
+    void window.api.sessions
+      .list({ afterTakeBack: true })
+      .catch((): SessionInfo[] => [])
+      .then(() => checkSavedTabs(savedAtStart))
       .then((checked) =>
         window.api.sessions
-          .list({ afterTakeBack: true })
+          .list()
           // No list: the rest of the layout still comes back, and the sessions arrive as session:created
           .catch((): SessionInfo[] => [])
           .then((all) => ({ checked, all }))
