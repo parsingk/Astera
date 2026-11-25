@@ -210,3 +210,16 @@ describe('the guest channel', () => {
     )
   })
 })
+
+describe('untrusting a guest', () => {
+  it('refuses a guest main forgot, while it still lives', async () => {
+    const target = fakeIpc()
+    const guard = createIpcGuard(target, () => {})
+    guard.ipcMain.handleGuest('plugin-ui.call', (() => 'ok') as never)
+    guard.trustGuest(webContents(9), { pluginId: 'hello-panel', host: 'hello-panel' })
+    guard.untrustGuest(9)
+    await expect(
+      Promise.resolve().then(() => target.handlers.get('plugin-ui.call')!({ sender: { id: 9 }, senderFrame: { url: 'astera-plugin://hello-panel/x.html', parent: null } }, 'context'))
+    ).rejects.toThrow('IPC_SENDER_REFUSED: plugin-ui.call')
+  })
+})

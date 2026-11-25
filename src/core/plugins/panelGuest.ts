@@ -16,14 +16,29 @@ export const isPluginPartition = (p: string | undefined): boolean => typeof p ==
 export const PLUGIN_UI_CSP =
   "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 
-/** The page a panel loads: the plugin's `ui` on its scheme host, the panel named in the query. */
-export function pluginPageUrl(id: string, ui: string, panel: string): string {
+/** The page a panel loads: the plugin's `ui` on its scheme host, the panel and a one-time token in the query, so one
+ *  prepare admits exactly one guest (plugin panels review I3). */
+export function pluginPageUrl(id: string, ui: string, panel: string, token: string): string {
   const page = ui.replace(/^\.\//, '').split('/').map(encodeURIComponent).join('/')
-  return `${PLUGIN_SCHEME}://${pluginSchemeHost(id)}/${page}?panel=${encodeURIComponent(panel)}`
+  return `${PLUGIN_SCHEME}://${pluginSchemeHost(id)}/${page}?panel=${encodeURIComponent(panel)}&t=${encodeURIComponent(token)}`
+}
+
+/** Why no panel of this plugin could be shown, or null: Chromium rewrites a standard scheme's host that reads as an
+ *  address (`123` becomes `0.0.0.123`), so every exact check would fail with nothing said (review M4). Node's URL parser
+ *  canonicalises an http host the way Chromium does. */
+export function pluginHostProblem(id: string): string | null {
+  const host = pluginSchemeHost(id)
+  let read: string
+  try {
+    read = new URL(`http://${host}/`).host
+  } catch {
+    read = ''
+  }
+  return read === host ? null : `${id} reads as an address, so its panels cannot be shown; rename the plugin`
 }
 
 /** A name Windows reads as a device, with or without an extension. */
-const DEVICE = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?$/i
+const DEVICE = /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?$/i
 const CONTROL = /[\x00-\x1f\x7f]/
 
 /** The file in the plugin's folder a request names, by the URL alone (main resolves symlinks and checks again). 403 for
@@ -85,6 +100,10 @@ export const BRIDGE_MAX_CALLS_PER_SECOND = 20
 /** Why a guest's bridge call is refused, or null when it may be answered. `calls` is that guest's recent call times,
  *  kept here: a call that is answered is counted. */
 export function bridgeRefusal(calls: number[], method: unknown, payload: unknown, now: number): string | null {
+  // Every call counts, a refused one too, and the rate is asked first: refusals cost main a parse each (review M5)
+  while (calls.length > 0 && now - calls[0] >= 1000) calls.shift()
+  if (calls.length >= BRIDGE_MAX_CALLS_PER_SECOND) return `TOO_MANY_CALLS: at most ${BRIDGE_MAX_CALLS_PER_SECOND} a second`
+  calls.push(now)
   if (typeof method !== 'string' || !(BRIDGE_METHODS as readonly string[]).includes(method)) return `UNKNOWN_METHOD: ${String(method)}`
   let size: number
   try {
@@ -93,8 +112,5 @@ export function bridgeRefusal(calls: number[], method: unknown, payload: unknown
     return 'PAYLOAD_NOT_JSON'
   }
   if (size > BRIDGE_MAX_PAYLOAD) return `PAYLOAD_TOO_LARGE: at most ${BRIDGE_MAX_PAYLOAD} bytes as JSON`
-  while (calls.length > 0 && now - calls[0] >= 1000) calls.shift()
-  if (calls.length >= BRIDGE_MAX_CALLS_PER_SECOND) return `TOO_MANY_CALLS: at most ${BRIDGE_MAX_CALLS_PER_SECOND} a second`
-  calls.push(now)
   return null
 }

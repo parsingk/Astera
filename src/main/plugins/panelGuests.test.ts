@@ -46,8 +46,17 @@ function fakeSessions() {
     cache.set(partition, made1)
     return made1
   }
+  const downloadsRefused: string[] = []
+  const proxies: { partition: string; config: unknown }[] = []
+  const pairingRefused: string[] = []
   const makeSession = (partition: string) => ({
     partition,
+    on: (ev: string, fn: (e: { preventDefault: () => void }) => void) => {
+      if (ev === 'will-download') fn({ preventDefault: () => void downloadsRefused.push(partition) })
+    },
+    setProxy: async (config: unknown) => void proxies.push({ partition, config }),
+    setBluetoothPairingHandler: (fn: (d: unknown, cb: (r: { confirmed: boolean }) => void) => void) => fn({}, (r) => void (!r.confirmed && pairingRefused.push(partition))),
+    setDevicePermissionHandler: (fn: () => boolean) => void (!fn() && pairingRefused.push(`${partition} device`)),
     protocol: {
       handle: (scheme: string, fn: Handler) => {
         made.push(`${partition} ${scheme}`)
@@ -58,32 +67,33 @@ function fakeSessions() {
     setPermissionCheckHandler: (fn: () => boolean) => void (!fn() && permissionRefusals.push(`${partition} check`))
   })
   const sessionOf = (partition: string): unknown => cache.get(partition) ?? { partition }
-  return { fromPartition, handlers, made, permissionRefusals, sessionOf }
+  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused }
 }
 
-const make = (rows: PluginRow[]) => {
+let tokens = 0
+const make = (rows: PluginRow[] | null) => {
   const sessions = fakeSessions()
   currentSessions = sessions
   const trusted: { id: number; guest: unknown }[] = []
+  const untrusted: number[] = []
   const guests = createPanelGuests({
     listPlugins: async () => rows,
     fromPartition: sessions.fromPartition as never,
     bridgePreload: '/out/preload/pluginBridge.js',
     trustGuest: (contents, guest) => void trusted.push({ id: contents.id, guest }),
-    now: () => 1000
+    untrustGuest: (id) => void untrusted.push(id),
+    now: () => 1000,
+    token: () => `tok${++tokens}`
   })
-  return { guests, sessions, trusted }
+  return { guests, sessions, trusted, untrusted }
 }
 let currentSessions: ReturnType<typeof fakeSessions> | null = null
 
 describe('prepare', () => {
   it('answers the page and partition of an enabled, ready plugin’s contributed panel, and sets its session up once', async () => {
     const { guests, sessions } = make([row()])
-    expect(await guests.prepare('hello-panel', 'main', null)).toEqual({
-      ok: true,
-      url: 'astera-plugin://hello-panel/dist/ui/index.html?panel=main',
-      partition: 'plugin-hello-panel'
-    })
+    const first = await guests.prepare('hello-panel', 'main', null)
+    expect(first).toEqual({ ok: true, url: expect.stringMatching(/^astera-plugin:\/\/hello-panel\/dist\/ui\/index\.html\?panel=main&t=tok\d+$/), partition: 'plugin-hello-panel' })
     await guests.prepare('hello-panel', 'main', null)
     expect(sessions.made).toEqual(['plugin-hello-panel astera-plugin'])
     // The plugin's session grants no permission, asked either way
@@ -145,15 +155,20 @@ describe('attaching and the bridge', () => {
   const guest = (id: number, partition: string) => {
     const listeners = new Map<string, (...a: unknown[]) => void>()
     let openHandler: (() => { action: string }) | null = null
-    return {
+    const g = {
       id,
+      webrtc: null as string | null,
+      closed: false,
       session: currentSessions!.sessionOf(partition),
+      setWebRTCIPHandlingPolicy: (p: string) => void (g.webrtc = p),
+      close: () => void (g.closed = true),
       setWindowOpenHandler: (fn: () => { action: string }) => void (openHandler = fn),
       on: (ev: string, fn: (...a: unknown[]) => void) => void listeners.set(ev, fn),
       once: (ev: string, fn: (...a: unknown[]) => void) => void listeners.set(ev, fn),
       emit: (ev: string, ...a: unknown[]) => listeners.get(ev)?.(...a),
       open: () => openHandler?.()
     }
+    return g
   }
 
   it('attaches a prepared panel with only the bridge preload and the guest rules forced, and refuses an unprepared one', async () => {
@@ -162,7 +177,18 @@ describe('attaching and the bridge', () => {
     if (!p.ok) throw new Error(p.reason)
     const prefs: Record<string, unknown> = { preload: 'file:///evil.js', nodeIntegration: true, sandbox: false }
     expect(guests.decideAttach({ partition: p.partition, src: p.url }, prefs)).toBe('plugin')
-    expect(prefs).toEqual({ preload: '/out/preload/pluginBridge.js', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true })
+    expect(prefs).toEqual({
+      preload: '/out/preload/pluginBridge.js',
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      webSecurity: true,
+      webviewTag: false,
+      disablePopups: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false
+    })
     expect(guests.decideAttach({ partition: p.partition, src: 'astera-plugin://hello-panel/dist/ui/app.js' }, {})).toBe('refuse')
     expect(guests.decideAttach({ partition: 'persist:preview', src: 'http://localhost:5173/' }, {})).toBe('preview')
   })
@@ -175,12 +201,13 @@ describe('attaching and the bridge', () => {
     const g = guest(41, p.partition)
     expect(guests.attached(g as never)).toBe(true)
     expect(trusted).toEqual([{ id: 41, guest: { pluginId: 'hello-panel', host: 'hello-panel' } }])
+    expect(g.webrtc).toBe('disable_non_proxied_udp')
     expect(g.open()).toEqual({ action: 'deny' })
     const away = { preventDefault: vi.fn() }
     g.emit('will-navigate', away, 'https://example.com/')
     expect(away.preventDefault).toHaveBeenCalled()
     const stay = { preventDefault: vi.fn() }
-    g.emit('will-navigate', stay, 'astera-plugin://hello-panel/dist/ui/index.html?panel=main')
+    g.emit('will-navigate', stay, 'astera-plugin://hello-panel/dist/ui/other.html')
     expect(stay.preventDefault).not.toHaveBeenCalled()
     expect(await guests.call(41, 'context', null)).toEqual({ plugin: 'hello-panel', panel: 'main' })
     g.emit('destroyed')
@@ -228,5 +255,134 @@ describe('a refused panel of a usable plugin', () => {
     expect(await m.guests.prepare('hello-panel', 'side', null)).toEqual({ ok: false, reason: 'hello-panel contributes no panel side' })
     expect((await m.sessions.handlers.get('plugin-hello-panel')!({ url: p.url })).status).toBe(200)
     expect(m.guests.decideAttach({ partition: p.partition, src: p.url }, {})).toBe('plugin')
+  })
+})
+
+// The plugin panels final review
+describe('final review fixes', () => {
+  const guestOf = (id: number, partition: string) => {
+    const listeners = new Map<string, (...a: unknown[]) => void>()
+    const g = {
+      id,
+      webrtc: null as string | null,
+      closed: false,
+      session: currentSessions!.sessionOf(partition),
+      opened: null as null | (() => { action: string }),
+      setWebRTCIPHandlingPolicy: (p: string) => void (g.webrtc = p),
+      crashed: false,
+      forcefullyCrashRenderer: () => void (g.crashed = true),
+      close: () => void (g.closed = true),
+      setWindowOpenHandler: (fn: () => { action: string }) => void (g.opened = fn),
+      on: (ev: string, fn: (...a: unknown[]) => void) => void listeners.set(ev, fn),
+      once: (ev: string, fn: (...a: unknown[]) => void) => void listeners.set(ev, fn),
+      emit: (ev: string, ...a: unknown[]) => listeners.get(ev)?.(...a)
+    }
+    return g
+  }
+  const open = async (m: ReturnType<typeof make>, id: number, project: string | null = null) => {
+    const p = await m.guests.prepare('hello-panel', 'main', project)
+    if (!p.ok) throw new Error(p.reason)
+    expect(m.guests.decideAttach({ partition: p.partition, src: p.url }, {})).toBe('plugin')
+    const g = guestOf(id, p.partition)
+    expect(m.guests.attached(g as never)).toBe(true)
+    return { p, g }
+  }
+
+  // I1: the element's preferences cannot carry anything into a plugin guest
+  it('rebuilds the preferences, keeping only the partition and the zoom', async () => {
+    const m = make([row()])
+    const p = await m.guests.prepare('hello-panel', 'main', null)
+    if (!p.ok) throw new Error(p.reason)
+    const prefs: Record<string, unknown> = { partition: p.partition, zoomFactor: 1.5, webviewTag: true, experimentalFeatures: true, allowRunningInsecureContent: true, enableBlinkFeatures: 'X', javascript: true }
+    m.guests.decideAttach({ partition: p.partition, src: p.url }, prefs)
+    expect(prefs.partition).toBe(p.partition)
+    expect(prefs.zoomFactor).toBe(1.5)
+    expect(prefs.webviewTag).toBe(false)
+    expect(prefs.experimentalFeatures).toBe(false)
+    expect(prefs.allowRunningInsecureContent).toBe(false)
+    expect('enableBlinkFeatures' in prefs).toBe(false)
+    expect('javascript' in prefs).toBe(false)
+  })
+
+  // I1: a guest that lands in a plugin session with no prepared page gets no trust and goes nowhere
+  it('holds a plugin session’s guest with nothing prepared behind it: no window, no navigation, no trust', async () => {
+    const m = make([row()])
+    await m.guests.prepare('hello-panel', 'main', null)
+    const g = guestOf(9, 'plugin-hello-panel')
+    expect(m.guests.attached(g as never)).toBe(true)
+    expect(m.trusted).toEqual([])
+    expect(g.opened?.()).toEqual({ action: 'deny' })
+    const nav = { preventDefault: vi.fn() }
+    g.emit('will-navigate', nav, 'astera-plugin://hello-panel/dist/ui/index.html')
+    expect(nav.preventDefault).toHaveBeenCalled()
+    await expect(m.guests.call(9, 'context', null)).rejects.toThrow('PANEL_GONE')
+  })
+
+  // I3: a prepared page admits one guest, once, and a guest answers what it was prepared as
+  it('admits one guest per prepare, and keeps each guest’s project as it was when it attached', async () => {
+    const m = make([row({ permissions: ['panels.register', 'workspace.read'] })])
+    const a = await open(m, 1, path.resolve('/work/a'))
+    expect(m.guests.decideAttach({ partition: a.p.partition, src: a.p.url }, {})).toBe('refuse')
+    await open(m, 2, path.resolve('/work/b'))
+    expect(await m.guests.call(1, 'context', null)).toMatchObject({ project: { name: 'a' } })
+    expect(await m.guests.call(2, 'context', null)).toMatchObject({ project: { name: 'b' } })
+  })
+
+  // I2: turning a plugin off through this app forgets it at once: its panels close and lose the bridge, its files stop
+  it('forgets a plugin: its open panels close and lose the bridge, its files and prepared pages stop', async () => {
+    const m = make([row()])
+    const { g } = await open(m, 5)
+    const later = await m.guests.prepare('hello-panel', 'main', null)
+    if (!later.ok) throw new Error(later.reason)
+    m.guests.forget('hello-panel')
+    // Screen check: close() alone left the page drawn with its scripts running; its renderer is ended first
+    expect(g.crashed).toBe(true)
+    expect(g.closed).toBe(true)
+    expect(m.untrusted).toEqual([5])
+    await expect(m.guests.call(5, 'context', null)).rejects.toThrow('PANEL_GONE')
+    expect((await m.sessions.handlers.get('plugin-hello-panel')!({ url: later.url })).status).toBe(403)
+    expect(m.guests.decideAttach({ partition: later.partition, src: later.url }, {})).toBe('refuse')
+  })
+
+  // I2: one turned off outside this app (the CLI) is caught by the watch
+  it('forgets on refresh a plugin the Host no longer lists as usable', async () => {
+    const rows = [row()]
+    const m = make(rows)
+    const { g } = await open(m, 6)
+    expect(m.guests.active()).toBe(true)
+    rows[0] = row({ enabled: false })
+    await m.guests.refresh()
+    expect(g.closed).toBe(true)
+    expect(m.guests.active()).toBe(false)
+  })
+
+  // M3: a Host that cannot answer changes nothing
+  it('says the list could not be read, and forgets nothing', async () => {
+    const live = make([row()])
+    await open(live, 7)
+    live.guests.listFrom(async () => null)
+    expect(await live.guests.prepare('hello-panel', 'main', null)).toEqual({ ok: false, reason: 'the Host’s plugin list could not be read' })
+    await live.guests.refresh()
+    expect(await live.guests.call(7, 'context', null)).toEqual({ plugin: 'hello-panel', panel: 'main' })
+  })
+
+  // M4: a plugin id that reads as an address is refused with a reason
+  it('refuses a plugin whose id reads as an address', async () => {
+    const m = make([row({ id: '123' })])
+    expect(await m.guests.prepare('123', 'main', null)).toEqual({ ok: false, reason: '123 reads as an address, so its panels cannot be shown; rename the plugin' })
+  })
+
+  // I4, I5, I6: a plugin session sends nothing past the page, downloads nothing, pairs with nothing; its guests pick no device
+  it('sets the session’s refusing proxy, refuses downloads and pairing, and a guest picks no Bluetooth device', async () => {
+    const m = make([row()])
+    const { g } = await open(m, 8)
+    expect(m.sessions.proxies).toEqual([{ partition: 'plugin-hello-panel', config: { proxyRules: 'http://127.0.0.1:9', proxyBypassRules: '<-loopback>' } }])
+    expect(m.sessions.downloadsRefused).toEqual(['plugin-hello-panel'])
+    expect(m.sessions.pairingRefused).toEqual(expect.arrayContaining(['plugin-hello-panel', 'plugin-hello-panel device']))
+    const pick = { preventDefault: vi.fn() }
+    const chosen: string[] = []
+    g.emit('select-bluetooth-device', pick, [{ deviceId: 'd1' }], (id: string) => chosen.push(id))
+    expect(pick.preventDefault).toHaveBeenCalled()
+    expect(chosen).toEqual([''])
   })
 })

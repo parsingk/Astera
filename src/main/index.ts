@@ -39,7 +39,8 @@ import { MEDIA_SCHEME } from '../core/files/media'
 import { PLUGIN_SCHEME } from '../core/plugins/panelGuest'
 import { createPanelGuests } from './plugins/panelGuests'
 import { isOwnDocument } from './navigationGuard'
-import { ipcMain, trustPluginGuest, trustWebContents } from './ipcGuard'
+import { ipcMain, trustPluginGuest, trustWebContents, untrustPluginGuest } from './ipcGuard'
+import { randomBytes } from 'node:crypto'
 import { installPreviewGuards } from './preview/guest'
 import { AgentGuestRegistry } from './agentBrowser/registry'
 import { registerPreviewDevTools } from './preview/devtools'
@@ -260,7 +261,9 @@ const panelGuests = createPanelGuests({
   fromPartition: (partition) => session.fromPartition(partition) as never,
   bridgePreload: path.join(__dirname, '../preload/pluginBridge.js'),
   trustGuest: trustPluginGuest,
-  now: Date.now
+  untrustGuest: untrustPluginGuest,
+  now: Date.now,
+  token: () => randomBytes(16).toString('hex')
 })
 
 /** Loads the app's own page into the window. Split from createWindow because on macOS/Linux the
@@ -486,6 +489,9 @@ app.whenReady().then(async () => {
   // what it does and does not bind). On the default session, which is the main
   // window's; the preview webviews run in their own partitions and never see this scheme.
   protocol.handle(MEDIA_SCHEME, (req) => handleMediaRequest(req, { allowed: (p) => mediaAllowlist.has(p) }))
+  // The app's own session asks for permissions as before, except openExternal: main opens links itself (shell.openExternal
+  // after its own checks), so a page or frame never hands a scheme to the operating system (plugin panels review M1)
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission !== 'openExternal'))
   // Windows delivers a toast against the process's AppUserModelID and silently drops it when that
   // does not match a shortcut's — indistinguishable from the OS-refusal case DesktopNotifierDeps's
   // `show` already expects to swallow (design doc §9). Called unconditionally rather than guarded to

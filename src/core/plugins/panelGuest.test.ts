@@ -9,6 +9,7 @@ import {
   isPluginPartition,
   panelAttach,
   pluginFilePath,
+  pluginHostProblem,
   pluginPageUrl,
   pluginPartition,
   type PreparedPanel
@@ -31,9 +32,16 @@ describe('plugin panel guest decisions', () => {
     )
   })
 
-  it('builds a panel page URL on the plugin host with the panel in the query, a leading ./ left out', () => {
-    expect(pluginPageUrl('hello-panel', 'dist/ui/index.html', 'main')).toBe('astera-plugin://hello-panel/dist/ui/index.html?panel=main')
-    expect(pluginPageUrl('@acme/x', './ui page.html', 'side.view')).toBe('astera-plugin://acme+x/ui%20page.html?panel=side.view')
+  it('builds a panel page URL on the plugin host with the panel and a one-time token in the query, a leading ./ left out', () => {
+    expect(pluginPageUrl('hello-panel', 'dist/ui/index.html', 'main', 'tok1')).toBe('astera-plugin://hello-panel/dist/ui/index.html?panel=main&t=tok1')
+    expect(pluginPageUrl('@acme/x', './ui page.html', 'side.view', 'tok2')).toBe('astera-plugin://acme+x/ui%20page.html?panel=side.view&t=tok2')
+  })
+
+  // Review M4: Chromium rewrites a standard scheme's host that reads as an address (123 becomes 0.0.0.123)
+  it('says when a plugin id reads as an address, which no panel could be shown on', () => {
+    expect(pluginHostProblem('hello-panel')).toBeNull()
+    expect(pluginHostProblem('@acme/x')).toBeNull()
+    for (const id of ['123', '1.2', '0x10']) expect(pluginHostProblem(id), id).toBe(`${id} reads as an address, so its panels cannot be shown; rename the plugin`)
   })
 
   describe('pluginFilePath', () => {
@@ -51,6 +59,8 @@ describe('plugin panel guest decisions', () => {
         'astera-plugin://hello-panel/dist/a%00.html',
         'astera-plugin://hello-panel/dist/con.txt',
         'astera-plugin://hello-panel/dist/NUL',
+        'astera-plugin://hello-panel/dist/COM%C2%B9',
+        'astera-plugin://hello-panel/dist/lpt%C2%B3.txt',
         'astera-plugin://hello-panel/dist./index.html',
         'astera-plugin://hello-panel/dist%20/index.html',
         'https://hello-panel/dist/ui/index.html'
@@ -111,5 +121,14 @@ describe('plugin panel guest decisions', () => {
       expect(bridgeRefusal(calls, 'context', null, 5100)).toBe(`TOO_MANY_CALLS: at most ${BRIDGE_MAX_CALLS_PER_SECOND} a second`)
       expect(bridgeRefusal(calls, 'context', null, 6100)).toBeNull()
     })
+  })
+})
+
+// Review M5: a refused call counts against the rate, so refusals cannot be sent at any rate
+describe('bridgeRefusal counts every call', () => {
+  it('refuses past the rate even when the calls before were refused for their method', () => {
+    const calls: number[] = []
+    for (let i = 0; i < BRIDGE_MAX_CALLS_PER_SECOND; i++) bridgeRefusal(calls, 'files.read', null, 9000 + i)
+    expect(bridgeRefusal(calls, 'context', null, 9050)).toBe(`TOO_MANY_CALLS: at most ${BRIDGE_MAX_CALLS_PER_SECOND} a second`)
   })
 })

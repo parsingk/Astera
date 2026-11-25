@@ -15,8 +15,9 @@ import {
  *  is held to it as the person's preview partition is. */
 export function guardPartition(partition: string): void {
   const previewSession = session.fromPartition(partition)
-  previewSession.setPermissionRequestHandler((_wc, _permission, callback, details) => {
-    callback(permissionAllowed(details.requestingUrl))
+  previewSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    // Never openExternal: a page's frame would hand any scheme to the operating system (plugin panels review M1)
+    callback(permission !== 'openExternal' && permissionAllowed(details.requestingUrl))
   })
   previewSession.setPermissionCheckHandler((_wc, _permission, requestingOrigin) =>
     permissionAllowed(requestingOrigin)
@@ -27,6 +28,13 @@ export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webConte
   // The renderer's <webview> tag can carry any attribute; whatever it says, the guest gets these
   // preferences and no preload. A src outside http(s)/blank, or a foreign partition, never attaches.
   win.webContents.on('will-attach-webview', (e, prefs, params) => {
+    // The element's webpreferences can name another partition than its own attribute, and Electron builds the guest in
+    // that one: such a guest never attaches, whichever rule would have taken it (plugin panels review I1)
+    const asked = (prefs as { partition?: string }).partition
+    if (asked !== undefined && asked !== params.partition) {
+      e.preventDefault()
+      return
+    }
     // A plugin partition is the panel guests' (ADR-008): a prepared panel attaches with Astera's bridge, anything else in
     // one never does; every other partition keeps the preview rule below
     const decision = plugins ? plugins.decideAttach(params, prefs) : 'preview'
@@ -36,15 +44,26 @@ export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webConte
     }
     if (decision === 'plugin') return
     delete prefs.preload
+    delete prefs.enableBlinkFeatures
     prefs.nodeIntegration = false
+    prefs.nodeIntegrationInSubFrames = false
     prefs.contextIsolation = true
     prefs.sandbox = true
     prefs.webSecurity = true
+    // What the element's webpreferences could otherwise turn on in a dev server's page (plugin panels review I1)
+    prefs.webviewTag = false
+    prefs.allowRunningInsecureContent = false
+    prefs.experimentalFeatures = false
     if (!guestAttachAllowed(params)) e.preventDefault()
   })
   win.webContents.on('did-attach-webview', (_e, guest) => {
     // A plugin panel's guest is the panel guests' to hold; it never reaches the preview's popup routing
     if (plugins?.attached(guest)) return
+    // No Bluetooth device is picked for a page: with no listener Electron takes the first one in range
+    guest.on('select-bluetooth-device', (ev, _devices, callback) => {
+      ev.preventDefault()
+      callback('')
+    })
     // No windows of its own. The address goes to the renderer, whose link rule routes it — the same
     // shape as ipc.ts's `send`, guarded the same way.
     guest.setWindowOpenHandler(({ url }) => {

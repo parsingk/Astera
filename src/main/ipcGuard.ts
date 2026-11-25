@@ -37,6 +37,7 @@ export function createIpcGuard(
   ipcMain: GuardedIpcMain
   trust: (contents: TrustedContents, isOwnDocument: (url: string) => boolean) => void
   trustGuest: (contents: TrustedContents, guest: GuestIdentity) => void
+  untrustGuest: (id: number) => void
 } {
   const trusted = new Map<number, (url: string) => boolean>()
   const guests = new Map<number, GuestIdentity>()
@@ -101,6 +102,9 @@ export function createIpcGuard(
     trustGuest(contents, guest) {
       guests.set(contents.id, guest)
       contents.once('destroyed', () => guests.delete(contents.id))
+    },
+    untrustGuest(id) {
+      guests.delete(id)
     }
   }
 }
@@ -115,3 +119,6 @@ export const trustWebContents = guard.trust
 
 /** Lets one plugin panel guest reach the guest channels while its top frame is on its plugin host (ADR-008). */
 export const trustPluginGuest = guard.trustGuest
+
+/** Takes that back for a guest still alive, when its plugin is turned off or removed. */
+export const untrustPluginGuest = guard.untrustGuest
