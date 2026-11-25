@@ -39,6 +39,7 @@ export function BottomPanel({
   onOpenUrl,
   onOpenPreview,
   onSendRunLog,
+  contextEnabled,
   problemsEnabled,
   problemsRoot,
   problems,
@@ -96,6 +97,8 @@ export function BottomPanel({
   onOpenPreview: (url: string) => void
   /** The rail's send-to-agent for a run (spec W4): App opens the context preview from what its console holds. */
   onSendRunLog: (runId: string) => void
+  /** Sending to an agent is turned on in Settings > General (Phase 1 gate); off, the rail has no send button. */
+  contextEnabled: boolean
   /** The Problems tab (spec W5): whether it is turned on in Settings > General, the explorer's project, its problems
    *  (null when they could not be read), and what a row and the refresh button do. */
   problemsEnabled: boolean
@@ -375,7 +378,7 @@ export function BottomPanel({
               onScrollToEnd={() => selectedRunId && bump(setScrollNonces, selectedRunId)}
               onClear={() => selectedRunId && bump(setClearNonces, selectedRunId)}
               onToggleFind={() => selectedRunId && setFindOpen((prev) => ({ ...prev, [selectedRunId]: !prev[selectedRunId] }))}
-              onSendToAgent={onSendRunLog}
+              onSendToAgent={contextEnabled ? onSendRunLog : undefined}
             />
             <div className="run-main">
               <RunTabStrip runs={runs} selectedId={selectedRunId} now={now} onSelect={onSelectRun} onDismiss={onDismissRun} onOpenPreview={onOpenPreview} />

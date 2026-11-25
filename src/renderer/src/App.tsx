@@ -3966,6 +3966,8 @@ export default function App(): React.JSX.Element {
   const [problemsAsk, setProblemsAsk] = useState(0)
   /** The Problems tab is turned on in Settings > General (Phase 1 gate). Off, or not known yet: no tab and nothing asked. */
   const problemsOn = workspaceFeatures?.problemsTab === true
+  /** Sending to an agent is turned on (Phase 1 gate). Off, or not known yet: no rail button and no diff hunk button. */
+  const contextOn = workspaceFeatures?.contextBridge === true
   // A project just opened shows no other project's list while its own is asked for
   useEffect(() => {
     setProblems(undefined)
@@ -4913,7 +4915,8 @@ export default function App(): React.JSX.Element {
     },
     // The editor selection to an agent, after a preview (spec W4).
     'context.attachSelection': {
-      blockedBy: () => (activeEditorSelection() ? null : 'action.blocked.noSelection'),
+      blockedBy: () =>
+        workspaceFeaturesRef.current?.contextBridge !== true ? 'action.blocked.featureOff' : activeEditorSelection() ? null : 'action.blocked.noSelection',
       run: () => openSelectionContext()
     }
   }
@@ -5788,6 +5791,7 @@ export default function App(): React.JSX.Element {
                       // A tail keeps its end when it has to be cut: the failure is on the last lines
                       openContextPreview(made.ref, contextText(made.ref, made.excerpt, '', { keepEnd: made.fromTail }), { keepEnd: made.fromTail })
                     }}
+                    contextEnabled={contextOn}
                     terminals={terminals}
                     terminalCwd={bottomRoot}
                     activeTab={bottomTabShown}
@@ -6798,8 +6802,13 @@ export default function App(): React.JSX.Element {
                   setSettingsTab('security')
                   setShowSettings(true)
                 },
-                // A hunk of its diff to a repair Job draft (spec W4): this computer's Runs only, as the form is local
-                onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
+                // A hunk of its diff to a repair Job draft (spec W4): this computer's Runs only, as the form is local, and
+                // only while sending to an agent is on (Phase 1 gate)
+                ...(contextOn
+                  ? {
+                      onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
+                    }
+                  : {})
               }
             : {})}
         />

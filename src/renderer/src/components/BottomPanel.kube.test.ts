@@ -58,7 +58,8 @@ const render = ({
   terminals = [] as TerminalBuffer[],
   kubeForwardCount = 0,
   runAvailable = false,
-  problemsEnabled = true
+  problemsEnabled = true,
+  contextEnabled = true
 } = {}): string =>
   renderToStaticMarkup(
     React.createElement(BottomPanel, {
@@ -74,6 +75,7 @@ const render = ({
       onOpenUrl: noop,
       onOpenPreview: noop,
       onSendRunLog: noop,
+      contextEnabled,
       problemsEnabled,
       problemsRoot: null,
       problems: [],
@@ -371,5 +373,15 @@ describe('BottomPanel Problems tab switch', () => {
     const html = render({ runAvailable: true, activeTab: 'run', problemsEnabled: false })
     expect(html).not.toContain('data-tab-id="problems"')
     expect(html).not.toContain('problems-body')
+  })
+})
+
+// Phase 1 gate: sending to an agent can be turned off in Settings > General, and the rail's send button goes with it
+describe('BottomPanel send to agent switch', () => {
+  it('has the rail send button while the switch is on, and not while it is off', () => {
+    const on = render({ runAvailable: true, activeTab: 'run' })
+    const off = render({ runAvailable: true, activeTab: 'run', contextEnabled: false })
+    expect(on).toContain('context.run.send')
+    expect(off).not.toContain('context.run.send')
   })
 })

@@ -12,7 +12,11 @@ const app = readFileSync(path.join(here, '../App.tsx'), 'utf8')
 // W4 "log → context preview": the run console's rail sends its selection, or the end of its log, to an agent through
 // the same preview an editor selection takes.
 describe('a run log to an agent', () => {
-  it('has a rail button for the selected run, off with no run', () => {
+  // Phase 1 gate: no handler (sending to an agent turned off in Settings > General) means no button
+  it('has a rail button for the selected run, off with no run, and none without a handler', () => {
+    expect(rail).toMatch(/onSendToAgent\?: \(runId: string\) => void/)
+    expect(rail).toMatch(/\{onSendToAgent && \(\s*<button type="button" className="run-rail-btn" title=\{t\('context\.run\.send'\)\}/)
+    expect(bottom).toMatch(/onSendToAgent=\{contextEnabled \? onSendRunLog : undefined\}/)
     expect(rail).toMatch(/title=\{t\('context\.run\.send'\)\}[^>]*disabled=\{none\}[^>]*onClick=\{\(\) => run && onSendToAgent\(run\.runId\)\}/)
   })
 
@@ -22,7 +26,7 @@ describe('a run log to an agent', () => {
   })
 
   it('opens the preview from what the console holds, for sessions in the run\'s project', () => {
-    expect(bottom).toMatch(/onSendToAgent=\{onSendRunLog\}/)
+    expect(bottom).toMatch(/onSendToAgent=\{contextEnabled \? onSendRunLog : undefined\}/)
     expect(app).toMatch(/onSendRunLog=\{\(runId\) => \{/)
     const send = app.slice(app.indexOf('onSendRunLog={(runId) => {'), app.indexOf('onSendRunLog={(runId) => {') + 1400)
     expect(send).toMatch(/readRunConsole\(runId\)/)

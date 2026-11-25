@@ -67,3 +67,15 @@ describe('the Problems tab off (Phase 1 gate)', () => {
     expect(app).toMatch(/entries=\{ACTIONS\.filter\(\(a\) => a\.id !== 'palette\.open'\)\.flatMap\(\(a\) => \{\s*const state = actionRegistry\.state\(a\.id\)\s*(?:\/\/[^\n]*\n\s*)*if \(!state\.ok && state\.reason === 'action\.blocked\.featureOff'\) return \[\]/)
   })
 })
+
+describe('sending to an agent off (Phase 1 gate)', () => {
+  it('hides the run rail button and the diff hunk button on anything but an explicit on', () => {
+    expect(app).toMatch(/const contextOn = workspaceFeatures\?\.contextBridge === true/)
+    expect(app).toMatch(/contextEnabled=\{contextOn\}/)
+    expect(app).toMatch(/\.\.\.\(contextOn\s*\?\s*\{\s*onDraftRepair: \(file: string, diff: string, rowIndex: number\) => openRepairDraft\(openRun, file, diff, rowIndex\)\s*\}\s*: \{\}\)/)
+  })
+
+  it('blocks the selection command as turned off, so the palette leaves it out', () => {
+    expect(app).toMatch(/'context\.attachSelection': \{\s*blockedBy: \(\) =>\s*workspaceFeaturesRef\.current\?\.contextBridge !== true \? 'action\.blocked\.featureOff'/)
+  })
+})
