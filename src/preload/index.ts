@@ -313,7 +313,8 @@ const api = {
     searchText: invoke('files.searchText'),
     resolveLink: invoke('files.resolveLink'),
     openFolder: invoke('files.openFolder'),
-    admitMedia: invoke('files.admitMedia')
+    admitMedia: invoke('files.admitMedia'),
+    exists: invoke('files.exists')
   },
   media: {
     stat: invoke('media.stat'),

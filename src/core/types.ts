@@ -1295,7 +1295,8 @@ export interface CoreApi {
     resize(id: string, cols: number, rows: number): void
     ack(id: string, bytes: number): void // backpressure driven by the xterm write callback
     kill(id: string): Promise<void>
-    list(): Promise<SessionInfo[]>
+    /** With `afterTakeBack`, answered once the Host's startup take back has settled (bounded), for the layout restore. */
+    list(opts?: { afterTakeBack?: boolean }): Promise<SessionInfo[]>
     /** Renames a session's tab. Resolves with the stored title — normalised, so an empty name comes
      *  back as the project folder name — or null when the session is already gone. The same title is
      *  Slack's message prefix and the desktop notification's title, so all three follow. */
@@ -1767,6 +1768,8 @@ export interface CoreApi {
     openFolder(path: string): Promise<void>
     /** An image or a video in a project, admitted for the media viewer (main/media/admit.ts); null for anything else. */
     admitMedia(path: string): Promise<{ path: string } | null>
+    /** Whether a file or a folder is there inside an opened project (main/projectFileExists.ts), for the layout restore. */
+    exists(path: string, kind: 'file' | 'dir'): Promise<boolean>
   }
   /** The media viewer tab (components/MediaViewer.tsx). Every call accepts only a media file that
    *  files.resolveLink answered in this run of the app (main/media/allowlist.ts). */

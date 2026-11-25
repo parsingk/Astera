@@ -296,6 +296,7 @@ import { executeLaunch } from './run/launch'
 import { agentDirOf, folderToOpen, resolveConsolePath, resolveExistingPath } from './run/resolveLink'
 import { mediaAllowlist } from './media/allowlist'
 import { admitProjectMedia } from './media/admit'
+import { existsInProject } from './projectFileExists'
 import { mediaKindOf } from '../core/files/media'
 import { saveConfigsBatch } from './run/saveConfigs'
 import { planFileRun } from './run/runFile'
@@ -429,6 +430,11 @@ export interface HostWiring {
 /** The most this will write for one dropped or pasted file. A prompt attachment is a screenshot or a
  *  document, not a disk image, and the cap is what keeps a stray drop from filling a disk. */
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/** How long sessions.list({ afterTakeBack: true }) waits for the Host's startup take back before answering anyway. */
+const SESSIONS_TAKEN_BACK_WAIT_MS = 5000
+const afterTakeBack = (opts: unknown): boolean =>
+  typeof opts === 'object' && opts !== null && (opts as { afterTakeBack?: unknown }).afterTakeBack === true
 
 // The same string core's handleCommand lets send the driving loop's own calls (APP_CALLER).
 const UI_CALLER = APP_CALLER
@@ -4244,7 +4250,15 @@ export function registerIpc(
   // Both managers' sessions, in one list: the renderer draws one row per SessionInfo and reads `kind`
   // to decide which pane goes in it (core/sessions/kind.ts), so a second call would only give it two
   // lists to merge itself.
-  ipcMain.handle('sessions.list', () => allSessions())
+  // The layout restore (spec W3) asks with `{ afterTakeBack: true }`: at a restart a session the Host still runs is in
+  // the list only once the startup take back has settled (hostSessionsTakenBack's own note), and a session missing from
+  // it would lose the place the window had kept for it. Bounded, so a Host that never answers does not hold the
+  // restore; anything later still arrives as session:created.
+  ipcMain.handle('sessions.list', async (_e, opts?: unknown) => {
+    if (afterTakeBack(opts))
+      await Promise.race([hostSessionsTakenBack, new Promise((r) => setTimeout(r, SESSIONS_TAKEN_BACK_WAIT_MS))])
+    return allSessions()
+  })
   // Renaming a tab. The renderer holds the sessions list it draws from, so it applies the returned
   // title itself — no broadcast, because the rename starts there and this app has one window.
   //
@@ -5663,6 +5677,11 @@ export function registerIpc(
   // a project is admitted (main/media/admit.ts). null leaves the file to an ordinary file tab.
   ipcMain.handle('files.admitMedia', (_e, p: unknown) =>
     admitProjectMedia(p as string, { assertAllowedPath, stat: (f) => fs.stat(f), allowlist: mediaAllowlist })
+  )
+  // Whether a saved file tab or a record tab's project folder can come back (spec W3): only inside an opened project,
+  // never a stat of a path a stored record names elsewhere (main/projectFileExists.ts).
+  ipcMain.handle('files.exists', (_e, p: unknown, kind: unknown) =>
+    existsInProject(p, kind, { assertAllowedPath, stat: (f) => fs.stat(f) })
   )
   // The media viewer's own calls. Each is checked against the media allowlist rather than
   // assertAllowedPath: the file was admitted when its link resolved, and it is usually outside every
