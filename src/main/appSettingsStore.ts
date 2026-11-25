@@ -28,6 +28,12 @@ import { githubLifecycleDefaultsOf, type GitHubLifecycleDefaults } from '../core
 import { GITHUB_LIFECYCLE_DEFAULTS } from '../core/github/lifecycle'
 import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import {
+  WORKSPACE_FEATURES_DEFAULTS,
+  readWorkspaceFeatures,
+  writableWorkspaceFeatures,
+  type WorkspaceFeatures
+} from '../core/settings/workspaceFeatures'
 
 /** The three settings that gate Astera's agent skills when the file does not say otherwise — a
  *  missing file, a corrupt one, or an absent key. */
@@ -166,6 +172,7 @@ export class AppSettingsStore {
   /** Desktop notifications, one flag per event. Written and read as one object, so the four move
    *  together and there is one place that knows what a missing file means. */
   private desktopNotify: DesktopNotifySettings = { ...DESKTOP_NOTIFY_DEFAULTS }
+  private workspaceFeatures: WorkspaceFeatures = { ...WORKSPACE_FEATURES_DEFAULTS }
   /** Whether the last load recovered from a damaged file and the person has not been told yet. */
   private recoveryNotice = false
 
@@ -207,6 +214,7 @@ export class AppSettingsStore {
       // Narrowed on read, like generator and terminalFont and for the same reason: the file is
       // user-editable, and the narrowing is per flag's own default (see readDesktopNotify).
       this.desktopNotify = readDesktopNotify((parsed as { desktopNotify?: unknown }).desktopNotify)
+      this.workspaceFeatures = readWorkspaceFeatures((parsed as { workspaceFeatures?: unknown }).workspaceFeatures)
       // Sanitised on read like terminalFont, and for the same reason: the file is user-editable and
       // these values become CLI arguments. Anything that does not survive reads as "not set", which
       // means the CLI default (or, for the account, no generation at all).
@@ -276,6 +284,7 @@ export class AppSettingsStore {
         this.kubectlPath = null
         this.kubeconfigFiles = []
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
+        this.workspaceFeatures = { ...WORKSPACE_FEATURES_DEFAULTS }
         this.generator = {}
         this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
         this.agentPermissionMode = 'yolo'
@@ -311,6 +320,7 @@ export class AppSettingsStore {
       this.kubectlPath = null
       this.kubeconfigFiles = []
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
+      this.workspaceFeatures = { ...WORKSPACE_FEATURES_DEFAULTS }
       this.generator = {}
       this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
       // **The narrower side, not the default** (I2). The file may have said 'manual', and the 'yolo'
@@ -557,6 +567,17 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getWorkspaceFeatures(): WorkspaceFeatures {
+    return { ...this.workspaceFeatures }
+  }
+
+  /** The three are written together, as setDesktopNotify writes its record; the value arrives from the renderer, so it
+   *  goes through the same narrowing as the file. */
+  async setWorkspaceFeatures(next: WorkspaceFeatures): Promise<void> {
+    this.workspaceFeatures = readWorkspaceFeatures(next)
+    await this.persist()
+  }
+
   getGenerator(): GeneratorSettings {
     return this.generator
   }
@@ -668,6 +689,7 @@ export class AppSettingsStore {
       kubectlPath?: string
       kubeconfigFiles?: string[]
       desktopNotify?: DesktopNotifySettings
+      workspaceFeatures?: WorkspaceFeatures
       generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
       agentPermissionMode?: AgentPermissionMode
@@ -726,6 +748,8 @@ export class AppSettingsStore {
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)
     if (desktopNotify) data.desktopNotify = desktopNotify
+    const workspaceFeatures = writableWorkspaceFeatures(this.workspaceFeatures)
+    if (workspaceFeatures) data.workspaceFeatures = workspaceFeatures
     // 비어 있으면 키 자체를 남기지 않는다 — 위 falsy 규칙 그대로다
     const generator = writableGeneratorSettings(this.generator)
     if (generator) data.generator = generator

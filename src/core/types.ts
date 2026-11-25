@@ -50,6 +50,7 @@ import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
+import type { WorkspaceFeatures } from './settings/workspaceFeatures'
 import type { ModelDescriptor, ModelListResult } from './models/types'
 import type {
   ChatAnswer,
@@ -1631,6 +1632,9 @@ export interface CoreApi {
     // DesktopNotifier itself (main), which is why the type lives in core/notify/settings rather than here.
     getDesktopNotify(): Promise<DesktopNotifySettings>
     setDesktopNotify(next: DesktopNotifySettings): Promise<void>
+    /** Which Phase 1 workspace features are on (core/settings/workspaceFeatures.ts). */
+    getWorkspaceFeatures(): Promise<WorkspaceFeatures>
+    setWorkspaceFeatures(next: WorkspaceFeatures): Promise<void>
     // Which account (and model) writes the How It Works explanations. Empty means no account has been
     // chosen, and nothing is generated — the screen says so rather than staying silently blank.
     getGenerator(): Promise<GeneratorSettings>
