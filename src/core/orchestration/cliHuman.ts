@@ -625,7 +625,8 @@ export function humanFor(
     // A package: where it is, its checksum, and what was left out of it
     case 'plugins-pack': {
       const left = Array.isArray(data.leftOut) ? (data.leftOut as unknown[]).map(str) : []
-      return [`wrote ${str(data.file)} (${str(data.files)} files, ${str(data.bytes)} bytes)`, `sha256 ${str(data.sha256)}`, ...(left.length > 0 ? [`left out: ${left.join(', ')}`] : []), ...warningLines(data)].join('\n')
+      const skipped = typeof data.skipped === 'number' && data.skipped > 0 ? [`not packed: ${data.skipped} files outside files or in node_modules`] : []
+      return [`wrote ${str(data.file)} (${str(data.files)} files, ${str(data.bytes)} bytes)`, `sha256 ${str(data.sha256)}`, ...(left.length > 0 ? [`left out: ${left.join(', ')}`] : []), ...skipped, ...warningLines(data)].join('\n')
     }
     case 'plugins-doctor':
       return columns(

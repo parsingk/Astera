@@ -4,6 +4,11 @@
 // and a gzip header that names no system, so the same folder packed by the same Astera gives the same bytes and checksum.
 // (zlib is the Astera build's, so a later Astera may compress the same files to other bytes.)
 //
+// What goes in follows npm (the person's decision, 2026-11-25): package.json's `files` chooses the files, with
+// package.json, a README, a LICENSE and the entry and ui always; node_modules stays out but for the packages
+// bundleDependencies names and the packages those need. A dependency the package would not carry is named (`unpacked`),
+// so pack can refuse a package that would not run: `install --file` fetches nothing.
+//
 // Left out, and named in the answer: junk anywhere (a .git folder, .DS_Store, Thumbs.db, desktop.ini, macOS ._ files,
 // npm-debug.log), credentials anywhere (.env files but .env.example, .envrc, .npmrc, .netrc, .pypirc, .yarnrc.yml,
 // .git-credentials, SSH keys, whatever is under .ssh or .aws), and outside node_modules keys and certificates and an old
@@ -11,6 +16,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { gzipSync } from 'node:zlib'
+import ignore, { type Ignore } from 'ignore'
 
 const BLOCK = 512
 /** npm's own fixed time for every entry, 1985-10-26T08:15:00Z. */
@@ -101,11 +107,71 @@ async function filesUnder(root: string): Promise<string[]> {
   return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
-/** The package of the folder at `copy`: its gzipped tar, the files in it and the files left out, each list sorted. */
-export async function packFolder(copy: string): Promise<{ tgz: Buffer; files: string[]; leftOut: string[] }> {
+const ALWAYS_AT_TOP = /^(?:readme|license|licence)(?:\..*)?$/i
+
+const exists = (at: string): Promise<boolean> => fs.stat(at).then(() => true, () => false)
+const readJson = async (file: string): Promise<Record<string, unknown>> => {
+  try {
+    const v: unknown = JSON.parse(await fs.readFile(file, 'utf8'))
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+const namesOf = (v: unknown): string[] => (typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.keys(v) : [])
+
+/** What of the folder at `copy` npm's rules put in a package: whether a path is chosen, and the dependencies left out. */
+async function packRules(copy: string): Promise<{ chosen: (rel: string) => boolean; unpacked: string[] }> {
+  const pkg = await readJson(path.join(copy, 'package.json'))
+  const astera = (typeof pkg.astera === 'object' && pkg.astera !== null ? pkg.astera : {}) as Record<string, unknown>
+  const always = new Set(['package.json', ...[astera.entry, astera.ui].filter((v): v is string => typeof v === 'string').map((v) => v.replace(/^\.\//, ''))])
+  // `files`, each line on its own and the last that matches deciding, so a later `!` takes a file back out of a folder
+  // an earlier line chose (gitignore's rule that keeps a file in an excluded folder excluded is not npm's here)
+  const lines = Array.isArray(pkg.files) ? pkg.files.filter((f): f is string => typeof f === 'string' && f.trim() !== '') : null
+  const matchers: { negated: boolean; ig: Ignore }[] | null = lines
+    ? lines.map((l) => (l.startsWith('!') ? { negated: true, ig: ignore().add(l.slice(1)) } : { negated: false, ig: ignore().add(l) }))
+    : null
+  const inFiles = (rel: string): boolean => {
+    if (matchers === null) return true
+    let chosen = false
+    for (const m of matchers) if (m.ig.ignores(rel)) chosen = !m.negated
+    return chosen
+  }
+
+  // bundleDependencies (or bundledDependencies): a list of names, or true for every dependency; with each, the packages
+  // it needs, nested under it or hoisted to the top
+  const dependencies = namesOf(pkg.dependencies)
+  const bundleField = pkg.bundleDependencies ?? pkg.bundledDependencies
+  const bundled = bundleField === true ? dependencies : Array.isArray(bundleField) ? bundleField.filter((n): n is string => typeof n === 'string') : []
+  const packages = new Set<string>()
+  const queue = bundled.map((n) => `node_modules/${n}`)
+  while (queue.length > 0) {
+    const dir = queue.shift() as string
+    if (packages.has(dir) || !(await exists(path.join(copy, ...dir.split('/'))))) continue
+    packages.add(dir)
+    const own = await readJson(path.join(copy, ...dir.split('/'), 'package.json'))
+    for (const dep of [...namesOf(own.dependencies), ...namesOf(own.optionalDependencies)]) {
+      const nested = `${dir}/node_modules/${dep}`
+      queue.push((await exists(path.join(copy, ...nested.split('/')))) ? nested : `node_modules/${dep}`)
+    }
+  }
+  const unpacked = dependencies.filter((n) => !packages.has(`node_modules/${n}`))
+  const chosen = (rel: string): boolean => {
+    if (rel.startsWith('node_modules/')) return [...packages].some((p) => rel.startsWith(`${p}/`))
+    if (always.has(rel) || (!rel.includes('/') && ALWAYS_AT_TOP.test(rel))) return true
+    return inFiles(rel)
+  }
+  return { chosen, unpacked }
+}
+
+/** The package of the folder at `copy`: its gzipped tar, the files in it and the files left out (each list sorted), how
+ *  many files npm's rules skipped, and the dependencies it does not carry. */
+export async function packFolder(copy: string): Promise<{ tgz: Buffer; files: string[]; leftOut: string[]; skipped: number; unpacked: string[] }> {
+  const rules = await packRules(copy)
   const all = await filesUnder(copy)
-  const files = all.filter((rel) => !leftOutOfPackage(rel))
-  const leftOut = all.filter((rel) => leftOutOfPackage(rel))
+  const candidates = all.filter(rules.chosen)
+  const files = candidates.filter((rel) => !leftOutOfPackage(rel))
+  const leftOut = candidates.filter((rel) => leftOutOfPackage(rel))
   const entries = await Promise.all(
     files.map(async (rel) => {
       const at = path.join(copy, ...rel.split('/'))
@@ -114,5 +180,5 @@ export async function packFolder(copy: string): Promise<{ tgz: Buffer; files: st
       return { path: rel, body: await fs.readFile(at), executable }
     })
   )
-  return { tgz: gzipFixed(tarOf(entries)), files, leftOut }
+  return { tgz: gzipFixed(tarOf(entries)), files, leftOut, skipped: all.length - candidates.length, unpacked: rules.unpacked }
 }

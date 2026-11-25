@@ -172,3 +172,21 @@ describe('astera plugins pack, final review', () => {
     expect(p).toMatchObject({ ok: true, body: { warnings: [{ code: 'INCOMPATIBLE' }] } })
   })
 })
+
+describe('astera plugins pack and dependencies', () => {
+  // A package from pack installs without npm, so a dependency it does not carry would be missing when it runs
+  it('refuses a plugin whose dependencies the package would not carry, writing nothing', async () => {
+    const init = await pluginDevCommand({ cmd: 'plugins-init', args: { name: 'deps', template: 'host' }, cwd: dir, version: '1.6.0' })
+    if (!init.ok) throw new Error(init.error.message)
+    const pkgFile = path.join(dir, 'deps', 'package.json')
+    await fs.writeFile(pkgFile, JSON.stringify({ ...JSON.parse(await fs.readFile(pkgFile, 'utf8')), dependencies: { lodash: '^4.0.0' } }))
+    await fs.mkdir(path.join(dir, 'deps', 'node_modules', 'lodash'), { recursive: true })
+    await fs.writeFile(path.join(dir, 'deps', 'node_modules', 'lodash', 'index.js'), 'x')
+    const r = await pluginDevCommand({ cmd: 'plugins-pack', args: { path: 'deps' }, cwd: dir, version: '1.6.0' })
+    expect(r).toMatchObject({
+      ok: false,
+      error: { code: 'FAILED', message: expect.stringMatching(/DEPENDENCIES_NOT_PACKED: lodash is a dependency the package would not carry: bundle the plugin into its entry, or list it in bundleDependencies/) }
+    })
+    expect((await fs.readdir(dir)).filter((n) => n.endsWith('.tgz'))).toEqual([])
+  })
+})

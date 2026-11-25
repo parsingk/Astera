@@ -75,7 +75,7 @@ describe('packFolder', () => {
   it('leaves out secrets and junk, naming each, and keeps a dependency’s own files', async () => {
     const copy = path.join(dir, 'copy')
     await write(copy, {
-      'package.json': '{}',
+      'package.json': JSON.stringify({ bundleDependencies: ['dep'] }),
       'index.js': 'x',
       '.env': 'TOKEN=1',
       '.env.local': 'TOKEN=2',
@@ -140,5 +140,78 @@ describe('what a package leaves out, final review', () => {
     await fs.writeFile(path.join(dir, 'p.tgz'), (await packFolder(copy)).tgz)
     await extractPackage(path.join(dir, 'p.tgz'), path.join(dir, 'out'))
     expect((await fs.stat(path.join(dir, 'out', 'bin', 'tool'))).mode & 0o111).not.toBe(0)
+  })
+})
+
+// The person's decision (2026-11-25, final review I2): what goes in follows npm. `files` chooses the files, node_modules
+// stays out but for what bundleDependencies names (with what those need), and a dependency not packed is named, so pack
+// can refuse a package that would not run: install --file fetches nothing.
+describe('what a package holds, as npm decides it', () => {
+  it('leaves node_modules out when nothing is bundled, and counts what it skipped', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, { 'package.json': '{}', 'index.js': 'x', 'node_modules/typescript/lib/tsc.js': 'x', 'node_modules/typescript/package.json': '{}' })
+    const packed = await packFolder(copy)
+    expect(packed.files).toEqual(['index.js', 'package.json'])
+    expect(packed.skipped).toBe(2)
+    expect(packed.unpacked).toEqual([])
+  })
+
+  it('takes only what `files` names, with package.json, README, LICENSE and the entry and ui always', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, {
+      'package.json': JSON.stringify({ files: ['dist', 'assets/**/*.png', '!dist/**/*.map'], astera: { entry: 'boot.js', ui: 'ui/index.html' } }),
+      'README.md': 'r',
+      'LICENSE': 'l',
+      'boot.js': 'b',
+      'ui/index.html': 'u',
+      'dist/main.js': 'm',
+      'dist/main.js.map': 'm',
+      'dist/sub/more.js': 'm',
+      'assets/img/a.png': 'p',
+      'assets/img/a.svg': 's',
+      'src/main.ts': 's',
+      'test/main.test.ts': 't'
+    })
+    const packed = await packFolder(copy)
+    expect(packed.files).toEqual(['LICENSE', 'README.md', 'assets/img/a.png', 'boot.js', 'dist/main.js', 'dist/sub/more.js', 'package.json', 'ui/index.html'])
+    expect(packed.skipped).toBe(4)
+  })
+
+  it('packs what bundleDependencies names, with the packages those need, and nothing else of node_modules', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, {
+      'package.json': JSON.stringify({ dependencies: { dep: '^1.0.0' }, bundleDependencies: ['dep'] }),
+      'index.js': 'x',
+      'node_modules/dep/package.json': JSON.stringify({ dependencies: { sub: '1.0.0', nested: '1.0.0' } }),
+      'node_modules/dep/index.js': 'd',
+      'node_modules/dep/node_modules/nested/index.js': 'n',
+      'node_modules/sub/package.json': '{}',
+      'node_modules/sub/index.js': 's',
+      'node_modules/other/index.js': 'o'
+    })
+    const packed = await packFolder(copy)
+    expect(packed.files).toEqual([
+      'index.js',
+      'node_modules/dep/index.js',
+      'node_modules/dep/node_modules/nested/index.js',
+      'node_modules/dep/package.json',
+      'node_modules/sub/index.js',
+      'node_modules/sub/package.json',
+      'package.json'
+    ])
+    expect(packed.unpacked).toEqual([])
+  })
+
+  it('bundles every dependency for bundleDependencies true, and names a dependency left unpacked', async () => {
+    const copy = path.join(dir, 'copy')
+    await write(copy, {
+      'package.json': JSON.stringify({ dependencies: { a: '1.0.0', b: '1.0.0' }, bundleDependencies: true }),
+      'index.js': 'x',
+      'node_modules/a/index.js': 'a',
+      'node_modules/b/index.js': 'b'
+    })
+    expect((await packFolder(copy)).files).toEqual(['index.js', 'node_modules/a/index.js', 'node_modules/b/index.js', 'package.json'])
+    await write(copy, { 'package.json': JSON.stringify({ dependencies: { a: '1.0.0', b: '1.0.0' }, bundleDependencies: ['a'] }) })
+    expect((await packFolder(copy)).unpacked).toEqual(['b'])
   })
 })

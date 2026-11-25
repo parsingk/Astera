@@ -125,6 +125,12 @@ async function pack(a: { args: Record<string, unknown>; cwd: string; version: st
     const file = chosen ?? path.join(path.dirname(folder), `${r.plugin.name.replace(/^@/, '').replace('/', '-')}-${r.plugin.version}.tgz`)
     if (within(folder, file)) return invalid(`${file} is inside the folder it packs; give --out`)
     const packed = await packFolder(r.copy)
+    // install --file fetches nothing: a dependency the package does not carry would be missing when the plugin runs
+    if (packed.unpacked.length > 0) {
+      const one = packed.unpacked.length === 1
+      const message = `${packed.unpacked.join(', ')} ${one ? 'is a dependency' : 'are dependencies'} the package would not carry: bundle the plugin into its entry, or list ${one ? 'it' : 'them'} in bundleDependencies`
+      return refused(folder, { ...r, problems: [{ code: 'DEPENDENCIES_NOT_PACKED', message }] }, 'would not run from its package')
+    }
 
     // Read back as `install --file` will read it (final review I1): the Host's extractor and its limits, then the entry
     // and ui in what came out, which the left-out rules could have taken away
@@ -167,6 +173,7 @@ async function pack(a: { args: Record<string, unknown>; cwd: string; version: st
         sha256: createHash('sha256').update(packed.tgz).digest('hex'),
         integrity: `sha512-${createHash('sha512').update(packed.tgz).digest('base64')}`,
         files: packed.files.length,
+        skipped: packed.skipped,
         leftOut: [...git, ...packed.leftOut].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)),
         ...(r.warnings.length > 0 ? { warnings: r.warnings } : {})
       }

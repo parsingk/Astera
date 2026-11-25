@@ -635,9 +635,12 @@ problem.
 `source`, a job source) and refuses a folder that already holds files.
 
 `pack` makes a package of a folder that validates: the same bytes each time the same Astera packs it (npm's layout,
-entries in order, one fixed time). It reads the package back as `install --file` will before writing it, leaves out and
-names `.git`, OS junk and credentials (`.env` but `.env.example`, `.npmrc`, `.netrc`, SSH keys and the like) and, outside
-`node_modules`, keys and certificates, and answers its sha256 and npm integrity.
+entries in order, one fixed time). What goes in follows npm: `files` in package.json chooses the files (package.json, a
+README, a LICENSE and the entry and ui always go in), and `node_modules` stays out but for what `bundleDependencies`
+names. A dependency the package would not carry is refused (`DEPENDENCIES_NOT_PACKED`), since `install --file` fetches
+nothing. It reads the package back as `install --file` will before writing it, leaves out and names `.git`, OS junk and
+credentials anywhere (`.env` but `.env.example`, `.npmrc`, `.netrc`, SSH keys and the like) and, outside bundled
+packages, keys and certificates, and answers its sha256 and npm integrity.
 
 **A plugin with a host entry runs trusted code on this machine.** It can do anything you can, and its permissions
 limit only what it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program. A

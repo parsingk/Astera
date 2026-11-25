@@ -23,6 +23,8 @@ export type FolderProblemCode =
   | 'UI_MISSING'
   /** `plugins pack` only: the package it made would be refused by `install --file` (tarball.ts's limits and names). */
   | 'PACKAGE_REFUSED'
+  /** `plugins pack` only: a dependency the package would not carry, which `install --file` would not fetch. */
+  | 'DEPENDENCIES_NOT_PACKED'
 
 export interface FolderProblem {
   code: FolderProblemCode
