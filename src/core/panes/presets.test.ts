@@ -101,6 +101,19 @@ describe('saved presets', () => {
     expect(applySaved(preset('empty'), [], null)).toBeNull()
   })
 
+  it('puts an app mirror it never saw beside its session, not in the first group', () => {
+    const tree: SavedNode = {
+      kind: 'split',
+      dir: 'row',
+      ratio: 0.5,
+      a: { kind: 'leaf', tabs: ['file:/p/a.ts'], active: 'file:/p/a.ts' },
+      b: { kind: 'leaf', tabs: ['session:s1'], active: 'session:s1' }
+    }
+    const r = applySaved(preset('mine', tree), ['file:/p/a.ts', 'session:s1', 'app:s1', 'app:s9'], 'file:/p/a.ts')!
+    expect(shape(r.root)).toEqual([['file:/p/a.ts', 'app:s9'], ['session:s1', 'app:s1']])
+    expect(activeTabs(r.root)).toEqual(['file:/p/a.ts', 'session:s1'])
+  })
+
   it('reads saved presets defensively', () => {
     expect(readPresets(null)).toEqual([])
     expect(readPresets('{')).toEqual([])

@@ -3,7 +3,7 @@
 // built-in ones are named for what the person is doing; a saved one is a layout the person kept under a name.
 // node: no imports, the renderer imports this.
 import { MAX_PANES, activateTab, createGroup, createSplit, firstLeaf, leaves, type PaneLeaf, type PaneNode } from './tree'
-import { parseTab } from './tabId'
+import { parseTab, sessionTab } from './tabId'
 import { readNode, readPanels, restoreTree, savedLeaves, type SavedNode, type SavedPanels } from './savedLayout'
 
 export type PresetId = 'coding' | 'review' | 'agents' | 'devops' | 'default'
@@ -97,19 +97,27 @@ export function applySaved(p: SavedPreset, tabIds: readonly string[], activeTabI
   const open = new Set(tabIds)
   const restored = restoreTree(p.tree, -1, (t) => open.has(t))
   if (!restored) return placed(group([...tabIds], activeTabId), activeTabId)
-  const inTree = new Set(leaves(restored.root).flatMap((l) => l.tabIds))
-  const rest = tabIds.filter((t) => !inTree.has(t))
-  const first = firstLeaf(restored.root)
-  const root =
-    rest.length === 0
-      ? restored.root
-      : replaceLeaf(restored.root, first.id, { ...first, tabIds: [...first.tabIds, ...rest] })
-  return placed(root, activeTabId)
+  const groups = leaves(restored.root)
+  const inTree = new Set(groups.flatMap((l) => l.tabIds))
+  // A tab the preset never saw joins the first group, except an app mirror (a preset never keeps one), which joins
+  // the group its session is in
+  const extra = new Map<string, string[]>()
+  for (const t of tabIds) {
+    if (inTree.has(t)) continue
+    const ref = parseTab(t)
+    const home = (ref?.kind === 'app' && groups.find((l) => l.tabIds.includes(sessionTab(ref.id)))) || groups[0]
+    extra.set(home.id, [...(extra.get(home.id) ?? []), t])
+  }
+  return placed(withExtraTabs(restored.root, extra), activeTabId)
 }
 
-function replaceLeaf(node: PaneNode, id: string, next: PaneLeaf): PaneNode {
-  if (node.kind === 'leaf') return node.id === id ? next : node
-  return { ...node, a: replaceLeaf(node.a, id, next), b: replaceLeaf(node.b, id, next) }
+/** The tree with each group's extra tabs appended after its own, its active tab unchanged. */
+function withExtraTabs(node: PaneNode, extra: ReadonlyMap<string, string[]>): PaneNode {
+  if (node.kind === 'leaf') {
+    const more = extra.get(node.id)
+    return more ? { ...node, tabIds: [...node.tabIds, ...more] } : node
+  }
+  return { ...node, a: withExtraTabs(node.a, extra), b: withExtraTabs(node.b, extra) }
 }
 
 const clampSize = (v: unknown, bounds: { min: number; max: number; initial: number }): number =>
