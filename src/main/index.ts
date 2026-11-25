@@ -283,7 +283,15 @@ function createWindow(startingText: string | null = null, theme?: Theme): Browse
     // session, which is exactly the regression a217ac1 was written to prevent.
     // webviewTag: the browser tab's <webview> (renderer/components/BrowserPane.tsx). Off by default
     // in Electron; installPreviewGuards below is what makes turning it on safe.
-    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false, webviewTag: true }
+    // contextIsolation and nodeIntegration are Electron 41's defaults, named so a default that moves
+    // cannot loosen them (spec E3, the Phase 2 entry gate).
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      webviewTag: true
+    }
   })
   if (startingText === null) loadApp(win)
   else loadInto(win, { url: startingPageUrl(startingText, theme) }, (m) => console.log(m))
