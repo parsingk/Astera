@@ -378,9 +378,13 @@ const api = {
   clipboard: {
     // A sandboxed preload has no clipboard module, and the terminal's key handler needs these answers at
     // once (xterm takes a boolean back synchronously), so main answers them through synchronous IPC.
-    readText: (): string => ipcRenderer.sendSync('clipboard.readTextSync'),
+    // A call the guard refuses answers null (main/ipcGuard.ts), so these still hand back a string and a boolean
+    readText: (): string => {
+      const text: unknown = ipcRenderer.sendSync('clipboard.readTextSync')
+      return typeof text === 'string' ? text : ''
+    },
     writeText: (text: string): void => void ipcRenderer.sendSync('clipboard.writeTextSync', text),
-    hasFiles: (): boolean => ipcRenderer.sendSync('clipboard.hasFilesSync'),
+    hasFiles: (): boolean => ipcRenderer.sendSync('clipboard.hasFilesSync') === true,
     requestFilePaste: invoke('clipboard.requestFilePaste'),
     writeFiles: invoke('clipboard.writeFiles')
   },

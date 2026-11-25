@@ -52,9 +52,12 @@ export function createIpcGuard(
       })
     },
     on(channel, listener) {
-      target.on(channel, (e: SenderEvent, ...args: unknown[]) => {
+      target.on(channel, (e: SenderEvent & { returnValue?: unknown }, ...args: unknown[]) => {
         if (!allowed(e)) {
           refuse(channel, e)
+          // A refused sendSync is otherwise answered only at main's next garbage collection, the sender frozen till
+          // then; on an ordinary message the value goes nowhere
+          e.returnValue = null
           return
         }
         ;(listener as (e: unknown, ...a: unknown[]) => void)(e, ...args)

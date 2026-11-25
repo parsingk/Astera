@@ -32,9 +32,10 @@ describe('the sandboxed main window and its clipboard', () => {
   })
 
   it('reads, writes and asks the clipboard through main, synchronously', () => {
-    expect(preload).toMatch(/readText: \(\): string => ipcRenderer\.sendSync\('clipboard\.readTextSync'\)/)
+    // Final review I2: a refused call answers null, so the renderer is still handed a string and a boolean
+    expect(preload).toMatch(/readText: \(\): string => \{\s*const text: unknown = ipcRenderer\.sendSync\('clipboard\.readTextSync'\)\s*return typeof text === 'string' \? text : ''\s*\}/)
     expect(preload).toMatch(/writeText: \(text: string\): void => void ipcRenderer\.sendSync\('clipboard\.writeTextSync', text\)/)
-    expect(preload).toMatch(/hasFiles: \(\): boolean => ipcRenderer\.sendSync\('clipboard\.hasFilesSync'\)/)
+    expect(preload).toMatch(/hasFiles: \(\): boolean => ipcRenderer\.sendSync\('clipboard\.hasFilesSync'\) === true/)
     expect(ipc).toMatch(/ipcMain\.on\('clipboard\.readTextSync', \(e\) => \{\s*e\.returnValue = clipboard\.readText\(\)/)
     expect(ipc).toMatch(/ipcMain\.on\('clipboard\.writeTextSync', \(e, text: unknown\) => \{\s*if \(typeof text === 'string'\) clipboard\.writeText\(text\)\s*e\.returnValue = true/)
     expect(ipc).toMatch(/ipcMain\.on\('clipboard\.hasFilesSync', \(e\) => \{\s*(?:\/\/[^\n]*\n\s*)*e\.returnValue = clipboard\.availableFormats\(\)\.includes\('text\/uri-list'\)/)

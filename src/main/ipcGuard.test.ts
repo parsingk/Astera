@@ -73,6 +73,18 @@ describe('the IPC sender check', () => {
     await expect(call()).rejects.toThrow('IPC_SENDER_REFUSED: ping')
   })
 
+  // Final review I2: a refused sendSync was answered only at main's next garbage collection, freezing the sender
+  it('answers a refused synchronous call at once, with null', () => {
+    const target = fakeIpc()
+    const guard = createIpcGuard(target, () => {})
+    guard.ipcMain.on('clipboard.readTextSync', ((e: { returnValue: unknown }) => {
+      e.returnValue = 'text'
+    }) as never)
+    const refused = { ...(event(9) as object), returnValue: undefined as unknown }
+    target.listeners.get('clipboard.readTextSync')!(refused)
+    expect(refused.returnValue).toBeNull()
+  })
+
   it('logs a refusal once per channel, naming the sender’s address', async () => {
     const target = fakeIpc()
     const log = vi.fn()
@@ -87,6 +99,19 @@ describe('the IPC sender check', () => {
   })
 })
 
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Does this source reach electron's ipcMain, or a webContents' or frame's own ipc, past the guard. */
+function bypassesGuard(text: string): boolean {
+  const electron = `['"]electron(?:/main)?['"]`
+  if (new RegExp(`import\\s*\\{[^}]*\\bipcMain\\b[^}]*\\}\\s*from\\s*${electron}`).test(text)) return true
+  if (new RegExp(`\\{[^}]*\\bipcMain\\b[^}]*\\}\\s*=\\s*require\\(\\s*${electron}\\s*\\)`).test(text)) return true
+  for (const m of text.matchAll(new RegExp(`import\\s+(?:\\*\\s+as\\s+)?(\\w+)\\s+from\\s+${electron}`, 'g'))) {
+    if (new RegExp(`\\b${m[1]}\\.ipcMain\\b`).test(text)) return true
+  }
+  return /\.ipc\.(?:handle|handleOnce|on|once)\(/.test(text)
+}
+
 // One guard for every handler: a file importing ipcMain straight from electron would register past it
 describe('every handler goes through the guard', () => {
   const mainDir = __dirname
@@ -100,12 +125,31 @@ describe('every handler goes through the guard', () => {
   }
   walk(mainDir)
 
-  it('no file but the guard imports ipcMain from electron', () => {
-    const offenders = files.filter((f) => {
-      if (path.basename(f) === 'ipcGuard.ts') return false
-      const text = readFileSync(f, 'utf8')
-      return /import\s*\{[^}]*\bipcMain\b[^}]*\}\s*from\s*'electron'/.test(text)
-    })
+  it('the detector catches every way past the guard (final review M1)', () => {
+    for (const text of [
+      "import { ipcMain } from 'electron'",
+      'import { app, ipcMain as ipc } from "electron"',
+      "import { ipcMain } from 'electron/main'",
+      "import * as electron from 'electron'\nelectron.ipcMain.handle('x', f)",
+      "import electron from 'electron'\nelectron.ipcMain.on('x', f)",
+      "const { ipcMain } = require('electron')",
+      "win.webContents.ipc.handle('x', f)",
+      "frame.ipc.on('x', f)"
+    ]) {
+      expect(bypassesGuard(text), text).toBe(true)
+    }
+    for (const text of [
+      "import { ipcMain } from './ipcGuard'",
+      "import { app, webContents } from 'electron'",
+      "import * as electron from 'electron'\nelectron.app.quit()",
+      'const ipcMainLike = 1'
+    ]) {
+      expect(bypassesGuard(text), text).toBe(false)
+    }
+  })
+
+  it('no file but the guard reaches electron’s ipcMain or a webContents ipc', () => {
+    const offenders = files.filter((f) => path.basename(f) !== 'ipcGuard.ts' && bypassesGuard(readFileSync(f, 'utf8')))
     expect(offenders.map((f) => path.relative(mainDir, f))).toEqual([])
   })
 
@@ -117,7 +161,7 @@ describe('every handler goes through the guard', () => {
       ['preview/devtools.ts', '../ipcGuard'],
       ['preview/emulation.ts', '../ipcGuard']
     ]) {
-      expect(readFileSync(path.join(mainDir, file), 'utf8')).toMatch(new RegExp(`import \\{[^}]*\\bipcMain\\b[^}]*\\} from '${from.replace('.', '\\.')}'`))
+      expect(readFileSync(path.join(mainDir, file), 'utf8')).toMatch(new RegExp(`import \\{[^}]*\\bipcMain\\b[^}]*\\} from '${escapeRe(from)}'`))
     }
     const index = readFileSync(path.join(mainDir, 'index.ts'), 'utf8')
     expect(index).toMatch(/trustWebContents\(win\.webContents, \(url\) => isOwnDocument\(url, process\.env\['ELECTRON_RENDERER_URL'\], indexFileUrl\)\)/)

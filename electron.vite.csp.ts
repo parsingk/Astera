@@ -1,8 +1,9 @@
-// The packaged renderer's content security policy (spec E3, the Phase 0 audit section 5 item 3). Only Astera's own scripts
-// run in the main window: a script injected through a rendered file, a markdown preview or a plugin later finds no
-// source it may load from. It goes into the built index.html as a meta tag, because the production page is a file://
-// document, which carries no response headers, and only into the build, because Vite's dev server needs inline scripts
-// and its own socket.
+// The packaged renderer's content security policy (spec E3, the Phase 0 audit section 5 item 3). No inline script, no
+// eval and no script from the network runs in the main window. On the file:// page `'self'` still admits a script from
+// any local file (Chromium's rule for file:, measured by the security gate's final review), so this closes inline and
+// remote script, not a file already on the disk; a privileged app scheme would be the step that closes that too. It
+// goes into the built index.html as a meta tag, because the production page is a file:// document, which carries no
+// response headers, and only into the build, because Vite's dev server needs inline scripts and its own socket.
 //
 // What the renderer shows today keeps showing: remote markdown images (the person kept them, as GitHub and VS Code show
 // them), data: and blob: images (the app mirror's frames, chat attachments, local markdown images), the media viewer's
