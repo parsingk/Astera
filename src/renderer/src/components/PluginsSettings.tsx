@@ -134,7 +134,14 @@ export function PluginsSettings(): React.JSX.Element {
       setInstalling('installing')
       // What was shown is what the Host checks the copy against (design P6), and from npm the version it fetches.
       const r = await during(() =>
-        window.api.plugins.install({ ...source, grant: answer.checked, expect: { name: str(seen.body.name), version: str(seen.body.version) } }).catch(failed)
+        window.api.plugins
+          .install({
+            ...source,
+            grant: answer.checked,
+            // The trust level shown too, so a folder that changed it in between is refused (final review M7)
+            expect: { name: str(seen.body.name), version: str(seen.body.version), ...(str(seen.body.trust) !== '' ? { trust: str(seen.body.trust) } : {}) }
+          })
+          .catch(failed)
       )
       if (!r.ok) {
         toast.error(installFailureLine(r, t))

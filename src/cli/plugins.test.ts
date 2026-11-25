@@ -250,3 +250,19 @@ describe('approvalMessage by trust level', () => {
     expect(approvalMessage(INSPECTION)).toContain(PLUGIN_TRUST_WARNING)
   })
 })
+
+// Final review M7: the trust level shown travels with the install
+describe('installPlugin sends the trust level it showed', () => {
+  it('names it in expect when the inspection had one', async () => {
+    const calls: { cmd: string; args: unknown }[] = []
+    const call = async (cmd: string, args: unknown): Promise<{ status: number; body: unknown }> => {
+      calls.push({ cmd, args })
+      return cmd === 'plugins-inspect'
+        ? { status: 200, body: { ...INSPECTION, trust: 'restricted-ui', permissions: ['panels.register'] } }
+        : { status: 200, body: {} }
+    }
+    await installPlugin({ args: { path: 'hello', yes: true }, cwd: CWD, request: undefined, call })
+    const install = calls.find((c) => c.cmd === 'plugins-install')
+    expect((install?.args as { expect: unknown }).expect).toEqual({ name: '@acme/astera-jira', version: '1.0.0', trust: 'restricted-ui' })
+  })
+})

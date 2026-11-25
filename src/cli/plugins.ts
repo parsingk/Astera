@@ -114,5 +114,7 @@ export async function installPlugin<R extends PluginCall>(a: {
   const named = grantOf(a.args.grant)
   if (named === null && a.args.yes !== true) return { approve: inspection }
   const grant = named ?? (Array.isArray(inspection.permissions) ? (inspection.permissions as string[]) : [])
-  return a.call('plugins-install', { ...source, grant, expect: { name: inspection.name, version: inspection.version } }, a.request)
+  // The trust level shown goes too, so a folder that changed it in between is refused (final review M7)
+  const trust = typeof inspection.trust === 'string' ? { trust: inspection.trust } : {}
+  return a.call('plugins-install', { ...source, grant, expect: { name: inspection.name, version: inspection.version, ...trust } }, a.request)
 }

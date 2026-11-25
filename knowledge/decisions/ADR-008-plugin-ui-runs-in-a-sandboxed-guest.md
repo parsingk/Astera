@@ -23,15 +23,20 @@ ADR-006 answered a neighbouring question for the frontend preview: the pane grid
 1. **Plugin UI never runs in the app's renderer.** No plugin script, component or stylesheet is loaded into the
    main window's document.
 2. **A plugin panel is a `<webview>` guest with a partition of its own.** Its pages come from the installed
-   package through a privileged scheme (`astera-plugin://<plugin id>/...`) handled on that plugin's session only,
-   which serves files inside the package and nothing else, with a Content-Security-Policy header that blocks
-   network, inline script and frames by default.
-3. **Main decides how a guest attaches.** `will-attach-webview` refuses a partition that is not a plugin's or a
-   `src` outside that plugin's scheme host, and replaces whatever preload the element asked for with Astera's
-   bridge, with sandbox, context isolation and web security forced on.
+   package through a privileged scheme (`astera-plugin://<host>/...`) handled on that plugin's session only, which
+   serves files inside the package and nothing else, with a Content-Security-Policy header that blocks network,
+   inline script and frames by default. The host is the plugin id with a scope written `scope+name`
+   (`pluginSchemeHost`), which no npm name can be: `@acme/x` parses as host `acme`, a plugin named `acme`.
+3. **Main decides how a guest attaches.** The main window already has a `will-attach-webview` guard for preview
+   guests (`main/preview/guest.ts`), which refuses any partition but the preview's. It routes a plugin partition to
+   the plugin rule instead: refused unless the `src` is that plugin's scheme host, whatever preload the element
+   asked for replaced with Astera's bridge, sandbox, context isolation and web security forced on. A plugin guest's
+   `window.open` and navigations never reach the preview's link handling.
 4. **The bridge trusts the guest, not the message.** A call's plugin is read from the guest that sent it (its
    session's partition, recorded when it attached), never from a plugin id in the payload. Calls are JSON DTOs,
    checked against the plugin's granted capabilities, scoped to a project, size- and rate-limited, with timeouts.
+   A contributed command or panel is registered as `<plugin id>:<its id>` (`contributionKey`): no npm name,
+   contribution id or core action id holds a colon, so a plugin's command never reads as a core action.
 5. **Two trust levels, shown as such.** `trusted host plugin`: today's Node plugins, native code with the
    person's rights, warned before install, never described as sandboxed. `restricted UI`: guest-only plugins with
    capability-checked access. A plugin that needs both is installed as trusted.

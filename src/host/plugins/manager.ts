@@ -432,13 +432,17 @@ export function createPluginManager(d: {
     folder: string,
     shownAs: string,
     grant: readonly string[],
-    expected: { name: string; version: string } | undefined
+    expected: { name: string; version: string; trust?: string } | undefined
   ): Promise<{ manifest: PluginManifest; granted: (PluginPermission | PluginUiPermission)[] }> {
     const read = await readManifest(folder)
     if (!read.ok) throw new Refused(400, read.error.split(folder).join(shownAs))
     const m = read.manifest
     if (expected !== undefined && (expected.name !== m.name || expected.version !== m.version))
       throw new Refused(409, `the folder changed after it was shown: it now holds ${m.name}@${m.version}; run the install again`)
+    // A folder that gained a host entry while a restricted UI prompt was open must not install as trusted code (final review
+    // M7); an expect without a trust level, from an older caller, is checked as before
+    if (expected?.trust !== undefined && expected.trust !== m.trust)
+      throw new Refused(409, `the folder changed after it was shown: it now holds ${m.name}@${m.version} as ${m.trust === 'trusted' ? 'trusted code' : 'restricted UI'}; run the install again`)
     const granted: (PluginPermission | PluginUiPermission)[] = []
     for (const g of grant) {
       if (!(m.permissions as string[]).includes(g))
@@ -465,7 +469,10 @@ export function createPluginManager(d: {
       (typeof want !== 'object' || want === null || typeof (want as Record<string, unknown>).name !== 'string' || typeof (want as Record<string, unknown>).version !== 'string')
     )
       throw new Refused(400, 'expect must be { name, version }')
-    const expected = want as { name: string; version: string } | undefined
+    const trustShown = want !== undefined ? (want as Record<string, unknown>).trust : undefined
+    if (trustShown !== undefined && trustShown !== 'trusted' && trustShown !== 'restricted-ui')
+      throw new Refused(400, 'expect.trust must be trusted or restricted-ui')
+    const expected = want as { name: string; version: string; trust?: string } | undefined
     if (source.kind === 'folder') {
       // Read before anything is copied: a registry that cannot be read refuses the change with nothing written.
       const records = await readRegistry(root)

@@ -6,6 +6,9 @@ a client from [the SDK](sdk.md) that the Host answers within the permissions you
 Astera's events somewhere, to react to a failed Run, or to connect Astera to a tool of your own, without keeping a
 script running yourself.
 
+This guide is about those plugins. Astera also reads Plugin API 2 manifests, which add a plugin that runs no program
+and only shows pages in Astera panels: see [Plugin API 2](#plugin-api-2).
+
 Where it stands:
 
 - A plugin is installed from a folder or from npm, and runs in the background: Astera calls its `activate` and lets it
@@ -16,7 +19,7 @@ Where it stands:
   ([Completion check plugins](#completion-check-plugins)).
 - `@astera-app/plugin-sdk` holds the plugin's types and `definePlugin`. A plugin needs nothing from it to run:
   [the sample](../examples/plugins/webhook-notifier) is plain JavaScript and uses its types for the editor only.
-- The Plugin API is version `1`.
+- The Plugin API is version `1`; Astera also reads version `2` ([Plugin API 2](#plugin-api-2)).
 
 ## Plugins are trusted code
 
@@ -88,7 +91,7 @@ The manifest is `package.json`: npm's own fields, and an `astera` field for Aste
 | `version` | A semver version. |
 | `displayName` | Optional. What the app shows, up to 64 characters. |
 | `description` | Optional. Shown when you install it: its first 500 characters. |
-| `astera.apiVersion` | The Plugin API it is written for: `"1"`. |
+| `astera.apiVersion` | The Plugin API it is written for: `"1"` (or `"2"`, see [Plugin API 2](#plugin-api-2)). |
 | `astera.entry` | The file Astera starts, relative to the folder: an ES module (`.mjs`, or `.js` with `"type": "module"`) or CommonJS. |
 | `astera.permissions` | What it asks Astera for ([Permissions](#permissions)). A person may grant fewer. |
 | `astera.settingsSchema` | Optional. The settings a person gives it ([Settings and secrets](#settings-and-secrets)). |
@@ -681,8 +684,11 @@ Astera's plugin runtime.
 `astera plugins list` gives each plugin's status, and the reason when there is one.
 
 **`incompatible`.** This Astera will not run it, and the reason says why: a Plugin API it does not speak, a
-`minAsteraVersion` newer than this Astera, or a capability it does not run yet. Update Astera, or take the
-capability out of the manifest.
+`minAsteraVersion` newer than this Astera, an `engines.astera` range this Astera is outside of, or a capability it
+does not run yet. Update Astera, or take the capability out of the manifest.
+
+**`ready`.** A restricted UI plugin ([Plugin API 2](#plugin-api-2)) that is enabled with what it needs granted. It has
+no program to run.
 
 **`stopped`, needs settings.** A required setting has no value. Set it with `astera plugins configure`.
 
@@ -703,6 +709,29 @@ install Node.js, or install from a folder. [The `astera` command](cli.md#plugins
 
 **A child process starts Astera** (on macOS or Linux). It was started from `process.execPath` without
 `ELECTRON_RUN_AS_NODE=1` ([The Node a plugin runs on](#the-node-a-plugin-runs-on)).
+
+## Plugin API 2
+
+Astera reads Plugin API 2 manifests (`"apiVersion": "2"`), which carry what
+[ADR-008](../knowledge/decisions/ADR-008-plugin-ui-runs-in-a-sandboxed-guest.md) decided for plugin UI:
+
+- `astera.entry` becomes optional, and `astera.ui` names the `.html` page the plugin's panels show: a relative path
+  with `/` between folders, and no `..`, `%`, `\`, `?`, `#` or URL.
+- `astera.contributes.panels` lists panels, `{ "id", "title" }`, and `astera.contributes.commands` lists commands,
+  `{ "id", "title", "panel" }`, each opening one of the panels. An id is lower-case letters, digits and `. _ -`, up to
+  64; a title is up to 64 characters. At most 20 panels and 50 commands.
+- Three permissions are for the UI: `commands.register` and `panels.register`, which what it contributes needs, and
+  `workspace.read`.
+- `engines.astera`, at the top of package.json as npm's own field, is a range of comparators such as
+  `">=1.7.0 <2.0.0"` that this Astera must satisfy.
+
+A plugin with an `astera.entry` is trusted code, as every API 1 plugin is. A plugin with only a `ui` is
+**restricted UI**: it starts no program, declares no capabilities or settings, and asks only for the three UI
+permissions. Astera lists it as `ready` once it is enabled with what it needs granted, and its install prompt says it
+starts no program instead of the trusted code warning.
+
+Its panels are not shown yet: the app opens them in a later version. Until then a Plugin API 2 plugin is checked,
+installed and listed.
 
 ## Not yet
 

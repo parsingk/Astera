@@ -619,8 +619,9 @@ astera plugins configure --id <pluginId> --set baseUrl=https://jira.example.com
 printf %s "$TOKEN" | astera plugins configure --id <pluginId> --stdin token   a secret, off the command line
 ```
 
-**Plugins run trusted code on this machine.** A plugin can do anything you can, and its permissions limit only what
-it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program.
+**A plugin with a host entry runs trusted code on this machine.** It can do anything you can, and its permissions
+limit only what it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program. A
+restricted UI plugin (Plugin API 2, a `ui` page and no entry) starts no program, and its install says so instead.
 
 Without --yes or --grant, `install` installs nothing and exits 2, printing what the plugin is, what it asks for and
 what it would replace. `--grant ""` grants no permission at all.

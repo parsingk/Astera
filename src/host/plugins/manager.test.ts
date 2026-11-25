@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createPluginManager, type PluginManager } from './manager'
 import type { PluginLaunch, PluginRunStatus, PluginRuntime } from './runtime'
-import { pluginsRoot } from './registry'
+import { pluginsRoot, readRegistry, writeRegistry } from './registry'
 import { pluginSecrets } from './pluginData'
 import { NpmMissing, type NpmRun } from './npm'
 import { NpmUnavailable } from './ownNpm'
@@ -1245,5 +1245,42 @@ describe('a UI-only plugin', () => {
   it('lists an API 1 plugin as trusted, as it always was', async () => {
     await manager.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
     expect((await listed())[0]).toMatchObject({ trust: 'trusted', status: 'stopped' })
+  })
+})
+
+describe('a UI-only plugin: final review fixes', () => {
+  const contributes = { commands: [{ id: 'open', title: 'Open Hello', panel: 'main' }], panels: [{ id: 'main', title: 'Hello' }] }
+  const uiPlugin = async (folder: string, entry = false): Promise<string> => {
+    const at = await plugin(folder, {
+      name: 'hello-panel',
+      permissions: ['commands.register', 'panels.register'],
+      astera: { apiVersion: '2', entry: entry ? './dist/plugin.js' : undefined, ui: 'dist/ui/index.html', contributes }
+    })
+    await fs.mkdir(path.join(at, 'dist', 'ui'), { recursive: true })
+    await fs.writeFile(path.join(at, 'dist', 'ui', 'index.html'), '<!doctype html><title>hello</title>')
+    return at
+  }
+
+  // M7: the trust level shown is part of what the install checks the folder against
+  it('refuses a folder that gained a host entry after it was shown as restricted UI', async () => {
+    const at = await uiPlugin('hello')
+    await uiPlugin('hello', true)
+    const r = await manager.install({ path: at, grant: ['commands.register', 'panels.register'], expect: { name: 'hello-panel', version: '1.0.0', trust: 'restricted-ui' } })
+    expect(r.status).toBe(409)
+    expect(body(r).error).toBe('the folder changed after it was shown: it now holds hello-panel@1.0.0 as trusted code; run the install again')
+    // An expect without a trust level, from an older caller, is checked as before
+    expect((await manager.install({ path: at, grant: ['commands.register', 'panels.register'], expect: { name: 'hello-panel', version: '1.0.0' } })).status).toBe(200)
+  })
+
+  // M9: Review Focus 4, a grant a contribution needs that the record lacks
+  it('is not ready when a contribution’s permission is missing from what was granted, and says which', async () => {
+    await manager.install({ path: await uiPlugin('hello'), grant: ['commands.register', 'panels.register'] })
+    const root = pluginsRoot(profile)
+    const records = await readRegistry(root)
+    await writeRegistry(root, records.map((r) => ({ ...r, granted: ['commands.register'] })))
+    expect(body(await manager.get('hello-panel'))).toMatchObject({
+      status: 'stopped',
+      reason: 'contributing panels needs the panels.register permission, which it was not granted: install it again and grant it'
+    })
   })
 })

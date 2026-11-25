@@ -51,6 +51,15 @@ export function capabilityPermissionProblem(capabilities: readonly PluginCapabil
   return null
 }
 
+/** The key a contributed command or panel is registered under: the plugin id, a colon, its own id. No npm name, no
+ *  contribution id and no core action id (`area.verb`) holds a colon, so a plugin's `run` command can never read as the
+ *  core `run.run` action (final review M6). */
+export const contributionKey = (pluginId: string, id: string): string => `${pluginId}:${id}`
+
+/** The host of a plugin's pages on the plugin scheme (ADR-008): its id, a scoped one written `scope+name`, which no npm
+ *  name can be, so `@acme/x` and a plugin named `acme` never share a host (final review M5). */
+export const pluginSchemeHost = (id: string): string => id.replace(/^@/, '').replace('/', '+')
+
 /** The permission each kind of contribution cannot work without (API 2), or null. */
 export function contributionPermissionProblem(c: PluginContributions, permissions: readonly string[]): string | null {
   if (c.commands.length > 0 && !permissions.includes('commands.register')) return 'contributing commands needs the commands.register permission'
@@ -145,9 +154,16 @@ const uiProblem = (v: unknown): string | null => {
   const where = pathProblem('astera.ui', v)
   if (where !== null) return where
   if (/[?#]/.test(v)) return `astera.ui ${v} holds a ? or #; it must be a plain file name`
+  // The scheme decodes a URL path and Windows drops a trailing dot or space: what the install checks must be exactly the
+  // file the panel is later served (final review M2)
+  if (/[%\\]/.test(v) || CONTROL.test(v) || /\t/.test(v)) return `astera.ui ${v} holds %, a backslash or a control character: use / between folders`
+  if (v.split('/').some((part) => part === '' || /[. ]$/.test(part))) return `astera.ui ${v} has an empty part, or one ending in a dot or a space`
   if (!/\.html$/i.test(v)) return `astera.ui ${v} is not an .html file`
   return null
 }
+
+/** Characters that hide or reorder text: a title sits beside core actions in the palette (final review M10). */
+const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
 
 const CONTRIBUTION_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const TITLE_MAX = 64
@@ -198,6 +214,10 @@ function contributionsOf(v: unknown, problems: string[]): PluginContributions {
       }
       if (CONTROL.test(title)) {
         problems.push(`${field}: ${id}’s title holds a control character`)
+        continue
+      }
+      if (INVISIBLE.test(title)) {
+        problems.push(`${field}: ${id}’s title holds an invisible or direction-changing character`)
         continue
       }
       kept.push({ ...item, id, title })
@@ -313,13 +333,27 @@ export function parseManifest(pkg: unknown): { ok: true; manifest: PluginManifes
   )
   const needs = capabilityPermissionProblem(capabilities, permissions)
   if (needs !== null) problems.push(needs)
+  if (v2 && !hasEntry) {
+    // A restricted UI plugin runs no program (ADR-008): a capability is served by a host program, settings are handed to
+    // one, and a Host command permission is what a host program calls with (final review I1, I2)
+    if (capabilities.length > 0) problems.push('astera.capabilities needs astera.entry: only a plugin’s host program serves them')
+    if (astera.settingsSchema !== undefined) problems.push('astera.settingsSchema needs astera.entry: settings reach a plugin’s host program')
+    for (const p of permissions)
+      if ((PLUGIN_PERMISSIONS as readonly string[]).includes(p))
+        problems.push(`astera.permissions: ${p} needs astera.entry; a restricted UI plugin asks only for ${PLUGIN_UI_PERMISSIONS.join(', ')}`)
+  }
+  if (v2 && !hasUi) {
+    // A UI permission means nothing to a plugin with no page (final review M8)
+    for (const p of permissions) if ((PLUGIN_UI_PERMISSIONS as readonly string[]).includes(p)) problems.push(`astera.permissions: ${p} needs astera.ui`)
+  }
   const contributes = v2 ? contributionsOf(astera.contributes, problems) : { commands: [], panels: [] }
   const contributed = contributes.commands.length > 0 || contributes.panels.length > 0
   if (contributed && !hasUi) problems.push('astera.contributes needs astera.ui: a panel is a page of the plugin’s UI')
   const contributionNeeds = contributionPermissionProblem(contributes, permissions)
   if (contributionNeeds !== null) problems.push(contributionNeeds)
-  // npm's own field, as VS Code reads engines.vscode
-  const range = isObject(engines) ? engines.astera : undefined
+  // npm's own field, as VS Code reads engines.vscode; API 2 only, so an API 1 manifest with an npm-style range reads as
+  // it always did (final review M1)
+  const range = v2 && isObject(engines) ? engines.astera : undefined
   if (range !== undefined && (typeof range !== 'string' || comparatorsOf(range) === null))
     problems.push(`engines.astera ${JSON.stringify(range)} is not a range Astera reads: ${ENGINES_FORM}`)
   const min = astera.minAsteraVersion

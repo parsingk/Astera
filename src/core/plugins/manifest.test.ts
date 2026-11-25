@@ -7,10 +7,13 @@ import {
   PLUGIN_UI_PERMISSIONS,
   incompatibility,
   parseManifest,
+  contributionKey,
   pluginFolderName,
+  pluginSchemeHost,
   satisfiesRange,
   type PluginManifest
 } from './manifest'
+import { makeActions } from '../keys/binding'
 
 const valid = (astera: Record<string, unknown> = {}, top: Record<string, unknown> = {}): Record<string, unknown> => ({
   name: '@acme/astera-jira',
@@ -320,7 +323,8 @@ describe('Plugin API 2', () => {
 
   it('takes the UI permissions in API 2 only', () => {
     expect(problemsOf(valid({ permissions: ['panels.register'] }))).toContain('astera.permissions: panels.register needs Plugin API 2')
-    expect(manifestOf(v2({ permissions: ['commands.register', 'panels.register', 'workspace.read', 'jobs.read'] })).permissions).toEqual([
+    // A Host command permission beside them needs a host entry (final review I2)
+    expect(manifestOf(v2({ entry: 'dist/host.js', permissions: ['commands.register', 'panels.register', 'workspace.read', 'jobs.read'] })).permissions).toEqual([
       'commands.register',
       'panels.register',
       'workspace.read',
@@ -355,5 +359,77 @@ describe('Plugin API 2', () => {
   it('has a notice for a UI-only plugin that never calls it trusted code', () => {
     expect(PLUGIN_RESTRICTED_UI_NOTICE).not.toContain(PLUGIN_TRUST_WARNING)
     expect(PLUGIN_RESTRICTED_UI_NOTICE).toMatch(/panel/i)
+  })
+})
+
+// Final review of manifest v2
+describe('Plugin API 2: final review fixes', () => {
+  const v2 = (astera: Record<string, unknown> = {}, top: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'hello-panel',
+    version: '0.1.0',
+    astera: { apiVersion: '2', ui: 'dist/ui/index.html', permissions: [], ...astera },
+    ...top
+  })
+
+  // I1: only a host program serves a capability or receives settings
+  it('refuses capabilities and settings on a plugin with no host entry', () => {
+    expect(problemsOf(v2({ capabilities: ['completion-check'] }))).toContain('astera.capabilities needs astera.entry: only a plugin’s host program serves them')
+    expect(problemsOf(v2({ settingsSchema: { type: 'object', properties: { token: { type: 'string', secret: true } } } }))).toContain(
+      'astera.settingsSchema needs astera.entry: settings reach a plugin’s host program'
+    )
+  })
+
+  // I2: a restricted UI plugin asks for the UI permissions only
+  it('refuses a Host command permission on a plugin with no host entry', () => {
+    expect(problemsOf(v2({ permissions: ['jobs.run'] }))).toContain(
+      'astera.permissions: jobs.run needs astera.entry; a restricted UI plugin asks only for commands.register, panels.register, workspace.read'
+    )
+  })
+
+  // M8: a UI permission on a plugin with no page
+  it('refuses a UI permission on a plugin with no UI page', () => {
+    expect(problemsOf(v2({ ui: undefined, entry: 'dist/host.js', permissions: ['panels.register'] }))).toContain('astera.permissions: panels.register needs astera.ui')
+  })
+
+  // M1: an API 1 manifest is read exactly as before, whatever its engines field holds
+  it('reads engines.astera for API 2 only', () => {
+    const v1 = manifestOf(valid({}, { engines: { astera: '^1.4.0' } }))
+    expect(v1.engines).toBeUndefined()
+    expect(incompatibility(v1, { version: '1.6.0', capabilities: [] })).toBeNull()
+  })
+
+  // M2: the page path is the file the scheme will serve, with nothing to decode
+  it('refuses a page path holding %, a backslash, a control character, an empty part or a part ending in a dot or space', () => {
+    for (const ui of ['dist/%2e%2e/ui.html', 'dist\\ui.html', 'dist/u\u0001i.html', 'dist//ui.html', 'dist./ui.html', 'dist /ui.html', 'ui.html.']) {
+      expect(problemsOf(v2({ ui })).some((p) => p.startsWith(`astera.ui ${ui}`)), JSON.stringify(ui)).toBe(true)
+    }
+    expect(manifestOf(v2({ ui: 'dist/ui-1.0/index.html' })).ui).toBe('dist/ui-1.0/index.html')
+  })
+
+  // M10: titles sit beside core actions in the palette
+  it('refuses a title with an invisible or direction-changing character', () => {
+    for (const ch of ['\u202e', '\u200b', '\u2066', '\ufeff']) {
+      const contributes = { panels: [{ id: 'main', title: `He${ch}llo` }] }
+      expect(problemsOf(v2({ permissions: ['panels.register'], contributes })), JSON.stringify(ch)).toContain(
+        'astera.contributes.panels: main’s title holds an invisible or direction-changing character'
+      )
+    }
+  })
+
+  // M6: one separator nothing else uses, so a plugin's command never reads as a core action
+  it('keys a contribution as plugin id, colon, its id, which no core action id or npm name holds', () => {
+    expect(contributionKey('run', 'run')).toBe('run:run')
+    expect(contributionKey('@acme/x', 'open')).toBe('@acme/x:open')
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      for (const a of makeActions(platform)) expect(a.id.includes(':'), a.id).toBe(false)
+    }
+  })
+
+  // ADR-008 (M5): the scheme host names one plugin, a scoped one too
+  it('gives each plugin its own scheme host, a scoped one written scope+name', () => {
+    expect(pluginSchemeHost('hello-panel')).toBe('hello-panel')
+    expect(pluginSchemeHost('@acme/x')).toBe('acme+x')
+    expect(pluginSchemeHost('@acme/x')).not.toBe(pluginSchemeHost('acme'))
+    expect(new URL(`astera-plugin://${pluginSchemeHost('@acme/x')}/index.html`).host).toBe('acme+x')
   })
 })
