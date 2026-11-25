@@ -118,7 +118,11 @@ export type ManualInstallIO = {
 }
 
 export const nodeManualInstallIO: ManualInstallIO = {
-  rm: (dir) => fs.rm(dir, { recursive: true, force: true }),
+  // `rm -rf`, not fs.rm. This runs in Electron's main process, whose `fs` is patched to read .asar
+  // archives as directories, so fs.rm walks into the earlier extraction's Contents/Resources/app.asar
+  // instead of unlinking it and then fails with ENOTEMPTY on Resources. That made every second
+  // attempt at the same version fail. A child process gets the real filesystem.
+  rm: (dir) => execFileAsync('rm', ['-rf', dir]).then(() => undefined),
   mkdir: async (dir) => void (await fs.mkdir(dir, { recursive: true })),
   run: async (file, args) => void (await execFileAsync(file, args)),
   list: (dir) => fs.readdir(dir)

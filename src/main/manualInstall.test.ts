@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import {
   NOTHING_STAGED,
@@ -154,3 +156,45 @@ describe.runIf(process.platform === 'darwin')('extractForManualInstall — 진�
     expect(stdout).not.toMatch(/com\.apple\.quarantine/)
   })
 })
+
+// 이 함수는 Electron 의 main 프로세스에서 돈다. 그곳의 `fs` 는 .asar 파일을 디렉터리처럼 보이게
+// 패치돼 있어서, fs.rm(recursive) 가 풀어 둔 앱의 Contents/Resources/app.asar 를 지우지 못하고
+// `ENOTEMPTY: directory not empty, rmdir '…/Contents/Resources'` 로 끝난다(1.5.5 에서 측정:
+// 같은 버전을 두 번째로 누르면 매번 실패). vitest 의 Node 에는 그 패치가 없으니 진짜 Electron 을
+// node 모드로 띄워서 지운다.
+const electronBinary = (() => {
+  try {
+    return createRequire(import.meta.url)('electron') as string
+  } catch {
+    return null
+  }
+})()
+
+describe.runIf(process.platform === 'darwin' && electronBinary !== null)(
+  'nodeManualInstallIO.rm — Electron 안에서',
+  () => {
+    it('app.asar 가 든 앞선 풀이를 남김없이 지운다', async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-manual-rm-'))
+      const resources = path.join(root, 'manual', '9.9.9', 'Astera.app', 'Contents', 'Resources')
+      await fs.mkdir(resources, { recursive: true })
+      // Electron 이 진짜 asar 로 알아보는 파일이어야 패치가 끼어든다.
+      const defaultApp = path.join(path.dirname(path.dirname(electronBinary!)), 'Resources', 'default_app.asar')
+      await fs.copyFile(defaultApp, path.join(resources, 'app.asar'))
+      await fs.writeFile(path.join(resources, 'other.txt'), 'x')
+
+      const target = path.join(root, 'manual', '9.9.9')
+      const module = pathToFileURL(fileURLToPath(new URL('./manualInstall.ts', import.meta.url))).href
+      const script =
+        `const { nodeManualInstallIO } = await import(${JSON.stringify(module)});` +
+        `await nodeManualInstallIO.rm(${JSON.stringify(target)});`
+      try {
+        await execFileAsync(electronBinary!, ['--no-warnings', '--input-type=module', '-e', script], {
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+        })
+        await expect(fs.stat(target)).rejects.toMatchObject({ code: 'ENOENT' })
+      } finally {
+        await fs.rm(root, { recursive: true, force: true })
+      }
+    })
+  }
+)
