@@ -40,7 +40,7 @@ function state(): OrchState {
           { id: 'i3', severity: 'medium', blocking: false, title: 'no file', description: 'd' }
         ]
       },
-      { id: 't3', runId: 'r3', title: 'other job', reviewIssues: [{ id: 'k', severity: 'critical', blocking: true, title: 'leak', description: 'd', file: 'x.ts' }] },
+      { id: 't3', runId: 'r3', title: 'other job', updatedAt: '2026-11-25T03:00:00Z', reviewIssues: [{ id: 'k', severity: 'critical', blocking: true, title: 'leak', description: 'd', file: 'x.ts' }] },
       { id: 'tx', runId: 'rx', title: 'other project', reviewIssues: [{ id: 'z', severity: 'high', blocking: true, title: 'z', description: 'd', file: 'z.ts' }] }
     ],
     dispatches: [
@@ -96,6 +96,9 @@ describe('completionProblemsOf', () => {
     expect(reviews[0].source).toEqual({ kind: 'review', id: 'review', label: 'Review' })
     // A Task with no worker yet resolves against its Job's folder
     expect(reviews[2].folders).toEqual(['D:\\repo'])
+    // A review with no review attempt on record (an external reviewer; the screen check's Task) is timed by the Task's
+    // last change, so an edit after it still marks it stale
+    expect(reviews[2].producedAt).toBe('2026-11-25T03:00:00Z')
   })
 
   it('answers nothing when no run of the project is known', () => {

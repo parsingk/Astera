@@ -58,11 +58,14 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
           })
         })
       }
-      const reviewedAt = attempts
-        .filter((d) => d.review === true && d.endedAt !== undefined)
-        .map((d) => d.endedAt as string)
-        .sort()
-        .at(-1)
+      // The last review attempt's end; with none on record (an external reviewer writes its issues without one), the
+      // Task's last change, which came after its issues were written
+      const reviewedAt =
+        attempts
+          .filter((d) => d.review === true && d.endedAt !== undefined)
+          .map((d) => d.endedAt as string)
+          .sort()
+          .at(-1) ?? task.updatedAt
       for (const issue of task.reviewIssues ?? []) {
         if (issue.file === undefined) continue
         out.push({
