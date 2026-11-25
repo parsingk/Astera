@@ -621,7 +621,14 @@ printf %s "$TOKEN" | astera plugins configure --id <pluginId> --stdin token   a 
 astera plugins validate --path ./my-plugin           checks the folder as an install would; exit 1 naming each problem
 astera plugins init my-plugin --template ui          writes ./my-plugin: ui, host, check or source
 astera plugins pack --path ./my-plugin               writes my-plugin-0.1.0.tgz beside it, with its sha256
+astera plugins dev --path ./my-plugin --yes          installs it, then again each time it changes; Ctrl+C stops
 ```
+
+`plugins dev` installs a folder as `install` does, with your approval, then watches it: once a change has settled it
+checks the folder as `validate` does and installs it again with the same grant, and an open panel of the plugin takes the
+new page by itself. A folder with problems is not installed, and one that asks for a new permission, capability or trust
+level waits for you to run `dev` again. Ctrl+C stops it and leaves the last install in place. Like every install, it is
+refused inside an agent session.
 
 `plugins validate`, `plugins init` and `plugins pack` are for whoever writes a plugin: they start no Host and change
 nothing in Astera, so they work without the app and inside an agent session.
@@ -783,6 +790,7 @@ astera plugins configure --id <pluginId> [--set <key=value>] [--unset <key>] [--
 astera plugins validate --path <folder>
 astera plugins init <name> --template <kind>
 astera plugins pack --path <folder> [--out <file>]
+astera plugins dev --path <folder> [--yes] [--grant <list>]
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

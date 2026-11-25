@@ -641,6 +641,8 @@ const NOT_SWITCHED = [
   'plugins-validate',
   'plugins-init',
   'plugins-pack',
+  // Installs as the folder changes, one Host call each time (src/cli/pluginDevWatch.ts)
+  'plugins-dev',
   // Answered before the switch by the job-source commands (plugin Phase 4, src/core/orchestration/commandSources.ts).
   'sources-list',
   'sources-items',

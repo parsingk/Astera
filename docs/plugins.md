@@ -703,7 +703,10 @@ astera plugins init my-plugin --template host
 astera plugins validate --path ./my-plugin
 ```
 
-Then edit, install again, read the log:
+`astera plugins dev --path . --yes` installs the folder, then installs it again each time it changes, with the
+permissions you approved; an open panel of the plugin shows the new page by itself. It does not install a folder with
+problems, and waits for you to run it again when the folder asks for something new. Or, by hand, edit, install again,
+read the log:
 
 ```sh
 astera plugins install --path . --yes
@@ -799,4 +802,4 @@ it. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to
 ## Not yet
 
 - The `github` and `how-it-works` commands for plugins, which their permissions are already named for.
-- A folder for each plugin's own data, and a development mode that reloads a plugin as you edit it.
+- A folder for each plugin's own data.

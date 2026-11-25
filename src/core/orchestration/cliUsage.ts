@@ -342,6 +342,16 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'out', value: '<file>', about: 'where to write the package (default: beside the folder)' }
     ]
   },
+  'plugins-dev': {
+    summary: 'install a plugin folder, then install it again each time it changes, with the permissions you approved',
+    detail:
+      'Shows what the plugin asks for and installs nothing until you approve, as install does: --yes or --grant, or exit 2. Then it watches the folder (not .git or node_modules) and, once a change has settled, checks it as validate does and installs it again with the same grant; an open panel of it takes the new page by itself. A folder with problems is not installed, and one that asks for a new permission, capability or trust level waits for you to run dev again. One line per event on standard output. Ctrl+C stops it and leaves the last install in place. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'yes', about: 'approve the permissions the plugin asks for' },
+      { name: 'grant', value: '<list>', about: 'approve exactly these permissions, comma separated (empty grants none)' }
+    ]
+  },
   'plugins-doctor': {
     summary: 'what could keep a plugin from running: its manifest, compatibility, entry, native addons and its last run',
     detail: 'Exits 1 when a check fails, naming each failing check.',

@@ -145,6 +145,7 @@ const NOT_SWITCHED = [
   'plugins-validate',
   'plugins-init',
   'plugins-pack',
+  'plugins-dev',
   'mcp-serve',
   'mcp-status',
   'projects-add',
