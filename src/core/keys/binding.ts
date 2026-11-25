@@ -38,6 +38,7 @@ export type ActionId =
   | 'job.new'
   | 'kube.open'
   | 'context.attachSelection'
+  | 'problems.open'
   | 'palette.open'
   | 'file.quickOpen'
   | 'search.text'
@@ -290,6 +291,15 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       defaults: [`${M}+P`],
       descKey: 'shortcut.file.quickOpen',
       yieldsToTerminal: !mac,
+      swallowsWhenBlocked: false
+    },
+    {
+      id: 'problems.open',
+      // W5: VS Code's key for its Problems panel. Nothing in Astera takes it, and the shell's Ctrl+M (Enter) has no Shift.
+      // It works over a focused terminal, like the palette key.
+      defaults: [`${M}+Shift+M`],
+      descKey: 'shortcut.problems.open',
+      yieldsToTerminal: false,
       swallowsWhenBlocked: false
     },
     {

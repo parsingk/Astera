@@ -38,6 +38,7 @@ import { logContext, selectionContext } from './lib/contextSources'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
+import type { Diagnostic } from '../../core/problems/diagnostic'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -3767,6 +3768,40 @@ export default function App(): React.JSX.Element {
   })
   const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
   /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
+  /** The explorer's project's problems (spec W5, main/problems.ts), null when they could not be read. Asked again when
+   *  the project or its Jobs change, when the window comes back (a file edited elsewhere is stale now), and on the tab's
+   *  refresh; a quarter second after the last change, since a running Job changes its snapshot often. */
+  const [problems, setProblems] = useState<Diagnostic[] | null>([])
+  const [problemsAsk, setProblemsAsk] = useState(0)
+  useEffect(() => {
+    if (!currentProject) {
+      setProblems([])
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      void window.api.problems
+        .list(currentProject)
+        .then(
+          (list) => {
+            if (!cancelled) setProblems(list)
+          },
+          () => {
+            if (!cancelled) setProblems(null)
+          }
+        )
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [currentProject, orchSnapshot, problemsAsk])
+  useEffect(() => {
+    const again = (): void => setProblemsAsk((n) => n + 1)
+    window.addEventListener('focus', again)
+    return () => window.removeEventListener('focus', again)
+  }, [])
+
   const kubeRail = (): void => {
     const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
     setRunPanelOpen(next.panelOpen)
@@ -4571,6 +4606,14 @@ export default function App(): React.JSX.Element {
     'file.quickOpen': { run: () => openPalette('') },
     // The same box on text in the project's files (spec W2), with or without a project for the same reason.
     'search.text': { run: () => openPalette('%') },
+    // The bottom panel on the Problems tab (spec W5); there is no tab without a project
+    'problems.open': {
+      blockedBy: () => (currentProject ? null : 'action.blocked.noProject'),
+      run: () => {
+        setRunPanelOpen(true)
+        setBottomTab('problems')
+      }
+    },
     // The editor selection to an agent, after a preview (spec W4).
     'context.attachSelection': {
       blockedBy: () => (activeEditorSelection() ? null : 'action.blocked.noSelection'),
@@ -5423,6 +5466,10 @@ export default function App(): React.JSX.Element {
                     onOpenFolder={openLinkedFolder}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
+                    problemsRoot={currentProject}
+                    problems={problems}
+                    onOpenProblem={(file, line) => openFile(file, line !== undefined ? { line } : undefined)}
+                    onRefreshProblems={() => setProblemsAsk((n) => n + 1)}
                     onSendRunLog={(runId) => {
                       // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
                       const run = runs.find((r) => r.runId === runId)
