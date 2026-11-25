@@ -45,6 +45,17 @@ describe('the READMEs and the command palette', () => {
     }
   })
 
+  // Phase 1 gate: where each workspace feature is turned off, in the app's words
+  it.each(READMES)('%s says where the workspace features are turned off, as the app names them', (file, lang) => {
+    const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
+    const m = CATALOGS[lang].messages
+    for (const key of ['settings.workspace.layoutMemory', 'settings.workspace.problemsTab', 'settings.workspace.contextBridge', 'shortcut.unbind', 'shortcut.resetOne'] as const) {
+      expect(text).toContain(`**${m[key]}**`)
+    }
+    expect(text).toContain(`${m['settings.title']} › ${m['settings.tab.general']}`)
+    expect(text).toContain(`${m['settings.title']} › ${m['settings.tab.shortcuts']}`)
+  })
+
   it.each(READMES)('%s names sending a selection to an agent as the app does', (file, lang) => {
     const text = readFileSync(path.resolve(__dirname, '../../..', file), 'utf8')
     expect(text).toContain(`**${CATALOGS[lang].messages['shortcut.context.attachSelection']}:**`)

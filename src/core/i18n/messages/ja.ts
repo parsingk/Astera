@@ -2393,7 +2393,7 @@ export const ja: Catalog = {
   'settings.notifications.limitWaitingHint': '使用上限でセッションが止まったときに送ります。',
   'settings.notifications.accountSwitched': 'アカウントを切り替えたとき',
   'settings.notifications.accountSwitchedHint': 'アカウントの自動切り替えでセッションが別のアカウントに移ったときに送ります。',
-  'settings.workspace.hint': '新しいワークスペース機能を個別にオフにできます。コマンドパレット、ファイルへ移動、ファイル内検索は、ショートカットタブでキーを解除するとオフになります。',
+  'settings.workspace.hint': '新しいワークスペース機能を個別にオフにできます。コマンドパレット、ファイルへ移動、ファイル内を検索は、ショートカットタブでキーを解除するとオフになります。',
   'settings.workspace.layoutMemory': 'レイアウトを記憶',
   'settings.workspace.layoutMemoryHint': 'ウィンドウを閉じたときの分割、タブ、サイドバー、下部パネルを次回起動時に復元します。オフにすると保存したレイアウトを削除します。',
   'settings.workspace.problemsTab': '問題タブ',

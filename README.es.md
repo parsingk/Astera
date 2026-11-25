@@ -194,6 +194,10 @@
   **Distribución: Varios agentes** y **Distribución: DevOps** ordenan las pestañas abiertas,
   **Distribución: Restablecer la predeterminada** vuelve al inicio y **Distribución: Distribuciones guardadas**
   guarda las tuyas con un nombre
+- **Desactivarlas:** en Configuración › General, **Recordar la distribución**, **Pestaña Problemas** y
+  **Enviar a un agente** desactivan cada una su función. La paleta de comandos, ir a un archivo y buscar en los
+  archivos solo se abren con su tecla: en Configuración › Atajos, **Quitar tecla** quita una tecla y
+  **Predeterminado** la devuelve
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo

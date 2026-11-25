@@ -2416,7 +2416,7 @@ export const es: Catalog = {
   'settings.notifications.limitWaitingHint': 'Se envía cuando la sesión se detiene por un límite de uso.',
   'settings.notifications.accountSwitched': 'Cuenta cambiada',
   'settings.notifications.accountSwitchedHint': 'Se envía cuando la rotación pasa la sesión a otra cuenta.',
-  'settings.workspace.hint': 'Cada función nueva del espacio de trabajo se puede desactivar aquí. La paleta de comandos, ir a archivo y buscar en archivos se desactivan quitando su tecla en la pestaña Atajos.',
+  'settings.workspace.hint': 'Cada función nueva del espacio de trabajo se puede desactivar aquí. La paleta de comandos, ir a un archivo y buscar en los archivos se desactivan quitando su tecla en la pestaña Atajos.',
   'settings.workspace.layoutMemory': 'Recordar la distribución',
   'settings.workspace.layoutMemoryHint': 'Las divisiones, pestañas, barra lateral y panel inferior con los que se cerró la ventana vuelven la próxima vez que se abre. Al desactivarlo se borra la distribución guardada.',
   'settings.workspace.problemsTab': 'Pestaña Problemas',
