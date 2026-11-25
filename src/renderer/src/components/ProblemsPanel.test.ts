@@ -14,7 +14,8 @@ describe('ProblemsPanel', () => {
   // Spec W5: filter, sort, jump to the place, and a stale mark
   it('filters by severity with counts and by text, and sorts as asked', () => {
     expect(src).toMatch(/const counts = problemCounts\(problems \?\? \[\]\)/)
-    expect(src).toMatch(/filterDiagnostics\(problems \?\? \[\], \{ severities, text \}\)/)
+    // Final review M4: filtered and sorted on what the row shows, not the absolute path or the English label
+    expect(src).toMatch(/sortDiagnostics\(filterDiagnostics\(problems \?\? \[\], \{ severities, text, shown \}\), sort, sourceOf\)/)
     expect(src).toMatch(/sortDiagnostics\(/)
     expect(src).toMatch(/t\(SEVERITY_KEY\[s\], \{ count: counts\[s\] \}\)/)
     for (const key of ['problems.severity.error', 'problems.severity.warning', 'problems.severity.info']) expect(src).toContain(`'${key}'`)
@@ -27,6 +28,9 @@ describe('ProblemsPanel', () => {
   it('opens a row at its line only when it has a file that is there', () => {
     expect(src).toMatch(/const openable = d\.path !== undefined && d\.stale !== 'missing'/)
     expect(src).toMatch(/onClick=\{openable \? \(\) => onOpen\(d\.path as string, d\.line\) : undefined\}/)
+    // Final review M5: a keyboard opens it too
+    expect(src).toMatch(/role=\{openable \? 'button' : undefined\}\s*tabIndex=\{openable \? 0 : undefined\}/)
+    expect(src).toMatch(/onKeyDown=\{\s*openable\s*\? \(e\) => \{\s*if \(e\.key !== 'Enter' && e\.key !== ' '\) return/)
   })
 
   it('marks a stale problem and says why on hover', () => {
@@ -34,7 +38,7 @@ describe('ProblemsPanel', () => {
   })
 
   it('says why the list is empty, and what it is made of', () => {
-    for (const key of ['problems.noProject', 'problems.empty', 'problems.filteredEmpty', 'problems.unavailable', 'problems.scope']) {
+    for (const key of ['problems.noProject', 'problems.empty', 'problems.filteredEmpty', 'problems.unavailable', 'problems.scope', 'problems.loading']) {
       expect(src).toContain(`t('${key}')`)
     }
   })
@@ -59,5 +63,49 @@ describe('the Problems tab', () => {
   it('opens a problem in the editor at its line, and has an action that opens the tab', () => {
     expect(app).toMatch(/onOpenProblem=\{\(file, line\) => openFile\(file, line !== undefined \? \{ line \} : undefined\)\}/)
     expect(app).toMatch(/'problems\.open': \{\s*blockedBy: \(\) => \(currentProject \? null : 'action\.blocked\.noProject'\),\s*run: \(\) => \{\s*setRunPanelOpen\(true\)\s*setBottomTab\('problems'\)/)
+  })
+})
+
+describe('ProblemsPanel, rows without a place (final review I2, M10, C1)', () => {
+  it('says a failed check with no words of its own failed, and counts findings it kept no detail of', () => {
+    expect(src).toMatch(/d\.unlisted !== undefined \? t\('problems\.unlisted', \{ count: d\.unlisted \}\) : d\.message !== '' \? d\.message : t\('problems\.checkFailed'\)/)
+  })
+
+  it('shows a name it would not look at, dimmed, with why on hover, and never opens it', () => {
+    expect(src).toMatch(/d\.unresolved !== undefined && \(\s*<span className="problem-where unresolved" title=\{t\('problems\.unresolvedHint'\)\}>/)
+  })
+
+  // Final review M5: the sort control is named for what it is, whatever is chosen
+  it('names the sort control', () => {
+    expect(src).toMatch(/ariaLabel=\{t\('problems\.sort'\)\}/)
+  })
+
+  // Final review M2: a project just opened shows no other project's list
+  it('says it is reading while the list for this project is not known yet', () => {
+    expect(src).toMatch(/problems === undefined\s*\? t\('problems\.loading'\)/)
+  })
+})
+
+describe('the Problems tab, badge and switching (final review M3, M5, M11)', () => {
+  it('counts errors and warnings on the tab, red only when there is an error', () => {
+    expect(bottom).toMatch(/const problemTally = problemCounts\(problems \?\? \[\]\)/)
+    expect(bottom).toMatch(/const problemsShown = problemTally\.error \+ problemTally\.warning/)
+    expect(bottom).toMatch(/className=\{`bottom-tab-badge\$\{problemTally\.error === 0 \? ' quiet' : ''\}`\}/)
+  })
+
+  it('stays on the Problems tab when the project or its terminals change', () => {
+    expect(app).toMatch(/setBottomTab\(\(cur\) => \(cur === 'run' \|\| cur === 'kube' \|\| cur === 'problems' \|\|/)
+  })
+
+  // Final review I1, M2: asked again on main's ping and after a save in the editor; cleared on a project change
+  it('is asked again when main says it may differ and after a save, and starts unknown for a new project', () => {
+    expect(app).toMatch(/const off = window\.api\.on\('problems:changed', again\)/)
+    expect(app).toMatch(/onFileSavedRef\.current\(tab\.path\)\s*setProblemsAsk\(\(n\) => n \+ 1\)/)
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*setProblems\(undefined\)\s*\}, \[currentProject\]\)/)
+  })
+
+  // Final review M6: the block sits above kubeRail's own doc
+  it('leaves kubeRail its doc comment', () => {
+    expect(app).toMatch(/\/\*\* The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows\. \*\/\s*const kubeRail = /)
   })
 })

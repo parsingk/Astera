@@ -1936,6 +1936,7 @@ export default function App(): React.JSX.Element {
       () => {
         setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev))
         onFileSavedRef.current(tab.path)
+        setProblemsAsk((n) => n + 1)
         return true
       },
       (err) => {
@@ -3767,12 +3768,16 @@ export default function App(): React.JSX.Element {
     windowShown
   })
   const cluster = useClusterView(bottomRoot ?? '', clusterVisible)
-  /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
-  /** The explorer's project's problems (spec W5, main/problems.ts), null when they could not be read. Asked again when
-   *  the project or its Jobs change, when the window comes back (a file edited elsewhere is stale now), and on the tab's
-   *  refresh; a quarter second after the last change, since a running Job changes its snapshot often. */
-  const [problems, setProblems] = useState<Diagnostic[] | null>([])
+  /** The explorer's project's problems (spec W5, main/problems.ts): null when they could not be read, undefined while
+   *  they are not known yet for this project. Asked again when main says they may differ (an orchestration write that
+   *  moved them, a file batch under the explorer), when the Jobs snapshot changes, after a save in the editor, when the
+   *  window comes back, and on the tab's refresh; a quarter second after the last of them. */
+  const [problems, setProblems] = useState<Diagnostic[] | null | undefined>(undefined)
   const [problemsAsk, setProblemsAsk] = useState(0)
+  // A project just opened shows no other project's list while its own is asked for
+  useEffect(() => {
+    setProblems(undefined)
+  }, [currentProject])
   useEffect(() => {
     if (!currentProject) {
       setProblems([])
@@ -3799,9 +3804,14 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     const again = (): void => setProblemsAsk((n) => n + 1)
     window.addEventListener('focus', again)
-    return () => window.removeEventListener('focus', again)
+    const off = window.api.on('problems:changed', again)
+    return () => {
+      window.removeEventListener('focus', again)
+      off()
+    }
   }, [])
 
+  /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
   const kubeRail = (): void => {
     const next = kubeRailClick({ panelOpen: runPanelOpen, shownTab: bottomTabShown, height: runPanelHeight })
     setRunPanelOpen(next.panelOpen)
@@ -4137,7 +4147,7 @@ export default function App(): React.JSX.Element {
         setTerminals(list)
         // If a tab that does not belong to this project is still active, fall back to Run. The Kubernetes and logs
         // tabs belong to none.
-        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || isLogTabId(cur) || isShellTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
+        setBottomTab((cur) => (cur === 'run' || cur === 'kube' || cur === 'problems' || isLogTabId(cur) || isShellTabId(cur) || list.some((x) => x.id === cur) ? cur : 'run'))
       },
       () => {
         if (!cancelled) setTerminals([])

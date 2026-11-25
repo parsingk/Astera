@@ -98,7 +98,7 @@ export function BottomPanel({
   /** The Problems tab (spec W5): the explorer's project, its problems (null when they could not be read), and what a
    *  row and the refresh button do. */
   problemsRoot: string | null
-  problems: Diagnostic[] | null
+  problems: Diagnostic[] | null | undefined
   onOpenProblem: (path: string, line?: number) => void
   onRefreshProblems: () => void
   terminals: TerminalBuffer[]
@@ -214,7 +214,7 @@ export function BottomPanel({
               {t('problems.tab')}
               {problemsShown > 0 && (
                 <span
-                  className="bottom-tab-badge"
+                  className={`bottom-tab-badge${problemTally.error === 0 ? ' quiet' : ''}`}
                   title={t('problems.tabCount', { errors: problemTally.error, warnings: problemTally.warning })}
                   aria-label={t('problems.tabCount', { errors: problemTally.error, warnings: problemTally.warning })}
                 >
