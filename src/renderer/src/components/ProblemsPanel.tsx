@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { AlertTriangle, CircleX, Info, RefreshCw, Send, Wrench } from 'lucide-react'
+import { Fragment, useMemo, useState } from 'react'
+import { AlertTriangle, CircleX, EyeOff, Info, RefreshCw, Send, Wrench } from 'lucide-react'
 import {
   filterDiagnostics,
   problemCounts,
@@ -9,6 +9,8 @@ import {
 } from '../../../core/problems/diagnostic'
 import { relativeTo } from '../../../core/context/contextRef'
 import { useI18n } from '../i18n/I18nProvider'
+import { dismissGroups, findingChipKey, findingStateKey, findingWhoKey } from '../lib/findingStates'
+import { localTime } from './findingsText'
 import { Select } from './Select'
 
 /** Each severity's toggle wording, written out so every key stays findable in the source. */
@@ -48,7 +50,12 @@ export function ProblemsPanel({
   onOpen: (path: string, line?: number, column?: number) => void
   onRefresh: () => void
   /** What the bar does with the chosen rows; absent with the bridge off. */
-  actions?: { send: (rows: Diagnostic[]) => void; fix: (rows: Diagnostic[]) => void }
+  actions?: {
+    send: (rows: Diagnostic[]) => void
+    fix: (rows: Diagnostic[]) => void
+    dismiss: (rows: Diagnostic[]) => void
+    undismiss: (rows: Diagnostic[]) => void
+  }
 }): React.JSX.Element {
   const { t } = useI18n()
   const [severities, setSeverities] = useState<ReadonlySet<DiagnosticSeverity>>(() => new Set(['error', 'warning', 'info']))
@@ -56,6 +63,15 @@ export function ProblemsPanel({
   const [sort, setSort] = useState<'severity' | 'file' | 'source'>('severity')
   /** The chosen rows' ids; a row no longer listed falls out of `chosen` by itself. */
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  /** The rows whose finding history is open under them (Phase 3 Part 1b). */
+  const [history, setHistory] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleHistory = (id: string): void =>
+    setHistory((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   const counts = problemCounts(problems ?? [])
   /** Who found it, in the words the row shows. */
   const sourceOf = (d: Diagnostic): string => (d.source.kind === 'review' ? t('problems.source.review') : d.source.label)
@@ -74,6 +90,8 @@ export function ProblemsPanel({
   )
 
   const chosen = rows.filter((d) => selected.has(d.id))
+  /** Every chosen row is dismissed: the button takes the dismissal back instead. */
+  const allDismissed = chosen.length > 0 && chosen.every((d) => d.finding?.state === 'dismissed')
   const choose = (id: string): void =>
     setSelected((prev) => {
       const next = new Set(prev)
@@ -152,6 +170,11 @@ export function ProblemsPanel({
               <Wrench size={12} />
               {t('problems.fix')}
             </button>
+            {/* Only a Task's findings are kept, so the button waits for rows that all are */}
+            <button type="button" className="problems-action" disabled={dismissGroups(chosen) === null} onClick={() => act(allDismissed ? actions.undismiss : actions.dismiss)}>
+              <EyeOff size={12} />
+              {t(allDismissed ? 'problems.undismiss' : 'problems.dismiss')}
+            </button>
           </>
         )}
         <button type="button" className="run-panel-btn" title={t('problems.refresh')} aria-label={t('problems.refresh')} onClick={onRefresh}>
@@ -166,10 +189,11 @@ export function ProblemsPanel({
           {rows.map((d) => {
             const openable = d.path !== undefined && d.stale !== 'missing'
             const where = placeOf(d)
+            const chip = findingChipKey(d)
             return (
+              <Fragment key={d.id}>
               <li
-                key={d.id}
-                className={`problem-row${openable ? ' openable' : ''}${d.stale !== undefined ? ' stale' : ''}`}
+                className={`problem-row${openable ? ' openable' : ''}${d.stale !== undefined ? ' stale' : ''}${d.finding?.state === 'dismissed' ? ' dismissed' : ''}`}
                 role={openable ? 'button' : undefined}
                 tabIndex={openable ? 0 : undefined}
                 onClick={openable ? () => onOpen(d.path as string, d.line, d.column) : undefined}
@@ -209,7 +233,41 @@ export function ProblemsPanel({
                     {t(d.stale === 'changed' ? 'problems.stale.changed' : 'problems.stale.missing')}
                   </span>
                 )}
+                {/* Where a finding a person acted on stands (Phase 3 Part 1b); it opens the changes, not the file */}
+                {chip !== null && d.finding !== undefined && (
+                  <button
+                    type="button"
+                    className={`problem-finding ${d.finding.state}`}
+                    aria-expanded={history.has(d.id)}
+                    title={t('problems.finding.historyHint')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleHistory(d.id)
+                    }}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    {t(chip)}
+                  </button>
+                )}
               </li>
+              {history.has(d.id) && d.finding !== undefined && (
+                <li className="problem-history-row">
+                  <ul className="problem-history">
+                    {[...d.finding.history].reverse().map((c, i) => (
+                      <li key={i}>
+                        {t('problems.finding.change', {
+                          when: localTime(c.at),
+                          who: t(findingWhoKey(c.by)),
+                          from: c.from !== null ? t(findingStateKey(c.from)) : t('problems.finding.new'),
+                          to: t(findingStateKey(c.to))
+                        })}
+                        {c.note !== undefined && <span className="problem-history-note">{c.note}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              )}
+              </Fragment>
             )
           })}
         </ul>

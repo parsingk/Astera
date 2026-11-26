@@ -108,7 +108,7 @@ export function BottomPanel({
   onOpenProblem: (path: string, line?: number, column?: number) => void
   onRefreshProblems: () => void
   /** Sending chosen problems to an agent and fixing them (Phase 3 Part 1); absent with the bridge off. */
-  problemActions?: { send: (rows: Diagnostic[]) => void; fix: (rows: Diagnostic[]) => void }
+  problemActions?: React.ComponentProps<typeof ProblemsPanel>['actions']
   terminals: TerminalBuffer[]
   /** The folder the terminals were opened in — a relative path link in one resolves against it */
   terminalCwd: string | null

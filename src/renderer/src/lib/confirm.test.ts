@@ -68,3 +68,15 @@ describe('confirm 스토어', () => {
     await expect(answer).resolves.toBe(true)
   })
 })
+
+// Phase 3 Part 1b: a dismissal asks for its note in the same modal
+describe('confirmModalWithInput', () => {
+  it('answers the typed text, or null on cancel', async () => {
+    const asked = mod.confirmModalWithInput({ title: 't', body: 'b', input: { label: 'Why', maxLength: 300 } })
+    mod.settle(true, [], 'known flaky')
+    expect(await asked).toBe('known flaky')
+    const cancelled = mod.confirmModalWithInput({ title: 't', body: 'b', input: { label: 'Why', maxLength: 300 } })
+    mod.settle(false, [], 'typed then cancelled')
+    expect(await cancelled).toBeNull()
+  })
+})

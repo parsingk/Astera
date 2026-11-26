@@ -35,7 +35,7 @@ describe('ProblemsPanel', () => {
 
   // Phase 3 Part 1: rows are chosen with a checkbox and sent to an agent, or fixed by one; nothing of it with the bridge off
   it('sends or fixes the chosen rows, and shows neither the checkboxes nor the buttons with the bridge off', () => {
-    expect(src).toMatch(/actions\?: \{ send: \(rows: Diagnostic\[\]\) => void; fix: \(rows: Diagnostic\[\]\) => void \}/)
+    expect(src).toMatch(/actions\?: \{\s*send: \(rows: Diagnostic\[\]\) => void\s*fix: \(rows: Diagnostic\[\]\) => void\s*dismiss: \(rows: Diagnostic\[\]\) => void\s*undismiss: \(rows: Diagnostic\[\]\) => void\s*\}/)
     expect(src).toMatch(/const chosen = rows\.filter\(\(d\) => selected\.has\(d\.id\)\)/)
     for (const key of ['problems.send', 'problems.fix', 'problems.choose']) expect(src).toContain(`t('${key}'`)
     expect(src).toMatch(/\{actions !== undefined && \(/)
@@ -45,8 +45,31 @@ describe('ProblemsPanel', () => {
     expect(bottom).toMatch(/actions=\{problemActions\}/)
   })
 
+  // Phase 3 Part 1b: a finding a person acted on says where it stands; its chip opens its history under the row
+  it('shows a recorded finding’s state as a chip that opens its history, and dims a dismissed row', () => {
+    expect(src).toMatch(/const chip = findingChipKey\(d\)/)
+    expect(src).toMatch(/className=\{`problem-finding \$\{d\.finding\.state\}`\}/)
+    expect(src).toMatch(/aria-expanded=\{history\.has\(d\.id\)\}/)
+    expect(src).toMatch(/history\.has\(d\.id\) && d\.finding !== undefined && \(/)
+    expect(src).toContain('className="problem-history"')
+    expect(src).toMatch(/d\.finding\?\.state === 'dismissed' \? ' dismissed' : ''/)
+    for (const key of ['problems.finding.change', 'problems.finding.new', 'problems.finding.historyHint']) expect(src).toContain(`'${key}'`)
+  })
+
+  it('dismisses the chosen rows, or takes the dismissal back when every chosen row is dismissed', () => {
+    expect(src).toMatch(/const allDismissed = chosen\.length > 0 && chosen\.every\(\(d\) => d\.finding\?\.state === 'dismissed'\)/)
+    expect(src).toMatch(/disabled=\{dismissGroups\(chosen\) === null\}/)
+    expect(src).toMatch(/act\(allDismissed \? actions\.undismiss : actions\.dismiss\)/)
+    expect(src).toMatch(/t\(allDismissed \? 'problems\.undismiss' : 'problems\.dismiss'\)/)
+    // The app asks for the note, then one command per Task; taking it back asks nothing
+    expect(app).toMatch(/const dismissProblems = async \(rows: Diagnostic\[\]\): Promise<void> => \{[\s\S]*?confirmModalWithInput\(\{[\s\S]*?changeFindings\(root, 'tasks-dismiss', groups, note\)/)
+    expect(app).toMatch(/const undismissProblems = async \(rows: Diagnostic\[\]\): Promise<void> => \{[\s\S]*?changeFindings\(root, 'tasks-undismiss', groups\)/)
+    expect(app).not.toMatch(/const undismissProblems = async \(rows: Diagnostic\[\]\): Promise<void> => \{[^}]*confirmModal/)
+    expect(app).toMatch(/for \(const g of groups\)[\s\S]{0,200}window\.api\.orch\s*\.command\(root, cmd, \{ task: g\.task, finding: g\.finding/)
+  })
+
   it('wires sending through the W4 preview and fixing through a dry run first, then the draft on a refusal', () => {
-    expect(app).toMatch(/problemActions=\{contextOn \? \{ send: sendProblems, fix: fixProblems \} : undefined\}/)
+    expect(app).toMatch(/problemActions=\{contextOn \? \{ send: sendProblems, fix: fixProblems, dismiss: dismissProblems, undismiss: undismissProblems \} : undefined\}/)
     expect(app).toMatch(/const made = problemsContext\(\{ rows, root, files \}\)/)
     expect(app).toMatch(/openContextPreview\(made\.ref, contextText\(made\.ref, made\.excerpt, made\.language\)\)/)
     expect(app).toMatch(/'tasks-repair', \{ \.\.\.request, dryRun: true \}\)/)
