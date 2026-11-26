@@ -16,7 +16,7 @@ export function encodeMessage(body: unknown): Buffer {
  *  `onError` once for a header without a length, a length over the bound (after which it reads nothing more), or a body
  *  that is not JSON (which is skipped). */
 export function createMessageReader(o: { maxBytes: number; onMessage(m: unknown): void; onError(e: Error): void }): (chunk: Buffer) => void {
-  let pending = Buffer.alloc(0)
+  let pending: Buffer = Buffer.alloc(0)
   let stopped = false
   return (chunk) => {
     if (stopped) return
