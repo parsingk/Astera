@@ -60,9 +60,11 @@ smaller problem to fix later than getting comment-detection right now would be t
 
 That false positive arrived on 2026-11-26: more than a dozen test files hold made-up paths as data (a finding's text
 `error src/a.ts:3 Lint: ...`, a test report's failure place). The guard now skips a citation whose file name matches no
-`.ts` or `.tsx` file in `src/`, since it cites no file of ours. It compares file names only, so a citation still counts
-when the directory around a real name changes. The cost: a stale citation to a file of ours that was since renamed or
-deleted is no longer caught.
+`.ts` or `.tsx` file of ours: every one git tracks (`src/`, `packages/`, `examples/` and the build configuration beside
+them) and any new one in `src/` not yet added. It compares file names only, so a citation still counts when the
+directory around a real name changes. A real citation is caught the moment it is written, since its file exists then,
+so a later rename leaves no citation behind to miss. The remaining cost: a fixture that uses a name one of our files has
+(`types.ts:3`) still trips the guard, and the fixture's name is changed.
 
 **This rule covers all committed prose, not only what the guard test can reach.** `docs/` and
 `.superpowers/` are git-ignored and absent from a fresh clone, so a test that runs in CI cannot
