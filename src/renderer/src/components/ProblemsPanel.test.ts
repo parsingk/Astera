@@ -148,7 +148,8 @@ describe('the Problems tab, badge and switching (final review M3, M5, M11)', () 
   // Final review I1, M2: asked again on main's ping and after a save in the editor; cleared on a project change
   it('is asked again when main says it may differ and after a save, and starts unknown for a new project', () => {
     expect(app).toMatch(/const off = window\.api\.on\('problems:changed', again\)/)
-    expect(app).toMatch(/onFileSavedRef\.current\(tab\.path\)\s*setProblemsAsk\(\(n\) => n \+ 1\)/)
+    // The language servers hear of the save first (Phase 3 Part 3)
+    expect(app).toMatch(/onFileSavedRef\.current\(tab\.path\)\s*void window\.api\.lsp\.saved\(\[tab\.path\]\)\.catch\(\(\) => \{\}\)\s*setProblemsAsk\(\(n\) => n \+ 1\)/)
     expect(app).toMatch(/useEffect\(\(\) => \{\s*setProblems\(undefined\)\s*\}, \[currentProject\]\)/)
   })
 

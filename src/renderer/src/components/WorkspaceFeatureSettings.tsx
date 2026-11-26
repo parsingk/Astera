@@ -3,7 +3,8 @@ import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 
 /** The features that act without a key, in the order a person meets them: the layout that comes back at start, the
- *  Problems tab, the buttons that send a piece of the workbench to an agent (the Phase 1 three), and the Tests tab. */
+ *  Problems tab, the buttons that send a piece of the workbench to an agent (the Phase 1 three), the Tests tab, and the
+ *  language servers' problems (Phase 3 Part 3). */
 const SWITCHES = [
   {
     key: 'layoutMemory',
@@ -24,6 +25,11 @@ const SWITCHES = [
     key: 'testsTab',
     label: 'settings.workspace.testsTab',
     hint: 'settings.workspace.testsTabHint'
+  },
+  {
+    key: 'languageServers',
+    label: 'settings.workspace.languageServers',
+    hint: 'settings.workspace.languageServersHint'
   }
 ] as const satisfies readonly { key: keyof WorkspaceFeatures; label: MessageKey; hint: MessageKey }[]
 
