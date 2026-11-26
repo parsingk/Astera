@@ -154,6 +154,11 @@ describe('humanFor', () => {
     )
   })
 
+  // Screen check of the Phase 2 gate: an empty list printed nothing at all
+  it('plugins list says when nothing is installed', () => {
+    expect(humanFor('plugins-list', { plugins: [] })).toBe('no plugins installed')
+  })
+
   // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission,
   // sandbox switch (sandbox design §6; a profile from a Host before it reads as off) and accounts in order
   it('agent-profiles list is a row per profile, and one profile is its fields', () => {

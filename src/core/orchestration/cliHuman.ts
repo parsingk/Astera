@@ -670,6 +670,7 @@ export function humanFor(
         })
       )
     case 'plugins-list':
+      if (asList(data, 'plugins').length === 0) return 'no plugins installed'
       return columns(
         asList(data, 'plugins').map((p) => {
           const granted = Array.isArray(p.permissions) ? (p.permissions as unknown[]).map(str) : []
