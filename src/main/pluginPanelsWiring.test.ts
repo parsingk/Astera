@@ -63,10 +63,24 @@ describe('plugin panels: final review wiring', () => {
   it('forgets a plugin before the Host turns it off, removes or replaces it, and watches while anything is open', () => {
     const ipc = read('ipc.ts')
     expect(ipc).toMatch(/ipcMain\.handle\('plugins\.setEnabled', \(_e, id: unknown, enabled: unknown\) => \{[\s\S]*?if \(enabled !== true\) panelGuests\.forget\(id\)/)
-    expect(ipc).toMatch(/ipcMain\.handle\('plugins\.remove', \(_e, id: unknown\) => \{[\s\S]*?panelGuests\.forget\(id\)\s*return panelGuests\.hold/)
+    expect(ipc).toMatch(/ipcMain\.handle\('plugins\.remove', async \(_e, id: unknown\) => \{[\s\S]*?panelGuests\.forget\(id\)\s*const answer = await panelGuests\.hold\(id, plugins\.remove\(id\)\)/)
     expect(ipc).toMatch(/const replaces = \(a as \{ expect\?: \{ name\?: unknown \} \} \| null\)\?\.expect\?\.name\s*if \(typeof replaces === 'string'\) \{\s*panelGuests\.forget\(replaces\)/)
     expect(ipc).toMatch(/setInterval\(\(\) => \{\s*if \(panelGuests\.active\(\)\) void panelGuests\.refresh\(\)\s*\}, PANEL_WATCH_MS\)\.unref\(\)/)
     expect(ipc).toMatch(/return r\.ok \? pluginRowsOf\(r\.body\) : null/)
+  })
+
+  // Phase 2 gate: a plugin the app removed starts with nothing when installed again, and only once the Host agreed
+  it('wipes a plugin’s panel storage only once the Host has removed it', () => {
+    const ipc = read('ipc.ts')
+    const handler = ipc.slice(ipc.indexOf("ipcMain.handle('plugins.remove'"), ipc.indexOf("ipcMain.handle('plugins.logs'"))
+    expect(handler).toMatch(/const answer = await panelGuests\.hold\(id, plugins\.remove\(id\)\)\s*\n[^\n]*\n\s*if \(answer\.ok\) panelGuests\.forget\(id, \{ wipe: true \}\)/)
+  })
+
+  // Phase 2 gate, spec E3 "audit": the app's half of the log, in the profile's plugins folder beside the Host's
+  it('gives the panel guests the app’s audit file beside the Host’s', () => {
+    expect(read('index.ts')).toMatch(
+      /const panelGuests = createPanelGuests\(\{[\s\S]*?audit: createPluginAudit\(\{\s*file: path\.join\(pluginsRoot\(app\.getPath\('userData'\)\), AUDIT_APP_FILE\)/
+    )
   })
 
   // M7: the bridge imports nothing but electron, so the two preloads can never share a chunk a sandbox cannot load

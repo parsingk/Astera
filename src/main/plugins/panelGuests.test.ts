@@ -5,6 +5,7 @@ import path from 'node:path'
 import { createPanelGuests } from './panelGuests'
 import type { PluginRow } from '../../core/plugins/pluginRows'
 import { PLUGIN_UI_CSP } from '../../core/plugins/panelGuest'
+import type { PluginAudit, PluginAuditRecord } from '../../core/plugins/pluginAudit'
 
 // ADR-008 in main: a prepared panel, the plugin's session and files, how its guest attaches, and its bridge
 type Handler = (req: { url: string }) => Promise<Response>
@@ -50,8 +51,11 @@ function fakeSessions() {
   const downloadsRefused: string[] = []
   const proxies: { partition: string; config: unknown }[] = []
   const pairingRefused: string[] = []
+  const wiped: string[] = []
   const makeSession = (partition: string) => ({
     partition,
+    clearStorageData: async () => void wiped.push(`${partition} storage`),
+    clearCache: async () => void wiped.push(`${partition} cache`),
     on: (ev: string, fn: (e: { preventDefault: () => void }) => void) => {
       if (ev === 'will-download') fn({ preventDefault: () => void downloadsRefused.push(partition) })
     },
@@ -68,11 +72,11 @@ function fakeSessions() {
     setPermissionCheckHandler: (fn: () => boolean) => void (!fn() && permissionRefusals.push(`${partition} check`))
   })
   const sessionOf = (partition: string): unknown => cache.get(partition) ?? { partition }
-  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused }
+  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused, wiped }
 }
 
 let tokens = 0
-const make = (rows: PluginRow[] | null) => {
+const make = (rows: PluginRow[] | null, o: { audit?: PluginAudit } = {}) => {
   const sessions = fakeSessions()
   currentSessions = sessions
   const trusted: { id: number; guest: unknown }[] = []
@@ -84,7 +88,8 @@ const make = (rows: PluginRow[] | null) => {
     trustGuest: (contents, guest) => void trusted.push({ id: contents.id, guest }),
     untrustGuest: (id) => void untrusted.push(id),
     now: () => 1000,
-    token: () => `tok${++tokens}`
+    token: () => `tok${++tokens}`,
+    ...(o.audit ? { audit: o.audit } : {})
   })
   return { guests, sessions, trusted, untrusted }
 }
@@ -397,5 +402,79 @@ describe('final review fixes', () => {
     g.emit('select-bluetooth-device', pick, [{ deviceId: 'd1' }], (id: string) => chosen.push(id))
     expect(pick.preventDefault).toHaveBeenCalled()
     expect(chosen).toEqual([''])
+  })
+
+  // Phase 2 gate, spec E3 "audit": an opened panel, a refused bridge call and a refused attach are recorded, a burst under
+  // one key for the writer to count
+  it('records an opened panel, a refused bridge call under one key per kind, and a refused attach without its token', async () => {
+    const recs: [PluginAuditRecord, string | undefined][] = []
+    const m = make([row()], { audit: { record: (e, k) => void recs.push([e, k]), flushed: async () => {} } })
+    const { p } = await open(m, 21)
+    await expect(m.guests.call(21, 'files.read', null)).rejects.toThrow('UNKNOWN_METHOD: files.read')
+    await expect(m.guests.call(21, 'files.read', null)).rejects.toThrow('UNKNOWN_METHOD: files.read')
+    const again = await m.guests.prepare('hello-panel', 'main', null)
+    if (!again.ok) throw new Error(again.reason)
+    expect(m.guests.decideAttach({ partition: p.partition, src: `${again.url}&x=1` }, {})).toBe('refuse')
+    const refusedCall = { plugin: 'hello-panel', event: 'bridge-refused', detail: 'UNKNOWN_METHOD: files.read' }
+    expect(recs).toEqual([
+      [{ plugin: 'hello-panel', event: 'panel-opened', detail: 'panel main' }, undefined],
+      [refusedCall, 'hello-panel bridge UNKNOWN_METHOD'],
+      [refusedCall, 'hello-panel bridge UNKNOWN_METHOD'],
+      [{ plugin: 'hello-panel', event: 'attach-refused', detail: 'astera-plugin://hello-panel/dist/ui/index.html' }, 'hello-panel attach']
+    ])
+  })
+
+  // Spec E3 Bridge row: the payload's plugin id is not trusted
+  it('ignores a plugin or panel named in a call’s payload: context answers what the guest was prepared as', async () => {
+    const m = make([row(), row({ id: 'other' })])
+    await open(m, 22)
+    expect(await m.guests.call(22, 'context', { plugin: 'other', panel: 'side', project: { root: '/etc', name: 'etc' } })).toEqual({ plugin: 'hello-panel', panel: 'main' })
+  })
+
+  // Phase 2 gate: a plugin removed and installed again in the same app run must not find its old page's storage
+  it('wipes a removed plugin’s panel storage and cache, on refresh, on prepare and when the app removes it', async () => {
+    const rows = [row()]
+    const m = make(rows)
+    await open(m, 23)
+    rows.length = 0
+    await m.guests.refresh()
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+    const n = make([row()])
+    await open(n, 24)
+    n.guests.listFrom(async () => [])
+    expect((await n.guests.prepare('hello-panel', 'main', null)).ok).toBe(false)
+    expect(n.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+    const q = make([row()])
+    await open(q, 25)
+    q.guests.forget('hello-panel', { wipe: true })
+    expect(q.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  it('wipes a plugin removed outside the app after its panel was closed, once', async () => {
+    const rows = [row()]
+    const m = make(rows)
+    const { g } = await open(m, 27)
+    g.emit('destroyed')
+    rows.length = 0
+    await m.guests.refresh()
+    await m.guests.refresh()
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  it('keeps the panel storage of a plugin turned off or installed again, and touches no session never used', async () => {
+    const rows = [row({ installedAt: 1 })]
+    const m = make(rows)
+    await open(m, 26)
+    rows[0] = row({ enabled: false, installedAt: 1 })
+    await m.guests.refresh()
+    rows[0] = row({ installedAt: 2 })
+    await m.guests.refresh()
+    expect(await m.guests.prepare('hello-panel', 'main', null)).toMatchObject({ ok: true })
+    m.guests.forget('hello-panel')
+    expect(m.sessions.wiped).toEqual([])
+    const never = make([])
+    expect((await never.guests.prepare('hello-panel', 'main', null)).ok).toBe(false)
+    never.guests.forget('hello-panel', { wipe: true })
+    expect(never.sessions.wiped).toEqual([])
   })
 })

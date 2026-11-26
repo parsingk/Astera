@@ -17,6 +17,7 @@ import {
 } from '../../core/plugins/panelGuest'
 import { contributionKey, pluginSchemeHost } from '../../core/plugins/manifest'
 import { unusablePlugin, type PanelRefusalCode, type PluginRow } from '../../core/plugins/pluginRows'
+import type { PluginAudit } from '../../core/plugins/pluginAudit'
 
 type SessionLike = {
   protocol: { handle: (scheme: string, handler: (req: { url: string }) => Promise<Response>) => void }
@@ -26,6 +27,8 @@ type SessionLike = {
   setBluetoothPairingHandler?: (fn: (details: unknown, callback: (r: { confirmed: boolean }) => void) => void) => void
   on: (event: 'will-download', fn: (e: { preventDefault: () => void }) => void) => void
   setProxy: (config: { proxyRules: string; proxyBypassRules: string }) => Promise<void>
+  clearStorageData: () => Promise<void>
+  clearCache: () => Promise<void>
 }
 type GuestLike = {
   id: number
@@ -95,6 +98,8 @@ export function createPanelGuests(d: {
   now: () => number
   /** A fresh one-time token for each prepared page. */
   token: () => string
+  /** The plugin audit log (Workspace & Plugin Platform V2 spec E3): panels opened, bridge calls and attaches refused. */
+  audit?: PluginAudit
 }) {
   let listPlugins = d.listPlugins ?? (async () => [])
   /** Prepared pages by their exact URL: each admits one guest, once (review I3). */
@@ -108,6 +113,8 @@ export function createPanelGuests(d: {
   const pending = new Map<string, Prepared>()
   /** Live guests: what they were prepared as, their recent call times, and how to close them. */
   const guests = new Map<number, { snapshot: Snapshot; calls: number[]; close: () => void }>()
+  /** Which plugin a partition is, for an audit record of an attach refused in it. */
+  const pluginOfPartition = new Map<string, string>()
 
   const refusedHere = (status: number): Response => new Response(null, { status })
 
@@ -131,9 +138,19 @@ export function createPanelGuests(d: {
   }
 
   /** A plugin that can no longer show panels: its files are no longer served, its prepared pages admit nobody, and its
-   *  open panels lose the bridge and are closed (ADR-008 §6, review I2). */
-  const forget = (pluginId: string): void => {
+   *  open panels lose the bridge and are closed (ADR-008 §6, review I2). With `wipe`, for a plugin removed, its session's
+   *  storage and cache go too, so the same plugin installed again in this app run starts with nothing (Phase 2 gate); a
+   *  session never set up in this run holds nothing, as a plugin session keeps nothing after the app quits. */
+  const forget = (pluginId: string, o?: { wipe?: true }): void => {
     roots.delete(pluginSchemeHost(pluginId))
+    const partition = pluginPartition(pluginId)
+    if (o?.wipe && setUp.has(partition)) {
+      const s = d.fromPartition(partition)
+      void s.clearStorageData().catch(() => {})
+      void s.clearCache().catch(() => {})
+      // Wiped once: a refresh after this does not find it again
+      pluginOfPartition.delete(partition)
+    }
     for (const [url, p] of prepared) if (p.pluginId === pluginId) prepared.delete(url)
     for (const [id, g] of guests) {
       if (g.snapshot.pluginId !== pluginId) continue
@@ -195,7 +212,7 @@ export function createPanelGuests(d: {
       const p = list.find((r) => r.id === pluginId)
       const why = unusablePlugin(pluginId, p)
       if (why !== null || !p) {
-        forget(pluginId)
+        forget(pluginId, p ? undefined : { wipe: true })
         return { ok: false, ...(why ?? { code: 'missing', reason: `no plugin ${pluginId} is installed` }) }
       }
       // An unknown panel of a usable plugin is refused alone: its other panels and its files stay as they were
@@ -205,6 +222,7 @@ export function createPanelGuests(d: {
       const addressProblem = pluginHostProblem(pluginId)
       if (addressProblem !== null) return { ok: false, code: 'address', reason: addressProblem }
       const partition = pluginPartition(pluginId)
+      pluginOfPartition.set(partition, pluginId)
       const url = pluginPageUrl(pluginId, p.ui as string, panelId, d.token())
       roots.set(host, p.dir)
       await setUpSession(partition, host)
@@ -230,9 +248,14 @@ export function createPanelGuests(d: {
      *  exact URL once, with preferences rebuilt from Astera's own; anything else in a plugin partition is refused. */
     decideAttach(params: { src?: string; partition?: string }, webPreferences: object): 'preview' | 'plugin' | 'refuse' {
       const decision = panelAttach(params, [...prepared.values()])
-      if (decision.kind !== 'plugin') return decision.kind
-      const entry = prepared.get(params.src as string)
-      if (!entry) return 'refuse'
+      const entry = decision.kind === 'plugin' ? prepared.get(params.src as string) : undefined
+      if (decision.kind === 'preview') return 'preview'
+      if (!entry) {
+        // Recorded without the query, which may hold a page's one-time token
+        const plugin = pluginOfPartition.get(params.partition as string) ?? (params.partition as string)
+        d.audit?.record({ plugin, event: 'attach-refused', detail: (params.src ?? '').split('?')[0] }, `${plugin} attach`)
+        return 'refuse'
+      }
       prepared.delete(entry.url)
       const prefs = webPreferences as Record<string, unknown>
       for (const k of Object.keys(prefs)) if (!KEPT_PREFERENCES.has(k)) delete prefs[k]
@@ -285,6 +308,7 @@ export function createPanelGuests(d: {
         }
       })
       d.trustGuest(guest as never, { pluginId: entry.pluginId, host: entry.host })
+      d.audit?.record({ plugin: entry.pluginId, event: 'panel-opened', detail: `panel ${entry.panelId}` })
       const own = `${PLUGIN_SCHEME}://${entry.host}/`
       const hold = (e: { preventDefault: () => void; url?: string }, url?: string): void => {
         if (!(e.url ?? url ?? '').startsWith(own)) e.preventDefault()
@@ -300,13 +324,18 @@ export function createPanelGuests(d: {
       const g = guests.get(guestId)
       if (!g) throw new Error('PANEL_GONE')
       const refusal = bridgeRefusal(g.calls, method, payload, d.now())
-      if (refusal !== null) throw new Error(refusal)
+      if (refusal !== null) {
+        const plugin = g.snapshot.pluginId
+        d.audit?.record({ plugin, event: 'bridge-refused', detail: refusal }, `${plugin} bridge ${refusal.split(':')[0]}`)
+        throw new Error(refusal)
+      }
       // context, the one method in Phase 2: what this guest was prepared as, whatever was prepared since (review I3)
       const s = g.snapshot
       return { plugin: s.pluginId, panel: s.panelId, ...(s.project ? { project: s.project } : {}) }
     },
 
-    /** A plugin turned off, removed or replaced through this app: forgotten before the Host is asked (ADR-008 §6). */
+    /** A plugin turned off, removed or replaced through this app: forgotten before the Host is asked (ADR-008 §6); a
+     *  removal the Host agreed to wipes its panel storage too. */
     forget,
 
     /** Whether anything is served or open, so the watch below has something to do. */
@@ -324,6 +353,8 @@ export function createPanelGuests(d: {
       for (const p of prepared.values()) watched.add(p.pluginId)
       for (const p of list) if (roots.has(pluginSchemeHost(p.id))) watched.add(p.id)
       for (const host of roots.keys()) if (!list.some((p) => pluginSchemeHost(p.id) === host)) roots.delete(host)
+      // One no longer listed was removed: its panel storage goes with it, its panels closed or not
+      for (const id of [...pluginOfPartition.values()]) if (!list.some((r) => r.id === id)) forget(id, { wipe: true })
       for (const id of watched) if (unusablePlugin(id, list.find((r) => r.id === id)) !== null) forget(id)
       // Installed again since a page was prepared (plugins dev, the CLI): its panels end, and each asks for the new page
       const stale = (pluginId: string, installedAt: number | undefined): boolean => {

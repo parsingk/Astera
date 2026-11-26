@@ -38,6 +38,8 @@ import { mediaAllowlist } from './media/allowlist'
 import { MEDIA_SCHEME } from '../core/files/media'
 import { PLUGIN_SCHEME } from '../core/plugins/panelGuest'
 import { createPanelGuests } from './plugins/panelGuests'
+import { AUDIT_APP_FILE, createPluginAudit } from '../core/plugins/pluginAudit'
+import { pluginsRoot } from '../host/plugins/registry'
 import { isOwnDocument } from './navigationGuard'
 import { ipcMain, trustPluginGuest, trustWebContents, untrustPluginGuest } from './ipcGuard'
 import { randomBytes } from 'node:crypto'
@@ -263,7 +265,12 @@ const panelGuests = createPanelGuests({
   trustGuest: trustPluginGuest,
   untrustGuest: untrustPluginGuest,
   now: Date.now,
-  token: () => randomBytes(16).toString('hex')
+  token: () => randomBytes(16).toString('hex'),
+  // The app's half of the plugin audit log (Workspace & Plugin Platform V2 spec E3), beside the Host's, which reads both
+  audit: createPluginAudit({
+    file: path.join(pluginsRoot(app.getPath('userData')), AUDIT_APP_FILE),
+    onError: (m) => console.log(`plugins audit: ${m}`)
+  })
 })
 
 /** Loads the app's own page into the window. Split from createWindow because on macOS/Linux the
