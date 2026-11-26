@@ -130,6 +130,33 @@ describe('createHostOrch', () => {
       expect((await orch.call({ cmd: 'plugins-list', args: {}, sessionId: '', from: pluginCaller(['jobs.read']) })).status).toBe(403)
       expect((await orch.call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: pluginCaller(['jobs.create']) })).status).toBe(403)
     })
+    // Phase 2 gate, spec E3 "audit": a refused call and a call that changes something are recorded, a read is not
+    it('records its refused calls and its sensitive calls, each under one key per command, and nothing for its reads', async () => {
+      const { jobId } = await seed()
+      const recs: [unknown, string | undefined][] = []
+      const orch = orchOver({ pluginAudit: { record: (e, key) => void recs.push([e, key]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
+      await orch.ready()
+      for (let i = 0; i < 2; i++)
+        await orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: pluginCaller(['jobs.read']) })
+      expect((await orch.call({ cmd: 'jobs-run', args: { id: jobId }, sessionId: '', from: pluginCaller(['jobs.run']) })).status).toBe(200)
+      expect((await orch.call({ cmd: 'projects-list', args: {}, sessionId: '', from: pluginCaller(['projects.read']) })).status).toBe(200)
+      const refusal = { plugin: 'astera-hello', event: 'call-refused', detail: 'jobs-create needs the jobs.create permission, which plugin astera-hello was not granted' }
+      expect(recs).toEqual([
+        [refusal, 'astera-hello call-refused jobs-create'],
+        [refusal, 'astera-hello call-refused jobs-create'],
+        [{ plugin: 'astera-hello', event: 'call', detail: 'jobs-run' }, 'astera-hello call jobs-run']
+      ])
+    })
+    // Final review M3: a plugin that varies the name of a command no plugin may send is still one burst
+    it('groups its refused calls to commands no plugin may send under one key', async () => {
+      await seed()
+      const keys: (string | undefined)[] = []
+      const orch = orchOver({ pluginAudit: { record: (_e, key) => void keys.push(key), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
+      await orch.ready()
+      for (const cmd of ['state-put', 'made-up-1', 'made-up-2']) await orch.call({ cmd, args: {}, sessionId: '', from: pluginCaller([]) })
+      expect(keys).toEqual(['astera-hello call-refused unlisted', 'astera-hello call-refused unlisted', 'astera-hello call-refused unlisted'])
+    })
+
     it('commits under its own name, with no session whatever it named', async () => {
       const { jobId } = await seed()
       const actors: unknown[] = []

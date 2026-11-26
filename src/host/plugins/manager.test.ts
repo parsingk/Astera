@@ -3,6 +3,8 @@ import { existsSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createPluginManager, type PluginManager } from './manager'
+import { pluginsCommand } from './commands'
+import { AUDIT_FILE, createPluginAudit } from '../../core/plugins/pluginAudit'
 import type { PluginLaunch, PluginRunStatus, PluginRuntime } from './runtime'
 import { pluginsRoot, readRegistry, writeRegistry } from './registry'
 import { pluginSecrets } from './pluginData'
@@ -149,6 +151,7 @@ describe('install', () => {
       permissions: ['jobs.read', 'jobs.create'],
       requested: ['jobs.read', 'jobs.create'],
       installedAt: 1_000,
+      installId: expect.stringMatching(/^[0-9a-f]{12}$/),
       dir: dirOf,
       source: { kind: 'folder', path: src }
     })
@@ -281,6 +284,21 @@ describe('install', () => {
     expect(r.body).toMatchObject({ version: '1.1.0', enabled: false, status: 'disabled', permissions: ['jobs.read'], installedAt: 2_000, replaced: '1.0.0' })
     expect(await listed()).toHaveLength(1)
     expect(await leftovers()).toEqual([])
+  })
+
+  // Final review I2: an identity an update keeps and a removal does not, so the app can tell a plugin installed again
+  // under the same id from an update, whenever it looks
+  it('gives an install an id that an update keeps and a removal and install again does not', async () => {
+    const src = await plugin(FOLDER)
+    const first = body(await manager.install({ path: src, grant: [] })).installId
+    expect(first).toMatch(/^[0-9a-f]{12}$/)
+    await plugin(FOLDER, { version: '1.1.0' })
+    expect(body(await manager.install({ path: src, grant: [] })).installId).toBe(first)
+    expect(body(await manager.get('@acme/astera-jira')).installId).toBe(first)
+    await manager.remove('@acme/astera-jira')
+    const again = body(await manager.install({ path: src, grant: [] })).installId
+    expect(again).toMatch(/^[0-9a-f]{12}$/)
+    expect(again).not.toBe(first)
   })
 
   it('installs a plugin this Astera will not run, and says why', async () => {
@@ -647,7 +665,7 @@ describe('with a runtime (plugin runtime design P11)', () => {
     expect(await m.setEnabled('@acme/astera-jira', true)).toMatchObject({ body: { status: 'running', changed: true } })
     rt.statuses.set('@acme/astera-jira', { status: 'failed', reason: 'activate threw: x' })
     expect(await m.list()).toMatchObject({ body: { plugins: [{ status: 'failed', reason: 'activate threw: x' }] } })
-    expect(await m.setEnabled('@acme/astera-jira', true)).toMatchObject({ body: { status: 'running', changed: true } })
+    expect(await m.setEnabled('@acme/astera-jira', true)).toMatchObject({ body: { status: 'running', changed: true, restarted: true } })
     expect(rt.calls).toEqual(['start @acme/astera-jira', 'stop @acme/astera-jira', 'start @acme/astera-jira', 'restart @acme/astera-jira'])
   })
 
@@ -695,6 +713,33 @@ describe('logs and doctor', () => {
     for (const bad of [0, 1001, 2.5, 'x', -1])
       expect(await manager.logs('@acme/astera-jira', bad)).toEqual({ status: 400, body: { error: 'plugins-logs --lines must be a whole number from 1 to 1000' } })
     expect((await manager.logs('nope', undefined)).status).toBe(404)
+  })
+
+  // Phase 2 gate, spec E3 "audit": the Host's and the app's files, read together, for a plugin removed long ago too
+  it('answers the audit log, both files merged by time, of one plugin or all, whether or not it is installed', async () => {
+    const root = pluginsRoot(profile)
+    await fs.mkdir(root, { recursive: true })
+    const line = (e: object): string => `${JSON.stringify(e)}\n`
+    await fs.writeFile(
+      path.join(root, 'audit.jsonl'),
+      line({ at: 1, plugin: 'gone', event: 'installed', by: 'cli', version: '1.0.0' }) + line({ at: 3, plugin: 'gone', event: 'removed' }) + line({ at: 4, plugin: 'other', event: 'enabled' })
+    )
+    await fs.writeFile(path.join(root, 'audit-app.jsonl'), line({ at: 2, plugin: 'gone', event: 'panel-opened', detail: 'panel main' }))
+    expect(await manager.audit('gone', undefined)).toEqual({
+      status: 200,
+      body: {
+        entries: [
+          { at: 1, plugin: 'gone', event: 'installed', by: 'cli', version: '1.0.0' },
+          { at: 2, plugin: 'gone', event: 'panel-opened', detail: 'panel main' },
+          { at: 3, plugin: 'gone', event: 'removed' }
+        ]
+      }
+    })
+    expect((await manager.audit(undefined, '2')).body).toEqual({ entries: [{ at: 3, plugin: 'gone', event: 'removed' }, { at: 4, plugin: 'other', event: 'enabled' }] })
+    for (const bad of [0, 1001, 2.5, 'x', -1])
+      expect(await manager.audit(undefined, bad)).toEqual({ status: 400, body: { error: 'plugins-audit --lines must be a whole number from 1 to 1000' } })
+    expect(await manager.audit('', undefined)).toEqual({ status: 400, body: { error: 'plugins-audit --id must name a plugin' } })
+    expect(await manager.audit(5, undefined)).toEqual({ status: 400, body: { error: 'plugins-audit --id must name a plugin' } })
   })
 
   it('finds nothing wrong with a healthy plugin', async () => {
@@ -1195,6 +1240,35 @@ describe('a UI-only plugin', () => {
     const r = body(await manager.inspect({ path: await uiPlugin('hello') }))
     expect(r).toMatchObject({ id: 'hello-panel', apiVersion: '2', trust: 'restricted-ui', ui: 'dist/ui/index.html', contributes, compatible: true })
     expect(r.entry).toBeUndefined()
+  })
+
+  // Phase 2 gate: a Host the app is not running beside runs no UI extension; the import fence keeps src/main, where a
+  // page is served, out of the Host bundle (src/host/importFence.test.ts)
+  it('starts nothing for a UI-only plugin when the Host starts, so a Host without the app runs no UI extension', async () => {
+    await manager.install({ path: await uiPlugin('hello'), grant: UI_PERMS })
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    await m.startAll()
+    expect(rt.calls).toEqual([])
+    expect(body(await m.list()).plugins).toMatchObject([{ id: 'hello-panel', status: 'ready' }])
+  })
+
+  // Phase 2 gate: removal deletes the plugin's log and settings, and its audit history stays readable
+  it('leaves the audit history of a removed plugin readable after its log and settings are gone', async () => {
+    const audit = createPluginAudit({ file: path.join(pluginsRoot(profile), AUDIT_FILE), now: () => clock })
+    const call = (cmd: string, args: Record<string, unknown>) => pluginsCommand({ manager, cmd, args, role: 'cli', marks: { effects: 0 }, audit, now: () => clock })
+    expect((await call('plugins-install', { path: await uiPlugin('hello'), grant: UI_PERMS })).status).toBe(200)
+    const log = path.join(pluginsRoot(profile), 'logs', 'hello-panel.log')
+    await fs.mkdir(path.dirname(log), { recursive: true })
+    await fs.writeFile(log, 'a line\n')
+    clock = 2_000
+    expect((await call('plugins-remove', { id: 'hello-panel' })).status).toBe(200)
+    await audit.flushed()
+    expect(existsSync(log)).toBe(false)
+    expect(body(await manager.audit('hello-panel', undefined)).entries).toEqual([
+      { at: 1_000, plugin: 'hello-panel', event: 'installed', by: 'cli', version: '1.0.0', detail: expect.stringMatching(/^restricted-ui; granted commands\.register, panels\.register; from /) },
+      { at: 2_000, plugin: 'hello-panel', event: 'removed', by: 'cli', version: '1.0.0' }
+    ])
   })
 
   it('installs, and is ready rather than stopped, with nothing handed to the runtime', async () => {

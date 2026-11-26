@@ -503,6 +503,30 @@ the log and in the reason `plugins list` gives, each line of a secret that runs 
 than 4 characters is not hidden, as it would take ordinary words out of every line. Only the value itself is found: a
 token the plugin encodes, splits or puts in a URL of its own is not, so do not log secrets in any form.
 
+## Audit
+
+`astera plugins audit` prints what happened to plugins, oldest first: `--id <id>` for one plugin, installed or not, and
+`--lines <n>` for more than the last 100. A removed plugin keeps its history: its log goes with it, its audit records do
+not.
+
+The Host writes them to `<profile>/plugins/audit.jsonl` and the app to `<profile>/plugins/audit-app.jsonl`, each file
+kept to 1 MiB, with one older file beside it. Each line is a JSON record with its time, the plugin and the event, and
+when there is one, who made the change (`app` or `cli`), the version and a detail:
+
+- the changes made from the app or the CLI: `installed` and `updated`, with the trust level, the permissions granted
+  and where it came from; `enabled`, `disabled` and `removed`; `configured`, with the keys set and unset; and
+  `change-refused`, such as an install an agent's shell tried;
+- its process: `started`, `exited` when it ended on its own, `stopped` when Astera stopped it, and `failed` when Astera
+  gave up starting it again;
+- its calls to the Host: `call-refused`, with the Host's sentence, and `call` for the ones that change something:
+  `jobs-create`, `jobs-run`, `runs-stop`, `runs-resume`, `tasks-add` and `questions-answer`. Reads are not recorded;
+- its panels: `panel-opened`, `bridge-refused` for a call the panel's bridge refused, and `attach-refused` for a page
+  that was not the one Astera prepared.
+
+A record holds names only, never a setting value or what a call carried; a `failed` record's reason is the plugin's own
+words, with its secret settings hidden as in its log. The same refusal or exit again within 1 minute is not written
+again: the line after it says how many more times it came.
+
 ## Settings and secrets
 
 **Settings** are what a person gives the plugin: a URL, a project, a token. The manifest declares them in
@@ -802,7 +826,8 @@ nothing after the app quits:
 
 Turning the plugin off, removing it or installing it again closes its open panels, from the app at once and from the CLI
 within a few seconds; each tab then asks again by itself, so a plugin installed again shows its new page and one turned
-off or removed says so. A page that crashes is not opened again by itself: its tab says it stopped and offers to open
+off or removed says so. Removing the plugin, from the app or the CLI, also clears what its pages stored, so it starts
+with nothing when installed again; turning it off or updating it keeps that. A page that crashes is not opened again by itself: its tab says it stopped and offers to open
 it. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
 
 ## Not yet

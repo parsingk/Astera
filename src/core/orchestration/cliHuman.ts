@@ -590,6 +590,25 @@ export function humanFor(
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []
       return lines.length > 0 ? lines.join('\n') : 'no log yet'
     }
+    // Phase 2 gate: a record a line, its time on the person's clock, what a record does not hold left out
+    case 'plugins-audit': {
+      const entries = asList(data, 'entries')
+      if (entries.length === 0) return 'no audit records yet'
+      return entries
+        .map((e) =>
+          [
+            // A time no date can hold is shown as it came, not thrown on (final review M5)
+            typeof e.at === 'number' && Number.isFinite(new Date(e.at).getTime()) ? localTime(new Date(e.at).toISOString()) : str(e.at),
+            str(e.plugin),
+            [str(e.event), ...(typeof e.version === 'string' ? [e.version] : [])].join(' '),
+            ...(typeof e.detail === 'string' ? [e.detail] : []),
+            ...(typeof e.by === 'string' ? [`(by ${e.by})`] : []),
+            // How many times it came since the line before of its kind (final review M5: "more" read as one too many)
+            ...(typeof e.repeated === 'number' ? [`(${e.repeated} times)`] : [])
+          ].join('  ')
+        )
+        .join('\n')
+    }
     case 'plugins-settings':
     case 'plugins-configure': {
       const fields = Array.isArray(data.fields) ? (data.fields as Record<string, unknown>[]) : []
@@ -653,6 +672,7 @@ export function humanFor(
         })
       )
     case 'plugins-list':
+      if (asList(data, 'plugins').length === 0) return 'no plugins installed'
       return columns(
         asList(data, 'plugins').map((p) => {
           const granted = Array.isArray(p.permissions) ? (p.permissions as unknown[]).map(str) : []

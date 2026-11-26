@@ -170,6 +170,7 @@ const NOT_SWITCHED = [
   'plugins-disable',
   'plugins-remove',
   'plugins-logs',
+  'plugins-audit',
   'plugins-doctor',
   'plugins-settings',
   'plugins-configure',

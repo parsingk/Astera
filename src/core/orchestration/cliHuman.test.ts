@@ -154,6 +154,11 @@ describe('humanFor', () => {
     )
   })
 
+  // Screen check of the Phase 2 gate: an empty list printed nothing at all
+  it('plugins list says when nothing is installed', () => {
+    expect(humanFor('plugins-list', { plugins: [] })).toBe('no plugins installed')
+  })
+
   // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission,
   // sandbox switch (sandbox design §6; a profile from a Host before it reads as off) and accounts in order
   it('agent-profiles list is a row per profile, and one profile is its fields', () => {
@@ -179,6 +184,30 @@ describe('humanFor', () => {
   it('plugins logs prints the lines, and says when there are none', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: ['one', 'two'] })).toBe('one' + String.fromCharCode(10) + 'two')
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')
+  })
+
+  // Phase 2 gate: one record a line, on the person's clock, what is absent left out
+  it('plugins audit prints a record a line on the local clock, and says when there are none', () => {
+    const at = new Date(2026, 10, 26, 9, 5, 3).getTime()
+    expect(
+      humanFor('plugins-audit', {
+        entries: [
+          { at, plugin: 'acme.hello', event: 'updated', by: 'cli', version: '1.1.0', detail: 'was 1.0.0; restricted-ui; granted nothing', repeated: 3 },
+          { at: at + 1000, plugin: 'acme.hello', event: 'enabled' }
+        ]
+      })
+    ).toBe(
+      [
+        '2026-11-26 09:05:03  acme.hello  updated 1.1.0  was 1.0.0; restricted-ui; granted nothing  (by cli)  (3 times)',
+        '2026-11-26 09:05:04  acme.hello  enabled'
+      ].join(String.fromCharCode(10))
+    )
+    expect(humanFor('plugins-audit', { entries: [] })).toBe('no audit records yet')
+  })
+
+  // Final review M5: a time no date can hold, from a Host that is not this one, is shown as it came rather than failing
+  it('plugins audit shows a time no date can hold as it came, and the rest as usual', () => {
+    expect(humanFor('plugins-audit', { entries: [{ at: 1e20, plugin: 'p', event: 'enabled' }] })).toBe('100000000000000000000  p  enabled')
   })
 
   // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted

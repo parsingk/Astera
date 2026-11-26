@@ -16,6 +16,10 @@ export interface PluginRecord {
   /** What the person approved: a subset of what the plugin asks for (spec §11); a Plugin API 2 plugin's UI permissions too. */
   granted: (PluginPermission | PluginUiPermission)[]
   installedAt: number
+  /** Minted when the plugin is installed with no record before it and kept by every update, so a plugin removed and
+   *  installed again under the same id is told apart from an update (the app wipes its panel storage then; Phase 2 gate
+   *  final review I2). A record from an Astera before it has none, and gets one at its next install. */
+  installId?: string
   /** Where it was installed from: a folder, an npm package by the spec the person gave and the version it was
    *  (plugins 2e), or a package file (`plugins pack`, Phase 2 step 4a) by its path and the sha256 of the bytes installed. */
   source: { kind: 'folder'; path: string } | { kind: 'npm'; spec: string; version: string } | { kind: 'file'; path: string; sha256: string }

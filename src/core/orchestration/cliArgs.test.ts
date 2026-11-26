@@ -76,6 +76,9 @@ describe('parseArgs', () => {
       args: { id: 'x', set: ['a=1', 'b=two'], unset: ['c'] }
     })
     expect(parseArgs(['plugins', 'logs', '--id', 'x', '--lines', '20'])).toMatchObject({ cmd: 'plugins-logs', args: { id: 'x', lines: '20' } })
+    // Phase 2 gate: the audit log, of every plugin or one
+    expect(parseArgs(['plugins', 'audit'])).toMatchObject({ cmd: 'plugins-audit', args: {} })
+    expect(parseArgs(['plugins', 'audit', '--id', 'gone', '--lines', '5'])).toMatchObject({ cmd: 'plugins-audit', args: { id: 'gone', lines: '5' } })
   })
   it('--deps는 JSON 배열로 파싱한다', () => {
     const r = parseArgs(['task-create', '--deps', '["tsk_1","tsk_2"]']) as {

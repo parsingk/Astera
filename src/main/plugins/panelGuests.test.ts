@@ -5,6 +5,7 @@ import path from 'node:path'
 import { createPanelGuests } from './panelGuests'
 import type { PluginRow } from '../../core/plugins/pluginRows'
 import { PLUGIN_UI_CSP } from '../../core/plugins/panelGuest'
+import type { PluginAudit, PluginAuditRecord } from '../../core/plugins/pluginAudit'
 
 // ADR-008 in main: a prepared panel, the plugin's session and files, how its guest attaches, and its bridge
 type Handler = (req: { url: string }) => Promise<Response>
@@ -50,8 +51,17 @@ function fakeSessions() {
   const downloadsRefused: string[] = []
   const proxies: { partition: string; config: unknown }[] = []
   const pairingRefused: string[] = []
+  const wiped: string[] = []
+  /** What the wipe waits for, and whether it fails: set by a test. */
+  const wipe: { gate: Promise<void>; fail: boolean } = { gate: Promise.resolve(), fail: false }
   const makeSession = (partition: string) => ({
     partition,
+    clearStorageData: async () => {
+      wiped.push(`${partition} storage`)
+      await wipe.gate
+      if (wipe.fail) throw new Error('disk busy')
+    },
+    clearCache: async () => void wiped.push(`${partition} cache`),
     on: (ev: string, fn: (e: { preventDefault: () => void }) => void) => {
       if (ev === 'will-download') fn({ preventDefault: () => void downloadsRefused.push(partition) })
     },
@@ -68,11 +78,11 @@ function fakeSessions() {
     setPermissionCheckHandler: (fn: () => boolean) => void (!fn() && permissionRefusals.push(`${partition} check`))
   })
   const sessionOf = (partition: string): unknown => cache.get(partition) ?? { partition }
-  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused }
+  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused, wiped, wipe }
 }
 
 let tokens = 0
-const make = (rows: PluginRow[] | null) => {
+const make = (rows: PluginRow[] | null, o: { audit?: PluginAudit; log?: (m: string) => void } = {}) => {
   const sessions = fakeSessions()
   currentSessions = sessions
   const trusted: { id: number; guest: unknown }[] = []
@@ -84,7 +94,9 @@ const make = (rows: PluginRow[] | null) => {
     trustGuest: (contents, guest) => void trusted.push({ id: contents.id, guest }),
     untrustGuest: (id) => void untrusted.push(id),
     now: () => 1000,
-    token: () => `tok${++tokens}`
+    token: () => `tok${++tokens}`,
+    ...(o.audit ? { audit: o.audit } : {}),
+    ...(o.log ? { log: o.log } : {})
   })
   return { guests, sessions, trusted, untrusted }
 }
@@ -397,5 +409,169 @@ describe('final review fixes', () => {
     g.emit('select-bluetooth-device', pick, [{ deviceId: 'd1' }], (id: string) => chosen.push(id))
     expect(pick.preventDefault).toHaveBeenCalled()
     expect(chosen).toEqual([''])
+  })
+
+  // Phase 2 gate, spec E3 "audit": an opened panel, a refused bridge call and a refused attach are recorded, a burst under
+  // one key for the writer to count
+  it('records an opened panel, a refused bridge call under one key per kind, and a refused attach without its token', async () => {
+    const recs: [PluginAuditRecord, string | undefined][] = []
+    const m = make([row()], { audit: { record: (e, k) => void recs.push([e, k]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
+    const { p } = await open(m, 21)
+    await expect(m.guests.call(21, 'files.read', null)).rejects.toThrow('UNKNOWN_METHOD: files.read')
+    await expect(m.guests.call(21, 'files.read', null)).rejects.toThrow('UNKNOWN_METHOD: files.read')
+    const again = await m.guests.prepare('hello-panel', 'main', null)
+    if (!again.ok) throw new Error(again.reason)
+    expect(m.guests.decideAttach({ partition: p.partition, src: `${again.url}&x=1` }, {})).toBe('refuse')
+    const refusedCall = { plugin: 'hello-panel', event: 'bridge-refused', detail: 'UNKNOWN_METHOD: files.read' }
+    expect(recs).toEqual([
+      [{ plugin: 'hello-panel', event: 'panel-opened', detail: 'panel main' }, undefined],
+      [refusedCall, 'hello-panel bridge UNKNOWN_METHOD'],
+      [refusedCall, 'hello-panel bridge UNKNOWN_METHOD'],
+      [{ plugin: 'hello-panel', event: 'attach-refused', detail: 'astera-plugin://hello-panel/dist/ui/index.html' }, 'hello-panel attach']
+    ])
+  })
+
+  // Spec E3 Bridge row: the payload's plugin id is not trusted
+  it('ignores a plugin or panel named in a call’s payload: context answers what the guest was prepared as', async () => {
+    const m = make([row(), row({ id: 'other' })])
+    await open(m, 22)
+    expect(await m.guests.call(22, 'context', { plugin: 'other', panel: 'side', project: { root: '/etc', name: 'etc' } })).toEqual({ plugin: 'hello-panel', panel: 'main' })
+  })
+
+  // Phase 2 gate: a plugin removed and installed again in the same app run must not find its old page's storage
+  it('wipes a removed plugin’s panel storage and cache, on refresh, on prepare and when the app removes it', async () => {
+    const rows = [row()]
+    const m = make(rows)
+    await open(m, 23)
+    rows.length = 0
+    await m.guests.refresh()
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+    const n = make([row()])
+    await open(n, 24)
+    n.guests.listFrom(async () => [])
+    expect((await n.guests.prepare('hello-panel', 'main', null)).ok).toBe(false)
+    expect(n.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+    const q = make([row()])
+    await open(q, 25)
+    q.guests.forget('hello-panel', { wipe: true })
+    expect(q.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  it('wipes a plugin removed outside the app after its panel was closed, once', async () => {
+    const rows = [row()]
+    const m = make(rows)
+    const { g } = await open(m, 27)
+    g.emit('destroyed')
+    rows.length = 0
+    await m.guests.refresh()
+    await m.guests.refresh()
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  // Final review I2 (a): turning it off stops the watch, so a removal outside the app is caught when it is opened again
+  it('wipes a plugin turned off, then removed and installed again outside the app, before its page is served again', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa' })]
+    const m = make(rows)
+    await open(m, 31)
+    rows[0] = row({ enabled: false, installId: 'aaaaaaaaaaaa' })
+    await m.guests.refresh()
+    expect(m.sessions.wiped).toEqual([])
+    rows[0] = row({ installId: 'bbbbbbbbbbbb' })
+    expect((await m.guests.prepare('hello-panel', 'main', null)).ok).toBe(true)
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  // Final review I2 (b): removed and installed again between two looks reads as an update by installedAt alone
+  it('wipes a plugin removed and installed again between two looks of the watch', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa', installedAt: 1 })]
+    const m = make(rows)
+    const { g } = await open(m, 32)
+    rows[0] = row({ installId: 'bbbbbbbbbbbb', installedAt: 2 })
+    await m.guests.refresh()
+    expect(g.closed).toBe(true)
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  it('keeps the storage of an update, which keeps its install id', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa', installedAt: 1 })]
+    const m = make(rows)
+    const { g } = await open(m, 33)
+    rows[0] = row({ installId: 'aaaaaaaaaaaa', installedAt: 2 })
+    await m.guests.refresh()
+    expect(g.closed).toBe(true)
+    expect((await m.guests.prepare('hello-panel', 'main', null)).ok).toBe(true)
+    expect(m.sessions.wiped).toEqual([])
+  })
+
+  // Final review M7: a page still running cannot write after the wipe began, and a prepare does not race it
+  it('closes a removed plugin’s pages before wiping, and a prepare waits for the wipe', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa' })]
+    const m = make(rows)
+    const { g } = await open(m, 34)
+    const order: string[] = []
+    const close = g.close
+    g.close = () => {
+      order.push('close')
+      close()
+    }
+    let release: () => void = () => {}
+    m.sessions.wipe.gate = new Promise<void>((r) => (release = r))
+    const wiped = m.sessions.wiped
+    const push = wiped.push.bind(wiped)
+    wiped.push = (...items: string[]) => {
+      order.push(...items)
+      return push(...items)
+    }
+    rows[0] = row({ installId: 'bbbbbbbbbbbb' })
+    await m.guests.refresh()
+    expect(order.slice(0, 2)).toEqual(['close', 'plugin-hello-panel storage'])
+    let prepared = false
+    const p = m.guests.prepare('hello-panel', 'main', null).then((r) => (prepared = r.ok))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(prepared).toBe(false)
+    release()
+    await p
+    expect(prepared).toBe(true)
+  })
+
+  it('says in its log when a wipe fails', async () => {
+    const said: string[] = []
+    const rows = [row()]
+    const m = make(rows, { log: (s) => void said.push(s) })
+    await open(m, 35)
+    m.sessions.wipe.fail = true
+    rows.length = 0
+    await m.guests.refresh()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(said).toEqual([expect.stringMatching(/^the panel storage of hello-panel could not be cleared: disk busy/)])
+  })
+
+  // Final review M9: a wiped partition still names its plugin, so plugins audit --id finds the refusal
+  it('names the plugin of a refused attach after its storage was wiped', async () => {
+    const recs: [PluginAuditRecord, string | undefined][] = []
+    const rows = [row()]
+    const m = make(rows, { audit: { record: (e, k) => void recs.push([e, k]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
+    await open(m, 36)
+    rows.length = 0
+    await m.guests.refresh()
+    expect(m.guests.decideAttach({ partition: 'plugin-hello-panel', src: 'astera-plugin://hello-panel/x.html' }, {})).toBe('refuse')
+    expect(recs.at(-1)).toEqual([{ plugin: 'hello-panel', event: 'attach-refused', detail: 'astera-plugin://hello-panel/x.html' }, 'hello-panel attach'])
+  })
+
+  it('keeps the panel storage of a plugin turned off or installed again, and touches no session never used', async () => {
+    const rows = [row({ installedAt: 1 })]
+    const m = make(rows)
+    await open(m, 26)
+    rows[0] = row({ enabled: false, installedAt: 1 })
+    await m.guests.refresh()
+    rows[0] = row({ installedAt: 2 })
+    await m.guests.refresh()
+    expect(await m.guests.prepare('hello-panel', 'main', null)).toMatchObject({ ok: true })
+    m.guests.forget('hello-panel')
+    expect(m.sessions.wiped).toEqual([])
+    const never = make([])
+    expect((await never.guests.prepare('hello-panel', 'main', null)).ok).toBe(false)
+    never.guests.forget('hello-panel', { wipe: true })
+    expect(never.sessions.wiped).toEqual([])
   })
 })

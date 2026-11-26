@@ -19,6 +19,7 @@ import type { AsteraEvent } from '../../core/publicContract'
 import { openHostLog, type HostLog } from '../log'
 import { releaseLogWriter } from '../../core/log/logWriter'
 import { pluginsRoot } from './registry'
+import type { PluginAudit } from '../../core/plugins/pluginAudit'
 
 export interface PluginTimings {
   /** How long `initialize` may take: loading the entry and `activate`. */
@@ -240,6 +241,9 @@ export function createPluginRuntime(d: {
   /** The notification for an event, worded for a person (plugin Phase 3 N10, notifications.ts), or null when the event
    *  is not one. Absent: a notification plugin is sent nothing. */
   notify?: (event: AsteraEvent) => PluginNotification | null | Promise<PluginNotification | null>
+  /** The plugin audit log (Workspace & Plugin Platform V2 spec E3): each start, each exit, a stop asked for and a
+   *  give-up, kept after the plugin's own log is gone. Absent: nothing is recorded. */
+  audit?: PluginAudit
 }): PluginRuntime {
   const t: PluginTimings = { ...PLUGIN_TIMINGS, ...d.timings }
   const spawn = d.spawn ?? nodeSpawn
@@ -264,6 +268,9 @@ export function createPluginRuntime(d: {
     s.terms = undefined
   }
   const say = (s: Slot, m: string): void => logOf(s.launch.folder).write(hide(s, `[host] ${m}`))
+  /** An audit record of the slot's plugin, its detail hidden like its log. */
+  const audit = (s: Slot, event: 'started' | 'exited' | 'stopped' | 'failed', detail?: string, coalesce?: string): void =>
+    d.audit?.record({ plugin: s.launch.id, event, version: s.launch.version, ...(detail !== undefined ? { detail: hide(s, detail) } : {}) }, coalesce)
   const later = (s: Slot, ms: number, f: () => void): void => {
     const timer = setTimeout(() => {
       s.timers.delete(timer)
@@ -414,6 +421,7 @@ export function createPluginRuntime(d: {
     let resolveExit: () => void = () => {}
     s.exited = new Promise((r) => (resolveExit = r))
     say(s, `started pid ${proc.pid ?? '?'}`)
+    audit(s, 'started', `pid ${proc.pid ?? '?'}`)
     const granted: ReadonlySet<string> = new Set(p.granted)
     const channel = proc.stdio[3] as Duplex | null | undefined
     const peer = createRpcPeer({
@@ -588,8 +596,10 @@ export function createPluginRuntime(d: {
       clearTimers(s)
       s.state = 'stopped'
       say(s, 'stopped')
+      audit(s, 'stopped')
       return
     }
+    audit(s, 'exited', signal ? `signal ${signal}` : `code ${code ?? '?'}`, `${s.launch.id} exited`)
     clearTimers(s)
     crashed(s, s.problem ?? (signal ? `it exited on signal ${signal}` : `it exited with code ${code ?? '?'}`))
   }
@@ -605,6 +615,7 @@ export function createPluginRuntime(d: {
       // The reason is read by `plugins list`, `get` and `doctor`: hidden like the log (2c final review I3).
       s.reason = hide(s, `${problem}${times}; see astera plugins logs --id ${s.launch.id}`)
       say(s, `failed: ${s.reason}`)
+      audit(s, 'failed', `${problem}${times}`)
       // The Host log names the plugin only: its message can carry a token, and the plugin's own log has it redacted.
       d.log(`plugins: ${s.launch.id} failed; see astera plugins logs --id ${s.launch.id}`)
       return

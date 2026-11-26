@@ -5164,10 +5164,13 @@ export function registerIpc(
     if (enabled !== true) panelGuests.forget(id)
     return panelGuests.hold(id, plugins.setEnabled(id as string, enabled === true))
   })
-  ipcMain.handle('plugins.remove', (_e, id: unknown) => {
+  ipcMain.handle('plugins.remove', async (_e, id: unknown) => {
     if (typeof id !== 'string') return plugins.remove(id as string)
     panelGuests.forget(id)
-    return panelGuests.hold(id, plugins.remove(id as string))
+    const answer = await panelGuests.hold(id, plugins.remove(id))
+    // Removed: its panel storage goes too, so the plugin installed again starts with nothing (Phase 2 gate)
+    if (answer.ok) panelGuests.forget(id, { wipe: true })
+    return answer
   })
   ipcMain.handle('plugins.logs', (_e, id: unknown, lines: unknown) => plugins.logs(id as string, lines as number))
   ipcMain.handle('plugins.settings', (_e, id: unknown) => plugins.settings(id as string))
