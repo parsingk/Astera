@@ -1,4 +1,4 @@
-import type { RunConfig, SaveConfigsResult, SaveReason } from '../../core/run/types'
+import { testReportPathRefusal, type RunConfig, type SaveConfigsResult, type SaveReason } from '../../core/run/types'
 import { migrateRunConfigs } from '../../core/run/migrate'
 import { hasUnsafeWin32Chars } from '../../core/run/build'
 import { isSeedId } from '../../core/run/draft'
@@ -55,6 +55,11 @@ export async function saveConfigsBatch(a: {
     // store cannot hold a value the renderer would then try to load.
     if (c.previewUrl !== undefined && !isHttpUrl(c.previewUrl)) {
       errors.push({ id, reason: 'INVALID_PREVIEW_URL' })
+      continue
+    }
+    // A test report is read from inside the run's folder only (Phase 3 Part 2), so a stored path never names another
+    if (c.testReport !== undefined && testReportPathRefusal(c.testReport.path) !== null) {
+      errors.push({ id, reason: 'INVALID_TEST_REPORT' })
       continue
     }
     if (a.platform === 'win32' && c.type !== 'shell') {

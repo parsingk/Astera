@@ -53,6 +53,28 @@ interface RunConfigBase {
    *  and beforeLaunch it is deliberately not part of seedKeyOf: telling a detected configuration where
    *  its page is does not make it a different configuration. */
   previewUrl?: string
+  /** Where a run of this configuration writes its test report, and in which format (Phase 3 Part 2): a file, or a
+   *  folder of `*.xml`, relative to the working directory and inside it (testReportPathRefusal). Main reads it after
+   *  each run a person starts; a check that runs this configuration reads it too. Not part of seedKeyOf, like
+   *  previewUrl: naming a report does not make it another configuration. */
+  testReport?: TestReportSpec
+}
+
+/** The report formats a configuration can name (Phase 3 Part 2). */
+export const TEST_REPORT_FORMATS = ['junit-xml', 'vitest-json'] as const
+export interface TestReportSpec {
+  format: (typeof TEST_REPORT_FORMATS)[number]
+  path: string
+}
+
+/** Why a test report path cannot be read, or null when it can: it must be relative, not empty, and must not climb out
+ *  of the working directory with `..`. Checked when a configuration is saved and again when a report is read. */
+export function testReportPathRefusal(path: string): string | null {
+  const p = path.trim().replace(/\\/g, '/')
+  if (p === '') return 'empty'
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) return 'absolute'
+  if (p.split('/').includes('..')) return 'outside'
+  return null
 }
 
 /** A free-form command. This is where every pre-type config migrates to, and it is the only way
@@ -197,8 +219,9 @@ export type RunnableConfig = Exclude<RunConfig, CompoundConfig>
  *  a seed id (seeds are detected, never stored), or an id that appears twice in the batch.
  *  UNSAFE_VALUE: a field that reaches the command string holds a character cmd.exe interprets.
  *  INVALID_CWD: the working directory is not inside the project.
- *  INVALID_PREVIEW_URL: previewUrl is present and is not an http(s) URL. */
-export type SaveReason = 'INVALID_CONFIG' | 'UNSAFE_VALUE' | 'INVALID_CWD' | 'INVALID_PREVIEW_URL'
+ *  INVALID_PREVIEW_URL: previewUrl is present and is not an http(s) URL.
+ *  INVALID_TEST_REPORT: testReport's path is empty, absolute, or climbs out with `..`. */
+export type SaveReason = 'INVALID_CONFIG' | 'UNSAFE_VALUE' | 'INVALID_CWD' | 'INVALID_PREVIEW_URL' | 'INVALID_TEST_REPORT'
 
 /** run.saveConfigs' answer. One batch, one verdict: on `ok: false` nothing was stored and every
  *  offending item is named, not just the first. */
@@ -213,7 +236,7 @@ export type SaveConfigsResult =
  *  so a Java version selector was drawn even in a Node project — there was no kind in the model to
  *  condition on. */
 export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boolean }): string[] {
-  const common = ['cwd', 'env', 'allowMultipleInstances', 'previewUrl']
+  const common = ['cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport']
   switch (type) {
     case 'shell':
       return common // args go straight into the command

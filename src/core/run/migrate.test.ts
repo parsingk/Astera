@@ -157,6 +157,19 @@ describe('migrateRunConfigs', () => {
     })
   })
 
+  // Phase 3 Part 2: the configuration's test report
+  describe('testReport', () => {
+    it('keeps a configuration’s test report', () => {
+      const cfg = { ...COMPLETE.npm, testReport: { format: 'junit-xml', path: 'report.xml' } }
+      expect(migrateRunConfigs([cfg])).toEqual([cfg])
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, testReport: { format: 'vitest-json', path: 'out/r.json' } }])).toHaveLength(1)
+    })
+    it('drops a configuration whose test report is not { format, path }', () => {
+      for (const testReport of ['report.xml', { format: 'tap', path: 'r' }, { format: 'junit-xml' }, { format: 'junit-xml', path: 3 }, null])
+        expect(migrateRunConfigs([{ ...COMPLETE.npm, testReport }]), JSON.stringify(testReport)).toEqual([])
+    })
+  })
+
   it('rejects a configuration whose folder is not a string', () => {
     expect(migrateRunConfigs([{ id: 'a', name: 'x', type: 'npm', script: 'dev', folder: 3 }])).toEqual([])
   })

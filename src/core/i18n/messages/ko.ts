@@ -2089,6 +2089,7 @@ export const ko = {
   'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',
   'run.manager.reason.INVALID_CWD': '{name}: 작업 폴더는 프로젝트 안이어야 합니다',
   'run.manager.reason.INVALID_PREVIEW_URL': '{name}: 미리보기 URL 은 http:// 또는 https:// 로 시작하는 주소여야 합니다',
+  'run.manager.reason.INVALID_TEST_REPORT': '{name}: 테스트 보고서 경로는 작업 폴더 안의 상대 경로여야 합니다',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',
@@ -2118,6 +2119,10 @@ export const ko = {
   'run.env.issue.shadowed': '아래의 같은 키가 이 값을 덮어씁니다',
   'run.field.allowMultipleInstances': '여러 인스턴스 허용',
   'run.field.previewUrl': '미리보기 URL',
+  'run.field.testReport': '테스트 보고서',
+  'run.form.testReportFormat': '형식',
+  'run.form.testReportPath': '보고서 경로(파일 또는 폴더)',
+  'run.form.testReportHint': 'Vitest: --reporter=junit --outputFile=report.xml, pytest: --junitxml=report.xml, Gradle: build/test-results/test, Maven: target/surefire-reports. 실행할 때마다 이 보고서를 읽어 테스트 탭에 보여 줍니다.',
   // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
   // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
   'run.field.command': '명령',

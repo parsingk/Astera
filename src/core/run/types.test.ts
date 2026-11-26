@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { optionalFieldsFor, availableOptionalFields } from './types'
+import { optionalFieldsFor, testReportPathRefusal, availableOptionalFields } from './types'
 import type { RunConfigType } from './types'
 
 /** 종류마다 내놓아야 하는 선택 항목 전체. Record 라 종류가 늘면 여기서 컴파일이 깨진다.
@@ -7,18 +7,18 @@ import type { RunConfigType } from './types'
  *  (packageManager·nodePath·release·features·packagePath·dockerfilePath·buildArgs·runArgs) 가
  *  한 번도 확인되지 않아, 다섯 종류의 반환을 [...common] 으로 바꿔도 테스트가 모두 초록이었다. */
 const OPTIONAL: Record<RunConfigType, string[]> = {
-  shell: ['cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  npm: ['packageManager', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  node: ['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  gradle: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  maven: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  cargo: ['release', 'features', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  go: ['packagePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  python: ['interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  pytest: ['target', 'interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  compose: ['composeFile', 'services', 'action', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  dockerfile: ['dockerfilePath', 'buildArgs', 'runArgs', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
-  dotnet: ['subcommand', 'configuration', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  shell: ['cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  npm: ['packageManager', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  node: ['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  gradle: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  maven: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  cargo: ['release', 'features', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  go: ['packagePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  python: ['interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  pytest: ['target', 'interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  compose: ['composeFile', 'services', 'action', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  dockerfile: ['dockerfilePath', 'buildArgs', 'runArgs', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
+  dotnet: ['subcommand', 'configuration', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'],
   compound: []
 }
 
@@ -32,10 +32,10 @@ describe('optionalFieldsFor', () => {
   // springBoot 는 JVM 두 종류에만 한 항목을 끼워 넣는다 — 나머지 열한 종류는 이 값에 흔들리지 않는다
   it('springBoot 는 gradle·maven 에만 springProfiles 를 끼워 넣는다', () => {
     expect(optionalFieldsFor('gradle', { springBoot: true })).toEqual([
-      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'
+      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'
     ])
     expect(optionalFieldsFor('maven', { springBoot: true })).toEqual([
-      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'
+      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'
     ])
     for (const type of Object.keys(OPTIONAL) as RunConfigType[]) {
       if (type === 'gradle' || type === 'maven') continue
@@ -114,7 +114,7 @@ describe('availableOptionalFields', () => {
     )
     expect(menu).not.toContain('javaHome')
     expect(menu).not.toContain('springProfiles')
-    expect(menu).toEqual(['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
+    expect(menu).toEqual(['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'])
   })
 
   it('이미 값이 있는 항목은 빠진다 — 값 자체가 "화면에 있다" 는 기록이다', () => {
@@ -124,7 +124,7 @@ describe('availableOptionalFields', () => {
         { springBoot: false },
         new Set()
       )
-    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
+    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'])
   })
 
   it('이번 편집에서 추가한 항목도 빠진다 — 아직 값이 없어도', () => {
@@ -134,7 +134,7 @@ describe('availableOptionalFields', () => {
         { springBoot: false },
         new Set(['packagePath', 'env'])
       )
-    ).toEqual(['args', 'cwd', 'allowMultipleInstances', 'previewUrl'])
+    ).toEqual(['args', 'cwd', 'allowMultipleInstances', 'previewUrl', 'testReport'])
   })
 
   // 빈 문자열도, false 도 undefined 가 아니므로 값으로 친다 — 지우거나 체크를 푼 칸이 메뉴로
@@ -146,13 +146,13 @@ describe('availableOptionalFields', () => {
         { springBoot: false },
         new Set()
       )
-    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
+    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'])
   })
 
   it('Boot 프로젝트의 gradle 구성에는 springProfiles 가 오른다', () => {
     expect(
       availableOptionalFields({ ...base, type: 'gradle', tasks: 'bootRun' }, { springBoot: true }, new Set())
-    ).toEqual(['javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
+    ).toEqual(['javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl', 'testReport'])
   })
 })
 
@@ -168,5 +168,15 @@ describe('previewUrl', () => {
       const has = optionalFieldsFor(t, { springBoot: false }).includes('previewUrl')
       expect(has, t).toBe(t !== 'compound')
     }
+  })
+})
+
+// Phase 3 Part 2: a test report is read from inside the run's folder only
+describe('testReportPathRefusal', () => {
+  it('takes a relative path inside the folder, a file or a folder', () => {
+    for (const p of ['report.xml', 'build/test-results/test', 'target\\surefire-reports', './out/junit.xml']) expect(testReportPathRefusal(p), p).toBeNull()
+  })
+  it('refuses an empty, absolute or climbing path', () => {
+    for (const p of ['', '  ', '/tmp/r.xml', 'C:\\r.xml', 'c:/r.xml', '\\\\server\\share\\r.xml', '../r.xml', 'a/../../r.xml', 'a\\..\\..\\r.xml']) expect(testReportPathRefusal(p), p).not.toBeNull()
   })
 })
