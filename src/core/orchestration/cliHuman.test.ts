@@ -181,6 +181,25 @@ describe('humanFor', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')
   })
 
+  // Phase 2 gate: one record a line, on the person's clock, what is absent left out
+  it('plugins audit prints a record a line on the local clock, and says when there are none', () => {
+    const at = new Date(2026, 10, 26, 9, 5, 3).getTime()
+    expect(
+      humanFor('plugins-audit', {
+        entries: [
+          { at, plugin: 'acme.hello', event: 'updated', by: 'cli', version: '1.1.0', detail: 'was 1.0.0; restricted-ui; granted nothing', repeated: 3 },
+          { at: at + 1000, plugin: 'acme.hello', event: 'enabled' }
+        ]
+      })
+    ).toBe(
+      [
+        '2026-11-26 09:05:03  acme.hello  updated 1.1.0  was 1.0.0; restricted-ui; granted nothing  (by cli)  (3 more)',
+        '2026-11-26 09:05:04  acme.hello  enabled'
+      ].join(String.fromCharCode(10))
+    )
+    expect(humanFor('plugins-audit', { entries: [] })).toBe('no audit records yet')
+  })
+
   // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted
   it('plugins validate names the plugin, its version and trust when nothing is wrong', () => {
     expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'hello', name: 'hello', version: '0.1.0', trust: 'restricted-ui' }, problems: [] })).toBe(

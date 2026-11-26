@@ -590,6 +590,23 @@ export function humanFor(
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []
       return lines.length > 0 ? lines.join('\n') : 'no log yet'
     }
+    // Phase 2 gate: a record a line, its time on the person's clock, what a record does not hold left out
+    case 'plugins-audit': {
+      const entries = asList(data, 'entries')
+      if (entries.length === 0) return 'no audit records yet'
+      return entries
+        .map((e) =>
+          [
+            localTime(typeof e.at === 'number' ? new Date(e.at).toISOString() : e.at),
+            str(e.plugin),
+            [str(e.event), ...(typeof e.version === 'string' ? [e.version] : [])].join(' '),
+            ...(typeof e.detail === 'string' ? [e.detail] : []),
+            ...(typeof e.by === 'string' ? [`(by ${e.by})`] : []),
+            ...(typeof e.repeated === 'number' ? [`(${e.repeated} more)`] : [])
+          ].join('  ')
+        )
+        .join('\n')
+    }
     case 'plugins-settings':
     case 'plugins-configure': {
       const fields = Array.isArray(data.fields) ? (data.fields as Record<string, unknown>[]) : []

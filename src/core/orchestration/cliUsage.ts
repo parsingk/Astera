@@ -305,6 +305,15 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: "the last lines of a plugin's log: what it printed, and when it started, stopped or crashed",
     flags: [ID('<pluginId>', 'the plugin (from `plugins list`)'), { name: 'lines', value: '<n>', about: 'how many lines, from 1 to 1000 (default 100)' }]
   },
+  'plugins-audit': {
+    summary: 'what happened to plugins: installs, updates and changes, refusals, starts and exits, panels opened',
+    detail:
+      "The Host's records and the app's, oldest first. A removed plugin keeps its history. Names only: no setting value, secret or payload is ever written. A burst of the same refusal is one record and a count.",
+    flags: [
+      { name: 'id', value: '<pluginId>', about: 'only this plugin, installed or not' },
+      { name: 'lines', value: '<n>', about: 'how many records, from 1 to 1000 (default 100)' }
+    ]
+  },
   'plugins-settings': {
     summary: "a plugin's settings: each one's value, a secret one only as set or not",
     flags: [ID('<pluginId>', 'the plugin (from `plugins list`)')]

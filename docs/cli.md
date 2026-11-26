@@ -614,6 +614,7 @@ astera plugins list                                  what is installed, its stat
 astera plugins disable --id <pluginId>               keep it installed but do not run it
 astera plugins remove --id <pluginId>                uninstall it and delete its copy
 astera plugins logs --id <pluginId>                  the last lines of its log
+astera plugins audit [--id <pluginId>]               what happened to plugins, a removed one too
 astera plugins doctor --id <pluginId>                what could keep it from running; exit 1 if anything does
 astera plugins settings --id <pluginId>              its settings; a secret one only as set or not
 astera plugins configure --id <pluginId> --set baseUrl=https://jira.example.com
@@ -791,6 +792,7 @@ astera plugins enable  --id <pluginId>
 astera plugins disable --id <pluginId>
 astera plugins remove  --id <pluginId>
 astera plugins logs    --id <pluginId> [--lines <n>]
+astera plugins audit   [--id <pluginId>] [--lines <n>]
 astera plugins doctor  --id <pluginId>
 astera plugins settings  --id <pluginId>
 astera plugins configure --id <pluginId> [--set <key=value>] [--unset <key>] [--stdin <key>]

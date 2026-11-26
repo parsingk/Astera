@@ -184,7 +184,7 @@ export const NOUNS = {
   // `validate`, `init` and `pack` are the plugin author's, answered in the CLI process without a Host (cli/pluginDev.ts);
   // `dev` installs as the folder changes, a Host call each time (cli/pluginDevWatch.ts); `test` runs it against a fake
   // Host in this process (cli/pluginTest.ts).
-  plugins: ['install', 'list', 'get', 'enable', 'disable', 'remove', 'logs', 'doctor', 'settings', 'configure', 'validate', 'init', 'pack', 'dev', 'test'],
+  plugins: ['install', 'list', 'get', 'enable', 'disable', 'remove', 'logs', 'audit', 'doctor', 'settings', 'configure', 'validate', 'init', 'pack', 'dev', 'test'],
   // **The job sources** (plugin Phase 4 J21): GitHub issues and the job-source plugins, a page of a source's items, one
   // item read whole. Answered by the Host before handleCommand's switch (src/core/orchestration/commandSources.ts).
   sources: ['list', 'items', 'show']

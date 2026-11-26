@@ -12,7 +12,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PLUGIN_CAPABILITIES, PLUGIN_PERMISSIONS, PLUGIN_TRUST_WARNING, capabilityPermissionProblem, parseManifest } from './manifest'
 import { SETTING_KEYWORDS, SETTING_TYPES, SETTINGS_MAX, parseSettingsSchema } from './settings'
-import { PLUGIN_COMMAND_PERMISSIONS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from '../host/pluginGate'
+import { PLUGIN_COMMAND_PERMISSIONS, PLUGIN_SENSITIVE_COMMANDS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from '../host/pluginGate'
+import { AUDIT_COALESCE_MS, AUDIT_EVENTS, AUDIT_SEGMENT_BYTES } from './pluginAudit'
 import { LOG_CHARS_PER_SECOND, LOG_LINES_PER_SECOND, PLUGIN_TIMINGS, REDACT_MIN, createPluginRuntime } from '../../host/plugins/runtime'
 import { SECRET_NAME_MAX, SECRET_VALUE_MAX } from '../../host/plugins/pluginData'
 import { PLUGIN_SERVED_CAPABILITIES } from '../../host/plugins/manager'
@@ -142,6 +143,20 @@ describe('docs/plugins.md', () => {
     expect(logs).toContain(`${LOG_LINES_PER_SECOND.toLocaleString('en-US')} lines or ${LOG_CHARS_PER_SECOND.toLocaleString('en-US')} characters a second`)
     expect(logs).toContain('its `ctx.log` lines and the launcher’s included')
     expect(logs).toContain('Astera’s own `[host]` lines are never dropped')
+  })
+
+  // Phase 2 gate, spec E3 "audit": what the log keeps, in the module's own numbers and names
+  it('says what the audit log records, where, for how long, and that it keeps no value', () => {
+    const audit = prose(section(guide, '## Audit'))
+    for (const e of AUDIT_EVENTS) expect(audit, e).toContain(`\`${e}\``)
+    for (const c of PLUGIN_SENSITIVE_COMMANDS) expect(audit, c).toContain(`\`${c}\``)
+    expect(audit).toContain('`<profile>/plugins/audit.jsonl`')
+    expect(audit).toContain('`<profile>/plugins/audit-app.jsonl`')
+    expect(audit).toContain(`kept to ${AUDIT_SEGMENT_BYTES / 1024 / 1024} MiB, with one older file beside it`)
+    expect(audit).toContain(`within ${AUDIT_COALESCE_MS / 60_000} minute`)
+    expect(audit).toContain('never a setting value, a secret or what a call carried')
+    expect(audit).toContain('A removed plugin keeps its history')
+    expect(prose(section(guide, '### Panels'))).toContain('Removing the plugin also clears what its pages stored')
   })
 
   // 2f final review m4: what a refused call leaves in the log is the Host's sentence, not the error code
