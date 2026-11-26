@@ -1,6 +1,7 @@
 import type { OrchState } from '../orchestration/state'
 import type { CheckResult, ReviewSeverity } from '../orchestration/types'
 import type { Diagnostic, DiagnosticSeverity } from './diagnostic'
+import { findingRef } from './findingRef'
 
 /** A problem as the Job state holds it: its file as the finding wrote it (relative to wherever the check or the review
  *  ran) and the folders to look for it in, newest worker folder first and the Job's folder last. Main resolves it. */
@@ -75,10 +76,13 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         const source = { kind: 'check' as const, id: c.configId, label: c.name }
         const at = c.endedAt !== undefined ? { producedAt: c.endedAt } : {}
         const findings = c.diagnostics ?? []
+        // The check as a whole: what its row without a file and its uncounted findings name
+        const checkRef = findingRef({ kind: 'check', taskId: task.id, source: c.configId, message: '' })
         findings.forEach((dg, i) => {
           out.push({
             schemaVersion: 1,
             id: `check:${task.id}:${c.configId}:${i}`,
+            ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, message: dg.message }),
             source,
             severity: checkSeverity(c, dg.severity),
             message: dg.message,
@@ -91,11 +95,11 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         })
         const unlisted = (c.diagnosticsTotal ?? findings.length) - findings.length
         if (unlisted > 0) {
-          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, source, severity: 'info', message: '', unlisted, ...at, origin, folders })
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, ref: checkRef, source, severity: 'info', message: '', unlisted, ...at, origin, folders })
         }
         if (findings.length === 0 && failed(c)) {
           const said = c.summary !== undefined && c.summary.trim() !== '' && c.summary !== c.status ? c.summary.trim() : lastLine(c.outputTail)
-          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, source, severity: 'error', message: said ?? '', ...at, origin, folders })
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, ref: checkRef, source, severity: 'error', message: said ?? '', ...at, origin, folders })
         }
       }
       // The last review attempt's end; with none on record (an external reviewer writes its issues without one), the
@@ -112,6 +116,7 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         out.push({
           schemaVersion: 1,
           id: `review:${task.id}:${issue.id}`,
+          ref: findingRef({ kind: 'review', taskId: task.id, file: issue.file, message: issue.title }),
           source: { kind: 'review', id: 'review', label: 'Review' },
           severity: REVIEW_SEVERITY[issue.severity] ?? 'warning',
           message: issue.title,

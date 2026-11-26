@@ -19,6 +19,16 @@ export interface Diagnostic {
   path?: string
   /** 1-based. */
   line?: number
+  /** 1-based, in UTF-16 code units as the editor and LSP count them (Phase 3). */
+  column?: number
+  /** Where the problem ends, when its producer says: 1-based, the column in UTF-16 code units. */
+  endLine?: number
+  endColumn?: number
+  /** The producer's own code for the kind of problem (a linter rule, a compiler error number). */
+  code?: string
+  /** The finding as a person's repair request names it, the same in the next round (core/problems/findingRef.ts): set
+   *  on a finding of a Job's Task. */
+  ref?: string
   /** When it was found (ISO), which is what makes it stale once the file changes after it. */
   producedAt?: string
   /** The Job round and Task it came from, for a finding of a Job's completion. */

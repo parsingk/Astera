@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { OrchState } from '../orchestration/state'
 import { completionProblemsOf, problemsKeyOf } from './completionProblems'
+import { findingRef } from './findingRef'
 
 const job = (id: string, cwd: string) => ({ id, objective: id, cwd })
 const run = (id: string, jobId: string, ordinal: number) => ({ id, jobId, ordinal, createdAt: `2026-11-25T0${ordinal}:00:00Z` })
@@ -70,6 +71,7 @@ describe('completionProblemsOf', () => {
       {
         schemaVersion: 1,
         id: 'check:t1:plugin:lint:0',
+        ref: expect.stringMatching(/^check:t1:[0-9a-f]{12}$/),
         source: { kind: 'check', id: 'plugin:lint', label: 'Lint' },
         severity: 'error',
         message: 'missing import',
@@ -83,6 +85,21 @@ describe('completionProblemsOf', () => {
       // A failed check's finding that says no severity is an error
       expect.objectContaining({ id: 'check:t1:plugin:lint:2', severity: 'error', message: 'no file here', file: undefined })
     ])
+  })
+
+  // Phase 3 Part 1: what a person's repair request names, the same in the next round
+  it('marks each check and review row with its finding reference, stable across rounds', () => {
+    const rows = completionProblemsOf(state(), PROJECT_RUNS)
+    const byId = Object.fromEntries(rows.map((p) => [p.id, p.ref]))
+    expect(byId['check:t1:plugin:lint:0']).toBe(findingRef({ kind: 'check', taskId: 't1', source: 'plugin:lint', file: 'src/a.ts', message: 'missing import' }))
+    expect(byId['review:t1:i1']).toBe(findingRef({ kind: 'review', taskId: 't1', file: 'src/a.ts', message: 'off by one' }))
+    // A review issue reissued with a new id in the next round keeps its reference
+    const next = state()
+    const t1 = next.tasks.find((t) => t.id === 't1')!
+    t1.reviewIssues = t1.reviewIssues!.map((i) => (i.id === 'i1' ? { ...i, id: 'rvw_new' } : i))
+    expect(completionProblemsOf(next, PROJECT_RUNS).find((p) => p.id === 'review:t1:rvw_new')?.ref).toBe(byId['review:t1:i1'])
+    // Every row of a Task carries one, the rows without a file and the uncounted ones too
+    expect(rows.filter((p) => p.origin !== undefined).every((p) => typeof p.ref === 'string')).toBe(true)
   })
 
   it('turns review issues that name a file into problems, by severity, timed by the last review', () => {
