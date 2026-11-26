@@ -17,6 +17,7 @@ import { cursorFile, pluginSecrets, type CursorStore } from './pluginData'
 import { createEventRing, type EventRing } from '../../core/events/eventRing'
 import { notificationOf } from '../../core/plugins/notifications'
 import type { EventDraft } from '../../core/orchestration/publicEvents'
+import type { PluginAudit } from '../../core/plugins/pluginAudit'
 
 let dir: string
 let launcher: string
@@ -55,6 +56,7 @@ function runtime(
     notify?: (e: AsteraEvent) => PluginNotification | null | Promise<PluginNotification | null>
     delivery?: Partial<DeliveryTimings>
     now?: () => number
+    audit?: PluginAudit
   } = {}
 ) {
   const calls: Call[] = []
@@ -83,6 +85,7 @@ function runtime(
     // Worded as the Host words them, in English, every Job's objective "Ship it"
     notify: extra.notify ?? ((e) => notificationOf(e, { lang: 'en', objectiveOf: () => 'Ship it' })),
     ...(extra.now ? { now: extra.now } : {}),
+    ...(extra.audit ? { audit: extra.audit } : {}),
     ...(extra.maxLine !== undefined ? { maxLine: extra.maxLine } : {}),
     ...(extra.cursors ? { cursors: extra.cursors } : {})
   })
@@ -162,6 +165,26 @@ describe('createPluginRuntime', () => {
     writeFileSync(p.entry, `export default { activate(ctx) { ctx.log.info('fixed') } }`)
     r.restart(p)
     await until(() => expect(r.status('throws')?.status).toBe('running'))
+  }, 90_000)
+
+  // Phase 2 gate, spec E3 "audit": a plugin's start, its crashes, a stop asked for and a give-up outlive its log
+  it('records a start, a crash exit, a requested stop and a give-up in the audit', async () => {
+    const recs: [unknown, string | undefined][] = []
+    const audit: PluginAudit = { record: (e, key) => void recs.push([e, key]), flushed: async () => {} }
+    const { r } = runtime({ failAfter: 2 }, { audit })
+    r.start(plugin('crashy', `export default { activate() { throw new Error('nope') } }`))
+    await until(() => expect(r.status('crashy')?.status).toBe('failed'))
+    const quiet = plugin('quiet', `export default { activate() {} }`)
+    r.start(quiet)
+    await until(() => expect(r.status('quiet')?.status).toBe('running'))
+    await r.stop('quiet')
+    const of = (id: string) => recs.filter(([e]) => (e as { plugin: string }).plugin === id)
+    const crashy = of('crashy')
+    expect(crashy.map(([e]) => (e as { event: string }).event)).toEqual(['started', 'exited', 'started', 'exited', 'failed'])
+    expect(crashy[0]).toEqual([{ plugin: 'crashy', event: 'started', version: '1.0.0', detail: expect.stringMatching(/^pid \d+$/) }, undefined])
+    expect(crashy[1]).toEqual([{ plugin: 'crashy', event: 'exited', version: '1.0.0', detail: expect.stringMatching(/^(code -?\d+|signal \w+)$/) }, 'crashy exited'])
+    expect(crashy[4]).toEqual([{ plugin: 'crashy', event: 'failed', version: '1.0.0', detail: expect.stringContaining('activate threw: nope') }, undefined])
+    expect(of('quiet').map(([e]) => (e as { event: string }).event)).toEqual(['started', 'stopped'])
   }, 90_000)
 
   // 2b final review M1: what a plugin says when it fails is its own text, and may carry a secret.

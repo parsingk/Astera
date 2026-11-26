@@ -29,6 +29,10 @@ export const PLUGIN_COMMAND_PERMISSIONS: Readonly<Record<string, PluginPermissio
   'events-poll': 'events.subscribe'
 })
 
+/** The commands a plugin may send that change something, each recorded in the audit log when admitted (Workspace &
+ *  Plugin Platform V2 spec E3, "sensitive calls"): every command above whose permission is not a read. */
+export const PLUGIN_SENSITIVE_COMMANDS: ReadonlySet<string> = new Set(['jobs-create', 'jobs-run', 'runs-stop', 'runs-resume', 'tasks-add', 'questions-answer'])
+
 /** Commands the SDK sends that no permission opens to a plugin: the agent profile reads (Agent Profiles design §6) are
  *  for the app, the CLI and MCP, and the plugin permissions have no word for them yet. This set is a list for the tests
  *  and the docs, not a check: a plugin asking is refused by `pluginRefusal` as for any unlisted command, and the role

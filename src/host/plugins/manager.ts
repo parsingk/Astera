@@ -16,6 +16,7 @@ import { moveRetrying, type Rename } from './moves'
 import { REDACT_MIN, pluginLogFile, type PluginLaunch, type PluginRuntime } from './runtime'
 import { coerceSetting, missingRequired, type SettingField, type SettingValue } from '../../core/plugins/settings'
 import { PluginSettingsUnreadable, forgetPluginData, pluginSecrets, readSettings, writeSettings } from './pluginData'
+import { AUDIT_APP_FILE, AUDIT_FILE, readPluginAudit } from '../../core/plugins/pluginAudit'
 
 /** `ready`: an enabled UI-only plugin (Plugin API 2, ADR-008) with nothing to start and nothing missing. */
 export type PluginStatus = 'disabled' | 'incompatible' | 'stopped' | 'starting' | 'running' | 'failed' | 'ready'
@@ -44,6 +45,9 @@ export interface PluginManager {
   startAll(): Promise<void>
   /** The last lines of a plugin's log (design P13). */
   logs(id: unknown, lines: unknown): Promise<PluginsAnswer>
+  /** The last records of the audit log, the Host's and the app's merged by time, of one plugin when `id` names one,
+   *  installed or not (Workspace & Plugin Platform V2 spec E3). */
+  audit(id: unknown, lines: unknown): Promise<PluginsAnswer>
   /** What could keep a plugin from running, one check at a time (spec §12 `doctor`). */
   doctor(id: unknown): Promise<PluginsAnswer>
   /** A plugin's settings as a person may see them: secret ones say only whether they are set (spec §23-§24). */
@@ -636,9 +640,7 @@ export function createPluginManager(d: {
 
   async function logs(id: unknown, lines: unknown): Promise<PluginsAnswer> {
     const want = idOf('plugins-logs', id)
-    const n = lines === undefined ? LOG_LINES_DEFAULT : typeof lines === 'string' && /^\d+$/.test(lines) ? Number(lines) : lines
-    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > LOG_LINES_MAX)
-      throw new Refused(400, `plugins-logs --lines must be a whole number from 1 to ${LOG_LINES_MAX}`)
+    const n = linesOf('plugins-logs', lines)
     const r = find(await readRegistry(root), want)
     const file = pluginLogFile(d.profileDir, r.folder)
     const read = (f: string): Promise<string[]> =>
@@ -648,6 +650,21 @@ export function createPluginManager(d: {
       )
     const all = [...(await read(`${file}.1`)), ...(await read(file))]
     return { status: 200, body: { id: r.id, file, lines: all.slice(-n) } }
+  }
+
+  /** A `--lines` value: a whole number from 1 to LOG_LINES_MAX, LOG_LINES_DEFAULT when absent; a 400 otherwise. */
+  const linesOf = (cmd: string, lines: unknown): number => {
+    const n = lines === undefined ? LOG_LINES_DEFAULT : typeof lines === 'string' && /^\d+$/.test(lines) ? Number(lines) : lines
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > LOG_LINES_MAX) throw new Refused(400, `${cmd} --lines must be a whole number from 1 to ${LOG_LINES_MAX}`)
+    return n
+  }
+
+  async function audit(id: unknown, lines: unknown): Promise<PluginsAnswer> {
+    // Not looked up in the registry: the history of a plugin removed is what the log is for
+    if (id !== undefined && (typeof id !== 'string' || id === '')) throw new Refused(400, 'plugins-audit --id must name a plugin')
+    const n = linesOf('plugins-audit', lines)
+    const entries = await readPluginAudit([path.join(root, AUDIT_FILE), path.join(root, AUDIT_APP_FILE)], { ...(id !== undefined ? { plugin: id } : {}), lines: n })
+    return { status: 200, body: { entries } }
   }
 
   async function doctor(id: unknown): Promise<PluginsAnswer> {
@@ -877,6 +894,7 @@ export function createPluginManager(d: {
     setEnabled: (id, enabled) => serial(() => setEnabled(id, enabled)),
     remove: (id) => serial(() => remove(id)),
     logs: (id, lines) => serial(() => logs(id, lines)),
+    audit: (id, lines) => serial(() => audit(id, lines)),
     doctor: (id) => serial(() => doctor(id)),
     settings: (id) => serial(() => settings(id)),
     configure: (id, set, unset) => serial(() => configure(id, set, unset)),

@@ -6,6 +6,8 @@
 import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
+import { pluginsRoot } from './plugins/registry'
+import { AUDIT_FILE, createPluginAudit } from '../core/plugins/pluginAudit'
 import { createHostExtensions } from './extensions/commands'
 import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
 import { createHostPolicies } from './audit/policyCommands'
@@ -424,6 +426,8 @@ async function main(): Promise<void> {
           eventLog.close()
           // And observe mode's records still on their way to the disk, capped the same way. Never rejects.
           await disposeWithin(auditRecorder.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
+          // And the plugin audit log's records, the plugins' last exits among them, capped the same way. Never rejects.
+          await disposeWithin(pluginAudit.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           // And the tokens read since the last save, capped the same way. Never rejects.
           await disposeWithin(tokenStore.save(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           registry.killAll()
@@ -894,6 +898,9 @@ async function main(): Promise<void> {
   // and run by this Host while it runs (P2, P11): its own executable as Node, on the launcher bundled beside it
   // (out/main/plugin-host.js; the Windows runtime copies it beside host.js). A plugin's calls go to the orch as that
   // plugin, which is created just below and asked only once a plugin runs.
+  // The plugin audit log (Workspace & Plugin Platform V2 spec E3): what happened to each plugin, kept apart from its own
+  // log, which goes with it. The app writes its panels and their bridge to a file of its own beside this one.
+  const pluginAudit = createPluginAudit({ file: path.join(pluginsRoot(profileDir), AUDIT_FILE), onError: (m) => log.write(`plugins audit: ${m}`) })
   const pluginRuntime = createPluginRuntime({
     profileDir,
     exec: process.execPath,
@@ -907,6 +914,7 @@ async function main(): Promise<void> {
     }),
     orch: { call: (a) => orch.call(a) },
     log: (m) => log.write(m),
+    audit: pluginAudit,
     // Event plugins are handed the public event log from a cursor of their own (plugin Phase 3 N1)
     events: eventLog,
     // Notification plugins are sent each one worded in the app's language, read when it is made, a Job by its
@@ -1079,6 +1087,7 @@ async function main(): Promise<void> {
     version: hostVersion,
     controllers,
     plugins,
+    pluginAudit,
     extensions,
     agentProfiles,
     policies,

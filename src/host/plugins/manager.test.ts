@@ -697,6 +697,33 @@ describe('logs and doctor', () => {
     expect((await manager.logs('nope', undefined)).status).toBe(404)
   })
 
+  // Phase 2 gate, spec E3 "audit": the Host's and the app's files, read together, for a plugin removed long ago too
+  it('answers the audit log, both files merged by time, of one plugin or all, whether or not it is installed', async () => {
+    const root = pluginsRoot(profile)
+    await fs.mkdir(root, { recursive: true })
+    const line = (e: object): string => `${JSON.stringify(e)}\n`
+    await fs.writeFile(
+      path.join(root, 'audit.jsonl'),
+      line({ at: 1, plugin: 'gone', event: 'installed', by: 'cli', version: '1.0.0' }) + line({ at: 3, plugin: 'gone', event: 'removed' }) + line({ at: 4, plugin: 'other', event: 'enabled' })
+    )
+    await fs.writeFile(path.join(root, 'audit-app.jsonl'), line({ at: 2, plugin: 'gone', event: 'panel-opened', detail: 'panel main' }))
+    expect(await manager.audit('gone', undefined)).toEqual({
+      status: 200,
+      body: {
+        entries: [
+          { at: 1, plugin: 'gone', event: 'installed', by: 'cli', version: '1.0.0' },
+          { at: 2, plugin: 'gone', event: 'panel-opened', detail: 'panel main' },
+          { at: 3, plugin: 'gone', event: 'removed' }
+        ]
+      }
+    })
+    expect((await manager.audit(undefined, '2')).body).toEqual({ entries: [{ at: 3, plugin: 'gone', event: 'removed' }, { at: 4, plugin: 'other', event: 'enabled' }] })
+    for (const bad of [0, 1001, 2.5, 'x', -1])
+      expect(await manager.audit(undefined, bad)).toEqual({ status: 400, body: { error: 'plugins-audit --lines must be a whole number from 1 to 1000' } })
+    expect(await manager.audit('', undefined)).toEqual({ status: 400, body: { error: 'plugins-audit --id must name a plugin' } })
+    expect(await manager.audit(5, undefined)).toEqual({ status: 400, body: { error: 'plugins-audit --id must name a plugin' } })
+  })
+
   it('finds nothing wrong with a healthy plugin', async () => {
     await manager.install({ path: await plugin(FOLDER), grant: [] })
     const r = await manager.doctor('@acme/astera-jira')

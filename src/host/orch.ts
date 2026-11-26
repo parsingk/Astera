@@ -32,7 +32,8 @@ import type { ControllerKind, OrchCall, OrchCaller } from '../core/host/orchProt
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
 import type { ControlPlaneReport } from '../core/controlPlane/report'
-import { pluginRefusal } from '../core/host/pluginGate'
+import { PLUGIN_SENSITIVE_COMMANDS, pluginRefusal } from '../core/host/pluginGate'
+import type { PluginAudit } from '../core/plugins/pluginAudit'
 import { sanitizeForController } from '../core/remote/sanitize'
 import { t } from '../core/i18n'
 import type { GatewayState } from '../core/remote/gatewayState'
@@ -617,6 +618,9 @@ export function createHostOrch(a: {
   /** The plugins this profile has installed (plugin runtime design P4, P5): every `plugins-*` command, for this
    *  machine's app and CLI, below the receipt line. Absent: all of them answer 501. */
   plugins?: PluginManager
+  /** The plugin audit log (Workspace & Plugin Platform V2 spec E3): a plugin's refused calls and the calls it makes that
+   *  change something, and the plugin changes the app and the CLI make. Absent: nothing is recorded. */
+  pluginAudit?: PluginAudit
   /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
    *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
   extensions?: Pick<HostExtensions, 'command'>
@@ -1842,9 +1846,14 @@ export function createHostOrch(a: {
         }
         // **And plugins pass theirs** (plugin runtime design P12), with the permissions the person granted, which the
         // Host's runtime put on the call from its own record: refused before receipts and before any command.
+        // Recorded in the audit log, a burst as one line: a refusal, and an admitted call that changes something.
         if (from?.role === 'plugin') {
           const refused = pluginRefusal(cmd, from.plugin)
-          if (refused) return refused
+          if (refused) {
+            if (from.plugin) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call-refused', detail: refused.body.error }, `${from.plugin.id} call-refused ${cmd}`)
+            return refused
+          }
+          if (from.plugin && PLUGIN_SENSITIVE_COMMANDS.has(cmd)) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call', detail: cmd }, `${from.plugin.id} call ${cmd}`)
         }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
         // line below, so a `request` sent with one would be accepted and silently ignored — which is
@@ -2271,7 +2280,8 @@ export function createHostOrch(a: {
             args,
             role: from?.role,
             ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
-            marks
+            marks,
+            ...(a.pluginAudit ? { audit: a.pluginAudit } : {})
           })
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }

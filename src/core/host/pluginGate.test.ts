@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PLUGIN_COMMAND_PERMISSIONS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from './pluginGate'
+import { PLUGIN_COMMAND_PERMISSIONS, PLUGIN_SENSITIVE_COMMANDS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from './pluginGate'
 import { PLUGIN_PERMISSIONS } from '../plugins/manifest'
 
 const plugin = (granted: string[]) => ({ id: 'astera-hello', granted: new Set(granted) })
@@ -76,5 +76,17 @@ describe('pluginRefusal (plugin runtime design P12)', () => {
       expect(sent.has(cmd), cmd).toBe(true)
       expect(pluginRefusal(cmd, { id: 'p', granted: new Set(Object.values(PLUGIN_COMMAND_PERMISSIONS)) })?.status, cmd).toBe(403)
     }
+  })
+})
+
+// Phase 2 gate, spec E3 "audit": the calls a plugin makes that change something are recorded, its reads are not
+describe('PLUGIN_SENSITIVE_COMMANDS', () => {
+  it('lists exactly the commands whose permission is not a read', () => {
+    const writes = Object.entries(PLUGIN_COMMAND_PERMISSIONS)
+      .filter(([, permission]) => !permission.endsWith('.read') && permission !== 'events.subscribe')
+      .map(([cmd]) => cmd)
+      .sort()
+    expect([...PLUGIN_SENSITIVE_COMMANDS].sort()).toEqual(writes)
+    expect([...PLUGIN_SENSITIVE_COMMANDS].sort()).toEqual(['jobs-create', 'jobs-run', 'questions-answer', 'runs-resume', 'runs-stop', 'tasks-add'])
   })
 })
