@@ -47,6 +47,14 @@ describe('the plugin audit log', () => {
     expect(await readPluginAudit([file], { lines: 10 })).toEqual(await linesOf(file))
   })
 
+  it('takes the time a record names, for a change recorded after the moment it was asked for', async () => {
+    const file = path.join(dir, 'audit.jsonl')
+    const audit = createPluginAudit({ file, now: () => 9 })
+    audit.record({ plugin: 'p', event: 'removed', at: 4 })
+    await audit.flushed()
+    expect(await linesOf(file)).toEqual([{ at: 4, plugin: 'p', event: 'removed' }])
+  })
+
   it('cuts a detail to AUDIT_DETAIL_MAX and takes control characters out of it', async () => {
     const file = path.join(dir, 'audit.jsonl')
     const audit = createPluginAudit({ file, now: () => 1 })

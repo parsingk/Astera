@@ -1240,7 +1240,7 @@ describe('a UI-only plugin', () => {
   // Phase 2 gate: removal deletes the plugin's log and settings, and its audit history stays readable
   it('leaves the audit history of a removed plugin readable after its log and settings are gone', async () => {
     const audit = createPluginAudit({ file: path.join(pluginsRoot(profile), AUDIT_FILE), now: () => clock })
-    const call = (cmd: string, args: Record<string, unknown>) => pluginsCommand({ manager, cmd, args, role: 'cli', marks: { effects: 0 }, audit })
+    const call = (cmd: string, args: Record<string, unknown>) => pluginsCommand({ manager, cmd, args, role: 'cli', marks: { effects: 0 }, audit, now: () => clock })
     expect((await call('plugins-install', { path: await uiPlugin('hello'), grant: UI_PERMS })).status).toBe(200)
     const log = path.join(pluginsRoot(profile), 'logs', 'hello-panel.log')
     await fs.mkdir(path.dirname(log), { recursive: true })

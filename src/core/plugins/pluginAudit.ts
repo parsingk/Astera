@@ -56,7 +56,9 @@ export interface PluginAuditEntry {
   repeated?: number
 }
 
-export type PluginAuditRecord = Omit<PluginAuditEntry, 'at' | 'repeated'>
+/** A record to make: when it happened is now, unless `at` says otherwise (a change is recorded at the moment it was
+ *  asked for, so what it caused, a start or a stop, reads after it). */
+export type PluginAuditRecord = Omit<PluginAuditEntry, 'at' | 'repeated'> & { at?: number }
 
 export interface PluginAudit {
   /** Queues a record; with `coalesce`, one of a burst of records sharing that key. Never throws. */
@@ -205,7 +207,7 @@ export function createPluginAudit(o: {
   return {
     record(e, coalesce) {
       try {
-        const at = now()
+        const at = e.at ?? now()
         if (coalesce !== undefined) {
           const w = windows.get(coalesce)
           if (w) {

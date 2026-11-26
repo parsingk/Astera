@@ -82,16 +82,21 @@ export async function pluginsCommand(a: {
   marks: { effects: number }
   /** The Host's plugin audit log: each change made and each change refused is recorded there. */
   audit?: PluginAudit
+  /** For tests: the clock a change's record takes its time from. */
+  now?: () => number
 }): Promise<PluginsAnswer> {
+  // A change starts or stops the plugin before it is answered: recorded at the moment it was asked for, what it caused
+  // reads after it
+  const asked = (a.now ?? Date.now)()
   const answer = await answerOf(a)
   if (a.audit && PLUGIN_CHANGES.has(a.cmd)) {
     const rec = changeRecord(a.cmd, a.args, a.role ?? 'unknown', answer)
-    if (rec) a.audit.record(rec)
+    if (rec) a.audit.record({ ...rec, at: asked })
   }
   return answer
 }
 
-async function answerOf(a: Omit<Parameters<typeof pluginsCommand>[0], 'audit'>): Promise<PluginsAnswer> {
+async function answerOf(a: Omit<Parameters<typeof pluginsCommand>[0], 'audit' | 'now'>): Promise<PluginsAnswer> {
   const { cmd, args, manager } = a
   if (a.role !== 'app' && a.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
   if (PLUGIN_CHANGES.has(cmd) && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }

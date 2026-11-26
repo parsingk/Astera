@@ -135,7 +135,8 @@ describe('pluginsCommand', () => {
 describe('pluginsCommand records changes in the audit log', () => {
   const recorder = (): PluginAudit & { recs: PluginAuditRecord[] } => {
     const recs: PluginAuditRecord[] = []
-    return { recs, record: (e) => void recs.push(e), flushed: async () => {} }
+    // The time a change was asked for is the clock's: these tests are about what a record says
+    return { recs, record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {} }
   }
   const answering = (body: unknown, status = 200) => async () => ({ status, body })
 
@@ -213,6 +214,37 @@ describe('pluginsCommand records changes in the audit log', () => {
       { plugin: '/p/evil', event: 'change-refused', by: 'cli', detail: 'plugins-install: not for agents' },
       { plugin: 'evil@1', event: 'change-refused', by: 'cli', detail: 'plugins-install: not for agents' }
     ])
+  })
+
+  // Screen check of the Phase 2 gate: a plugin starts inside its install and stops inside its removal, so a change
+  // recorded once it was answered came after what it caused. Recorded at the moment it was asked for, it comes first.
+  it('records a change at the moment it was asked for, so the start or stop it caused reads after it', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { createPluginAudit, readPluginAudit } = await import('../../core/plugins/pluginAudit')
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-audit-order-'))
+    try {
+      let clock = 0
+      const now = () => ++clock
+      const file = path.join(dir, 'audit.jsonl')
+      const audit = createPluginAudit({ file, now })
+      const manager = fake()
+      manager.install = vi.fn(async () => {
+        audit.record({ plugin: 'p', event: 'started' })
+        return { status: 200, body: { id: 'p', version: '1.0.0', trust: 'trusted', permissions: [], source: { kind: 'folder', path: '/p' } } }
+      })
+      manager.remove = vi.fn(async () => {
+        audit.record({ plugin: 'p', event: 'stopped' })
+        return { status: 200, body: { id: 'p', version: '1.0.0', removed: true } }
+      })
+      await pluginsCommand({ manager, cmd: 'plugins-install', args: { path: '/p', grant: [] }, role: 'cli', marks: { effects: 0 }, audit, now })
+      await pluginsCommand({ manager, cmd: 'plugins-remove', args: { id: 'p' }, role: 'cli', marks: { effects: 0 }, audit, now })
+      await audit.flushed()
+      expect((await readPluginAudit([file], { lines: 10 })).map((e) => e.event)).toEqual(['installed', 'started', 'removed', 'stopped'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('records nothing for a read, a change that failed its checks, or a change that changed nothing', async () => {
