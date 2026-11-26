@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { promises as fs, mkdtempSync } from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,8 +21,28 @@ beforeAll(async () => {
   launcher = await bundleLauncher(work)
 }, 60_000)
 afterAll(async () => {
+  for (const s of servers) s.close()
   await removeFixture(work)
 })
+
+const servers: http.Server[] = []
+/** A server on this machine answering every request with `answer` (its body read first), and the bodies it was sent. */
+async function loopback(answer: (body: string) => { status: number; json?: unknown }): Promise<{ url: string; bodies: string[] }> {
+  const bodies: string[] = []
+  const server = http.createServer((req, res) => {
+    let text = ''
+    req.setEncoding('utf8').on('data', (c: string) => (text += c))
+    req.on('end', () => {
+      bodies.push(text)
+      const a = answer(text)
+      res.writeHead(a.status, { 'content-type': 'application/json' })
+      res.end(a.json === undefined ? '' : JSON.stringify(a.json))
+    })
+  })
+  servers.push(server)
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/`, bodies }
+}
 
 /** Short waits, so a stuck plugin is found in a moment: the checks are the same. */
 const fast = { startMs: 15_000, stopGraceMs: 800, observeMs: 300 }
@@ -54,6 +76,55 @@ describe('testPlugin', () => {
     const r = await testPlugin({ folder: path.join(examples, 'debug-leftovers'), version: '1.6.0', launcher, timings: fast })
     if (!('checks' in r)) throw new Error(JSON.stringify(r))
     expect(r.checks.filter((c) => !c.ok), JSON.stringify(r.checks)).toEqual([])
+  }, 60_000)
+
+  // Phase 2 gate: the API 1 plugins run as before, each sample through the real runtime against an endpoint on this
+  // machine in place of the service it posts to or reads
+  it('passes the webhook-notifier sample against a loopback webhook', async () => {
+    const hook = await loopback(() => ({ status: 200 }))
+    const r = await testPlugin({ folder: path.join(examples, 'webhook-notifier'), version: '1.6.0', launcher, timings: fast, settings: { webhookUrl: hook.url } })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks.filter((c) => !c.ok), JSON.stringify(r.checks)).toEqual([])
+    expect(r.checks.map((c) => c.name)).toEqual(['starts', 'event', 'denied', 'stops'])
+    expect(hook.bodies.length).toBeGreaterThan(0)
+  }, 60_000)
+
+  it('passes the discord-notifier sample against a loopback webhook', async () => {
+    const hook = await loopback(() => ({ status: 204 }))
+    const r = await testPlugin({ folder: path.join(examples, 'discord-notifier'), version: '1.6.0', launcher, timings: fast, settings: { webhookUrl: hook.url } })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks.filter((c) => !c.ok), JSON.stringify(r.checks)).toEqual([])
+    expect(r.checks.map((c) => c.name)).toEqual(['starts', 'notification', 'denied', 'stops'])
+    expect(hook.bodies.length).toBeGreaterThan(0)
+  }, 60_000)
+
+  it('passes the linear-source sample against a loopback GraphQL answer', async () => {
+    const issue = {
+      identifier: 'ENG-1',
+      title: 'Fix login',
+      url: 'https://linear.app/acme/issue/ENG-1/fix-login',
+      description: 'It fails on Safari.',
+      priorityLabel: 'High',
+      state: { name: 'Todo' },
+      team: { key: 'ENG', name: 'Engineering' },
+      assignee: { name: 'Ann' },
+      labels: { nodes: [{ name: 'bug' }] }
+    }
+    const api = await loopback((body) =>
+      (JSON.parse(body) as { query: string }).query.includes('issues(')
+        ? { status: 200, json: { data: { issues: { nodes: [issue], pageInfo: { hasNextPage: false, endCursor: null } } } } }
+        : { status: 200, json: { data: { issue } } }
+    )
+    const r = await testPlugin({
+      folder: path.join(examples, 'linear-source'),
+      version: '1.6.0',
+      launcher,
+      timings: fast,
+      settings: { apiKey: 'lin_api_test', apiUrl: `${api.url}graphql` }
+    })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks.filter((c) => !c.ok), JSON.stringify(r.checks)).toEqual([])
+    expect(r.checks.find((c) => c.name === 'job-source')?.detail).toBe("listed 1, read ENG-1 and built its Job's objective")
   }, 60_000)
 
   it('fails starts for a plugin that throws as it starts, saying why', async () => {

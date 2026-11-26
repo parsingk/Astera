@@ -3,6 +3,8 @@ import { existsSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createPluginManager, type PluginManager } from './manager'
+import { pluginsCommand } from './commands'
+import { AUDIT_FILE, createPluginAudit } from '../../core/plugins/pluginAudit'
 import type { PluginLaunch, PluginRunStatus, PluginRuntime } from './runtime'
 import { pluginsRoot, readRegistry, writeRegistry } from './registry'
 import { pluginSecrets } from './pluginData'
@@ -1222,6 +1224,35 @@ describe('a UI-only plugin', () => {
     const r = body(await manager.inspect({ path: await uiPlugin('hello') }))
     expect(r).toMatchObject({ id: 'hello-panel', apiVersion: '2', trust: 'restricted-ui', ui: 'dist/ui/index.html', contributes, compatible: true })
     expect(r.entry).toBeUndefined()
+  })
+
+  // Phase 2 gate: a Host the app is not running beside runs no UI extension; the import fence keeps src/main, where a
+  // page is served, out of the Host bundle (src/host/importFence.test.ts)
+  it('starts nothing for a UI-only plugin when the Host starts, so a Host without the app runs no UI extension', async () => {
+    await manager.install({ path: await uiPlugin('hello'), grant: UI_PERMS })
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    await m.startAll()
+    expect(rt.calls).toEqual([])
+    expect(body(await m.list()).plugins).toMatchObject([{ id: 'hello-panel', status: 'ready' }])
+  })
+
+  // Phase 2 gate: removal deletes the plugin's log and settings, and its audit history stays readable
+  it('leaves the audit history of a removed plugin readable after its log and settings are gone', async () => {
+    const audit = createPluginAudit({ file: path.join(pluginsRoot(profile), AUDIT_FILE), now: () => clock })
+    const call = (cmd: string, args: Record<string, unknown>) => pluginsCommand({ manager, cmd, args, role: 'cli', marks: { effects: 0 }, audit })
+    expect((await call('plugins-install', { path: await uiPlugin('hello'), grant: UI_PERMS })).status).toBe(200)
+    const log = path.join(pluginsRoot(profile), 'logs', 'hello-panel.log')
+    await fs.mkdir(path.dirname(log), { recursive: true })
+    await fs.writeFile(log, 'a line\n')
+    clock = 2_000
+    expect((await call('plugins-remove', { id: 'hello-panel' })).status).toBe(200)
+    await audit.flushed()
+    expect(existsSync(log)).toBe(false)
+    expect(body(await manager.audit('hello-panel', undefined)).entries).toEqual([
+      { at: 1_000, plugin: 'hello-panel', event: 'installed', by: 'cli', version: '1.0.0', detail: expect.stringMatching(/^restricted-ui; granted commands\.register, panels\.register; from /) },
+      { at: 2_000, plugin: 'hello-panel', event: 'removed', by: 'cli', version: '1.0.0' }
+    ])
   })
 
   it('installs, and is ready rather than stopped, with nothing handed to the runtime', async () => {
