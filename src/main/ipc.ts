@@ -85,7 +85,7 @@ import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { createHostRoute } from './host/hostRoute'
 import { hostWritesFinding, stampFindings } from '../core/problems/findingStates'
-import { createTestResults, resultOfRun } from './testResults'
+import { createTestResults, resultOfRun, type TestRunResult } from './testResults'
 import { readTestReport } from '../core/tests/read'
 import { rerunArgs, type RerunPlan } from '../core/tests/rerun'
 import { buildRunContext } from '../core/run/build'
@@ -1602,16 +1602,22 @@ export function registerIpc(
   // The last test result of each configuration a person runs (Phase 3 Part 2): written as a run ends, read by the Tests
   // tab and the Problems list
   const testResults = createTestResults({ dir: path.join(app.getPath('userData'), 'test-results') })
-  /** The runs tests.rerun started on part of a configuration's tests, until their result is recorded */
-  const rerunScopes = new Set<string>()
+  /** The project's configurations that name a test report, by id with their name now: the results it lists (final
+   *  review M5 and M6) */
+  const testConfigsOf = (project: string): Map<string, string> =>
+    new Map(core.runConfig.get(project).filter((c) => c.testReport !== undefined).map((c) => [c.id, c.name]))
+  /** The runs tests.rerun started on part of a configuration's tests, each with the result it reran, until it really ends */
+  const rerunBases = new Map<string, TestRunResult>()
   const recordTestRun = async (e: RunStatus): Promise<void> => {
     try {
       const config = core.runConfig.get(e.projectPath).find((c) => c.id === e.configId)
       const r = await resultOfRun({ status: e, config, cwd: core.run.cwdOf(e.runId) ?? e.projectPath, read: readTestReport })
-      // A rerun of the failures is merged into the result it reran
-      const partial = rerunScopes.delete(e.runId)
+      // A rerun of the failures is merged into the result it reran. An exit the app lost sight of is not its end: the mark
+      // waits for the real one (final review M1)
+      const base = rerunBases.get(e.runId)
+      if (e.exitCode !== PTY_LOST_SIGHT_EXIT_CODE) rerunBases.delete(e.runId)
       if (!r) return
-      await testResults.record(partial ? { ...r, scope: 'failures' } : r)
+      await testResults.record(base ? { ...r, scope: 'failures' } : r, base)
       problemsPing.touch()
       send('tests:changed', e.projectPath)
     } catch (err) {
@@ -1620,7 +1626,7 @@ export function registerIpc(
   }
   ipcMain.handle('tests.list', async (_e, project: string) => {
     await assertAllowedPath(project)
-    return testResults.load(project, new Set(core.runConfig.get(project).map((c) => c.id)))
+    return testResults.load(project, testConfigsOf(project))
   })
   const pushOrchState = (state: OrchState): void => {
     orchPushes.push(state)
@@ -5311,7 +5317,7 @@ export function registerIpc(
       }),
       // A person's failed tests (Phase 3 Part 2), from the configurations the project still has
       testProducer({
-        results: (p) => testResults.load(p, new Set(core.runConfig.get(p).map((c) => c.id))),
+        results: (p) => testResults.load(p, testConfigsOf(p)),
         stat: statMtime
       })
     ],
@@ -5626,8 +5632,9 @@ export function registerIpc(
   /** Plan a launch and run it. Both ▶ (run.start) and running a file from the tree (run.runFile) go
    *  through here, so a file's configuration honours a before-launch chain exactly as any other does.
    *  Resolves with the run the panel should open on — the chain's first step. */
-  // `append` is added to the root configuration's own command only: a rerun of its failures (Phase 3 Part 2, tests.rerun)
-  const startChain = async (projectPath: string, configId: string, append = ''): Promise<RunStatus> => {
+  // `append` is added to the root configuration's own command only: a rerun of its failures (Phase 3 Part 2, tests.rerun),
+  // which `onRoot` hears the root's own run of, whenever a before-launch chain gets to it (final review I1)
+  const startChain = async (projectPath: string, configId: string, append = '', onRoot?: (root: RunStatus) => void): Promise<RunStatus> => {
     const tr = (key: string, params?: Record<string, string | number>): string =>
       t(core.lang, key as MessageKey, params)
     // The plan and every step's command, before anything starts: a chain with a broken step must not
@@ -5647,7 +5654,9 @@ export function registerIpc(
         if (!step) throw new Error(`NO_CONFIG: ${stepId}`)
         const opts = { projectPath, projectName, config: step.config, command: stepId === configId && append !== '' ? `${step.command}${append}` : step.command }
         const decision = decideStart(core.run.listByProject(projectPath), step.config)
-        return decision.action === 'restart' ? core.run.restart(decision.runId, opts) : core.run.start(opts)
+        const started = decision.action === 'restart' ? await core.run.restart(decision.runId, opts) : core.run.start(opts)
+        if (stepId === configId) onRoot?.(started)
+        return started
       },
       whenExited: (runId) => core.run.whenExited(runId),
       onFocus: (status) => send('run:focus', { runId: status.runId, projectPath: status.projectPath }),
@@ -5672,15 +5681,17 @@ export function registerIpc(
     const config = stored.find((c) => c.id === configId)
     if (!config) throw new Error(`NO_CONFIG: ${configId}`)
     let plan: RerunPlan = { append: '', scope: 'all' }
+    let base: TestRunResult | undefined
     if (failuresOnly) {
-      const [result] = await testResults.load(projectPath, new Set([configId]))
-      if (result) {
+      ;[base] = await testResults.load(projectPath, new Map([[configId, config.name]]))
+      if (base) {
         const { files } = await loadRunConfigs({ projectPath, stored, assertAllowedPath })
-        plan = rerunArgs(config, result, buildRunContext(files, process.platform))
+        plan = rerunArgs(config, base, buildRunContext(files, process.platform))
       } else plan = { append: '', scope: 'all', why: 'not-narrowable' }
     }
-    const status = await startChain(projectPath, configId, plan.append)
-    if (plan.scope !== 'all') rerunScopes.add(status.runId)
+    // The mark goes on the root configuration's own run, not on a before-launch step's (final review I1)
+    const reran = plan.scope !== 'all' ? base : undefined
+    const status = await startChain(projectPath, configId, plan.append, reran ? (root) => rerunBases.set(root.runId, reran) : undefined)
     return { runId: status.runId, scope: plan.scope, ...(plan.why !== undefined ? { why: plan.why } : {}) }
   })
 
@@ -5864,7 +5875,20 @@ export function registerIpc(
   // project guard is here, as for every other run handler; the per-item checks are inside.
   ipcMain.handle('run.saveConfigs', async (_e, projectPath: string, configs: RunConfig[]) => {
     await assertAllowedPath(projectPath)
-    return saveConfigsBatch({ projectPath, configs, platform: process.platform, assertConfigCwd, store: core.runConfig })
+    const reporting = [...testConfigsOf(projectPath).keys()]
+    const saved = await saveConfigsBatch({ projectPath, configs, platform: process.platform, assertConfigCwd, store: core.runConfig })
+    // A configuration removed, or no longer naming a test report, takes its last result with it (final review M6)
+    const still = testConfigsOf(projectPath)
+    const gone = reporting.filter((id) => !still.has(id))
+    if (gone.length > 0) {
+      void Promise.all(gone.map((id) => testResults.forget(id)))
+        .then(() => {
+          problemsPing.touch()
+          send('tests:changed', projectPath)
+        })
+        .catch((err: unknown) => console.error(`test results not forgotten: ${err instanceof Error ? err.message : String(err)}`))
+    }
+    return saved
   })
 
   // Project terminals. open and list take a path and so must pass assertAllowedPath — that stops a shell

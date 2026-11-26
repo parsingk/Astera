@@ -45,45 +45,73 @@ function merged(prev: TestRunResult, rerun: TestRunResult): TestRunResult {
   }
 }
 
+/** A stored result with every field the Tests tab and the Problems list read (final review M8: a hand edit or a future
+ *  shape is skipped, never thrown on). */
+function isResult(v: unknown): v is TestRunResult {
+  if (v === null || typeof v !== 'object') return false
+  const r = v as Partial<TestRunResult>
+  return (
+    r.schemaVersion === 1 &&
+    typeof r.projectPath === 'string' &&
+    typeof r.cwd === 'string' &&
+    typeof r.configId === 'string' &&
+    typeof r.configName === 'string' &&
+    typeof r.startedAt === 'string' &&
+    typeof r.endedAt === 'string' &&
+    typeof r.outcome === 'string' &&
+    Array.isArray(r.cases) &&
+    r.counts !== null &&
+    typeof r.counts === 'object' &&
+    (['passed', 'failed', 'skipped', 'errored'] as const).every((k) => typeof r.counts?.[k] === 'number')
+  )
+}
+
+/** The configuration's stored result, or null when there is none or it is not one. */
+async function readStored(file: string): Promise<TestRunResult | null> {
+  try {
+    const r: unknown = JSON.parse(await fs.readFile(file, 'utf8'))
+    return isResult(r) ? r : null
+  } catch {
+    // nothing stored yet, a file being replaced, or not one of ours
+    return null
+  }
+}
+
 export function createTestResults(a: { dir: string }): {
-  load(project: string, live?: ReadonlySet<string>): Promise<TestRunResult[]>
-  record(r: TestRunResult): Promise<void>
+  load(project: string, live: ReadonlyMap<string, string>): Promise<TestRunResult[]>
+  record(r: TestRunResult, base?: TestRunResult): Promise<void>
   forget(configId: string): Promise<void>
 } {
   return {
-    /** The project's results, newest first; with `live`, only the configurations the project still has. */
+    /** The project's results, newest first: one per configuration in `live` (the project's configurations that name a
+     *  test report, by id with their name now), each read from its own file and named as it is called now (final review
+     *  M5, M6 and M7). */
     async load(project, live) {
-      let names: string[]
-      try {
-        names = await fs.readdir(a.dir)
-      } catch {
-        return []
-      }
       const out: TestRunResult[] = []
-      for (const n of names.filter((x) => x.endsWith('.json'))) {
-        try {
-          const r = JSON.parse(await fs.readFile(path.join(a.dir, n), 'utf8')) as TestRunResult
-          if (r?.schemaVersion !== 1 || typeof r.projectPath !== 'string' || typeof r.configId !== 'string') continue
-          if (!sameFolder(project, r.projectPath) || (live !== undefined && !live.has(r.configId))) continue
-          out.push(r)
-        } catch {
-          // a file being replaced, or not one of ours: not a result
-        }
+      for (const [id, name] of live) {
+        const r = await readStored(fileOf(a.dir, id))
+        if (r !== null && r.configId === id && sameFolder(project, r.projectPath)) out.push({ ...r, configName: name })
       }
       return out.sort((x, y) => y.endedAt.localeCompare(x.endedAt))
     },
-    /** A rerun of the failures that read a fresh report is merged into the stored result; anything else replaces it. */
-    async record(r) {
+    /**
+     * A rerun of the failures that read a fresh report is merged into the result it reran (`base`, taken when it was asked
+     * for, or the stored one), anything else replaces it. A run that started before the stored result's run is older news
+     * and is not kept: two runs of one configuration can end out of order (final review M11).
+     */
+    async record(r, base) {
       await fs.mkdir(a.dir, { recursive: true })
       const file = fileOf(a.dir, r.configId)
+      const stored = await readStored(file)
+      const ours = (x: TestRunResult | null | undefined): x is TestRunResult => !!x && x.configId === r.configId && sameFolder(x.projectPath, r.projectPath)
+      if (ours(stored) && Date.parse(stored.startedAt) > Date.parse(r.startedAt)) return
       let out = r
       if (r.scope === 'failures' && !r.stale && (r.outcome === 'passed' || r.outcome === 'failed')) {
-        try {
-          const prev = JSON.parse(await fs.readFile(file, 'utf8')) as TestRunResult
-          if (prev?.schemaVersion === 1 && prev.configId === r.configId && sameFolder(prev.projectPath, r.projectPath)) out = merged(prev, r)
-        } catch {
-          // nothing stored yet, or not readable: the rerun is the result
-        }
+        // The result it reran, unless a full result came after it: a stop recorded in between (the rerun restarted a live
+        // run of the configuration) is not what it reran (final review M1)
+        const read = (x: TestRunResult): boolean => !x.stale && (x.outcome === 'passed' || x.outcome === 'failed')
+        const onto = ours(base) ? (ours(stored) && read(stored) && Date.parse(stored.startedAt) > Date.parse(base.startedAt) ? stored : base) : stored
+        if (ours(onto)) out = merged(onto, r)
       }
       const tmp = `${file}.${randomUUID()}.tmp`
       await fs.writeFile(tmp, JSON.stringify(out), 'utf8')
