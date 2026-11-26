@@ -203,6 +203,8 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         const env = base?.env
         // Its result names what the hiding took (fix round 2), never a value
         const hidden = base !== undefined && base.hidden.length > 0 ? { hiddenEnv: base.hidden } : {}
+        // A failed run's test failures are read from its report (Phase 3 Part 2), on either path
+        const report = config.testReport ? { testReport: config.testReport } : {}
         // validation: marks this run as not the user's. The run list and the global badge label it,
         // and run.stop routes markStopped by it (RunStatus.validation). Nothing waits for the user's
         // own runs any more — a validation starts beside them; same-tree validations are serialised
@@ -211,7 +213,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, ...(env ? { env } : {}) })
           // Deny rules only (Claude Code on Windows without its shell route into Codex's sandbox): its workers' shells ran
           // as the person, and so does this check, said on its result (the person's Q1)
-          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden }
+          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden, ...report }
         }
         // Inside the sandbox the workers ran in, as their CLI and account, or not at all: a check that cannot be put in it
         // is a question to a person (rule E5), never a run outside it nor the code's failure
@@ -255,8 +257,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           name: config.name,
           ...hidden,
           ...(reasonFile !== null ? { sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) } : {}),
-          // A failed run's test failures are read from its report (Phase 3 Part 2)
-          ...(config.testReport ? { testReport: config.testReport } : {})
+          ...report
         }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),

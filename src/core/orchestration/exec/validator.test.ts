@@ -856,7 +856,9 @@ describe('TaskValidator, test reports', () => {
     const r = calls[0].results[0]
     expect(r).toMatchObject({ configId: 'unit', status: 'failed', exitCode: 1, diagnosticsTotal: 25 })
     expect(r.diagnostics).toHaveLength(20)
-    expect(r.diagnostics?.[0]).toEqual({ file: 'src/a.test.ts', line: 10, message: 'math > case 0: expected 0', severity: 'error' })
+    // Final review I6: the failing test is the finding, so its words ("expected 3 to be 4", then "expected 5 to be 4")
+    // never make a still-failing test a new finding; the output tail carries them
+    expect(r.diagnostics?.[0]).toEqual({ file: 'src/a.test.ts', line: 10, message: 'math > case 0', severity: 'error' })
     expect(asked[0].cwd).toBe(absPath('w1'))
     expect(Number.isFinite(asked[0].sinceMs)).toBe(true)
   })

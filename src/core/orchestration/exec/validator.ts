@@ -325,7 +325,10 @@ export class TaskValidator {
   }
 
   /** A failed check's test report as its diagnostics: each failed or errored case, at most 20, with the count beyond.
-   *  Only a fresh report that failed counts; a stale, unreadable or passing one adds nothing and changes no status. */
+   *  Only a fresh report that failed counts; a stale, unreadable or passing one adds nothing and changes no status. A
+   *  diagnostic names the test only: a finding's fingerprint is its message, and a still-failing test whose words changed
+   *  ("expected 3 to be 4", then "expected 5 to be 4") stays the same finding (final review I6). The words are in the
+   *  check's output tail. */
   private async reportFailures(cwd: string, spec: TestReportSpec, startedAt: string): Promise<{ diagnostics: CheckDiagnostic[]; diagnosticsTotal?: number } | null> {
     try {
       const r = await this.deps.readTestReport!({ cwd, spec, sinceMs: Date.parse(startedAt) })
@@ -333,12 +336,11 @@ export class TaskValidator {
       const failed = r.report.cases.filter((c) => c.status === 'failed' || c.status === 'errored')
       if (failed.length === 0) return null
       const diagnostics = failed.slice(0, 20).map((c): CheckDiagnostic => {
-        const words = (c.failure?.message ?? '').split('\n')[0].trim()
         const file = c.failure?.file ?? c.file
         return {
           ...(file !== undefined ? { file } : {}),
           ...(file !== undefined && c.failure?.line !== undefined ? { line: c.failure.line } : {}),
-          message: `${[...c.suite, c.name].join(' > ')}${words !== '' ? `: ${words}` : ''}`,
+          message: [...c.suite, c.name].join(' > '),
           severity: 'error'
         }
       })
