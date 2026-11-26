@@ -67,6 +67,7 @@ function rig(o: {
       return Buffer.from(text, 'utf8')
     },
     stat: async (p) => (files[p] === undefined ? null : { size: o.sizes?.[p] ?? files[p].length }),
+    exists: () => true,
     timings: { idleMs: 60_000, backoffMs: [10, 10], stableMs: 10_000, failAfter: 3, maxServers: 4, ...o.timings }
   })
   const last = (p: string): LspProblem[] | undefined => emitted.flat().filter((f) => f.path === p).at(-1)?.problems

@@ -88,6 +88,8 @@ export function createLspManager(d: {
   launch?: typeof lspLaunch
   readFile?: (p: string) => Promise<Buffer>
   stat?: (p: string) => Promise<{ size: number } | null>
+  /** For tests: whether an interpreter is there (pythonPathFor's check). */
+  exists?: (p: string) => boolean
   timings?: Partial<LspManagerTimings>
   now?: () => number
   platform?: string
@@ -212,7 +214,7 @@ export function createLspManager(d: {
   }
 
   const startSession = async (srv: Srv, settings: LanguageServerSettings): Promise<void> => {
-    const python = srv.language === 'python' ? pythonPathFor(interpreterFor(srv.root), d.profileDir) : undefined
+    const python = srv.language === 'python' ? pythonPathFor(interpreterFor(srv.root), d.profileDir, d.exists) : undefined
     srv.pythonPath = python?.pythonPath
     const l = launch({ server: srv.server, root: srv.root, profileDir: d.profileDir, exec: d.exec, env: d.env, settings, ...(python ? { pythonPath: python } : {}), platform })
     if ('refused' in l) {
@@ -350,7 +352,7 @@ export function createLspManager(d: {
     // A python server whose interpreter changed starts again with it
     for (const srv of [...servers.values()]) {
       if (srv.language !== 'python' || srv.session === null || srv.files.size === 0) continue
-      if (pythonPathFor(interpreterFor(srv.root), d.profileDir).pythonPath === srv.pythonPath) continue
+      if (pythonPathFor(interpreterFor(srv.root), d.profileDir, d.exists).pythonPath === srv.pythonPath) continue
       await stopSrv(srv)
       srv.crashes = 0
       await startSession(srv, settings)

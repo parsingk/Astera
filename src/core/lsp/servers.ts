@@ -8,6 +8,7 @@
 // which Windows can find in the project folder before PATH; a `.bat`/`.cmd` it would run through a shell. With no
 // interpreter to give, the path is one inside Astera's folder that never exists, and the missing-import rules are off, so
 // no false problem reaches an agent.
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { LspNote, LspServerId, PinnedPackage } from './model'
 
@@ -67,10 +68,11 @@ export function typescriptServerFor(major: number | null, installed: ReadonlySet
   return installed.has('typescript5') ? { server: 'typescript5', notes: [] } : { server: 'typescript', notes: ['typescript5-not-installed'] }
 }
 
-/** The `pythonPath` pyright is given: the interpreter when it is an absolute path to no batch file, else a path inside
- *  Astera's folder that never exists, with the missing-import rules off. */
-export function pythonPathFor(interpreter: string | null, profileDir: string): { pythonPath: string; missingImportsOff: boolean } {
-  if (interpreter !== null && path.isAbsolute(interpreter) && !/\.(?:bat|cmd)$/i.test(interpreter)) return { pythonPath: interpreter, missingImportsOff: false }
+/** The `pythonPath` pyright is given: the interpreter when it is an absolute path to no batch file that exists, else a
+ *  path inside Astera's folder that never exists, with the missing-import rules off (an interpreter pyright cannot run
+ *  would make every import a false problem). */
+export function pythonPathFor(interpreter: string | null, profileDir: string, exists: (p: string) => boolean = existsSync): { pythonPath: string; missingImportsOff: boolean } {
+  if (interpreter !== null && path.isAbsolute(interpreter) && !/\.(?:bat|cmd)$/i.test(interpreter) && exists(interpreter)) return { pythonPath: interpreter, missingImportsOff: false }
   return { pythonPath: path.join(profileDir, 'language-servers', 'no-python', 'python'), missingImportsOff: true }
 }
 

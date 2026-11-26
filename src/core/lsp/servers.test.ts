@@ -61,7 +61,13 @@ describe('pyright interpreter rules', () => {
     expect(pythonPathFor(path.resolve('py', 'python.cmd'), prof)).toEqual({ pythonPath: none, missingImportsOff: true })
     expect(pythonPathFor('python', prof)).toEqual({ pythonPath: none, missingImportsOff: true })
     const exe = path.resolve('py', 'python.exe')
-    expect(pythonPathFor(exe, prof)).toEqual({ pythonPath: exe, missingImportsOff: false })
+    expect(pythonPathFor(exe, prof, () => true)).toEqual({ pythonPath: exe, missingImportsOff: false })
+  })
+
+  // An interpreter the person set that is not there: pyright could not run it, and its missing-import problems would be
+  // false ones
+  it('treats an interpreter that does not exist as none', () => {
+    expect(pythonPathFor(path.resolve('gone', 'python.exe'), prof, () => false)).toEqual({ pythonPath: none, missingImportsOff: true })
   })
 
   it('answers only the python section', () => {
