@@ -1,4 +1,4 @@
-import type { TestRunResult } from './tests/model'
+import type { RerunScope, RerunWhy, TestRunResult } from './tests/model'
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type {
   KubeContexts,
@@ -1710,7 +1710,7 @@ export interface CoreApi {
   tests: {
     list(projectPath: string): Promise<TestRunResult[]>
     /** Runs the configuration again, whole or only what failed; says how far it narrowed (core/tests/rerun.ts) */
-    rerun(projectPath: string, configId: string, failuresOnly: boolean): Promise<{ runId: string; scope: 'failures' | 'files' | 'all'; why?: 'not-narrowable' | 'package-manager' | 'unsafe-names' }>
+    rerun(projectPath: string, configId: string, failuresOnly: boolean): Promise<{ runId: string; scope: RerunScope; why?: RerunWhy }>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only

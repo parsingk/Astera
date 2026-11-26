@@ -78,7 +78,7 @@ export function TestsPanel({
               </button>
             )}
           </div>
-          {shown && n.case.failure && <pre className="tests-failure">{n.case.failure.message}</pre>}
+          {shown && n.case.failure && <pre className="tests-failure">{n.case.failure.message || t('tests.noMessage')}</pre>}
         </li>
       )
     }
@@ -99,7 +99,8 @@ export function TestsPanel({
       <ul className="tests-list">
         {results.map((r) => {
           const expanded = open.has(r.configId)
-          const total = r.cases.reduce((sum, c) => sum + (c.durationMs ?? 0), 0)
+          // How long the run took (final review M9): its cases' own times add up to more when workers run in parallel
+          const took = Date.parse(r.endedAt) - Date.parse(r.startedAt)
           return (
             <li key={r.configId} className="tests-config">
               <div className="tests-config-head">
@@ -108,7 +109,7 @@ export function TestsPanel({
                   {r.configName}
                 </button>
                 <span className="tests-counts">{t('tests.counts', { passed: r.counts.passed, failed: r.counts.failed + r.counts.errored, skipped: r.counts.skipped })}</span>
-                {total > 0 && <span className="tests-time">{duration(total)}</span>}
+                {took > 0 && <span className="tests-time">{duration(took)}</span>}
                 <span className="tests-time">{localTime(r.endedAt)}</span>
                 <button type="button" className="problems-action" onClick={() => onRerun(r.configId, false)}>
                   {t('tests.rerun')}

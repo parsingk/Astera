@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { TestCase, TestRunResult } from '../../../core/tests/model'
-import { caseLocation, testTree } from './testTree'
+import { caseLocation, rerunNote, testTree } from './testTree'
 
 // Phase 3 Part 2: the Tests tab's tree of a result, file > suite > case
 const c = (over: Partial<TestCase>): TestCase => ({ id: over.name ?? 'x', suite: [], name: 'x', status: 'passed', ...over })
@@ -55,5 +55,21 @@ describe('caseLocation', () => {
     expect(caseLocation(result([]), c({ failure: { message: 'm', file: 'src/a.test.ts', line: 9 } }))).toEqual({ path: 'D:\\repo\\web\\src\\a.test.ts', line: 9 })
     expect(caseLocation(result([], '/home/u/repo'), c({ file: 'src/a.test.ts' }))).toEqual({ path: '/home/u/repo/src/a.test.ts' })
     expect(caseLocation(result([]), c({}))).toBeNull()
+  })
+})
+
+// Final review M14: the toast says why a rerun of the failures ran less narrowly, not one sentence for every reason
+describe('rerunNote', () => {
+  it('names each reason a rerun of the failures ran by files or whole', () => {
+    expect(rerunNote('failures', undefined)).toBeNull()
+    expect(rerunNote('files', 'unsafe-names')).toBe('tests.scope.files')
+    expect(rerunNote('files', 'file-level')).toBe('tests.scope.filesFileLevel')
+    expect(rerunNote('files', 'package-manager')).toBe('tests.scope.filesPackageManager')
+    expect(rerunNote('files', 'too-long')).toBe('tests.scope.filesTooLong')
+    expect(rerunNote('all', 'not-narrowable')).toBe('tests.scope.all')
+    expect(rerunNote('all', undefined)).toBe('tests.scope.all')
+    expect(rerunNote('all', 'unsafe-names')).toBe('tests.scope.allUnsafe')
+    expect(rerunNote('all', 'package-manager')).toBe('tests.scope.allPackageManager')
+    expect(rerunNote('all', 'too-long')).toBe('tests.scope.allTooLong')
   })
 })

@@ -24,6 +24,13 @@ describe('TestsPanel', () => {
     for (const key of ['tests.rerun', 'tests.rerunFailures', 'tests.counts']) expect(src).toContain(`'${key}'`)
   })
 
+  // Final review M9: how long the run took, not the sum of its cases (parallel workers make that larger)
+  it('shows how long the run took, and says so when a failure has no words', () => {
+    expect(src).toMatch(/const took = Date\.parse\(r\.endedAt\) - Date\.parse\(r\.startedAt\)/)
+    expect(src).not.toMatch(/sum \+ \(c\.durationMs/)
+    expect(src).toMatch(/n\.case\.failure\.message \|\| t\('tests\.noMessage'\)/)
+  })
+
   it('says when a result is stale, stopped, unknown or cut, and when there is none', () => {
     for (const key of ['tests.stale', 'tests.outcome.stopped', 'tests.outcome.unknown', 'tests.truncated', 'tests.empty']) expect(src).toContain(`'${key}'`)
   })
@@ -32,8 +39,8 @@ describe('TestsPanel', () => {
     expect(src).toMatch(/const at = caseLocation\(r, n\.case\)/)
     expect(src).toMatch(/onOpen\(at\.path, at\.line\)/)
     expect(app).toMatch(/window\.api\.tests\s*\.rerun\(currentProject, configId, failuresOnly\)/)
-    expect(app).toContain("'tests.scope.files'")
-    expect(app).toContain("'tests.scope.all'")
+    // Final review M14: the toast names the reason (lib/testTree.ts rerunNote)
+    expect(app).toMatch(/const note = failuresOnly \? rerunNote\(r\.scope, r\.why\) : null/)
     expect(app).toMatch(/window\.api\.on\('tests:changed'/)
   })
 })

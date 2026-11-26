@@ -43,6 +43,7 @@ import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
 import type { Diagnostic } from '../../core/problems/diagnostic'
 import type { TestRunResult } from '../../core/tests/model'
+import { rerunNote } from './lib/testTree'
 import { FINDING_NOTE_MAX } from '../../core/orchestration/types'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -4177,8 +4178,8 @@ export default function App(): React.JSX.Element {
       .rerun(currentProject, configId, failuresOnly)
       .then(
         (r) => {
-          if (failuresOnly && r.scope === 'files') toast.info(t('tests.scope.files'))
-          else if (failuresOnly && r.scope === 'all') toast.info(t('tests.scope.all'))
+          const note = failuresOnly ? rerunNote(r.scope, r.why) : null
+          if (note !== null) toast.info(t(note))
         },
         (e: unknown) => toast.error(t('tests.rerunFailed', { error: e instanceof Error ? e.message : String(e) }))
       )

@@ -1,4 +1,21 @@
-import type { TestCase, TestRunResult, TestStatus } from '../../../core/tests/model'
+import type { MessageKey } from '../../../core/i18n'
+import type { RerunScope, RerunWhy, TestCase, TestRunResult, TestStatus } from '../../../core/tests/model'
+
+/** What the toast says when a rerun of the failures ran by files or whole, for each reason (final review M14); null when
+ *  it ran only the failures. */
+export function rerunNote(scope: RerunScope, why: RerunWhy | undefined): MessageKey | null {
+  if (scope === 'failures') return null
+  if (scope === 'files') {
+    if (why === 'file-level') return 'tests.scope.filesFileLevel'
+    if (why === 'package-manager') return 'tests.scope.filesPackageManager'
+    if (why === 'too-long') return 'tests.scope.filesTooLong'
+    return 'tests.scope.files'
+  }
+  if (why === 'unsafe-names') return 'tests.scope.allUnsafe'
+  if (why === 'package-manager') return 'tests.scope.allPackageManager'
+  if (why === 'too-long') return 'tests.scope.allTooLong'
+  return 'tests.scope.all'
+}
 
 /** One row of the Tests tab's tree: a file, a suite in it, or a case, with the counts of the cases under it. */
 export interface TreeNode {
