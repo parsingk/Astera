@@ -586,6 +586,34 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     ]
   },
 
+  'tasks-findings': {
+    summary: "a task's findings and where each stands",
+    detail:
+      "One line per finding: its reference, its state and its words, the task's findings now first (open unless a person acted on them), then the ones a person acted on that the task no longer has. A state is open, repair-requested, resolved-pending-verification (the repair ended, its checks have not run again yet), verified (a check or review ran over it again without it; never set by a person) or dismissed (with the note). The references are what `tasks repair`, `tasks dismiss` and `tasks undismiss` take. An unknown task is 4.",
+    flags: [{ name: 'task', value: '<taskId>', required: true, about: 'the task (from `tasks list`)' }]
+  },
+
+  'tasks-dismiss': {
+    summary: 'set findings of a task aside, with a note',
+    detail:
+      "A dismissed finding stays on the app's Problems list, dimmed and out of the counts, stays dismissed when a later round finds it again, and is left out of a `tasks repair` that names no finding. It changes no verdict: a failed check still fails and a blocking review issue still blocks. The note is required, kept as one line of at most 300 characters. Only what the task's Problems rows show can be dismissed, the row for a check's unlisted findings included; another reference is 2, an unknown task 4. It is for a person, so an agent session is refused with 5.",
+    flags: [
+      { name: 'task', value: '<taskId>', required: true, about: 'the task (from `tasks list`)' },
+      { name: 'finding', value: '<ref>', required: true, about: 'a finding to dismiss (from `tasks findings`); repeat for more' },
+      { name: 'note', value: '<text>', required: true, about: 'why, kept with the finding' }
+    ]
+  },
+
+  'tasks-undismiss': {
+    summary: 'take back the dismissal of findings',
+    detail:
+      'Each finding goes back to what still holds: repair-requested while a repair carrying it runs, resolved-pending-verification while the checks after its repair run, else open, which the next round settles. A reference that is not dismissed is 2, an unknown task 4. It is for a person, so an agent session is refused with 5.',
+    flags: [
+      { name: 'task', value: '<taskId>', required: true, about: 'the task (from `tasks list`)' },
+      { name: 'finding', value: '<ref>', required: true, about: 'a dismissed finding; repeat for more' }
+    ]
+  },
+
   'questions-list': {
     summary: 'questions workers have asked',
     flags: [

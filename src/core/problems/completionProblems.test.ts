@@ -182,6 +182,47 @@ describe('completionProblemsOf', () => {
 
 // Review I1: the Problems list is asked again when what it is made of changes, whatever view is open. main compares this
 // key on every orchestration write; it moves with findings and runs, not with a status change.
+describe('finding states on the rows (Phase 3 Part 1b)', () => {
+  it('carries a recorded finding’s state, note and history on its rows, and nothing on the others', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    const ref = findingRef({ kind: 'check', taskId: 't1', source: 'plugin:lint', file: 'src/a.ts', message: 'missing import' })
+    const history = [{ at: '2026-11-25T03:00:00Z', by: 'person' as const, from: null, to: 'dismissed' as const, note: 'known' }]
+    t1.findingStates = { [ref]: { kind: 'check', source: 'plugin:lint', state: 'dismissed', note: 'known', history } }
+    const rows = completionProblemsOf(s, new Set(['r1', 'r2', 'r3']))
+    expect(rows.find((p) => p.ref === ref)?.finding).toEqual({ state: 'dismissed', note: 'known', history })
+    expect(rows.filter((p) => p.ref !== ref).every((p) => p.finding === undefined)).toBe(true)
+  })
+
+  it('moves the Problems key when a finding’s state changes, and not when nothing did', () => {
+    const rec = (state: 'repair-requested' | 'resolved-pending-verification') => ({
+      kind: 'check' as const,
+      state,
+      history: [{ at: 'x', by: 'astera' as const, from: null, to: state }]
+    })
+    const a = state()
+    a.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': rec('repair-requested') }
+    const b = state()
+    b.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': rec('repair-requested') }
+    expect(problemsKeyOf(b)).toBe(problemsKeyOf(a))
+    const c = state()
+    c.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': rec('resolved-pending-verification') }
+    expect(problemsKeyOf(c)).not.toBe(problemsKeyOf(a))
+    expect(problemsKeyOf(a)).not.toBe(problemsKeyOf(state()))
+  })
+
+  // Final review M1: at 20 changes a new note keeps the state and the count; its time still moves the key
+  it('moves the Problems key when a dismissal’s note changes at the history cap', () => {
+    const changes = (last: string) =>
+      Array.from({ length: 20 }, (_, i) => ({ at: i === 19 ? last : `2026-11-2${i % 10}T00:00:00Z`, by: 'person' as const, from: null, to: 'dismissed' as const, note: 'n' }))
+    const a = state()
+    a.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': { kind: 'check', state: 'dismissed', note: 'old', history: changes('2026-11-26T01:00:00Z') } }
+    const b = state()
+    b.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': { kind: 'check', state: 'dismissed', note: 'new', history: changes('2026-11-26T02:00:00Z') } }
+    expect(problemsKeyOf(b)).not.toBe(problemsKeyOf(a))
+  })
+})
+
 describe('problemsKeyOf', () => {
   it('moves when a check round, a review or a run changes, and not otherwise', () => {
     const a = state()

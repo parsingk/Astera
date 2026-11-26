@@ -104,7 +104,9 @@ const TASK_HIDDEN = [
   'ciWait',
   'ciUnknowns',
   // Who forced the completion, for the Host's run report: not a script's to read or send
-  'completionOverrideBy'
+  'completionOverrideBy',
+  // A person's findings and their states (Phase 3 Part 1b): `tasks findings` says them, the DTO does not carry them
+  'findingStates'
 ] as const
 
 /** A question's field kept back on purpose: who answered it, the Host's own record for its run report. */

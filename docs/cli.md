@@ -831,6 +831,9 @@ astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
 astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> [--account <id,…>] [--agent-profile <id|name>] [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
 astera tasks   dispatch --id <taskId>
 astera tasks   repair --task <taskId> [--finding <ref>] [--dry-run]
+astera tasks   findings --task <taskId>
+astera tasks   dismiss --task <taskId> --finding <ref> --note <text>
+astera tasks   undismiss --task <taskId> --finding <ref>
 
 astera accounts list  [--agent <claude|codex>]
 
@@ -1175,6 +1178,33 @@ with 6 and nothing changes, `error.details.reason` saying why:
 An unknown task is a 4, and a `--finding` the task does not have is a 2. It is for a person, so an agent
 session, an MCP client and a plugin are refused with 5. `--dry-run` answers whether the task would take it,
 and how many findings would go, and changes nothing.
+
+**`tasks findings --task <taskId>` says where each of a task's findings stands**, one line each: its
+reference, its state and its words. The task's findings now come first, open unless a person acted on them,
+then the ones a person acted on that the task no longer has. A finding a person asked to repair is
+`repair-requested`; when that repair ends well it is `resolved-pending-verification` until the task's checks
+or review run again; a round that ran over it without it makes it `verified`, and one that still has it
+makes it `open` again. Astera never reads a finding that simply stopped showing as fixed: a check that did
+not run, could not run, timed out, failed without listing its findings, or counted more findings than it
+listed leaves the state as it was, and so does a review that rejected the work without listing its issues.
+A repair that never started, or that ended without success, sends its findings back to `open`. No person sets
+`verified`.
+
+```json
+{"ok":true,"data":{"taskId":"tsk_2","findings":[{"ref":"check:tsk_2:3f9a1c0b7e21","state":"resolved-pending-verification","text":"error src/a.ts:3 Lint: x is not defined","changes":2}]}}
+```
+
+**`tasks dismiss --task <taskId> --finding <ref>... --note <text>` sets findings aside.** The note is
+required and kept as one line of at most 300 characters. A dismissed finding stays on the app's Problems
+list, dimmed and out of the counts, stays dismissed when a later round finds it again, and is left out of a
+`tasks repair` that names no finding. It changes no verdict: a failed check still fails, a blocking review
+issue still blocks, and the automatic repairs still see it. Only what the task's Problems rows show can be
+dismissed, the row for a check's unlisted findings included. **`tasks undismiss --task <taskId> --finding
+<ref>...`** takes it back to what still holds: `repair-requested` while a repair carrying it runs,
+`resolved-pending-verification` while the checks after its repair run, else `open`, which the next round
+settles. A reference the task's rows do not show (for `undismiss`, one that is not dismissed) is a 2 and an
+unknown task a 4. Both are for a person: an agent session, an MCP
+client and a plugin are refused with 5, since an agent could hide a problem this way.
 
 **`run-configs list --job <jobId>` prints `id`, `name` and `type`** for each run configuration of the
 Job's folder: the ones the app's Run menu shows there, saved and detected. Nothing else about a

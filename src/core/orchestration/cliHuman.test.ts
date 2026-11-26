@@ -191,6 +191,21 @@ describe('humanFor', () => {
     expect(humanFor('tasks-repair', { taskId: 't1', via: 'failed', asked: 20 })).toBe('task t1 can take a repair: it failed (20 findings would go)')
   })
 
+  // Phase 3 Part 1b
+  it('tasks findings lists each finding on its line, and dismiss and undismiss say how many', () => {
+    expect(humanFor('tasks-dismiss', { taskId: 't1', dismissed: 2 })).toBe('dismissed 2 findings of task t1')
+    expect(humanFor('tasks-undismiss', { taskId: 't1', undismissed: 1 })).toBe('undismissed 1 finding of task t1')
+    const findings = [
+      { ref: 'check:t1:a', state: 'open', text: 'error a', changes: 0 },
+      { ref: 'review:t1:b', state: 'dismissed', text: 'warning b', note: 'known', changes: 1 },
+      { ref: 'check:t1:c', state: 'verified', changes: 2 }
+    ]
+    expect(humanFor('tasks-findings', { taskId: 't1', findings })).toBe(
+      ['check:t1:a  open  error a', 'review:t1:b  dismissed  warning b  (note: known)', 'check:t1:c  verified'].join('\n')
+    )
+    expect(humanFor('tasks-findings', { taskId: 't1', findings: [] })).toBe('task t1 has no findings')
+  })
+
   it('plugins logs prints the lines, and says when there are none', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: ['one', 'two'] })).toBe('one' + String.fromCharCode(10) + 'two')
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')

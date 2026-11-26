@@ -11,12 +11,15 @@ export function ConfirmHost(): React.JSX.Element | null {
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   /** 켜진 choice 의 id 들. 창이 바뀌면 초기화한다 — 남겨 두면 다음 확인 창이 앞의 선택을 물려받는다 */
   const [checked, setChecked] = useState<string[]>([])
+  /** input 에 친 글. 같은 이유로 창이 바뀌면 비운다 */
+  const [text, setText] = useState('')
 
   useEffect(
     () =>
       subscribe((next) => {
         setPending(next)
         setChecked((next?.choices ?? []).filter((c) => c.defaultChecked).map((c) => c.id))
+        setText('')
       }),
     []
   )
@@ -34,26 +37,54 @@ export function ConfirmHost(): React.JSX.Element | null {
 
   if (!pending) return null
 
-  return <ConfirmView pending={pending} checked={checked} onChecked={setChecked} />
+  return <ConfirmView pending={pending} checked={checked} onChecked={setChecked} text={text} onText={setText} />
 }
 
 /** The modal itself, apart from the store so it is tested as markup: title, body, choices, footer, buttons. */
 export function ConfirmView({
   pending,
   checked,
-  onChecked
+  onChecked,
+  text = '',
+  onText = () => {}
 }: {
   pending: PendingConfirm
   checked: string[]
   onChecked: (update: (prev: string[]) => string[]) => void
+  /** What is typed in `pending.input`, held by ConfirmHost. */
+  text?: string
+  onText?: (text: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
+  /** A confirmation that asks for a line of text is not confirmed without one. */
+  const blank = pending.input !== undefined && text.trim() === ''
+  const confirm = (): void => {
+    if (!blank) settle(true, checked, pending.input !== undefined ? text : undefined)
+  }
   return (
     <div className="modal-backdrop" {...backdropProps(() => settle(false))}>
       <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
         <h2>{pending.title}</h2>
         <p className="confirm-text confirm-body">{pending.body}</p>
         {pending.code !== undefined && <pre className="confirm-code">{pending.code}</pre>}
+        {pending.input !== undefined && (
+          <label className="field">
+            <span>{pending.input.label}</span>
+            <input
+              className="confirm-input"
+              type="text"
+              autoFocus
+              value={text}
+              maxLength={pending.input.maxLength}
+              onChange={(e) => onText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                confirm()
+              }}
+            />
+          </label>
+        )}
         {/* 곁가지 선택. 되돌릴 수 없는 동작에 딸린 결정을 이 자리에서 받는다 — 확인 창을 닫고 다른
             곳에서 다시 묻게 하면 사람이 무엇을 고른 채로 지웠는지 알 수 없다 */}
         {pending.choices && pending.choices.length > 0 && (
@@ -93,7 +124,7 @@ export function ConfirmView({
           <button type="button" autoFocus={pending.code !== undefined} onClick={() => settle(false)}>
             {pending.cancelLabel ?? t('common.cancel')}
           </button>
-          <button className="primary" type="button" autoFocus={pending.code === undefined} onClick={() => settle(true, checked)}>
+          <button className="primary" type="button" disabled={blank} autoFocus={pending.code === undefined && pending.input === undefined} onClick={confirm}>
             {pending.confirmLabel ?? t('common.confirm')}
           </button>
         </div>

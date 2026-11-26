@@ -26,9 +26,12 @@ export type ConfirmRequest = {
   confirmLabel?: string
   cancelLabel?: string
   choices?: ConfirmChoice[]
+  /** A line of text the person must type before confirming, drawn after the body: a dismissal's note (Phase 3 Part 1b).
+   *  The confirm button is off while it is blank. */
+  input?: { label: string; maxLength: number }
 }
-/** 확인 결과. checked 는 켜진 choice 의 id 들 — 취소면 언제나 빈 배열이다 */
-export type ConfirmAnswer = { ok: boolean; checked: string[] }
+/** 확인 결과. checked 는 켜진 choice 의 id 들 — 취소면 언제나 빈 배열이다. text 는 input 에 친 글, 확인했을 때만 */
+export type ConfirmAnswer = { ok: boolean; checked: string[]; text?: string }
 export type PendingConfirm = ConfirmRequest & { resolve: (answer: ConfirmAnswer) => void }
 
 const listeners = new Set<(pending: PendingConfirm | null) => void>()
@@ -67,12 +70,17 @@ export function confirmModalWithChoices(request: ConfirmRequest): Promise<Confir
   })
 }
 
-export function settle(ok: boolean, checked: string[] = []): void {
+/** A confirmation that asks for a line of text: the text typed, or null when the person cancelled. */
+export function confirmModalWithInput(request: ConfirmRequest & { input: { label: string; maxLength: number } }): Promise<string | null> {
+  return confirmModalWithChoices(request).then((a) => (a.ok ? (a.text ?? '') : null))
+}
+
+export function settle(ok: boolean, checked: string[] = [], text?: string): void {
   const current = pending
   if (!current) return
   pending = null
   emit()
   // 취소는 언제나 빈 배열이다 — 켜 둔 체크박스가 취소를 타고 흘러나가면 부르는 쪽이 그것을 선택으로
-  // 읽을 수 있다
-  current.resolve({ ok, checked: ok ? checked : [] })
+  // 읽을 수 있다. 친 글도 같다
+  current.resolve({ ok, checked: ok ? checked : [], ...(ok && text !== undefined ? { text } : {}) })
 }

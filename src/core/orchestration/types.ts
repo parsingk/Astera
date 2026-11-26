@@ -119,6 +119,35 @@ export interface AskedFinding {
   ref: string
   text: string
 }
+/** Where a finding a person acted on stands (Phase 3 Part 1b, design §5 Part 1 item 5). A person's repair asks it
+ *  (`repair-requested`), the repair ending well waits on the next round (`resolved-pending-verification`), a round that
+ *  ran over it without it proves it gone (`verified`, never a person's), one that still has it opens it again (`open`).
+ *  `dismissed` is a person's, with a note, and no round moves it. Whether its file changed since is the row's `stale`,
+ *  a separate flag. */
+export type FindingState = 'open' | 'repair-requested' | 'resolved-pending-verification' | 'verified' | 'dismissed'
+/** One change of a finding's state: when, who (a person's act, or `astera` for a change a round or an attempt's end
+ *  made), from what (null for the first), to what, the attempt's head then, and a dismissal's note. */
+export interface FindingChange {
+  at: string
+  by: ActorGroup
+  from: FindingState | null
+  to: FindingState
+  revision?: string
+  note?: string
+}
+/** A finding a person acted on, by its reference (core/problems/findingRef.ts) on its Task. `source` is a check's
+ *  configuration, the round that can prove it gone; `note` the current dismissal's. */
+export interface FindingRecord {
+  kind: 'check' | 'review'
+  source?: string
+  state: FindingState
+  note?: string
+  history: FindingChange[]
+}
+/** The newest changes a finding keeps, the records a Task keeps (verified ones go first), and a note's length. */
+export const FINDING_HISTORY_MAX = 20
+export const TASK_FINDING_STATES_MAX = 100
+export const FINDING_NOTE_MAX = 300
 /** Why a Task does not take a person's repair (taskRepair.ts repairEligibility): `tasks-repair` answers 409 with it as
  *  `reason`, the CLI carries it in `details.reason`, and the app says each in a sentence of its own. */
 export type RepairRefusal =
@@ -473,6 +502,9 @@ export interface Task {
   lastFailure?: string
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
+  /** 사람이 손댄 발견(수리 요청·무시)의 상태와 기록, 발견 참조별(Phase 3 Part 1b). 자동 변화는 Host 커밋 스탬프
+   *  (core/problems/findingStates.ts stampFindings) 가 만든다. 앱이 몰아가는 장부라 공개 DTO 에는 없다(TASK_HIDDEN) */
+  findingStates?: Record<string, FindingRecord>
   /** The last review that gave a verdict ran with Claude Code's file-tool protection only (Task K fix round 1): its work was
    *  sandboxed, and Claude Code on Windows without its shell route into Codex's sandbox has none, so its reviewer started
    *  with the deny rules only (E2), its shell unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */

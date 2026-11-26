@@ -118,4 +118,15 @@ describe('ConfirmView', () => {
     expect(buttons({ title: 'T', body: 'B', code: 'npx run-me', resolve: () => {} })).toEqual(['common.cancel [focused]', 'common.confirm'])
     expect(buttons({ title: 'T', body: 'B', resolve: () => {} })).toEqual(['common.cancel', 'common.confirm [focused]'])
   })
+
+  // Phase 3 Part 1b: a dismissal's note is asked in the modal, and the modal does not confirm without one
+  it('draws a text field for an input after the body, and keeps confirm off while it is blank', () => {
+    const pending = { title: 'T', body: 'BODY-TEXT', input: { label: 'WHY-LABEL', maxLength: 300 }, resolve: () => {} }
+    const blank = renderToStaticMarkup(React.createElement(ConfirmView, { pending, checked: [], onChecked: () => {}, text: ' ', onText: () => {} }))
+    expect(blank.indexOf('BODY-TEXT')).toBeLessThan(blank.indexOf('WHY-LABEL'))
+    expect(blank).toMatch(/<input[^>]*class="confirm-input"[^>]*maxLength="300"|<input[^>]*maxLength="300"[^>]*class="confirm-input"/)
+    expect(blank).toMatch(/<button class="primary" type="button" disabled=""/)
+    const typed = renderToStaticMarkup(React.createElement(ConfirmView, { pending, checked: [], onChecked: () => {}, text: 'known', onText: () => {} }))
+    expect(typed).not.toMatch(/<button class="primary" type="button" disabled=""/)
+  })
 })

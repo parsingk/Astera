@@ -29,6 +29,37 @@ describe('createMirrorStore', () => {
 
   // 읽기도 거절한다 — 빈 상태를 돌려주면 그것을 읽은 자리가 "Job 이 없다"로 읽고, 그 답으로
   // 쓴 것이 진짜 상태를 덮는다.
+  // Phase 3 Part 1b: the Host stamps an app's put and does not push it back to the app, so the mirror stamps it the same
+  // way first and shows at once what the Host will derive (a repair the app opened marks its findings)
+  it('stamps each write before it goes, and sends the stamped state', async () => {
+    const call = vi.fn().mockResolvedValue({ status: 200, body: {} })
+    const stamp = vi.fn((_prev: unknown, next: { jobs: unknown[] }) => ({ ...next, jobs: [...next.jobs, { id: 'stamped' }] }))
+    const m = createMirrorStore({ call, stamp: stamp as never })
+    const first = emptyState()
+    m.accept(first)
+    const next = { ...emptyState(), jobs: [{ id: 'job_2' }] } as never
+    await m.setState(next)
+    expect(stamp).toHaveBeenCalledWith(first, next)
+    expect(m.getState().jobs).toEqual([{ id: 'job_2' }, { id: 'stamped' }])
+    expect(call).toHaveBeenCalledWith({ cmd: 'state-put', args: { state: m.getState() }, sessionId: '' })
+  })
+
+  // Final review I2: the stamped state is what was sent, so it is what a refusal takes back and a reply confirms
+  it('puts a refused stamped write back, and takes the version of one that landed', async () => {
+    const stamp = (_prev: unknown, next: { jobs: unknown[] }) => ({ ...next, jobs: [...next.jobs, { id: 'stamped' }] })
+    const refused = createMirrorStore({ call: vi.fn().mockResolvedValue({ status: 500, body: {} }), stamp: stamp as never })
+    const first = emptyState()
+    refused.accept(first, 3)
+    await expect(refused.setState({ ...emptyState(), jobs: [{ id: 'job_2' }] } as never)).rejects.toThrow(/refused/)
+    expect(refused.getState()).toBe(first)
+    const call = vi.fn().mockResolvedValue({ status: 200, body: { version: 9 } })
+    const landed = createMirrorStore({ call, stamp: stamp as never })
+    landed.accept(emptyState(), 3)
+    await landed.setState({ ...emptyState(), jobs: [{ id: 'job_2' }] } as never)
+    await landed.setState({ ...emptyState(), jobs: [{ id: 'job_3' }] } as never)
+    expect(call.mock.calls[1][0].args.version).toBe(9)
+  })
+
   it('아직 아무것도 못 받았으면 읽기도 거절한다', () => {
     const m = createMirrorStore({ call: vi.fn() })
     expect(() => m.getState()).toThrow(/not loaded/)

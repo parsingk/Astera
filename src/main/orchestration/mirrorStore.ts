@@ -40,6 +40,10 @@ export function createMirrorStore(a: {
     args: Record<string, unknown>
     sessionId: string
   }): Promise<{ status: number; body: unknown }>
+  /** Run over every write before it goes, as the Host runs the put through its commit stamps: the Host does not push an
+   *  app's own put back to it, so what the Host derives from it (a finding's state, Phase 3 Part 1b) shows here at once
+   *  only if the mirror derives it the same way. The Host's next push replaces it with the Host's own. */
+  stamp?(prev: OrchState, next: OrchState): OrchState
 }): MirrorStore {
   let state: OrchState | null = null
   /** The Host commit this mirror is holding — **or the one it will be holding once the writes already
@@ -81,12 +85,13 @@ export function createMirrorStore(a: {
       const previous = state
       const sent = version
       const previousVersion = version
-      state = next
+      const stamped = a.stamp ? a.stamp(previous, next) : next
+      state = stamped
       // Moved with the state, not when the reply lands — see `version`. Undefined stays undefined: a
       // Host too old to issue versions is one this check is off for, and inventing a number here
       // would start refusing every write against it.
       if (typeof version === 'number') version = version + 1
-      const r = await a.call({ cmd: 'state-put', args: { state: next, version: sent }, sessionId: '' })
+      const r = await a.call({ cmd: 'state-put', args: { state: stamped, version: sent }, sessionId: '' })
       if (r.status === 409) {
         // **The Host had moved on, so this write never landed and the mirror was wrong before it was
         // even built** (ruling F56). The refusal carries the state the Host actually holds, so the
@@ -97,7 +102,7 @@ export function createMirrorStore(a: {
         if (body && isValidState(body.state)) {
           state = body.state
           version = body.version
-        } else if (state === next) {
+        } else if (state === stamped) {
           state = previous
           version = previousVersion
         }
@@ -114,7 +119,7 @@ export function createMirrorStore(a: {
         //
         // Unless something has moved on in the meantime — a later write, or a push from the Host.
         // Then that is the newer truth and this reply has nothing to say about it.
-        if (state === next) {
+        if (state === stamped) {
           state = previous
           version = previousVersion
         }
@@ -126,7 +131,7 @@ export function createMirrorStore(a: {
       // and taking the reply's number would have the next write quote a version older than the state
       // it is built from.
       const ok = r.body as { version?: number } | null
-      if (state === next && typeof ok?.version === 'number') version = ok.version
+      if (state === stamped && typeof ok?.version === 'number') version = ok.version
     },
     accept: (s, v) => {
       state = s

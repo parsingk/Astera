@@ -37,10 +37,12 @@ import { contentRevision, contextText, isUnder, sessionFits, type ContextRef } f
 import { logContext, problemsContext, selectionContext } from './lib/contextSources'
 import { problemsObjective } from './lib/problemsDraft'
 import { repairAnswer, repairRequestOf } from './lib/problemsRepair'
+import { dismissGroups } from './lib/findingStates'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
 import type { Diagnostic } from '../../core/problems/diagnostic'
+import { FINDING_NOTE_MAX } from '../../core/orchestration/types'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
@@ -128,7 +130,7 @@ import * as sticky from './lib/stickyProject'
 import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { announceSettingsRecovery } from './lib/settingsRecoveryNotice'
-import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
+import { confirmModal, confirmModalWithChoices, confirmModalWithInput, isConfirmOpen } from './lib/confirm'
 import { offerCopyInstall } from './lib/copyInstallOffer'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
 import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
@@ -4925,6 +4927,44 @@ export default function App(): React.JSX.Element {
     else if (asked.kind === 'refused') await offerDraft(asked.key)
     else toast.error(t('problems.fix.failed', { error: asked.error }))
   }
+  /** One dismissal command per Task (Phase 3 Part 1b), then one line for all of them: how many changed, or the first
+   *  refusal in its own words. */
+  const changeFindings = async (root: string, cmd: 'tasks-dismiss' | 'tasks-undismiss', groups: Array<{ task: string; finding: string[] }>, note?: string): Promise<void> => {
+    let changed = 0
+    let error: string | null = null
+    for (const g of groups) {
+      const r = await window.api.orch
+        .command(root, cmd, { task: g.task, finding: g.finding, ...(note !== undefined ? { note } : {}) })
+        .catch((e: unknown) => ({ status: 0, body: { error: e instanceof Error ? e.message : String(e) } }))
+      const body = (r.body ?? {}) as { dismissed?: unknown; undismissed?: unknown; error?: unknown }
+      if (r.status === 200) changed += Number(body.dismissed ?? body.undismissed ?? 0)
+      else error ??= typeof body.error === 'string' ? body.error : String(r.status)
+    }
+    if (error !== null) toast.error(t('problems.dismiss.failed', { error }))
+    else toast.info(t(cmd === 'tasks-dismiss' ? 'problems.dismiss.done' : 'problems.undismiss.done', { count: changed }))
+  }
+  /** Sets the chosen findings aside with a person's note (Phase 3 Part 1b). They stay listed, dimmed, and no verdict
+   *  changes; the note is asked in the confirmation itself. */
+  const dismissProblems = async (rows: Diagnostic[]): Promise<void> => {
+    const root = currentProject
+    const groups = dismissGroups(rows)
+    if (!root || !groups) return
+    const note = await confirmModalWithInput({
+      title: t('problems.dismiss.title'),
+      body: t('problems.dismiss.body', { count: rows.length }),
+      confirmLabel: t('problems.dismiss.confirm'),
+      input: { label: t('problems.dismiss.note'), maxLength: FINDING_NOTE_MAX }
+    })
+    if (note === null) return
+    await changeFindings(root, 'tasks-dismiss', groups, note)
+  }
+  /** Takes the dismissal of the chosen findings back, each to where it was; nothing is lost, so nothing is asked. */
+  const undismissProblems = async (rows: Diagnostic[]): Promise<void> => {
+    const root = currentProject
+    const groups = dismissGroups(rows)
+    if (!root || !groups) return
+    await changeFindings(root, 'tasks-undismiss', groups)
+  }
   /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
   const openPalette = (query: PaletteStart): void => {
@@ -5966,7 +6006,7 @@ export default function App(): React.JSX.Element {
                     problemsRoot={currentProject}
                     problems={problems}
                     onOpenProblem={(file, line, column) => openFile(file, line !== undefined ? { line, ...(column !== undefined ? { col: column } : {}) } : undefined)}
-                    problemActions={contextOn ? { send: sendProblems, fix: fixProblems } : undefined}
+                    problemActions={contextOn ? { send: sendProblems, fix: fixProblems, dismiss: dismissProblems, undismiss: undismissProblems } : undefined}
                     onRefreshProblems={() => setProblemsAsk((n) => n + 1)}
                     onSendRunLog={(runId) => {
                       // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
