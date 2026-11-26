@@ -112,6 +112,7 @@ import {
 import { runWorktrees } from './integrate'
 import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
 import { taskFindings, taskFoldersOf } from '../problems/completionProblems'
+import { cleanNote, findingRevision, findingSourceOf, moveFinding } from '../problems/findingStates'
 import { isPathWithin } from '../files/tree'
 import { buildHandoverPrompt } from './handover'
 import { parseReviewFile, type ReviewIssueInput } from './review'
@@ -5200,7 +5201,8 @@ export async function handleCommand(
       if (!named.every((x): x is string => typeof x === 'string' && x !== '')) return bad('--finding needs a finding reference')
       const texts = args.texts !== null && typeof args.texts === 'object' && !Array.isArray(args.texts) ? (args.texts as Record<string, unknown>) : {}
       const own = taskFindings(task, taskFoldersOf(s, task))
-      const asked: AskedFinding[] = named.length === 0 ? own : []
+      // With none named, every finding but the ones a person dismissed (Phase 3 Part 1b)
+      const asked: AskedFinding[] = named.length === 0 ? own.filter((f) => task.findingStates?.[f.ref]?.state !== 'dismissed') : []
       const unknown: string[] = []
       for (const ref of named) {
         const given = texts[ref]
@@ -5231,6 +5233,65 @@ export async function handleCommand(
         .at(-1)
       // How many findings rode, one per reference and at most ASKED_FINDINGS_MAX (final review M11)
       return okBody({ taskId, via: verdict.via, ...(d ? { repairDispatchId: d.id } : {}), asked: capAsked(asked).length })
+    }
+    /**
+     * A Task's findings and where each stands (Phase 3 Part 1b): its findings now, as taskFindings lists them (open when
+     * no person acted on them), then the ones a person acted on that it no longer has. A read, anyone's.
+     */
+    case 'tasks-findings': {
+      const taskId = str(args.task)
+      if (!taskId) return bad('--task is required')
+      const task = s.tasks.find((t) => t.id === taskId)
+      if (!task) return notFound(`unknown task: ${taskId}`)
+      const recs = task.findingStates ?? {}
+      const own = taskFindings(task, taskFoldersOf(s, task))
+      const current = new Set(own.map((f) => f.ref))
+      const row = (ref: string, text?: string) => {
+        const r = recs[ref]
+        return { ref, state: r?.state ?? 'open', ...(text !== undefined ? { text } : {}), ...(r?.note !== undefined ? { note: r.note } : {}), changes: r?.history.length ?? 0 }
+      }
+      return okBody({ taskId, findings: [...own.map((f) => row(f.ref, f.text)), ...Object.keys(recs).filter((ref) => !current.has(ref)).map((ref) => row(ref))] })
+    }
+    /**
+     * A person setting findings aside, with a note, or taking that back (Phase 3 Part 1b). A dismissed finding stays on
+     * the list, dimmed, no round moves it, and it changes no verdict: checks, Gates and the automatic repairs never read
+     * it. An agent could hide a problem this way, so only a person's callers reach it. Undismissing puts each back where
+     * it was before its dismissal.
+     */
+    case 'tasks-dismiss':
+    case 'tasks-undismiss': {
+      const dismiss = cmd === 'tasks-dismiss'
+      const verb = dismiss ? 'dismiss' : 'undismiss'
+      if (agentCaller(caller)) return denied(withUnsaidNote(caller, `tasks ${verb} is for a person: ask from the app or your own shell, not from inside an agent session`))
+      const taskId = str(args.task)
+      if (!taskId) return bad('--task is required')
+      const task = s.tasks.find((t) => t.id === taskId)
+      if (!task) return notFound(`unknown task: ${taskId}`)
+      const named = args.finding === undefined ? [] : Array.isArray(args.finding) ? args.finding : [args.finding]
+      if (named.length === 0) return bad('--finding is required')
+      if (!named.every((x): x is string => typeof x === 'string' && x !== '')) return bad('--finding needs a finding reference')
+      const refs = [...new Set(named)]
+      const note = dismiss ? cleanNote(typeof args.note === 'string' ? args.note : '') : ''
+      if (dismiss && note === '') return bad('--note is required')
+      const recs = { ...(task.findingStates ?? {}) }
+      const folders = taskFoldersOf(s, task)
+      if (dismiss) {
+        const known = new Set([...taskFindings(task, folders).map((f) => f.ref), ...Object.keys(recs)])
+        const unknown = refs.filter((ref) => !known.has(ref))
+        if (unknown.length > 0) return bad(`not a finding of task ${taskId}: ${unknown.join(', ')}`)
+      } else {
+        const not = refs.filter((ref) => recs[ref]?.state !== 'dismissed')
+        if (not.length > 0) return bad(`not dismissed: ${not.join(', ')}`)
+      }
+      const revision = findingRevision(s, taskId)
+      for (const ref of refs) {
+        const rec = recs[ref]
+        // Back to where its newest dismissal found it, or open when that was its first state
+        const to = dismiss ? 'dismissed' : ([...(rec?.history ?? [])].reverse().find((c) => c.to === 'dismissed')?.from ?? 'open')
+        recs[ref] = moveFinding(rec, ref, to, { at: now, by: 'person', ...(revision !== undefined ? { revision } : {}), ...(dismiss ? { note } : {}) }, findingSourceOf(task, folders, ref))
+      }
+      await deps.setState({ ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, findingStates: recs } : t)) })
+      return okBody(dismiss ? { taskId, dismissed: refs.length } : { taskId, undismissed: refs.length })
     }
     /** 질문에 답한다 — `gate-resolve` 의 공개 이름(공개 CLI 설계 §5 Phase B).
      *  답을 받는 플래그 이름도 사람의 말로 바뀐다(`--answer`). 서버 안에서는 한 자리로 간다 —

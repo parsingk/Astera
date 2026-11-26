@@ -83,7 +83,7 @@ function checkRound(task: Task, c: CheckResult, base: readonly string[]): CheckR
 }
 
 /** The check whose round carries this reference now, for a new record's `source`. */
-function sourceOf(task: Task, base: readonly string[], ref: string): string | undefined {
+export function findingSourceOf(task: Task, base: readonly string[], ref: string): string | undefined {
   return (task.checks ?? []).find((c) => checkRound(task, c, base).refs.has(ref))?.configId
 }
 
@@ -143,7 +143,7 @@ export function stampFindings(prev: OrchState, next: OrchState, group: ActorGrou
     for (const d of carriers) {
       const was = prevDispatches.get(d.id)
       // 1. A person's repair opened (recovery's replacement finds them repair-requested already)
-      if (!was && d.endedAt === undefined) for (const f of d.askedFindings!) move(f.ref, 'repair-requested', group, sourceOf(task, folders(), f.ref))
+      if (!was && d.endedAt === undefined) for (const f of d.askedFindings!) move(f.ref, 'repair-requested', group, findingSourceOf(task, folders(), f.ref))
       // 2. It ended
       if (was && was.endedAt === undefined && d.endedAt !== undefined)
         for (const f of d.askedFindings!)

@@ -603,6 +603,19 @@ export function humanFor(
       const would = typeof data.asked === 'number' ? ` (${data.asked} finding${data.asked === 1 ? '' : 's'} would go)` : ''
       return `task ${str(data.taskId)} can take a repair: ${how}${would}`
     }
+    // Phase 3 Part 1b: a task's findings, one line each, and how many a person set aside or took back
+    case 'tasks-findings': {
+      const findings = Array.isArray(data.findings) ? (data.findings as Record<string, unknown>[]) : []
+      if (findings.length === 0) return `task ${str(data.taskId)} has no findings`
+      return findings
+        .map((f) => [str(f.ref), str(f.state), ...(typeof f.text === 'string' ? [f.text] : []), ...(typeof f.note === 'string' ? [`(note: ${f.note})`] : [])].join('  '))
+        .join('\n')
+    }
+    case 'tasks-dismiss':
+    case 'tasks-undismiss': {
+      const n = Number(data.dismissed ?? data.undismissed ?? 0)
+      return `${data.dismissed !== undefined ? 'dismissed' : 'undismissed'} ${n} finding${n === 1 ? '' : 's'} of task ${str(data.taskId)}`
+    }
     case 'plugins-logs': {
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []
       return lines.length > 0 ? lines.join('\n') : 'no log yet'
