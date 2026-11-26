@@ -10,6 +10,7 @@
 // 실행 구성(앱의 RunConfigStore, Host 의 run-configs.json), 실행 관리자, 세션 생존 여부, 검토·수리의
 // 시작, continuity journal 의 첫 체크포인트 head(Host 에서는 언제나 null, R12), git diff.
 import { readFileSync, rmSync } from 'node:fs'
+import { readTestReport } from '../../tests/read'
 import os from 'node:os'
 import { t, type Lang, type MessageKey } from '../../i18n'
 import type { RunConfig } from '../../run/config'
@@ -165,6 +166,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
   // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
   // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
   const validator = new TaskValidator({
+    readTestReport,
     runner: {
       start: async ({ cwd, taskId, configId }) => {
         const st = c.getState()
@@ -252,7 +254,9 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           runId: started.runId,
           name: config.name,
           ...hidden,
-          ...(reasonFile !== null ? { sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) } : {})
+          ...(reasonFile !== null ? { sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) } : {}),
+          // A failed run's test failures are read from its report (Phase 3 Part 2)
+          ...(config.testReport ? { testReport: config.testReport } : {})
         }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),
