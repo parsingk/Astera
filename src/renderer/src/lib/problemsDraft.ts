@@ -9,7 +9,7 @@ import { problemsContext } from './contextSources'
  * says they are data and masks what they carry. Their files' lines are left to the agent, who can read the files.
  */
 export function problemsObjective(rows: readonly Diagnostic[], root: string): string {
-  const made = problemsContext({ rows, root, files: {} })
+  const made = problemsContext({ rows, root, files: {}, anyFolder: true })
   if (!made.ok) return ''
   const checks = [...new Set(rows.filter((d) => d.source.kind === 'check').map((d) => d.source.label))]
   return [

@@ -34,8 +34,9 @@ import { NewRunModal } from './components/NewRunModal'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
 import { contentRevision, contextText, isUnder, sessionFits, type ContextRef } from '../../core/context/contextRef'
-import { logContext, problemLine, problemsContext, selectionContext } from './lib/contextSources'
+import { logContext, problemsContext, selectionContext } from './lib/contextSources'
 import { problemsObjective } from './lib/problemsDraft'
+import { repairAnswer, repairRequestOf } from './lib/problemsRepair'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
@@ -4773,7 +4774,8 @@ export default function App(): React.JSX.Element {
       // would send the pasted context with its own message: offered last, marked, never the default
       .sort((a, b) => Number(a.startedBy === 'agent') - Number(b.startedBy === 'agent'))
     if (fitting.length === 0) {
-      toast.info(t('context.noSession'))
+      // A row of a Job's worker folder fits only a session working there: say which folder (final review I3)
+      toast.info(currentProject && isUnder(currentProject, ref.root) ? t('context.noSession') : t('context.noSessionIn', { folder: ref.root }))
       return
     }
     setContextPreview({
@@ -4874,7 +4876,10 @@ export default function App(): React.JSX.Element {
       }
     }
     const made = problemsContext({ rows, root, files })
-    if (!made.ok) return
+    if (!made.ok) {
+      if (made.reason === 'folders') toast.info(t('problems.send.folders'))
+      return
+    }
     openContextPreview(made.ref, contextText(made.ref, made.excerpt, made.language))
   }
   /** Problems with no Task that can take a repair, as a new Job draft (the hunk's way, openRepairDraft). */
@@ -4886,45 +4891,39 @@ export default function App(): React.JSX.Element {
   }
   /** Has an agent fix the chosen problems (Phase 3 Part 1). Rows of one Task go to that Task as a repair request: the
    *  Host is asked first whether the Task takes one (a dry run, which changes nothing), then the person confirms with
-   *  the Task named; a Task that cannot take it says why and offers a new Job draft instead. Rows of no Task, or of
-   *  several, go to the draft directly. */
+   *  the Job and Task named and, past the bound, how many go; a refusal, from the dry run or from the real call after
+   *  the state moved, says why and offers a new Job draft instead (final review M10). Rows of no Task, or of several,
+   *  go to the draft directly. */
   const fixProblems = async (rows: Diagnostic[]): Promise<void> => {
     const root = currentProject
     if (!root || rows.length === 0) return
-    const tasks = new Set(rows.map((d) => d.origin?.taskId))
+    const request = repairRequestOf(rows, root)
     const origin = rows[0].origin
-    if (tasks.size !== 1 || !origin || rows.some((d) => d.ref === undefined)) return openProblemsDraft(rows)
-    const request = {
-      task: origin.taskId,
-      finding: rows.map((d) => d.ref as string),
-      texts: Object.fromEntries(rows.map((d) => [d.ref as string, problemLine(d, root)]))
-    }
+    if (!request || !origin) return openProblemsDraft(rows)
     /** A failed call is an answer like any other, said as one. */
     const failedCall = (e: unknown): { status: number; body: unknown } => ({ status: 0, body: { error: e instanceof Error ? e.message : String(e) } })
-    const dry = await window.api.orch.command(root, 'tasks-repair', { ...request, dryRun: true }).catch(failedCall)
-    if (dry.status === 409) {
-      const code = (dry.body as { reason?: string } | null)?.reason ?? 'not-repairable'
-      const ok = await confirmModal({
-        title: t('problems.fix.cannotTitle'),
-        body: `${t(`problems.fix.refused.${code}` as MessageKey)} ${t('problems.fix.offerDraft')}`,
-        confirmLabel: t('problems.fix.draft')
-      })
+    const offerDraft = async (key: MessageKey): Promise<void> => {
+      const ok = await confirmModal({ title: t('problems.fix.cannotTitle'), body: `${t(key)} ${t('problems.fix.offerDraft')}`, confirmLabel: t('problems.fix.draft') })
       if (ok) openProblemsDraft(rows)
+    }
+    const dry = repairAnswer(await window.api.orch.command(root, 'tasks-repair', { ...request, dryRun: true }).catch(failedCall))
+    if (dry.kind === 'refused') return offerDraft(dry.key)
+    if (dry.kind === 'failed') {
+      toast.error(t('problems.fix.failed', { error: dry.error }))
       return
     }
-    if (dry.status !== 200) {
-      toast.error(t('problems.fix.failed', { error: (dry.body as { error?: string } | null)?.error ?? String(dry.status) }))
-      return
-    }
+    // At most ASKED_FINDINGS_MAX ride; the dry run says how many will (final review M11)
+    const capped = dry.asked !== undefined && dry.asked < request.finding.length ? ` ${t('problems.fix.capped', { kept: dry.asked })}` : ''
     const ok = await confirmModal({
       title: t('problems.fix.title'),
-      body: t('problems.fix.body', { task: origin.task, count: rows.length }),
+      body: `${t('problems.fix.body', { job: origin.job ?? origin.runId, task: origin.task, count: rows.length })}${capped}`,
       confirmLabel: t('problems.fix.confirm')
     })
     if (!ok) return
-    const asked = await window.api.orch.command(root, 'tasks-repair', request).catch(failedCall)
-    if (asked.status === 200) toast.info(t('problems.fix.asked', { task: origin.task }))
-    else toast.error(t('problems.fix.failed', { error: (asked.body as { error?: string } | null)?.error ?? String(asked.status) }))
+    const asked = repairAnswer(await window.api.orch.command(root, 'tasks-repair', request).catch(failedCall))
+    if (asked.kind === 'ok') toast.info(t('problems.fix.asked', { task: origin.task }))
+    else if (asked.kind === 'refused') await offerDraft(asked.key)
+    else toast.error(t('problems.fix.failed', { error: asked.error }))
   }
   /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */

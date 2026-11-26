@@ -600,7 +600,8 @@ export function humanFor(
             : data.via === 'exhausted-gate'
               ? 'through its exhausted repairs question'
               : str(data.via)
-      return `task ${str(data.taskId)} can take a repair: ${how}`
+      const would = typeof data.asked === 'number' ? ` (${data.asked} finding${data.asked === 1 ? '' : 's'} would go)` : ''
+      return `task ${str(data.taskId)} can take a repair: ${how}${would}`
     }
     case 'plugins-logs': {
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []

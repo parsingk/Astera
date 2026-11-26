@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { logContext, problemsContext, selectionContext } from './contextSources'
+import { logContext, problemLine, problemsContext, selectionContext } from './contextSources'
 import type { Diagnostic } from '../../../core/problems/diagnostic'
-import { contextText } from '../../../core/context/contextRef'
+import { contextText, sessionFits } from '../../../core/context/contextRef'
 import { contentRevision } from '../../../core/context/contextRef'
 
 const DOC = 'line one\nline two\nline three\nline four\n'
@@ -156,5 +156,34 @@ describe('problemsContext', () => {
 
   it('refuses no rows', () => {
     expect(problemsContext({ rows: [], root: 'D:\\repo', files: {} })).toEqual({ ok: false, reason: 'empty' })
+  })
+
+  // Final review I3: a Task's finding is found in its worker folder, outside the project; only a session working in that
+  // folder may take it, as a session of another worktree may not (W4)
+  it('gives a row found in a worker folder that folder as its root, so a session working there takes it', () => {
+    const WT = 'F:\\wt\\t1'
+    const r = problemsContext({ rows: [row({ path: `${WT}\\src\\a.ts`, root: WT })], root: 'D:\\repo', files: { [`${WT}\\src\\a.ts`]: FILE } })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.ref.root).toBe(WT)
+    expect(sessionFits(r.ref, { cwd: WT, alive: true })).toBe(true)
+    expect(sessionFits(r.ref, { cwd: 'D:\\repo', alive: true })).toBe(false)
+    expect(r.excerpt.startsWith('error src/a.ts:4 Lint: x is not defined\n')).toBe(true)
+  })
+
+  it('gives rows of one worker folder that folder, a row with no file joining them, and refuses rows of two folders', () => {
+    const WT = 'F:\\wt\\t1'
+    const inWt = row({ path: `${WT}\\src\\a.ts`, root: WT })
+    const noFile = row({ id: 'check:t1:cfg', path: undefined, line: undefined, message: 'npm test failed' })
+    const together = problemsContext({ rows: [inWt, noFile], root: 'D:\\repo', files: {} })
+    if (!together.ok) throw new Error(together.reason)
+    expect(together.ref.root).toBe(WT)
+    expect(sessionFits(together.ref, { cwd: 'D:\\repo', alive: true })).toBe(false)
+    expect(problemsContext({ rows: [inWt, row({ root: 'D:\\repo' })], root: 'D:\\repo', files: {} })).toEqual({ ok: false, reason: 'folders' })
+  })
+
+  // Final review M15: the lines pasted for a row whose file changed may not be the lines it was about
+  it('says on the problem’s line when its file changed since it was found, or is not there', () => {
+    expect(problemLine(row({ stale: 'changed' }), 'D:\\repo')).toBe('error src/a.ts:4 Lint: x is not defined (the file changed since this was found)')
+    expect(problemLine(row({ stale: 'missing' }), 'D:\\repo')).toBe('error src/a.ts:4 Lint: x is not defined (the file is not there now)')
   })
 })

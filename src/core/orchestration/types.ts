@@ -119,6 +119,17 @@ export interface AskedFinding {
   ref: string
   text: string
 }
+/** Why a Task does not take a person's repair (taskRepair.ts repairEligibility): `tasks-repair` answers 409 with it as
+ *  `reason`, the CLI carries it in `details.reason`, and the app says each in a sentence of its own. */
+export type RepairRefusal =
+  | 'unknown-task'
+  | 'busy'
+  | 'run-ended'
+  | 'dependents-started'
+  | 'folder-gone'
+  | 'folder-in-use'
+  | 'blocked-by-gate'
+  | 'not-repairable'
 /** 앱이 특별히 다루는 Gate. exhausted 의 해소는 retry-once / mark-failed 로 갈라지고(server.ts 의
  *  gate-resolve), blocked 는 보통 Gate 처럼 풀린다 — 질문이 왜 막혔는지 말한다 */
 export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable' | GitHubGateKind

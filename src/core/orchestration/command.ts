@@ -5214,7 +5214,7 @@ export async function handleCommand(
       const verdict = repairEligibility(s, taskId, isFolder)
       // `reason`, the word the CLI's envelope carries in `details` (cliOutput.ts refusalDetailsOf)
       if (!verdict.ok) return { status: 409, body: { error: verdict.detail, reason: verdict.reason } }
-      if (args.dryRun === true) return okBody({ taskId, via: verdict.via })
+      if (args.dryRun === true) return okBody({ taskId, via: verdict.via, asked: capAsked(asked).length })
       if (!deps.repairOnce) return conflict('a repair cannot be opened here')
       let from: OrchState
       if (verdict.via === 'exhausted-gate') {

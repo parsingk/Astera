@@ -122,7 +122,7 @@ describe('tasks-repair', () => {
 
   it('answers a dry run with the verdict and changes nothing', async () => {
     const deps = depsOver(seeded({ status: 'failed' }))
-    expect(await handleCommand(deps, CLI, 'tasks-repair', { task: 't1', dryRun: true })).toEqual({ status: 200, body: { taskId: 't1', via: 'failed' } })
+    expect(await handleCommand(deps, CLI, 'tasks-repair', { task: 't1', dryRun: true })).toEqual({ status: 200, body: { taskId: 't1', via: 'failed', asked: 2 } })
     expect(deps.onces).toEqual([])
     expect(deps.writes).toBe(0)
   })

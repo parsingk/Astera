@@ -1,4 +1,4 @@
-import { contentRevision, relativeTo, type ContextRef } from '../../../core/context/contextRef'
+import { contentRevision, isUnder, relativeTo, type ContextRef } from '../../../core/context/contextRef'
 import { isCredentialFile } from '../../../core/files/textMatch'
 import type { Diagnostic } from '../../../core/problems/diagnostic'
 
@@ -81,16 +81,24 @@ export function selectionContext(input: {
 /** How many lines before and after a problem an agent receives with it. */
 const PROBLEM_CONTEXT_LINES = 3
 
-/** What a problem says, as one line: its severity, its place, who found it, and its words (or what stands for them). */
+/** A row whose file moved on since it was found, as the line says it (final review M15): the lines around it are read
+ *  now, so they may not be the lines it was about. */
+const STALE_NOTE: Record<NonNullable<Diagnostic['stale']>, string> = {
+  changed: ' (the file changed since this was found)',
+  missing: ' (the file is not there now)'
+}
+
+/** What a problem says, as one line: its severity, its place (relative to the folder its file was found in, else to
+ *  `root`), who found it, its words (or what stands for them), and whether its file moved on since. */
 export function problemLine(d: Diagnostic, root: string): string {
-  const where = d.path !== undefined ? `${relativeTo(root, d.path)}${d.line !== undefined ? `:${d.line}` : ''} ` : ''
+  const where = d.path !== undefined ? `${relativeTo(d.root ?? root, d.path)}${d.line !== undefined ? `:${d.line}` : ''} ` : ''
   const words =
     d.message !== ''
       ? d.message
       : d.unlisted !== undefined
         ? `${d.unlisted} more finding(s) this check did not list`
         : 'the check failed'
-  return `${d.severity} ${where}${d.source.label}: ${words}`
+  return `${d.severity} ${where}${d.source.label}: ${words}${d.stale !== undefined ? STALE_NOTE[d.stale] : ''}`
 }
 
 /** The lines around a problem, numbered, its own marked with `>`. */
@@ -108,37 +116,47 @@ function problemLines(text: string, line: number, endLine: number): string[] {
  * Problems rows as a piece of context (Phase 3 Part 1, "send to an agent"): each problem as one line (severity, place,
  * who found it, its words) followed by the lines around it from `files` (the files as read from disk now, by path), so
  * the agent sees what the person saw. One row is a piece of its file, with its lines and the file's revision, which the
- * paste checks again; several rows are a piece of the project. A credential file's lines are never included
- * (isCredentialFile, as for a selection): its problem goes by its words alone.
+ * paste checks again; several rows are a piece of their folder. A row's folder is the one its file was found in (a Job's
+ * worker folder, outside the project, or the project: `root` on the row), else `root`; a row with no file takes the
+ * others' folder. Only a session working in that folder may take the piece (final review I3, W4), so rows of two
+ * folders are refused (`folders`): no one session can see both. `anyFolder` is for text no session receives as a piece
+ * (a new Job's draft): rows of several folders are listed together as a piece of `root`, each by its place in its own
+ * folder. A credential file's lines are never included (isCredentialFile, as for a selection): its problem goes by its
+ * words alone.
  */
 export function problemsContext(input: {
   rows: readonly Diagnostic[]
   root: string
   files: Readonly<Record<string, string>>
-}): { ok: true; ref: ContextRef; excerpt: string; language: string } | { ok: false; reason: 'empty' } {
+  anyFolder?: boolean
+}): { ok: true; ref: ContextRef; excerpt: string; language: string } | { ok: false; reason: 'empty' | 'folders' } {
   if (input.rows.length === 0) return { ok: false, reason: 'empty' }
+  const folders = input.rows.filter((d) => d.path !== undefined).map((d) => d.root ?? input.root)
+  const mixed = folders.some((f) => !isUnder(f, folders[0]) || !isUnder(folders[0], f))
+  if (mixed && input.anyFolder !== true) return { ok: false, reason: 'folders' }
+  const root = mixed ? input.root : (folders[0] ?? input.root)
   /** The file's text when its lines may be sent, else undefined. */
   const readable = (d: Diagnostic): string | undefined =>
-    d.path !== undefined && d.line !== undefined && !isCredentialFile(relativeTo(input.root, d.path)) ? input.files[d.path] : undefined
+    d.path !== undefined && d.line !== undefined && !isCredentialFile(relativeTo(d.root ?? root, d.path)) ? input.files[d.path] : undefined
   const blocks = input.rows.map((d) => {
     const text = readable(d)
-    const head = problemLine(d, input.root)
+    const head = problemLine(d, root)
     return text === undefined ? head : [head, ...problemLines(text, d.line as number, d.endLine ?? (d.line as number))].join('\n')
   })
   const excerpt = blocks.join('\n\n')
-  if (input.rows.length > 1) return { ok: true, ref: { schemaVersion: 1, kind: 'diagnostic', root: input.root, label: `${input.rows.length} problems` }, excerpt, language: '' }
+  if (input.rows.length > 1) return { ok: true, ref: { schemaVersion: 1, kind: 'diagnostic', root, label: `${input.rows.length} problems` }, excerpt, language: '' }
   const d = input.rows[0]
   const text = readable(d)
   const ref: ContextRef = {
     schemaVersion: 1,
     kind: 'diagnostic',
-    root: input.root,
+    root,
     ...(d.path !== undefined ? { path: d.path } : {}),
     ...(d.line !== undefined ? { range: { startLine: d.line, endLine: d.endLine ?? d.line } } : {}),
     // Only for lines that are sent: the paste checks them again against the file on disk
     ...(text !== undefined ? { revision: contentRevision(text) } : {}),
     sourceId: d.ref ?? d.id,
-    label: `${d.path !== undefined ? `${relativeTo(input.root, d.path)}${d.line !== undefined ? `:${d.line}` : ''} ` : ''}${d.source.label}`
+    label: `${d.path !== undefined ? `${relativeTo(root, d.path)}${d.line !== undefined ? `:${d.line}` : ''} ` : ''}${d.source.label}`
   }
   return { ok: true, ref, excerpt, language: '' }
 }

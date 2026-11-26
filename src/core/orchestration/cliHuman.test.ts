@@ -188,6 +188,7 @@ describe('humanFor', () => {
     expect(humanFor('tasks-repair', { taskId: 't1', via: 'failed' })).toBe('task t1 can take a repair: it failed')
     expect(humanFor('tasks-repair', { taskId: 't1', via: 'reopen' })).toBe('task t1 can take a repair: it is completed and nothing has moved on from it')
     expect(humanFor('tasks-repair', { taskId: 't1', via: 'exhausted-gate' })).toBe('task t1 can take a repair: through its exhausted repairs question')
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'failed', asked: 20 })).toBe('task t1 can take a repair: it failed (20 findings would go)')
   })
 
   it('plugins logs prints the lines, and says when there are none', () => {

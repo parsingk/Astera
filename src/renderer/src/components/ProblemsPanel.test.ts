@@ -50,8 +50,12 @@ describe('ProblemsPanel', () => {
     expect(app).toMatch(/const made = problemsContext\(\{ rows, root, files \}\)/)
     expect(app).toMatch(/openContextPreview\(made\.ref, contextText\(made\.ref, made\.excerpt, made\.language\)\)/)
     expect(app).toMatch(/'tasks-repair', \{ \.\.\.request, dryRun: true \}\)/)
-    expect(app).toMatch(/if \(dry\.status === 409\)/)
+    // A refusal offers the draft whenever it comes: from the dry run, or from the real call after the state moved (M10)
+    expect(app).toMatch(/if \(dry\.kind === 'refused'\) return offerDraft\(dry\.key\)/)
+    expect(app).toMatch(/else if \(asked\.kind === 'refused'\) await offerDraft\(asked\.key\)/)
     expect(app).toMatch(/openProblemsDraft\(rows\)/)
+    // Rows of two folders: said, nothing opens (I3)
+    expect(app).toMatch(/if \(made\.reason === 'folders'\) toast\.info\(t\('problems\.send\.folders'\)\)/)
   })
 
   it('marks a stale problem and says why on hover', () => {

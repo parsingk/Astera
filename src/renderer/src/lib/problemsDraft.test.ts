@@ -31,6 +31,14 @@ describe('problemsObjective', () => {
     expect(problemsObjective([row({ source: { kind: 'lsp', id: 'ts', label: 'TypeScript' } })], 'D:\\repo').split('\n')[0]).toBe('Fix the problems below, found in this project.')
   })
 
+  // Rows of two Tasks' worker folders go to the draft (no one Task takes them): each by its place in its own folder, the
+  // place the new Job finds it in the project
+  it('lists rows found in two worker folders, each relative to its own folder', () => {
+    const text = problemsObjective([row({ path: 'F:\\wt\\t1\\src\\a.ts', root: 'F:\\wt\\t1' }), row({ path: 'F:\\wt\\t2\\src\\b.ts', root: 'F:\\wt\\t2', line: 2 })], 'D:\\repo')
+    expect(text).toContain('error src/a.ts:4 Lint: x is not defined')
+    expect(text).toContain('error src/b.ts:2 Lint: x is not defined')
+  })
+
   it('masks a secret a problem’s words carry', () => {
     expect(problemsObjective([row({ message: 'bad value TOKEN=abcdef1234567890xyz' })], 'D:\\repo')).not.toContain('abcdef1234567890xyz')
   })

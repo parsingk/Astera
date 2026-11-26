@@ -9,21 +9,11 @@ import { maskForAgent } from '../context/contextRef'
 import { isSamePath } from '../files/tree'
 import { latestImplDispatch } from './convergence'
 import type { OrchState } from './state'
-import type { AskedFinding } from './types'
+import type { AskedFinding, RepairRefusal } from './types'
 
 /** At most this many findings ride on one repair, each at most this long: a repair spec is a prompt, not a report. */
 export const ASKED_FINDINGS_MAX = 20
 export const ASKED_FINDING_TEXT_MAX = 300
-
-export type RepairRefusal =
-  | 'unknown-task'
-  | 'busy'
-  | 'run-ended'
-  | 'dependents-started'
-  | 'folder-gone'
-  | 'folder-in-use'
-  | 'blocked-by-gate'
-  | 'not-repairable'
 
 export type RepairEligibility =
   | { ok: true; via: 'failed' | 'reopen' | 'exhausted-gate'; gateId?: string }
