@@ -144,6 +144,18 @@ describe('tasks-repair', () => {
     expect(all.onces[0].asked?.map((f) => f.ref)).toEqual([LINT_REF(), REVIEW_REF()])
   })
 
+  // Final review M8: a check that reports absolute paths still names the finding the way the Problems row does
+  it('knows a finding its check named by an absolute path under the Task’s folder by the row’s reference', async () => {
+    const s = seeded({ status: 'failed' })
+    const abs = path.join(dir, 'src', 'a.ts')
+    const t1 = s.tasks[0]
+    const state = { ...s, tasks: [{ ...t1, checks: [{ ...t1.checks![0], diagnostics: [{ file: abs, line: 3, message: 'x is not defined' }] }] }] } as OrchState
+    const deps = depsOver(state)
+    const r = await handleCommand(deps, CLI, 'tasks-repair', { task: 't1', finding: [LINT_REF()] })
+    expect(r.status).toBe(200)
+    expect(deps.onces[0].asked).toEqual([{ ref: LINT_REF(), text: `error ${abs}:3 Lint: x is not defined` }])
+  })
+
   it('refuses a finding the Task does not have', async () => {
     const deps = depsOver(seeded({ status: 'failed' }))
     const r = await handleCommand(deps, CLI, 'tasks-repair', { task: 't1', finding: ['check:t1:ffffffffffff'] })

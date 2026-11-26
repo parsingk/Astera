@@ -111,7 +111,7 @@ import {
 } from './types'
 import { runWorktrees } from './integrate'
 import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
-import { taskFindings } from '../problems/completionProblems'
+import { taskFindings, taskFoldersOf } from '../problems/completionProblems'
 import { isPathWithin } from '../files/tree'
 import { buildHandoverPrompt } from './handover'
 import { parseReviewFile, type ReviewIssueInput } from './review'
@@ -5199,7 +5199,7 @@ export async function handleCommand(
       const named = args.finding === undefined ? [] : Array.isArray(args.finding) ? args.finding : [args.finding]
       if (!named.every((x): x is string => typeof x === 'string' && x !== '')) return bad('--finding needs a finding reference')
       const texts = args.texts !== null && typeof args.texts === 'object' && !Array.isArray(args.texts) ? (args.texts as Record<string, unknown>) : {}
-      const own = taskFindings(task)
+      const own = taskFindings(task, taskFoldersOf(s, task))
       const asked: AskedFinding[] = named.length === 0 ? own : []
       const unknown: string[] = []
       for (const ref of named) {

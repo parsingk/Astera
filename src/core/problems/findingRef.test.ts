@@ -34,6 +34,15 @@ describe('findingRef', () => {
     expect(one).toBe(two)
   })
 
+  // Final review M8: the public form must not move with how a check spelled the path. A check that reports absolute
+  // paths (ESLint's default) names a file under the Task's folder the same as one that reports it relative
+  it('makes an absolute path under one of the Task’s folders relative, and folds a drive letter’s case', () => {
+    const rel = findingRef({ kind: 'check', taskId: 't1', file: 'src/a.ts', message: 'm' })
+    expect(findingRef({ kind: 'check', taskId: 't1', file: 'D:\\wt\\t1\\src\\a.ts', base: ['D:\\wt\\t1'], message: 'm' })).toBe(rel)
+    expect(findingRef({ kind: 'check', taskId: 't1', file: 'd:/wt/t1/src/a.ts', base: ['D:\\wt\\t1'], message: 'm' })).toBe(rel)
+    expect(findingRef({ kind: 'check', taskId: 't1', file: 'd:\\other\\x.ts', message: 'm' })).toBe(findingRef({ kind: 'check', taskId: 't1', file: 'D:/other/x.ts', message: 'm' }))
+  })
+
   it('ignores slash direction, a leading ./ and runs of whitespace', () => {
     const a = findingRef({ kind: 'check', taskId: 't1', file: 'src\\dir\\a.ts', message: 'missing  import\n here' })
     const b = findingRef({ kind: 'check', taskId: 't1', file: './src/dir/a.ts', message: ' missing import here ' })
