@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { OrchState } from '../orchestration/state'
-import { completionProblemsOf, problemsKeyOf } from './completionProblems'
+import { completionProblemsOf, problemsKeyOf, taskFindings, taskFoldersOf } from './completionProblems'
+import { findingRef } from './findingRef'
 
 const job = (id: string, cwd: string) => ({ id, objective: id, cwd })
 const run = (id: string, jobId: string, ordinal: number) => ({ id, jobId, ordinal, createdAt: `2026-11-25T0${ordinal}:00:00Z` })
@@ -70,19 +71,63 @@ describe('completionProblemsOf', () => {
       {
         schemaVersion: 1,
         id: 'check:t1:plugin:lint:0',
+        ref: expect.stringMatching(/^check:t1:[0-9a-f]{12}$/),
         source: { kind: 'check', id: 'plugin:lint', label: 'Lint' },
         severity: 'error',
         message: 'missing import',
         file: 'src/a.ts',
         line: 3,
         producedAt: '2026-11-25T02:30:00Z',
-        origin: { runId: 'r2', taskId: 't1', task: 'fix the parser' },
+        origin: { runId: 'r2', taskId: 't1', task: 'fix the parser', job: 'j1' },
         folders: ['F:\\wt\\t1-b', 'F:\\wt\\t1-a', 'D:\\repo']
       },
       expect.objectContaining({ id: 'check:t1:plugin:lint:1', severity: 'warning', file: 'src/b.ts', line: 9 }),
       // A failed check's finding that says no severity is an error
       expect.objectContaining({ id: 'check:t1:plugin:lint:2', severity: 'error', message: 'no file here', file: undefined })
     ])
+  })
+
+  // Phase 3 Part 1: what a person's repair request names, the same in the next round
+  it('marks each check and review row with its finding reference, stable across rounds', () => {
+    const rows = completionProblemsOf(state(), PROJECT_RUNS)
+    const byId = Object.fromEntries(rows.map((p) => [p.id, p.ref]))
+    expect(byId['check:t1:plugin:lint:0']).toBe(findingRef({ kind: 'check', taskId: 't1', source: 'plugin:lint', file: 'src/a.ts', message: 'missing import' }))
+    expect(byId['review:t1:i1']).toBe(findingRef({ kind: 'review', taskId: 't1', file: 'src/a.ts', message: 'off by one' }))
+    // A review issue reissued with a new id in the next round keeps its reference
+    const next = state()
+    const t1 = next.tasks.find((t) => t.id === 't1')!
+    t1.reviewIssues = t1.reviewIssues!.map((i) => (i.id === 'i1' ? { ...i, id: 'rvw_new' } : i))
+    expect(completionProblemsOf(next, PROJECT_RUNS).find((p) => p.id === 'review:t1:rvw_new')?.ref).toBe(byId['review:t1:i1'])
+    // Every row of a Task carries one, the rows without a file and the uncounted ones too
+    expect(rows.filter((p) => p.origin !== undefined).every((p) => typeof p.ref === 'string')).toBe(true)
+  })
+
+  // Phase 3 Part 1: what `tasks-repair` fills a reference's words from when the CLI names only the reference
+  it('lists each of a Task’s findings with its reference and its words, the references the rows carry', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    const listed = taskFindings(t1, taskFoldersOf(s, t1))
+    const rowRefs = completionProblemsOf(s, PROJECT_RUNS)
+      .filter((p) => p.origin?.taskId === 't1' && p.unlisted === undefined)
+      .map((p) => p.ref)
+    expect(listed.map((f) => f.ref)).toEqual(rowRefs)
+    expect(listed[0]).toEqual({ ref: rowRefs[0], text: 'error src/a.ts:3 Lint: missing import' })
+    expect(listed.find((f) => f.ref.startsWith('review:'))?.text).toBe('error src/a.ts:20 Review: off by one')
+  })
+
+  // A Task of a round carries its run, not its Job: the Job's folder is found through the run, so the Host's
+  // tasks-repair reads an absolute path under the Job's folder as the row does
+  it('gives a round’s Task its attempts’ folders, newest first, then its Job’s folder found through its run', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    expect(t1.jobId).toBeUndefined()
+    expect(taskFoldersOf(s, t1)).toEqual([...new Set(s.dispatches.filter((d) => d.taskId === 't1').sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map((d) => d.cwd)), 'D:\\repo'])
+  })
+
+  // Final review M9: the confirmation names the Job as well as the Task
+  it('names the Job a row came from beside its Task', () => {
+    const row = completionProblemsOf(state(), PROJECT_RUNS).find((p) => p.id === 'review:t1:i1')
+    expect(row?.origin).toEqual({ runId: 'r2', taskId: 't1', task: 'fix the parser', job: 'j1' })
   })
 
   it('turns review issues that name a file into problems, by severity, timed by the last review', () => {

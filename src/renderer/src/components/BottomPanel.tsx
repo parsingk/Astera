@@ -44,6 +44,7 @@ export function BottomPanel({
   problemsRoot,
   problems,
   onOpenProblem,
+  problemActions,
   onRefreshProblems,
   terminals,
   terminalCwd,
@@ -104,8 +105,10 @@ export function BottomPanel({
   problemsEnabled: boolean
   problemsRoot: string | null
   problems: Diagnostic[] | null | undefined
-  onOpenProblem: (path: string, line?: number) => void
+  onOpenProblem: (path: string, line?: number, column?: number) => void
   onRefreshProblems: () => void
+  /** Sending chosen problems to an agent and fixing them (Phase 3 Part 1); absent with the bridge off. */
+  problemActions?: { send: (rows: Diagnostic[]) => void; fix: (rows: Diagnostic[]) => void }
   terminals: TerminalBuffer[]
   /** The folder the terminals were opened in — a relative path link in one resolves against it */
   terminalCwd: string | null
@@ -417,6 +420,7 @@ export function BottomPanel({
               problems={problems}
               onOpen={onOpenProblem}
               onRefresh={onRefreshProblems}
+              actions={problemActions}
             />
           </div>
         )}

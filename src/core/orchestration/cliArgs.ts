@@ -82,7 +82,7 @@ const NUMERIC = new Set(['timeoutMs', 'limit'])
 const JSON_ARRAY = new Set(['deps'])
 /** Flags that may appear more than once and always arrive as an array. Everything else keeps the
  *  last value, which is what every existing caller expects. */
-const REPEATABLE = new Set(['check', 'set', 'unset'])
+const REPEATABLE = new Set(['check', 'set', 'unset', 'finding'])
 
 /** `astera browser <sub>`. Exported because cliUsage.ts prints usage for both of them, and a second
  *  copy of the list would drift from this one. */
@@ -123,7 +123,7 @@ export const NOUNS = {
   // `create-from-source` (plugin Phase 4 J21) is answered before handleCommand's switch, with the `sources` commands.
   jobs: ['list', 'get', 'wait', 'run', 'create', 'create-from-source'],
   runs: ['list', 'get', 'wait', 'follow', 'stop', 'resume', 'checks', 'reconverge'],
-  tasks: ['list', 'add', 'dispatch'],
+  tasks: ['list', 'add', 'dispatch', 'repair'],
   questions: ['list', 'get', 'answer'],
   // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.
   // 동사 없는 `accounts` 는 가이드가 가르치는 세션 명령 그대로다(BARE_NOUNS).

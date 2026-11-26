@@ -1,10 +1,30 @@
 import type { OrchState } from '../orchestration/state'
-import type { CheckResult, ReviewSeverity } from '../orchestration/types'
+import type { AskedFinding, CheckResult, ReviewSeverity, Task } from '../orchestration/types'
+import { jobName } from '../findings/make'
 import type { Diagnostic, DiagnosticSeverity } from './diagnostic'
+import { findingRef } from './findingRef'
 
 /** A problem as the Job state holds it: its file as the finding wrote it (relative to wherever the check or the review
  *  ran) and the folders to look for it in, newest worker folder first and the Job's folder last. Main resolves it. */
-export type RawProblem = Omit<Diagnostic, 'path' | 'stale'> & { file?: string; folders: string[] }
+export type RawProblem = Omit<Diagnostic, 'path' | 'stale' | 'root'> & { file?: string; folders: string[] }
+
+/**
+ * Where a Task's findings were made: the folders of its attempts, newest first, then its Job's folder, each once. Main
+ * looks for a finding's file in them in this order, and a finding's reference reads an absolute file under one of them as
+ * the relative file it is (findingRef `base`), so the Problems row and the Host's repair agree on it. A round's Task
+ * names its run, not its Job, so the Job is found through the run.
+ */
+export function taskFoldersOf(state: Pick<OrchState, 'dispatches' | 'jobs' | 'runs'>, task: Pick<Task, 'id' | 'jobId' | 'runId'>): string[] {
+  const jobId = task.jobId ?? state.runs.find((r) => r.id === task.runId)?.jobId
+  const jobCwd = state.jobs.find((j) => j.id === jobId)?.cwd
+  return [
+    ...state.dispatches
+      .filter((d) => d.taskId === task.id)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .map((d) => d.cwd),
+    ...(jobCwd !== undefined ? [jobCwd] : [])
+  ].filter((f, i, all) => all.indexOf(f) === i)
+}
 
 const REVIEW_SEVERITY: Record<ReviewSeverity, DiagnosticSeverity> = {
   critical: 'error',
@@ -63,22 +83,22 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
   }
   const out: RawProblem[] = []
   for (const run of latest.values()) {
-    const jobCwd = state.jobs.find((j) => j.id === run.jobId)?.cwd
+    const job = state.jobs.find((j) => j.id === run.jobId)
     for (const task of tasksOf.get(run.id) ?? []) {
       const attempts = attemptsOf.get(task.id) ?? []
-      const folders = [
-        ...new Set([...attempts].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map((d) => d.cwd)),
-        ...(jobCwd !== undefined ? [jobCwd] : [])
-      ].filter((f, i, all) => all.indexOf(f) === i)
-      const origin = { runId: run.id, taskId: task.id, task: task.title }
+      const folders = taskFoldersOf({ dispatches: attempts, jobs: job !== undefined ? [job] : [], runs: [run] }, task)
+      const origin = { runId: run.id, taskId: task.id, task: task.title, ...(job !== undefined ? { job: jobName(job) } : {}) }
       for (const c of task.checks ?? []) {
         const source = { kind: 'check' as const, id: c.configId, label: c.name }
         const at = c.endedAt !== undefined ? { producedAt: c.endedAt } : {}
         const findings = c.diagnostics ?? []
+        // The check as a whole: what its row without a file and its uncounted findings name
+        const checkRef = findingRef({ kind: 'check', taskId: task.id, source: c.configId, message: '' })
         findings.forEach((dg, i) => {
           out.push({
             schemaVersion: 1,
             id: `check:${task.id}:${c.configId}:${i}`,
+            ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, base: folders, message: dg.message }),
             source,
             severity: checkSeverity(c, dg.severity),
             message: dg.message,
@@ -91,11 +111,11 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         })
         const unlisted = (c.diagnosticsTotal ?? findings.length) - findings.length
         if (unlisted > 0) {
-          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, source, severity: 'info', message: '', unlisted, ...at, origin, folders })
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, ref: checkRef, source, severity: 'info', message: '', unlisted, ...at, origin, folders })
         }
         if (findings.length === 0 && failed(c)) {
           const said = c.summary !== undefined && c.summary.trim() !== '' && c.summary !== c.status ? c.summary.trim() : lastLine(c.outputTail)
-          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, source, severity: 'error', message: said ?? '', ...at, origin, folders })
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, ref: checkRef, source, severity: 'error', message: said ?? '', ...at, origin, folders })
         }
       }
       // The last review attempt's end; with none on record (an external reviewer writes its issues without one), the
@@ -112,6 +132,7 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         out.push({
           schemaVersion: 1,
           id: `review:${task.id}:${issue.id}`,
+          ref: findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title }),
           source: { kind: 'review', id: 'review', label: 'Review' },
           severity: REVIEW_SEVERITY[issue.severity] ?? 'warning',
           message: issue.title,
@@ -143,4 +164,36 @@ export function problemsKeyOf(state: OrchState): string {
     })
     .join(';')
   return `${runs}|${tasks}`
+}
+
+/**
+ * A Task's findings as a repair request names them (Phase 3 Part 1, `tasks-repair`): each Problems row of the Task, in
+ * the rows' order, with its reference (the same call completionProblemsOf makes for the row) and its words as one line,
+ * `severity place who: words`, the way the app's preview writes them. What the Host fills a reference's words from when
+ * the CLI names only the reference. A check's uncounted findings have no words of their own and are left out. `folders`
+ * is the Task's folders (taskFoldersOf), so a reference matches its row's.
+ */
+export function taskFindings(task: Task, folders: readonly string[] = []): AskedFinding[] {
+  const out: AskedFinding[] = []
+  const place = (file: string | undefined, line: number | undefined): string => (file !== undefined ? `${file}${line !== undefined ? `:${line}` : ''} ` : '')
+  for (const c of task.checks ?? []) {
+    const findings = c.diagnostics ?? []
+    for (const dg of findings)
+      out.push({
+        ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, base: folders, message: dg.message }),
+        text: `${checkSeverity(c, dg.severity)} ${place(dg.file, dg.line)}${c.name}: ${dg.message}`
+      })
+    if (findings.length === 0 && failed(c)) {
+      const said = c.summary !== undefined && c.summary.trim() !== '' && c.summary !== c.status ? c.summary.trim() : lastLine(c.outputTail)
+      out.push({ ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, message: '' }), text: `error ${c.name}: ${said ?? 'the check failed'}` })
+    }
+  }
+  for (const issue of task.reviewIssues ?? []) {
+    if (issue.file === undefined) continue
+    out.push({
+      ref: findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title }),
+      text: `${REVIEW_SEVERITY[issue.severity] ?? 'warning'} ${place(issue.file, issue.line)}Review: ${issue.title}`
+    })
+  }
+  return out
 }

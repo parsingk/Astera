@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, CircleX, Info, RefreshCw } from 'lucide-react'
+import { AlertTriangle, CircleX, Info, RefreshCw, Send, Wrench } from 'lucide-react'
 import {
   filterDiagnostics,
   problemCounts,
@@ -30,24 +30,32 @@ const ICON: Record<DiagnosticSeverity, React.ReactNode> = {
  * asked, each row opening its file at its line, by click or by keyboard. A problem whose file changed since it was found
  * is marked; one whose file is gone, or whose name was not looked at (outside its folder, another machine), opens
  * nothing.
+ *
+ * With the Agent Context Bridge on (Phase 3 Part 1), rows are chosen with a checkbox and the bar sends them to an agent
+ * session or has an agent fix them (`actions`, App.tsx); off, neither the checkboxes nor the buttons are there.
  */
 export function ProblemsPanel({
   projectRoot,
   problems,
   onOpen,
-  onRefresh
+  onRefresh,
+  actions
 }: {
   /** The explorer's project, or null with none open. */
   projectRoot: string | null
   /** The project's problems; null when they could not be read, undefined while they are not known yet. */
   problems: Diagnostic[] | null | undefined
-  onOpen: (path: string, line?: number) => void
+  onOpen: (path: string, line?: number, column?: number) => void
   onRefresh: () => void
+  /** What the bar does with the chosen rows; absent with the bridge off. */
+  actions?: { send: (rows: Diagnostic[]) => void; fix: (rows: Diagnostic[]) => void }
 }): React.JSX.Element {
   const { t } = useI18n()
   const [severities, setSeverities] = useState<ReadonlySet<DiagnosticSeverity>>(() => new Set(['error', 'warning', 'info']))
   const [text, setText] = useState('')
   const [sort, setSort] = useState<'severity' | 'file' | 'source'>('severity')
+  /** The chosen rows' ids; a row no longer listed falls out of `chosen` by itself. */
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const counts = problemCounts(problems ?? [])
   /** Who found it, in the words the row shows. */
   const sourceOf = (d: Diagnostic): string => (d.source.kind === 'review' ? t('problems.source.review') : d.source.label)
@@ -64,6 +72,20 @@ export function ProblemsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [problems, severities, text, sort, projectRoot, t]
   )
+
+  const chosen = rows.filter((d) => selected.has(d.id))
+  const choose = (id: string): void =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  /** Hands the chosen rows on and clears the choice. */
+  const act = (run: (rows: Diagnostic[]) => void): void => {
+    run(chosen)
+    setSelected(new Set())
+  }
 
   const toggle = (s: DiagnosticSeverity): void =>
     setSeverities((prev) => {
@@ -120,6 +142,18 @@ export function ProblemsPanel({
           onChange={(v) => setSort(v as typeof sort)}
           ariaLabel={t('problems.sort')}
         />
+        {actions !== undefined && (
+          <>
+            <button type="button" className="problems-action" disabled={chosen.length === 0} onClick={() => act(actions.send)}>
+              <Send size={12} />
+              {t('problems.send')}
+            </button>
+            <button type="button" className="problems-action" disabled={chosen.length === 0} onClick={() => act(actions.fix)}>
+              <Wrench size={12} />
+              {t('problems.fix')}
+            </button>
+          </>
+        )}
         <button type="button" className="run-panel-btn" title={t('problems.refresh')} aria-label={t('problems.refresh')} onClick={onRefresh}>
           <RefreshCw size={12} />
         </button>
@@ -138,18 +172,29 @@ export function ProblemsPanel({
                 className={`problem-row${openable ? ' openable' : ''}${d.stale !== undefined ? ' stale' : ''}`}
                 role={openable ? 'button' : undefined}
                 tabIndex={openable ? 0 : undefined}
-                onClick={openable ? () => onOpen(d.path as string, d.line) : undefined}
+                onClick={openable ? () => onOpen(d.path as string, d.line, d.column) : undefined}
                 onKeyDown={
                   openable
                     ? (e) => {
                         if (e.key !== 'Enter' && e.key !== ' ') return
                         e.preventDefault()
-                        onOpen(d.path as string, d.line)
+                        onOpen(d.path as string, d.line, d.column)
                       }
                     : undefined
                 }
                 title={d.origin ? d.origin.task : undefined}
               >
+                {actions !== undefined && (
+                  <input
+                    type="checkbox"
+                    className="problem-choose"
+                    aria-label={t('problems.choose')}
+                    checked={selected.has(d.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    onChange={() => choose(d.id)}
+                  />
+                )}
                 {ICON[d.severity]}
                 <span className="problem-message">{messageOf(d)}</span>
                 {where !== null && <span className="problem-where">{where}</span>}

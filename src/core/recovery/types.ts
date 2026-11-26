@@ -2,7 +2,7 @@
 // worktree and the settings are read by main and arrive here as plain values (P1 design §4).
 import type { Message } from '../i18n'
 import type { Provider } from '../providers/meta'
-import type { RepairReason } from '../orchestration/types'
+import type { AskedFinding, RepairReason } from '../orchestration/types'
 
 export type RecoveryStrategy = 'resume-native' | 'redispatch' | 'recheck' | 'smart-resume' | 'review'
 
@@ -37,6 +37,10 @@ export interface LostAttempt {
    *  새로 연 것을 둘 다 세는 repairCountOf 로 이 사실을 다시 계산하면(전체 브랜치 리뷰, Finding 3)
    *  예산을 실제로 넘지 않은 재시작에도 "사람이 허락했다" 는 말이 우연히 붙는다. */
   grantedExtra?: true
+  /** A person's repair (`tasks-repair`, Phase 3 Part 1) with the findings they chose (`Dispatch.askedFindings`): the
+   *  restarted attempt carries them, so its worker still reads them first and it stays outside the automatic budget
+   *  (final review I4). */
+  askedFindings?: AskedFinding[]
 }
 
 export interface GitFacts {

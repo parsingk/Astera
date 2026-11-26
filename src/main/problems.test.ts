@@ -49,6 +49,8 @@ describe('completionProducer', () => {
   it('finds a file in the Task\'s worker folder first, and leaves a finding unmarked when the file is as it was', async () => {
     const [d, noFile] = await produce('src/a.ts', { [at(WT, 'src', 'a.ts')]: T_CHECK - 1000, [at(PROJECT, 'src', 'a.ts')]: T_CHECK - 1000 })
     expect(d.path).toBe(at(WT, 'src', 'a.ts'))
+    // Final review I3: the folder it was found in, which a session must work in to be handed it
+    expect(d.root).toBe(WT)
     expect(d.stale).toBeUndefined()
     expect(d).not.toHaveProperty('file')
     expect(d).not.toHaveProperty('folders')
@@ -60,6 +62,7 @@ describe('completionProducer', () => {
   it('falls back to the project when the worker folder no longer holds the file', async () => {
     const [d] = await produce('src/a.ts', { [at(PROJECT, 'src', 'a.ts')]: T_CHECK - 1000 })
     expect(d.path).toBe(at(PROJECT, 'src', 'a.ts'))
+    expect(d.root).toBe(PROJECT)
     expect(d.stale).toBeUndefined()
   })
 

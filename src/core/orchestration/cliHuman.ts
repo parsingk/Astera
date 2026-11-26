@@ -586,6 +586,23 @@ export function humanFor(
     case 'policies-rules-move':
     case 'policies-rules-reset':
       return policyText(data)
+    // Phase 3 Part 1: the attempt a person's repair request opened, or how the task would take one
+    case 'tasks-repair': {
+      if (typeof data.repairDispatchId === 'string') {
+        const n = typeof data.asked === 'number' ? data.asked : 0
+        return `asked task ${str(data.taskId)} to fix ${n} finding${n === 1 ? '' : 's'} (attempt ${data.repairDispatchId})`
+      }
+      const how =
+        data.via === 'failed'
+          ? 'it failed'
+          : data.via === 'reopen'
+            ? 'it is completed and nothing has moved on from it'
+            : data.via === 'exhausted-gate'
+              ? 'through its exhausted repairs question'
+              : str(data.via)
+      const would = typeof data.asked === 'number' ? ` (${data.asked} finding${data.asked === 1 ? '' : 's'} would go)` : ''
+      return `task ${str(data.taskId)} can take a repair: ${how}${would}`
+    }
     case 'plugins-logs': {
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []
       return lines.length > 0 ? lines.join('\n') : 'no log yet'

@@ -575,6 +575,17 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [ID('<taskId>', 'the task to place (from `tasks list --ready`)')]
   },
 
+  'tasks-repair': {
+    summary: 'ask a task to fix findings a person chose, one more repair outside its budget',
+    detail:
+      "A finding is named by its reference, the form the app's Problems rows carry (check:<taskId>:<hex>, review:<taskId>:<hex>); with no --finding, every finding the task has now; at most 20 ride, and the answer says how many. A failed task, or one blocked by its exhausted repairs question, takes it; so does a completed task while its run has not ended and no task built on it, down the chain, has started (those waiting go back to pending until it completes again). For every one, the folder of its last attempt must still be there with no other task working in it. Anything else is refused with 6, details.reason saying why (run-ended, dependents-started, folder-gone, folder-in-use, blocked-by-gate, busy, not-repairable); a reference the task does not have is 2. The repair runs in the task's last attempt's folder, its worker reads the findings first, and the task's checks run again after it. It is for a person, so an agent session is refused with 5. --dry-run answers whether it would be taken, and how many findings would go, and changes nothing.",
+    flags: [
+      { name: 'task', value: '<taskId>', required: true, about: 'the task to repair (from `tasks list`)' },
+      { name: 'finding', value: '<ref>', about: 'a finding to fix; repeat for more (default: every finding the task has)' },
+      { name: 'dry-run', about: 'say whether the task would take it, and change nothing' }
+    ]
+  },
+
   'questions-list': {
     summary: 'questions workers have asked',
     flags: [

@@ -470,6 +470,19 @@ describe('reconciler — repair Dispatch 는 앱의 것', () => {
     expect(seen[0]).toMatchObject({ appDriven: true, hasValidateConfig: true, repair: 'check-failure' })
   })
 
+  // Final review I4: a person's repair lost in a crash keeps the findings they chose, as grantedExtra is kept
+  it('carries the findings a person asked a lost repair for', async () => {
+    const asked = [{ ref: 'check:tsk_1:aaaaaaaaaaaa', text: 'error a.ts:3 x' }]
+    const current = state({
+      runs: [run({ autoDispatch: undefined, convergence: {} })],
+      tasks: [task({ validateConfigIds: ['c1'] })],
+      dispatches: [dispatch({ repair: 'check-failure', askedFindings: asked })]
+    })
+    const { r, seen } = harnessWith(current)
+    await r.reconcileAll()
+    expect(seen[0]).toMatchObject({ repair: 'check-failure', askedFindings: asked })
+  })
+
   it('convergence Run 의 유실된 첫 구현 attempt 는 여전히 코디네이터의 것이다', async () => {
     const current = state({
       runs: [run({ autoDispatch: undefined, convergence: {} })],

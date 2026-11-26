@@ -255,7 +255,8 @@ export class RecoveryReconciler {
       // "정책 없음" 으로 읽는다(이 파일이 손으로 고쳐질 수 있다는 전제는 곳곳에 이미 있다).
       appDriven: placedByApp(jobOf(state, run), run) || (policyOf(state, task) !== null && dispatch.repair !== undefined),
       ...(dispatch.repair ? { repair: dispatch.repair } : {}),
-      ...(dispatch.grantedExtra ? { grantedExtra: true } : {})
+      ...(dispatch.grantedExtra ? { grantedExtra: true } : {}),
+      ...(dispatch.askedFindings ? { askedFindings: dispatch.askedFindings } : {})
     }
 
     const git = await this.deps.readGitFacts(dispatch.cwd)

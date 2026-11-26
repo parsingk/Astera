@@ -27,10 +27,35 @@ describe('ProblemsPanel', () => {
   // Review focus 1 and 4: a row opens its file at its line; a problem with no file, or whose file is gone, opens nothing.
   it('opens a row at its line only when it has a file that is there', () => {
     expect(src).toMatch(/const openable = d\.path !== undefined && d\.stale !== 'missing'/)
-    expect(src).toMatch(/onClick=\{openable \? \(\) => onOpen\(d\.path as string, d\.line\) : undefined\}/)
+    expect(src).toMatch(/onClick=\{openable \? \(\) => onOpen\(d\.path as string, d\.line, d\.column\) : undefined\}/)
     // Final review M5: a keyboard opens it too
     expect(src).toMatch(/role=\{openable \? 'button' : undefined\}\s*tabIndex=\{openable \? 0 : undefined\}/)
     expect(src).toMatch(/onKeyDown=\{\s*openable\s*\? \(e\) => \{\s*if \(e\.key !== 'Enter' && e\.key !== ' '\) return/)
+  })
+
+  // Phase 3 Part 1: rows are chosen with a checkbox and sent to an agent, or fixed by one; nothing of it with the bridge off
+  it('sends or fixes the chosen rows, and shows neither the checkboxes nor the buttons with the bridge off', () => {
+    expect(src).toMatch(/actions\?: \{ send: \(rows: Diagnostic\[\]\) => void; fix: \(rows: Diagnostic\[\]\) => void \}/)
+    expect(src).toMatch(/const chosen = rows\.filter\(\(d\) => selected\.has\(d\.id\)\)/)
+    for (const key of ['problems.send', 'problems.fix', 'problems.choose']) expect(src).toContain(`t('${key}'`)
+    expect(src).toMatch(/\{actions !== undefined && \(/)
+    expect(src).toMatch(/disabled=\{chosen\.length === 0\}/)
+    // A checkbox does not open the row's file
+    expect(src).toMatch(/onClick=\{\(e\) => e\.stopPropagation\(\)\}/)
+    expect(bottom).toMatch(/actions=\{problemActions\}/)
+  })
+
+  it('wires sending through the W4 preview and fixing through a dry run first, then the draft on a refusal', () => {
+    expect(app).toMatch(/problemActions=\{contextOn \? \{ send: sendProblems, fix: fixProblems \} : undefined\}/)
+    expect(app).toMatch(/const made = problemsContext\(\{ rows, root, files \}\)/)
+    expect(app).toMatch(/openContextPreview\(made\.ref, contextText\(made\.ref, made\.excerpt, made\.language\)\)/)
+    expect(app).toMatch(/'tasks-repair', \{ \.\.\.request, dryRun: true \}\)/)
+    // A refusal offers the draft whenever it comes: from the dry run, or from the real call after the state moved (M10)
+    expect(app).toMatch(/if \(dry\.kind === 'refused'\) return offerDraft\(dry\.key\)/)
+    expect(app).toMatch(/else if \(asked\.kind === 'refused'\) await offerDraft\(asked\.key\)/)
+    expect(app).toMatch(/openProblemsDraft\(rows\)/)
+    // Rows of two folders: said, nothing opens (I3)
+    expect(app).toMatch(/if \(made\.reason === 'folders'\) toast\.info\(t\('problems\.send\.folders'\)\)/)
   })
 
   it('marks a stale problem and says why on hover', () => {
@@ -61,7 +86,7 @@ describe('the Problems tab', () => {
   })
 
   it('opens a problem in the editor at its line, and has an action that opens the tab', () => {
-    expect(app).toMatch(/onOpenProblem=\{\(file, line\) => openFile\(file, line !== undefined \? \{ line \} : undefined\)\}/)
+    expect(app).toMatch(/onOpenProblem=\{\(file, line, column\) => openFile\(file, line !== undefined \? \{ line, \.\.\.\(column !== undefined \? \{ col: column \} : \{\}\) \} : undefined\)\}/)
     expect(app).toMatch(/'problems\.open': \{\s*blockedBy: \(\) =>\s*workspaceFeaturesRef\.current\?\.problemsTab !== true \? 'action\.blocked\.featureOff' : currentProject \? null : 'action\.blocked\.noProject',\s*run: \(\) => \{\s*setRunPanelOpen\(true\)\s*setBottomTab\('problems'\)/)
   })
 })

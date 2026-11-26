@@ -181,6 +181,16 @@ describe('humanFor', () => {
     expect(humanFor('agent-profiles-delete', { id: 'ap_1', name: 'Reviewer', deleted: true })).toContain('ap_1')
   })
 
+  // Phase 3 Part 1: what a repair request did, or would do
+  it('tasks repair says the attempt it opened, or how the Task would take one', () => {
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'reopen', repairDispatchId: 'dsp_2', asked: 3 })).toBe('asked task t1 to fix 3 findings (attempt dsp_2)')
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'reopen', repairDispatchId: 'dsp_2', asked: 1 })).toBe('asked task t1 to fix 1 finding (attempt dsp_2)')
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'failed' })).toBe('task t1 can take a repair: it failed')
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'reopen' })).toBe('task t1 can take a repair: it is completed and nothing has moved on from it')
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'exhausted-gate' })).toBe('task t1 can take a repair: through its exhausted repairs question')
+    expect(humanFor('tasks-repair', { taskId: 't1', via: 'failed', asked: 20 })).toBe('task t1 can take a repair: it failed (20 findings would go)')
+  })
+
   it('plugins logs prints the lines, and says when there are none', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: ['one', 'two'] })).toBe('one' + String.fromCharCode(10) + 'two')
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')

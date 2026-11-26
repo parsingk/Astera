@@ -12,6 +12,7 @@ import { FOLLOW_WINDOW_MS, type AnsweredQuestion, type StopResult, type WaitEndi
 import { briefTask, jobView, latestRunOf, runTokensOf, runView, taskTokensOf, type SpentTokens } from './publicViews'
 import { lastByState } from './stateMemo'
 import { randomBytes } from 'node:crypto'
+import { statSync } from 'node:fs'
 import {
   ackDelivery,
   applyReply,
@@ -96,6 +97,7 @@ import {
   isGitHubGateKind,
   isPlaceholderSessionId,
   recomputeReady,
+  type AskedFinding,
   type CheckResult,
   type ConvergencePolicy,
   type Dispatch,
@@ -108,6 +110,8 @@ import {
   type TaskStatus
 } from './types'
 import { runWorktrees } from './integrate'
+import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
+import { taskFindings, taskFoldersOf } from '../problems/completionProblems'
 import { isPathWithin } from '../files/tree'
 import { buildHandoverPrompt } from './handover'
 import { parseReviewFile, type ReviewIssueInput } from './review'
@@ -604,7 +608,7 @@ export interface OrchServerDeps {
    *  못했을 때(예: 이 Task 를 막는 다른 Gate 가 이미 열려 있다) gate-resolve 의 200 응답이 그 사실을
    *  담을 수 있게 한다 — repairOnce 자신은 실패를 이미 로그하므로(그 함수의 주석) 이 반환값은 응답에
    *  싣는 용도이지, 여기서 또 로그할 것이 있어서가 아니다. */
-  repairOnce?(a: { taskId: string; from?: OrchState }): Promise<{ ok: true } | { ok: false; error: string }>
+  repairOnce?(a: { taskId: string; from?: OrchState; asked?: readonly AskedFinding[] }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
    *  으로 그대로 간다); 주입되지 않으면 영어다.
    *
@@ -793,6 +797,15 @@ export interface SessionCreate {
 
 type Reply = { status: number; body: unknown }
 const okBody = (body: unknown): Reply => ({ status: 200, body })
+/** Whether a folder is there, for a person's repair request (taskRepair.ts): read where the command runs, which is the
+ *  Host holding the Task's folders. */
+const isFolder = (p: string): boolean => {
+  try {
+    return statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
 /** An optional integer flag within [min, max]; the error text when it is not. */
 const boundedInt = (v: unknown, name: string, min: number, max: number, fallback: number): number | string => {
   if (v === undefined) return fallback
@@ -5165,6 +5178,59 @@ export async function handleCommand(
       if (retried && !retried.ok)
         return okBody({ ...r.value, retryOnceFailed: retried.error } satisfies AnsweredQuestion)
       return okBody(r.value satisfies AnsweredQuestion)
+    }
+    /**
+     * **A person asks a Task to fix the findings they chose** (Phase 3 design §5 Part 1 item 4). For this machine's app and a
+     * person's own shell: an agent is refused, and MCP, controllers and plugins never get here (no gate lists it). The
+     * findings come as references (core/problems/findingRef.ts); the app sends each one's words as the person saw them,
+     * the CLI only the references, whose words come from the Task's own findings (taskFindings); with none named, every
+     * finding the Task has. Which Tasks take it is taskRepair.ts's rule, refused with its reason (409) otherwise;
+     * `--dry-run` answers that verdict and changes nothing. The Task goes back to ready (a failed or completed one, past
+     * the transition table as mark-failed goes, or a blocked one through its exhausted repairs Gate's retry-once) in the
+     * state handed to repairOnce, which opens the repair Dispatch on it and commits both at once, as retry-once does.
+     */
+    case 'tasks-repair': {
+      if (agentCaller(caller))
+        return denied(withUnsaidNote(caller, 'tasks repair is for a person: ask from the app or your own shell, not from inside an agent session'))
+      const taskId = str(args.task)
+      if (!taskId) return bad('--task is required')
+      const task = s.tasks.find((t) => t.id === taskId)
+      if (!task) return notFound(`unknown task: ${taskId}`)
+      const named = args.finding === undefined ? [] : Array.isArray(args.finding) ? args.finding : [args.finding]
+      if (!named.every((x): x is string => typeof x === 'string' && x !== '')) return bad('--finding needs a finding reference')
+      const texts = args.texts !== null && typeof args.texts === 'object' && !Array.isArray(args.texts) ? (args.texts as Record<string, unknown>) : {}
+      const own = taskFindings(task, taskFoldersOf(s, task))
+      const asked: AskedFinding[] = named.length === 0 ? own : []
+      const unknown: string[] = []
+      for (const ref of named) {
+        const given = texts[ref]
+        const ownText = own.find((f) => f.ref === ref)?.text
+        if (typeof given === 'string' && given.trim() !== '') asked.push({ ref, text: given })
+        else if (ownText !== undefined) asked.push({ ref, text: ownText })
+        else unknown.push(ref)
+      }
+      if (unknown.length > 0) return bad(`not a finding of task ${taskId}: ${unknown.join(', ')}`)
+      if (asked.length === 0) return bad(`task ${taskId} has no findings to fix; name one with --finding`)
+      const verdict = repairEligibility(s, taskId, isFolder)
+      // `reason`, the word the CLI's envelope carries in `details` (cliOutput.ts refusalDetailsOf)
+      if (!verdict.ok) return { status: 409, body: { error: verdict.detail, reason: verdict.reason } }
+      if (args.dryRun === true) return okBody({ taskId, via: verdict.via, asked: capAsked(asked).length })
+      if (!deps.repairOnce) return conflict('a repair cannot be opened here')
+      let from: OrchState
+      if (verdict.via === 'exhausted-gate') {
+        const r = resolveGate(s, { gateId: verdict.gateId as string, resolution: 'retry-once' }, now)
+        if (!r.ok) return refused(r)
+        from = r.state
+      } else from = readyForRepair(s, taskId, now)
+      const opened = await deps.repairOnce({ taskId, from, asked })
+      // Nothing was committed: the Task and its Gate stay as they were
+      if (!opened.ok) return conflict(`the repair could not be opened: ${opened.error}`)
+      const d = deps
+        .getState()
+        .dispatches.filter((x) => x.taskId === taskId && x.askedFindings !== undefined)
+        .at(-1)
+      // How many findings rode, one per reference and at most ASKED_FINDINGS_MAX (final review M11)
+      return okBody({ taskId, via: verdict.via, ...(d ? { repairDispatchId: d.id } : {}), asked: capAsked(asked).length })
     }
     /** 질문에 답한다 — `gate-resolve` 의 공개 이름(공개 CLI 설계 §5 Phase B).
      *  답을 받는 플래그 이름도 사람의 말로 바뀐다(`--answer`). 서버 안에서는 한 자리로 간다 —

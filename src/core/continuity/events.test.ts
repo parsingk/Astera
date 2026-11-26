@@ -210,6 +210,14 @@ describe('deriveEvents — dispatches', () => {
     expect(types(requested, withDispatch(dispatch({ sessionId: 'sess-1' })))).toEqual(['ATTEMPT_STARTED'])
   })
 
+  // Final review M12: who asked is the commit's actor; which findings is the attempt's own record, by reference
+  it('names the findings a person asked a repair for, by reference only', () => {
+    const asked = withDispatch(dispatch({ repair: 'check-failure', askedFindings: [{ ref: 'check:tsk_1:aaaaaaaaaaaa', text: 'error a.ts:3 x' }] }))
+    const ev = deriveEvents(withDispatch(null, task({ status: 'ready' })), asked, NOW).find((e) => e.type === 'ATTEMPT_START_REQUESTED')
+    expect(ev?.payload).toMatchObject({ repair: 'check-failure', askedFindings: ['check:tsk_1:aaaaaaaaaaaa'] })
+    expect(JSON.stringify(ev?.payload)).not.toContain('error a.ts')
+  })
+
   it('a reused terminal appears with a real id: requested and started in one write', () => {
     expect(types(withDispatch(null, task({ status: 'ready' })), withDispatch(dispatch({ sessionId: 'sess-1' })))).toEqual([
       'ATTEMPT_START_REQUESTED',

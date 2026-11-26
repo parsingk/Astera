@@ -17,12 +17,26 @@ export interface Diagnostic {
   message: string
   /** The file, absolute, when the finding names one. */
   path?: string
+  /** The folder `path` was found in (a Job's worker folder, or the project), for a finding of a Job: a session must work
+   *  in this folder to be handed the row (final review I3), as a session of another worktree must not. */
+  root?: string
   /** 1-based. */
   line?: number
+  /** 1-based, in UTF-16 code units as the editor and LSP count them (Phase 3). */
+  column?: number
+  /** Where the problem ends, when its producer says: 1-based, the column in UTF-16 code units. */
+  endLine?: number
+  endColumn?: number
+  /** The producer's own code for the kind of problem (a linter rule, a compiler error number). */
+  code?: string
+  /** The finding as a person's repair request names it, the same in the next round (core/problems/findingRef.ts): set
+   *  on a finding of a Job's Task. */
+  ref?: string
   /** When it was found (ISO), which is what makes it stale once the file changes after it. */
   producedAt?: string
-  /** The Job round and Task it came from, for a finding of a Job's completion. */
-  origin?: { runId: string; taskId: string; task: string }
+  /** The Job round and Task it came from, for a finding of a Job's completion, and the Job's name as every place shows
+   *  it, when its Job is still on record. */
+  origin?: { runId: string; taskId: string; task: string; job?: string }
   /** The file changed after the finding (`changed`) or is not there (`missing`): it may no longer hold. */
   stale?: 'changed' | 'missing'
   /** This row stands for that many findings the producer kept no detail of (a check keeps 20 and counts the rest). */

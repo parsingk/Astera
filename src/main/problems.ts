@@ -75,19 +75,22 @@ export function completionProducer(deps: {
         const { file, folders, ...rest } = p
         if (file === undefined) return rest
         if (UNC_LIKE.test(file)) return { ...rest, unresolved: file }
+        // Each place to look with the folder it is in, which the row carries as its root (final review I3)
+        const holder = path.isAbsolute(file) ? folders.find((f) => isPathWithin(f, file)) : undefined
         const candidates = path.isAbsolute(file)
-          ? folders.some((f) => isPathWithin(f, file))
-            ? [file]
+          ? holder !== undefined
+            ? [{ f: holder, abs: file }]
             : []
-          : folders.map((f) => ({ f, abs: path.join(f, ...file.split(/[\\/]/)) })).filter((c) => isPathWithin(c.f, c.abs)).map((c) => c.abs)
+          : folders.map((f) => ({ f, abs: path.join(f, ...file.split(/[\\/]/)) })).filter((c) => isPathWithin(c.f, c.abs))
         if (candidates.length === 0) return { ...rest, unresolved: file }
-        for (const abs of candidates) {
-          const st = await statOnce(abs)
+        for (const c of candidates) {
+          const st = await statOnce(c.abs)
           if (!st) continue
           const changed = rest.producedAt !== undefined && st.mtimeMs > Date.parse(rest.producedAt)
-          return { ...rest, path: abs, ...(changed ? { stale: 'changed' as const } : {}) }
+          return { ...rest, path: c.abs, root: c.f, ...(changed ? { stale: 'changed' as const } : {}) }
         }
-        return { ...rest, path: candidates[candidates.length - 1], stale: 'missing' }
+        const last = candidates[candidates.length - 1]
+        return { ...rest, path: last.abs, root: last.f, stale: 'missing' }
       }
       return mapLimited(raw, STAT_AT_ONCE, resolve)
     }
