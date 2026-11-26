@@ -82,7 +82,7 @@ export function selectionContext(input: {
 const PROBLEM_CONTEXT_LINES = 3
 
 /** What a problem says, as one line: its severity, its place, who found it, and its words (or what stands for them). */
-function problemLine(d: Diagnostic, root: string): string {
+export function problemLine(d: Diagnostic, root: string): string {
   const where = d.path !== undefined ? `${relativeTo(root, d.path)}${d.line !== undefined ? `:${d.line}` : ''} ` : ''
   const words =
     d.message !== ''

@@ -34,7 +34,8 @@ import { NewRunModal } from './components/NewRunModal'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
 import { contentRevision, contextText, isUnder, sessionFits, type ContextRef } from '../../core/context/contextRef'
-import { logContext, selectionContext } from './lib/contextSources'
+import { logContext, problemLine, problemsContext, selectionContext } from './lib/contextSources'
+import { problemsObjective } from './lib/problemsDraft'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
@@ -4857,6 +4858,74 @@ export default function App(): React.JSX.Element {
     setNewRunDraft(repairObjective({ file, hunk, projectPath: run.projectPath, runId: run.runId }))
     setNewRunOpen(true)
   }
+  /** Problems rows to an agent session (Phase 3 Part 1): the files they name are read from disk now, so the lines around
+   *  each problem are what the agent will find, then the same preview and paste as a selection. A file that cannot be
+   *  read is left out of the lines; its problem still goes by its words. */
+  const sendProblems = async (rows: Diagnostic[]): Promise<void> => {
+    const root = currentProject
+    if (!root || rows.length === 0) return
+    const files: Record<string, string> = {}
+    for (const p of new Set(rows.flatMap((d) => (d.path !== undefined && d.line !== undefined ? [d.path] : [])))) {
+      try {
+        const read = await window.api.files.read(p)
+        if (!read.binary) files[p] = toLf(read.content)
+      } catch {
+        // gone or unreadable: the problem goes by its words
+      }
+    }
+    const made = problemsContext({ rows, root, files })
+    if (!made.ok) return
+    openContextPreview(made.ref, contextText(made.ref, made.excerpt, made.language))
+  }
+  /** Problems with no Task that can take a repair, as a new Job draft (the hunk's way, openRepairDraft). */
+  const openProblemsDraft = (rows: Diagnostic[]): void => {
+    const root = currentProject
+    if (!root) return
+    setNewRunDraft(problemsObjective(rows, root))
+    setNewRunOpen(true)
+  }
+  /** Has an agent fix the chosen problems (Phase 3 Part 1). Rows of one Task go to that Task as a repair request: the
+   *  Host is asked first whether the Task takes one (a dry run, which changes nothing), then the person confirms with
+   *  the Task named; a Task that cannot take it says why and offers a new Job draft instead. Rows of no Task, or of
+   *  several, go to the draft directly. */
+  const fixProblems = async (rows: Diagnostic[]): Promise<void> => {
+    const root = currentProject
+    if (!root || rows.length === 0) return
+    const tasks = new Set(rows.map((d) => d.origin?.taskId))
+    const origin = rows[0].origin
+    if (tasks.size !== 1 || !origin || rows.some((d) => d.ref === undefined)) return openProblemsDraft(rows)
+    const request = {
+      task: origin.taskId,
+      finding: rows.map((d) => d.ref as string),
+      texts: Object.fromEntries(rows.map((d) => [d.ref as string, problemLine(d, root)]))
+    }
+    /** A failed call is an answer like any other, said as one. */
+    const failedCall = (e: unknown): { status: number; body: unknown } => ({ status: 0, body: { error: e instanceof Error ? e.message : String(e) } })
+    const dry = await window.api.orch.command(root, 'tasks-repair', { ...request, dryRun: true }).catch(failedCall)
+    if (dry.status === 409) {
+      const code = (dry.body as { code?: string } | null)?.code ?? 'not-repairable'
+      const ok = await confirmModal({
+        title: t('problems.fix.cannotTitle'),
+        body: `${t(`problems.fix.refused.${code}` as MessageKey)} ${t('problems.fix.offerDraft')}`,
+        confirmLabel: t('problems.fix.draft')
+      })
+      if (ok) openProblemsDraft(rows)
+      return
+    }
+    if (dry.status !== 200) {
+      toast.error(t('problems.fix.failed', { error: (dry.body as { error?: string } | null)?.error ?? String(dry.status) }))
+      return
+    }
+    const ok = await confirmModal({
+      title: t('problems.fix.title'),
+      body: t('problems.fix.body', { task: origin.task, count: rows.length }),
+      confirmLabel: t('problems.fix.confirm')
+    })
+    if (!ok) return
+    const asked = await window.api.orch.command(root, 'tasks-repair', request).catch(failedCall)
+    if (asked.status === 200) toast.info(t('problems.fix.asked', { task: origin.task }))
+    else toast.error(t('problems.fix.failed', { error: (asked.body as { error?: string } | null)?.error ?? String(asked.status) }))
+  }
   /** Opens the palette box on actions, on files or on text in files. A menu left open (a tab's menu draws above the palette's backdrop)
    *  would stay on screen and keep acting on the workbench behind it, so the two the keyboard can open are closed. */
   const openPalette = (query: PaletteStart): void => {
@@ -5897,7 +5966,8 @@ export default function App(): React.JSX.Element {
                     problemsEnabled={problemsOn}
                     problemsRoot={currentProject}
                     problems={problems}
-                    onOpenProblem={(file, line) => openFile(file, line !== undefined ? { line } : undefined)}
+                    onOpenProblem={(file, line, column) => openFile(file, line !== undefined ? { line, ...(column !== undefined ? { col: column } : {}) } : undefined)}
+                    problemActions={contextOn ? { send: sendProblems, fix: fixProblems } : undefined}
                     onRefreshProblems={() => setProblemsAsk((n) => n + 1)}
                     onSendRunLog={(runId) => {
                       // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
