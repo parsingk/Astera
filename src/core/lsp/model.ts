@@ -36,10 +36,16 @@ export interface LspFileDiagnostics {
  *  TypeScript 5 server would check it as its own TypeScript does. */
 export type LspNote = 'older-typescript' | 'typescript5-not-installed'
 
+/** Why a server is stopped or failed, in a word the settings screen says in the person's language: not installed,
+ *  stopped to make room for another (at most four run), crashed three times, refused for another reason. `reason`
+ *  carries the details. */
+export type LspWhy = 'not-installed' | 'room' | 'crashed' | 'refused'
+
 export interface LspServerStatus {
   server: LspServerId
   root: string
   status: 'starting' | 'running' | 'stopped' | 'failed'
+  why?: LspWhy
   reason?: string
   pid?: number
   notes?: LspNote[]

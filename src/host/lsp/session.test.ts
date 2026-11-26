@@ -159,8 +159,8 @@ describe('lspLaunch', () => {
   })
 
   it('refuses a launch whose server file is missing', () => {
-    expect(lspLaunch(base({ exists: () => false }))).toEqual({ refused: expect.stringContaining('langserver.index.js') })
-    expect(lspLaunch(base({ server: 'typescript', platform: 'freebsd' }))).toEqual({ refused: expect.any(String) })
+    expect(lspLaunch(base({ exists: () => false }))).toEqual({ refused: expect.stringContaining('langserver.index.js'), why: 'not-installed' })
+    expect(lspLaunch(base({ server: 'typescript', platform: 'freebsd' }))).toEqual({ refused: expect.any(String), why: 'refused' })
   })
 
   it('never names a .cmd interpreter to pyright, and runs it on the Host’s Node without the current folder on the search path', () => {
@@ -181,7 +181,7 @@ describe('lspLaunch', () => {
     expect(opts.tsserver.path.endsWith(path.join('typescript@5.9.3', 'package', 'lib', 'tsserver.js'))).toBe(true)
     expect(opts.disableAutomaticTypingAcquisition).toBe(true)
     expect(l.env.TEMP).toBe(path.join(path.resolve('prof'), 'language-servers', 'tmp'))
-    expect(lspLaunch(base({ server: 'typescript5', exists: (p) => !p.endsWith('tsserver.js') }))).toEqual({ refused: expect.stringContaining('tsserver.js') })
+    expect(lspLaunch(base({ server: 'typescript5', exists: (p) => !p.endsWith('tsserver.js') }))).toEqual({ refused: expect.stringContaining('tsserver.js'), why: 'not-installed' })
   })
 
   it('runs TypeScript 7’s own binary with --lsp --stdio, or the path the person set', () => {

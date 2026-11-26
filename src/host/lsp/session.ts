@@ -66,6 +66,17 @@ function serverEnv(env: NodeJS.ProcessEnv, extra: Record<string, string>): NodeJ
   return { ...out, NoDefaultCurrentDirectoryInExePath: '1', ...extra }
 }
 
+/** Why a server cannot run: its files are not there (`not-installed`), or another reason. */
+export interface LspRefused {
+  refused: string
+  why: 'not-installed' | 'refused'
+}
+
+/** A server's log for a root: `<profile>/language-servers/logs/<server>-<8 hex of the folded root's sha256>.log`. */
+export function lspLogFile(profileDir: string, server: LspServerId, root: string, platform: string = process.platform): string {
+  return path.join(lspDir(profileDir), 'logs', `${server}-${createHash('sha256').update(foldPathCase(root, platform)).digest('hex').slice(0, 8)}.log`)
+}
+
 /** How a server runs for a root, or why it cannot: its files must be where Astera installed them, or where the person's
  *  setting says, and the root must be a folder a file URI can name. */
 export function lspLaunch(d: {
@@ -80,15 +91,15 @@ export function lspLaunch(d: {
   platform?: string
   arch?: string
   exists?: (p: string) => boolean
-}): LspLaunch | { refused: string } {
+}): LspLaunch | LspRefused {
   const platform = d.platform ?? process.platform
   const exists = d.exists ?? existsSync
-  if (pathToUri(d.root, platform) === null) return { refused: `a server cannot be pointed at ${d.root}` }
-  const log = path.join(lspDir(d.profileDir), 'logs', `${d.server}-${createHash('sha256').update(foldPathCase(d.root, platform)).digest('hex').slice(0, 8)}.log`)
-  const missing = (p: string): { refused: string } => ({ refused: `not installed: ${p} is missing` })
+  if (pathToUri(d.root, platform) === null) return { refused: `a server cannot be pointed at ${d.root}`, why: 'refused' }
+  const log = lspLogFile(d.profileDir, d.server, d.root, platform)
+  const missing = (p: string): LspRefused => ({ refused: `not installed: ${p} is missing`, why: 'not-installed' })
   const pins = serverPackages(d.server, platform, d.arch ?? process.arch)
   if (d.server === 'typescript') {
-    if (!d.settings.typescript.path && pins === null) return { refused: `there is no TypeScript 7 package for ${platform} ${d.arch ?? process.arch}` }
+    if (!d.settings.typescript.path && pins === null) return { refused: `there is no TypeScript 7 package for ${platform} ${d.arch ?? process.arch}`, why: 'refused' }
     const file = d.settings.typescript.path ?? path.join(packageDir(d.profileDir, pins![0]), 'lib', platform === 'win32' ? 'tsc.exe' : 'tsc')
     if (!exists(file)) return missing(file)
     return { server: d.server, root: d.root, file, args: ['--lsp', '--stdio'], env: serverEnv(d.env, {}), log }
