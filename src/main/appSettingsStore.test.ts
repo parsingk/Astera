@@ -1040,6 +1040,40 @@ describe('mcpGithubWrite', () => {
   })
 })
 
+// Phase 3 Part 3: the "언어 서버" settings, in the shape the Host reads (core/settings/languageServers.ts)
+describe('languageServers', () => {
+  const DEFAULTS = { typescript: { enabled: true }, python: { enabled: true, venvProjects: [] } }
+
+  it('defaults to both languages on, and is not written while at the defaults', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getLanguageServers()).toEqual(DEFAULTS)
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('languageServers')
+  })
+
+  it('keeps language server settings across a reload, and drops a relative path', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const tsc = path.join(dir, 'ts', 'tsc.exe')
+    const py = path.join(dir, 'py', 'python.exe')
+    await a.setLanguageServers({ typescript: { enabled: false, path: tsc }, python: { enabled: true, path: 'relative/langserver.index.js', interpreter: py, venvProjects: [dir] } })
+    const want = { typescript: { enabled: false, path: tsc }, python: { enabled: true, interpreter: py, venvProjects: [dir] } }
+    expect(a.getLanguageServers()).toEqual(want)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).languageServers).toEqual(want)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getLanguageServers()).toEqual(want)
+  })
+
+  it('a recovered profile reads both languages off', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getLanguageServers()).toEqual({ typescript: { enabled: false }, python: { enabled: false, venvProjects: [] } })
+  })
+})
+
 describe('mcpHttp', () => {
   const DEFAULTS = { enabled: false, port: 7871, lan: false, hosts: [] }
 
@@ -1210,7 +1244,7 @@ describe('workspaceFeatures', () => {
     await a.setWorkspaceFeatures({ ...WORKSPACE_FEATURES_DEFAULTS, problemsTab: false })
     const b = new AppSettingsStore(f)
     await b.load()
-    expect(b.getWorkspaceFeatures()).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true })
+    expect(b.getWorkspaceFeatures()).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true, languageServers: true })
   })
 
   it('leaves the key out of the file while every switch is on', async () => {
@@ -1236,7 +1270,7 @@ describe('workspaceFeatures', () => {
     const f = file()
     const s = new AppSettingsStore(f)
     await s.load()
-    await s.setWorkspaceFeatures({ layoutMemory: false, problemsTab: false, contextBridge: false, testsTab: false })
+    await s.setWorkspaceFeatures({ layoutMemory: false, problemsTab: false, contextBridge: false, testsTab: false, languageServers: false })
     await fs.writeFile(f, '{ not json', 'utf8')
     expect((await s.load()).recovered).toBe(true)
     expect(s.getWorkspaceFeatures()).toEqual(WORKSPACE_FEATURES_DEFAULTS)

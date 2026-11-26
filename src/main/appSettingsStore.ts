@@ -27,6 +27,7 @@ import { EMPTY_REVIEWER_SETTINGS, reviewerSettingsOf, type ReviewerSettings } fr
 import { githubLifecycleDefaultsOf, type GitHubLifecycleDefaults } from '../core/github/lifecycleDefaults'
 import { GITHUB_LIFECYCLE_DEFAULTS } from '../core/github/lifecycle'
 import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
+import { languageServersOf, type LanguageServerSettings } from '../core/settings/languageServers'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import {
   WORKSPACE_FEATURES_DEFAULTS,
@@ -143,6 +144,7 @@ export class AppSettingsStore {
   private githubLifecycle: GitHubLifecycleDefaults = { ...GITHUB_LIFECYCLE_DEFAULTS }
   /** MCP over HTTP (MCP HTTP design §2). Off by default; written only while a field differs from its default. */
   private mcpHttp: McpHttpSettings = mcpHttpOf(undefined)
+  private languageServers: LanguageServerSettings = languageServersOf(undefined)
   /** The registered external reviewers and the chosen one (`externalReviewers`, `reviewBy`). Empty means the built-in
    *  review; written only while it is not empty. The Host reads the file (readReviewerSettings). */
   private reviewerSettings: ReviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
@@ -236,6 +238,8 @@ export class AppSettingsStore {
       this.githubLifecycle = githubLifecycleDefaultsOf((parsed as { githubLifecycle?: unknown }).githubLifecycle)
       // The same function the Host's readMcpHttp uses, so the two cannot differ.
       this.mcpHttp = mcpHttpOf((parsed as { mcpHttp?: unknown }).mcpHttp)
+      // The same narrowing the Host's readLanguageServers uses (Phase 3 Part 3)
+      this.languageServers = languageServersOf((parsed as { languageServers?: unknown }).languageServers)
       // The same function the Host's readReviewerSettings uses, so the two cannot differ.
       this.reviewerSettings = reviewerSettingsOf(parsed)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
@@ -293,6 +297,7 @@ export class AppSettingsStore {
         this.mcpGithubWrite = false
         this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS }
         this.mcpHttp = mcpHttpOf(undefined)
+        this.languageServers = languageServersOf(undefined)
         this.reviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
@@ -335,6 +340,8 @@ export class AppSettingsStore {
       // The narrower side too (G7a final review M4): the file may have said "do not rerun", and the Host reads this one
       this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false }
       this.mcpHttp = mcpHttpOf(undefined)
+      // The narrower side too: the file may have turned a language off, so both are off until the person says
+      this.languageServers = { typescript: { enabled: false }, python: { enabled: false, venvProjects: [] } }
       // The narrower side too: no external reviewer, so every review stays the built-in one.
       this.reviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
       this.terminalFont = { latin: null, hangul: null }
@@ -526,6 +533,16 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getLanguageServers(): LanguageServerSettings {
+    return languageServersOf(this.languageServers)
+  }
+
+  /** The "언어 서버" settings (Phase 3 Part 3), narrowed as the Host reads them; the Host reads the file at each start. */
+  async setLanguageServers(next: LanguageServerSettings): Promise<void> {
+    this.languageServers = languageServersOf(next)
+    await this.persist()
+  }
+
   getGithubPolling(): boolean {
     return this.githubPolling
   }
@@ -698,6 +715,7 @@ export class AppSettingsStore {
       mcpGithubWrite?: true
       githubLifecycle?: GitHubLifecycleDefaults
       mcpHttp?: McpHttpSettings
+      languageServers?: LanguageServerSettings
       externalReviewers?: ReviewerSettings['reviewers']
       reviewBy?: string
       terminalFont?: TerminalFont
@@ -742,6 +760,8 @@ export class AppSettingsStore {
     if (JSON.stringify(this.githubLifecycle) !== JSON.stringify(githubLifecycleDefaultsOf(undefined))) data.githubLifecycle = { ...this.githubLifecycle }
     const h = this.mcpHttp
     if (h.enabled || h.lan || h.port !== MCP_HTTP_DEFAULT_PORT || h.hosts.length > 0) data.mcpHttp = h
+    // Left out while at the defaults
+    if (JSON.stringify(this.languageServers) !== JSON.stringify(languageServersOf(undefined))) data.languageServers = languageServersOf(this.languageServers)
     if (this.reviewerSettings.reviewers.length > 0) data.externalReviewers = this.reviewerSettings.reviewers
     if (this.reviewerSettings.reviewBy !== null) data.reviewBy = this.reviewerSettings.reviewBy
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those

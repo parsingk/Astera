@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import path from 'node:path'
 import type { OrchState } from '../core/orchestration/state'
 import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic'
-import { completionProducer, createProblems, createProblemsPing, testProducer } from './problems'
+import { completionProducer, createProblems, createProblemsPing, lspProducer, testProducer } from './problems'
+import type { LspFileDiagnostics } from '../core/lsp/model'
 import type { TestRunResult } from '../core/tests/model'
 
 const PROJECT = path.resolve('/repo')
@@ -290,5 +291,47 @@ describe('testProducer', () => {
     expect(changed[0].stale).toBe('changed')
     const gone = await produce([result()])
     expect(gone[0].stale).toBe('missing')
+  })
+})
+
+// Phase 3 Part 3: the language servers' problems for the project's open files
+describe('lspProducer', () => {
+  const T = '2026-11-26T02:00:00.000Z'
+  const file: LspFileDiagnostics = {
+    root: PROJECT,
+    path: at(PROJECT, 'src', 'a.ts'),
+    server: 'typescript',
+    producedAt: T,
+    problems: [
+      { line: 90, column: 7, endLine: 90, endColumn: 14, severity: 'error', message: "Type 'string' is not assignable to type 'number'.", code: '2322' },
+      { line: 3, column: 1, endLine: 3, endColumn: 2, severity: 'warning', message: 'unused' }
+    ]
+  }
+  const produce = (files: LspFileDiagnostics[], mtimes: Record<string, number> = {}) =>
+    lspProducer({ files: () => files, stat: async (abs) => (abs in mtimes ? { mtimeMs: mtimes[abs] } : null) }).diagnostics(PROJECT)
+
+  it('one row per problem with column and range, and a stale mark once the file changed', async () => {
+    const rows = await produce([file], { [file.path]: Date.parse(T) - 1000 })
+    expect(rows[0]).toEqual({
+      schemaVersion: 1,
+      id: `lsp:typescript:${file.path}:90:7:2322:0`,
+      source: { kind: 'lsp', id: 'typescript', label: 'TypeScript' },
+      severity: 'error',
+      message: "Type 'string' is not assignable to type 'number'.",
+      path: file.path,
+      root: PROJECT,
+      line: 90,
+      column: 7,
+      endLine: 90,
+      endColumn: 14,
+      code: '2322',
+      producedAt: T
+    })
+    expect(rows[1]).toMatchObject({ id: `lsp:typescript:${file.path}:3:1::1`, severity: 'warning' })
+    expect(rows[1]).not.toHaveProperty('code')
+    const changed = await produce([file], { [file.path]: Date.parse(T) + 5000 })
+    expect(changed[0].stale).toBe('changed')
+    expect((await produce([file]))[0].stale).toBe('missing')
+    expect((await produce([{ ...file, server: 'typescript5' }], { [file.path]: 0 }))[0].source.label).toBe('TypeScript 5')
   })
 })

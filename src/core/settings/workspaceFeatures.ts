@@ -1,10 +1,10 @@
 // The switches that turn the Phase 1 workspace features off (the spec's Phase 1 gate: a new feature can be turned off
 // through the existing settings). The three that act without a key: the layout the window remembers, the Problems tab,
 // and sending a piece of the workbench to an agent. The palette, go to file and find in files open only by their keys,
-// and a key is taken away in the shortcut settings. Phase 3 Part 2 adds the Tests tab.
+// and a key is taken away in the shortcut settings. Phase 3 Part 2 adds the Tests tab, Part 3 the language servers.
 //
-// All four default on: the Phase 1 three passed their reviews and screen checks (spec 9.3), and the Tests tab follows
-// them. They move together as one stored
+// All five default on: the Phase 1 three passed their reviews and screen checks (spec 9.3), and the Tests tab and the
+// language servers follow them (nothing runs until a server is installed). They move together as one stored
 // object, the convention core/notify/settings.ts follows, so one place knows what a missing file means.
 //
 // node: no imports — the settings screen (renderer) and the settings store (main) both read this.
@@ -14,13 +14,15 @@ export interface WorkspaceFeatures {
   problemsTab: boolean
   contextBridge: boolean
   testsTab: boolean
+  languageServers: boolean
 }
 
 export const WORKSPACE_FEATURES_DEFAULTS: WorkspaceFeatures = {
   layoutMemory: true,
   problemsTab: true,
   contextBridge: true,
-  testsTab: true
+  testsTab: true,
+  languageServers: true
 }
 
 /** Read from a file a person can edit by hand. Every switch defaults on, so it reads off only on an explicit `false`:
@@ -32,7 +34,8 @@ export function readWorkspaceFeatures(v: unknown): WorkspaceFeatures {
     layoutMemory: o.layoutMemory !== false,
     problemsTab: o.problemsTab !== false,
     contextBridge: o.contextBridge !== false,
-    testsTab: o.testsTab !== false
+    testsTab: o.testsTab !== false,
+    languageServers: o.languageServers !== false
   }
 }
 

@@ -44,6 +44,7 @@ const EVENT_CHANNELS = [
   'files:changedBatch',
   'problems:changed',
   'tests:changed',
+  'lsp:state',
   'files:opProgress',
   'worktree:createProgress',
   'git:changed',
@@ -261,6 +262,8 @@ const api = {
     setDesktopNotify: invoke('settings.setDesktopNotify'),
     getWorkspaceFeatures: invoke('settings.getWorkspaceFeatures'),
     setWorkspaceFeatures: invoke('settings.setWorkspaceFeatures'),
+    getLanguageServers: invoke('settings.getLanguageServers'),
+    setLanguageServers: invoke('settings.setLanguageServers'),
     getGenerator: invoke('settings.getGenerator'),
     setGenerator: invoke('settings.setGenerator'),
     listModels: invoke('settings.listModels'),
@@ -299,6 +302,15 @@ const api = {
   tests: {
     list: invoke('tests.list'),
     rerun: invoke('tests.rerun')
+  },
+  lsp: {
+    setOpen: invoke('lsp.setOpen'),
+    saved: invoke('lsp.saved'),
+    status: invoke('lsp.status'),
+    install: invoke('lsp.install'),
+    remove: invoke('lsp.remove'),
+    log: invoke('lsp.log'),
+    venvFor: invoke('lsp.venvFor')
   },
   files: {
     list: invoke('files.list'),

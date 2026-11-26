@@ -1,4 +1,5 @@
 import type { RerunScope, RerunWhy, TestRunResult } from './tests/model'
+import type { LanguageServerSettings, LspInstalled, LspOpenFile, LspServerStatus } from './lsp/model'
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type {
   KubeContexts,
@@ -1075,6 +1076,8 @@ export interface CoreEvents {
   'problems:changed': null
   /** A project's test results changed (Phase 3 Part 2): the project path */
   'tests:changed': string
+  /** Every language server's state, whole (Phase 3 Part 3) */
+  'lsp:state': LspServerStatus[]
   /** The open-task section's redraw trigger. **Not folded**, unlike 'understanding:changed' above —
    *  workUnits.json (what this section reads) is keyed by the raw session cwd, a different key space
    *  from understanding.json's origin-repo fold (ipc.ts's sessionTasks.* handlers explain why). The
@@ -1639,6 +1642,10 @@ export interface CoreApi {
     /** Which Phase 1 workspace features are on (core/settings/workspaceFeatures.ts). */
     getWorkspaceFeatures(): Promise<WorkspaceFeatures>
     setWorkspaceFeatures(next: WorkspaceFeatures): Promise<void>
+    /** Settings > language servers (Phase 3 Part 3): each language on or off, path overrides, pyright's interpreter, the
+     *  projects whose venv the person allowed. A path that cannot replace the install is refused. */
+    getLanguageServers(): Promise<LanguageServerSettings>
+    setLanguageServers(next: LanguageServerSettings): Promise<void>
     // Which account (and model) writes the How It Works explanations. Empty means no account has been
     // chosen, and nothing is generated — the screen says so rather than staying silently blank.
     getGenerator(): Promise<GeneratorSettings>
@@ -1707,6 +1714,16 @@ export interface CoreApi {
     list(projectPath: string): Promise<Diagnostic[]>
   }
   /** The last test result of each configuration of a project (Phase 3 Part 2, main/testResults.ts) */
+  /** Language servers (Phase 3 Part 3): the editor's open files and saves, and Settings > language servers */
+  lsp: {
+    setOpen(files: LspOpenFile[]): Promise<void>
+    saved(paths: string[]): Promise<void>
+    status(): Promise<{ servers: LspServerStatus[]; installed: LspInstalled[] }>
+    install(server: string): Promise<unknown>
+    remove(server: string): Promise<unknown>
+    log(server: string, root: string): Promise<{ lines: string[] }>
+    venvFor(project: string): Promise<string | null>
+  }
   tests: {
     list(projectPath: string): Promise<TestRunResult[]>
     /** Runs the configuration again, whole or only what failed; says how far it narrowed (core/tests/rerun.ts) */

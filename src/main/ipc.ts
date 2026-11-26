@@ -253,7 +253,11 @@ import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
 import { createQuickOpen } from './quickOpen'
 import { createTextSearch } from './textSearch'
-import { completionProducer, createProblems, createProblemsPing, statMtime, testProducer } from './problems'
+import { completionProducer, createProblems, createProblemsPing, lspProducer, statMtime, testProducer } from './problems'
+import { createHostLspView, pickInterpreter } from './host/hostLsp'
+import { languageServerPathProblem, type LanguageServerSettings } from '../core/settings/languageServers'
+import type { LspOpenFile } from '../core/lsp/model'
+import { isUnder as isUnderRoot } from '../core/context/contextRef'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
@@ -1627,6 +1631,62 @@ export function registerIpc(
   ipcMain.handle('tests.list', async (_e, project: string) => {
     await assertAllowedPath(project)
     return testResults.load(project, testConfigsOf(project))
+  })
+  // Language servers (Phase 3 Part 3): the window's open files and saves go to the Host through whatever client is up;
+  // its problems come back for the Problems list, its servers' states to Settings (main/host/hostLsp.ts)
+  const lspView = createHostLspView({
+    status: () => hostClient?.status() ?? { connected: false, features: [] },
+    send: (m) => hostClient?.send(m) ?? false,
+    interpreterFor: async (root) => pickInterpreter(root, core.appSettings.getLanguageServers(), await listPythonInterpreters(root).catch(() => [])),
+    changed: () => problemsPing.touch(),
+    stateChanged: (servers) => send('lsp:state', servers),
+    log: orchLog
+  })
+  const lspRoute = createHostRoute({ call: (m) => orchCall(m), notRunning: 'The Astera Host is not running, and it runs the language servers. Start it and try again.' })
+  // An install fetches up to 31 MB a package and checks it: well past the usual deadline
+  const lspInstallRoute = createHostRoute({ call: (m) => orchCall(m), timeoutMs: 10 * 60_000, notRunning: 'The Astera Host is not running, and it installs the language servers. Start it and try again.' })
+  const lspAnswer = async (route: typeof lspRoute, cmd: string, args: Record<string, unknown>): Promise<unknown> => {
+    const r = await route(cmd, args)
+    if (r.status === 200) return r.body
+    const body = (typeof r.body === 'object' && r.body !== null ? r.body : {}) as { error?: unknown; code?: unknown }
+    throw new Error(`${typeof body.code === 'string' ? `${body.code}: ` : ''}${typeof body.error === 'string' ? body.error : `${cmd} failed (${r.status})`}`)
+  }
+  ipcMain.handle('lsp.setOpen', async (_e, files: unknown) => {
+    const allowed = new Map<string, boolean>()
+    const ok: LspOpenFile[] = []
+    for (const f of Array.isArray(files) ? files : []) {
+      const o = (typeof f === 'object' && f !== null ? f : {}) as { path?: unknown; root?: unknown }
+      if (typeof o.path !== 'string' || typeof o.root !== 'string' || !isUnderRoot(o.root, o.path)) continue
+      if (!allowed.has(o.root)) allowed.set(o.root, await assertAllowedPath(o.root).then(() => true, () => false))
+      if (allowed.get(o.root)) ok.push({ path: o.path, root: o.root })
+    }
+    await lspView.setOpen(ok)
+  })
+  ipcMain.handle('lsp.saved', (_e, paths: unknown) => {
+    lspView.saved(Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [])
+  })
+  ipcMain.handle('lsp.status', () => lspAnswer(lspRoute, 'lsp-status', {}))
+  ipcMain.handle('lsp.install', (_e, server: string) => lspAnswer(lspInstallRoute, 'lsp-install', { server }))
+  ipcMain.handle('lsp.remove', (_e, server: string) => lspAnswer(lspRoute, 'lsp-remove', { server }))
+  ipcMain.handle('lsp.log', (_e, server: string, root: string) => lspAnswer(lspRoute, 'lsp-log', { server, root }))
+  // The virtual environment found inside a project, which the person may allow pyright to use there
+  ipcMain.handle('lsp.venvFor', async (_e, project: string) => {
+    await assertAllowedPath(project)
+    const found = await listPythonInterpreters(project).catch(() => [])
+    return found.find((i) => isUnderRoot(project, i.path) && !/\.(?:bat|cmd)$/i.test(i.path))?.path ?? null
+  })
+  ipcMain.handle('settings.getLanguageServers', () => core.appSettings.getLanguageServers())
+  ipcMain.handle('settings.setLanguageServers', async (_e, next: LanguageServerSettings) => {
+    // A path that cannot replace the install is refused, not dropped: the person typed it
+    for (const [server, p] of [['typescript', next?.typescript?.path], ['python', next?.python?.path]] as const) {
+      if (typeof p !== 'string' || p === '') continue
+      const problem = languageServerPathProblem(server, p)
+      if (problem !== null) throw new Error(`INVALID_LANGUAGE_SERVER_PATH: ${problem}`)
+    }
+    await core.appSettings.setLanguageServers(next)
+    // A language turned on or off, or another interpreter, reaches the Host with the open set again; a path is read when
+    // its server next starts
+    await lspView.connected()
   })
   const pushOrchState = (state: OrchState): void => {
     orchPushes.push(state)
@@ -4583,7 +4643,7 @@ export function registerIpc(
     if (next === null || typeof next !== 'object' || Array.isArray(next))
       throw new Error(`INVALID_WORKSPACE_FEATURES: ${String(next)}`)
     const o = next as Record<string, unknown>
-    for (const k of ['layoutMemory', 'problemsTab', 'contextBridge', 'testsTab'])
+    for (const k of ['layoutMemory', 'problemsTab', 'contextBridge', 'testsTab', 'languageServers'])
       if (typeof o[k] !== 'boolean') throw new Error(`INVALID_WORKSPACE_FEATURES: ${k}=${String(o[k])}`)
     await core.appSettings.setWorkspaceFeatures(next as WorkspaceFeatures)
   })
@@ -5318,6 +5378,11 @@ export function registerIpc(
       // A person's failed tests (Phase 3 Part 2), from the configurations the project still has
       testProducer({
         results: (p) => testResults.load(p, testConfigsOf(p)),
+        stat: statMtime
+      }),
+      // The language servers' problems for the open files (Phase 3 Part 3), while their switch is on
+      lspProducer({
+        files: (p) => (core.appSettings.getWorkspaceFeatures().languageServers ? lspView.files(p) : []),
         stat: statMtime
       })
     ],
@@ -7008,6 +7073,12 @@ export function registerIpc(
     client.onMessage((m) => workspaceView.pushed(m))
     client.onConnect(() => void workspaceView.connected())
     client.onStatusChange((s) => workspaceView.status(s))
+
+    // Language servers (Phase 3 Part 3): the Host's pushes, the whole open set again after each handshake, and nothing
+    // kept once it goes. None of these callbacks throws (hostLsp.ts).
+    client.onMessage((m) => lspView.pushed(m))
+    client.onConnect(() => void lspView.connected())
+    client.onStatusChange(() => lspView.status())
 
     // MCP over HTTP (design §4): a Host that announced `mcp-http` pushes its entrance state to every
     // greeted client; after each handshake the view asks for it, and a dropped connection reads as no

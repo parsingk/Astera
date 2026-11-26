@@ -5,6 +5,8 @@ import { isPathWithin } from '../core/files/tree'
 import { completionProblemsOf, problemsKeyOf, type RawProblem } from '../core/problems/completionProblems'
 import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic'
 import type { TestRunResult } from '../core/tests/model'
+import type { LspFileDiagnostics } from '../core/lsp/model'
+import { LSP_SERVERS } from '../core/lsp/languages'
 import { UNC_LIKE } from './run/resolveLink'
 
 /** How many stats one ask runs at once. A share that stops answering holds a libuv thread per stat for its timeout
@@ -140,6 +142,46 @@ export function testProducer(deps: {
       return mapLimited(rows, STAT_AT_ONCE, async ({ d, abs }) => {
         if (abs === undefined) return d
         const st = await deps.stat(abs)
+        if (!st) return { ...d, stale: 'missing' as const }
+        return changedAfter(st, d.producedAt) ? { ...d, stale: 'changed' as const } : d
+      })
+    }
+  }
+}
+
+/**
+ * The language servers' problems (Phase 3 Part 3) for the project's files open in the editor, as the Host last pushed
+ * them (main/host/hostLsp.ts): one row per problem, with its column and range, under its server's name. A row is marked
+ * `changed` once its file changed after the server spoke, `missing` once it is gone. No Task: its fix is a new Job draft.
+ */
+export function lspProducer(deps: {
+  files: (project: string) => LspFileDiagnostics[]
+  stat: (abs: string) => Promise<{ mtimeMs: number } | null>
+}): DiagnosticProducer {
+  return {
+    id: 'lsp',
+    async diagnostics(project) {
+      const rows = deps.files(project).flatMap((f) =>
+        f.problems.map(
+          (p, i): Diagnostic => ({
+            schemaVersion: 1,
+            id: `lsp:${f.server}:${f.path}:${p.line}:${p.column}:${p.code ?? ''}:${i}`,
+            source: { kind: 'lsp', id: f.server, label: LSP_SERVERS[f.server].title },
+            severity: p.severity,
+            message: p.message,
+            path: f.path,
+            root: f.root,
+            line: p.line,
+            column: p.column,
+            endLine: p.endLine,
+            endColumn: p.endColumn,
+            ...(p.code !== undefined ? { code: p.code } : {}),
+            producedAt: f.producedAt
+          })
+        )
+      )
+      return mapLimited(rows, STAT_AT_ONCE, async (d) => {
+        const st = await deps.stat(d.path as string)
         if (!st) return { ...d, stale: 'missing' as const }
         return changedAfter(st, d.producedAt) ? { ...d, stale: 'changed' as const } : d
       })
