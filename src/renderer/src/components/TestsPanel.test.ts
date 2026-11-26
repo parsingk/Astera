@@ -16,9 +16,10 @@ describe('TestsPanel', () => {
     expect(app).toMatch(/testsAvailable: workspaceFeatures\?\.testsTab === true/)
   })
 
-  it('offers rerun always and rerun-failures only when the result has failures', () => {
+  it('offers rerun always and rerun-failures only when this run’s result has failures', () => {
     expect(src).toMatch(/onRerun\(r\.configId, false\)/)
-    expect(src).toMatch(/r\.counts\.failed \+ r\.counts\.errored > 0 && \(/)
+    // Screen check: a report an earlier run left is not this run's failures, so it offers no rerun of them
+    expect(src).toMatch(/!r\.stale && r\.outcome === 'failed' && r\.counts\.failed \+ r\.counts\.errored > 0 && \(/)
     expect(src).toMatch(/onRerun\(r\.configId, true\)/)
     for (const key of ['tests.rerun', 'tests.rerunFailures', 'tests.counts']) expect(src).toContain(`'${key}'`)
   })

@@ -113,7 +113,8 @@ export function TestsPanel({
                 <button type="button" className="problems-action" onClick={() => onRerun(r.configId, false)}>
                   {t('tests.rerun')}
                 </button>
-                {r.counts.failed + r.counts.errored > 0 && (
+                {/* Only this run's own failures: a report an earlier run left, or one not read, offers none */}
+                {!r.stale && r.outcome === 'failed' && r.counts.failed + r.counts.errored > 0 && (
                   <button type="button" className="problems-action" onClick={() => onRerun(r.configId, true)}>
                     {t('tests.rerunFailures')}
                   </button>
