@@ -87,6 +87,8 @@ import { createHostRoute } from './host/hostRoute'
 import { hostWritesFinding, stampFindings } from '../core/problems/findingStates'
 import { createTestResults, resultOfRun } from './testResults'
 import { readTestReport } from '../core/tests/read'
+import { rerunArgs, type RerunPlan } from '../core/tests/rerun'
+import { buildRunContext } from '../core/run/build'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
 import { ownerMismatchOf } from '../core/orchestration/ownerCheck'
 import { exactGithubLifecycleDefaults } from '../core/github/lifecycleDefaults'
@@ -1600,12 +1602,16 @@ export function registerIpc(
   // The last test result of each configuration a person runs (Phase 3 Part 2): written as a run ends, read by the Tests
   // tab and the Problems list
   const testResults = createTestResults({ dir: path.join(app.getPath('userData'), 'test-results') })
+  /** The runs tests.rerun started on part of a configuration's tests, until their result is recorded */
+  const rerunScopes = new Set<string>()
   const recordTestRun = async (e: RunStatus): Promise<void> => {
     try {
       const config = core.runConfig.get(e.projectPath).find((c) => c.id === e.configId)
       const r = await resultOfRun({ status: e, config, cwd: core.run.cwdOf(e.runId) ?? e.projectPath, read: readTestReport })
+      // A rerun of the failures is merged into the result it reran
+      const partial = rerunScopes.delete(e.runId)
       if (!r) return
-      await testResults.record(r)
+      await testResults.record(partial ? { ...r, scope: 'failures' } : r)
       problemsPing.touch()
       send('tests:changed', e.projectPath)
     } catch (err) {
@@ -5620,7 +5626,8 @@ export function registerIpc(
   /** Plan a launch and run it. Both ▶ (run.start) and running a file from the tree (run.runFile) go
    *  through here, so a file's configuration honours a before-launch chain exactly as any other does.
    *  Resolves with the run the panel should open on — the chain's first step. */
-  const startChain = async (projectPath: string, configId: string): Promise<RunStatus> => {
+  // `append` is added to the root configuration's own command only: a rerun of its failures (Phase 3 Part 2, tests.rerun)
+  const startChain = async (projectPath: string, configId: string, append = ''): Promise<RunStatus> => {
     const tr = (key: string, params?: Record<string, string | number>): string =>
       t(core.lang, key as MessageKey, params)
     // The plan and every step's command, before anything starts: a chain with a broken step must not
@@ -5638,7 +5645,7 @@ export function registerIpc(
       startOne: async (stepId) => {
         const step = prepared.get(stepId)
         if (!step) throw new Error(`NO_CONFIG: ${stepId}`)
-        const opts = { projectPath, projectName, config: step.config, command: step.command }
+        const opts = { projectPath, projectName, config: step.config, command: stepId === configId && append !== '' ? `${step.command}${append}` : step.command }
         const decision = decideStart(core.run.listByProject(projectPath), step.config)
         return decision.action === 'restart' ? core.run.restart(decision.runId, opts) : core.run.start(opts)
       },
@@ -5655,6 +5662,26 @@ export function registerIpc(
   ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
     await assertAllowedPath(projectPath)
     return startChain(projectPath, configId)
+  })
+
+  // A configuration run again from the Tests tab (Phase 3 Part 2): whole, or only what failed, which main works out from
+  // the stored result and the configuration (core/tests/rerun.ts), never from text the renderer sends
+  ipcMain.handle('tests.rerun', async (_e, projectPath: string, configId: string, failuresOnly: boolean) => {
+    await assertAllowedPath(projectPath)
+    const stored = core.runConfig.get(projectPath)
+    const config = stored.find((c) => c.id === configId)
+    if (!config) throw new Error(`NO_CONFIG: ${configId}`)
+    let plan: RerunPlan = { append: '', scope: 'all' }
+    if (failuresOnly) {
+      const [result] = await testResults.load(projectPath, new Set([configId]))
+      if (result) {
+        const { files } = await loadRunConfigs({ projectPath, stored, assertAllowedPath })
+        plan = rerunArgs(config, result, buildRunContext(files, process.platform))
+      } else plan = { append: '', scope: 'all', why: 'not-narrowable' }
+    }
+    const status = await startChain(projectPath, configId, plan.append)
+    if (plan.scope !== 'all') rerunScopes.add(status.runId)
+    return { runId: status.runId, scope: plan.scope, ...(plan.why !== undefined ? { why: plan.why } : {}) }
   })
 
   // Running a file straight from the tree. One call rather than a renderer-composed list: the file

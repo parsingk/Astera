@@ -1709,6 +1709,8 @@ export interface CoreApi {
   /** The last test result of each configuration of a project (Phase 3 Part 2, main/testResults.ts) */
   tests: {
     list(projectPath: string): Promise<TestRunResult[]>
+    /** Runs the configuration again, whole or only what failed; says how far it narrowed (core/tests/rerun.ts) */
+    rerun(projectPath: string, configId: string, failuresOnly: boolean): Promise<{ runId: string; scope: 'failures' | 'files' | 'all'; why?: 'not-narrowable' | 'package-manager' | 'unsafe-names' }>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only

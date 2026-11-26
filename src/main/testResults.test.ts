@@ -74,3 +74,19 @@ describe('resultOfRun', () => {
     expect(await resultOfRun({ status: status(), config: undefined, cwd: 'D:/a', read })).toBeNull()
   })
 })
+
+// Phase 3 Part 2: a rerun of the failures updates the result instead of shrinking it to the rerun
+describe('createTestResults, a failures-only rerun', () => {
+  const c = (id: string, status: 'passed' | 'failed' | 'skipped'): TestRunResult['cases'][number] => ({ id, suite: [], name: id, status })
+  it('merges a failures-only rerun into the stored result, a case the filter skipped keeping what it was', async () => {
+    const store = createTestResults({ dir })
+    await store.record(result({ outcome: 'failed', cases: [c('a', 'passed'), c('b', 'failed'), c('c', 'failed')], counts: { passed: 1, failed: 2, skipped: 0, errored: 0 } }))
+    await store.record(result({ runId: 'r2', endedAt: '2026-11-26T02:00:00.000Z', scope: 'failures', outcome: 'passed', cases: [c('a', 'skipped'), c('b', 'passed'), c('c', 'passed')], counts: { passed: 2, failed: 0, skipped: 1, errored: 0 } }))
+    const [r] = await store.load('D:/a')
+    expect(r.cases.map((x) => [x.id, x.status])).toEqual([['a', 'passed'], ['b', 'passed'], ['c', 'passed']])
+    expect(r).toMatchObject({ runId: 'r2', outcome: 'passed', endedAt: '2026-11-26T02:00:00.000Z', counts: { passed: 3, failed: 0, skipped: 0, errored: 0 } })
+    // A rerun that read nothing of its own is recorded as it is: it says what happened
+    await store.record(result({ runId: 'r3', scope: 'failures', outcome: 'unknown', stale: true, cases: [] }))
+    expect((await store.load('D:/a'))[0]).toMatchObject({ runId: 'r3', outcome: 'unknown', stale: true })
+  })
+})

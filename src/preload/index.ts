@@ -297,7 +297,8 @@ const api = {
     list: invoke('problems.list')
   },
   tests: {
-    list: invoke('tests.list')
+    list: invoke('tests.list'),
+    rerun: invoke('tests.rerun')
   },
   files: {
     list: invoke('files.list'),

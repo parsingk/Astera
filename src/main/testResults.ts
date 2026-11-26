@@ -24,6 +24,27 @@ export function countsOf(cases: readonly TestCase[]): Record<TestStatus, number>
   return out
 }
 
+/**
+ * A rerun of the failures laid over the result it reran: each of its cases replaces the stored one, but a case its filter
+ * skipped (Vitest marks the tests a name filter left out as skipped) keeps what it was, and the cases it did not run stay.
+ */
+function merged(prev: TestRunResult, rerun: TestRunResult): TestRunResult {
+  const ran = new Map(rerun.cases.map((c) => [c.id, c]))
+  const known = new Set(prev.cases.map((c) => c.id))
+  const cases = prev.cases.map((c) => {
+    const n = ran.get(c.id)
+    return n === undefined || n.status === 'skipped' ? c : n
+  })
+  for (const n of rerun.cases) if (!known.has(n.id)) cases.push(n)
+  return {
+    ...rerun,
+    cases,
+    counts: countsOf(cases),
+    outcome: cases.some((c) => c.status === 'failed' || c.status === 'errored') ? 'failed' : 'passed',
+    ...(prev.truncated || rerun.truncated ? { truncated: true as const } : {})
+  }
+}
+
 export function createTestResults(a: { dir: string }): {
   load(project: string, live?: ReadonlySet<string>): Promise<TestRunResult[]>
   record(r: TestRunResult): Promise<void>
@@ -51,11 +72,21 @@ export function createTestResults(a: { dir: string }): {
       }
       return out.sort((x, y) => y.endedAt.localeCompare(x.endedAt))
     },
+    /** A rerun of the failures that read a fresh report is merged into the stored result; anything else replaces it. */
     async record(r) {
       await fs.mkdir(a.dir, { recursive: true })
       const file = fileOf(a.dir, r.configId)
+      let out = r
+      if (r.scope === 'failures' && !r.stale && (r.outcome === 'passed' || r.outcome === 'failed')) {
+        try {
+          const prev = JSON.parse(await fs.readFile(file, 'utf8')) as TestRunResult
+          if (prev?.schemaVersion === 1 && prev.configId === r.configId && sameFolder(prev.projectPath, r.projectPath)) out = merged(prev, r)
+        } catch {
+          // nothing stored yet, or not readable: the rerun is the result
+        }
+      }
       const tmp = `${file}.${randomUUID()}.tmp`
-      await fs.writeFile(tmp, JSON.stringify(r), 'utf8')
+      await fs.writeFile(tmp, JSON.stringify(out), 'utf8')
       await fs.rename(tmp, file)
     },
     async forget(configId) {
