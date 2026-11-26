@@ -3,7 +3,7 @@ import { WORKSPACE_FEATURES_DEFAULTS, readWorkspaceFeatures, writableWorkspaceFe
 
 describe('workspace feature switches', () => {
   it('are all on by default', () => {
-    expect(WORKSPACE_FEATURES_DEFAULTS).toEqual({ layoutMemory: true, problemsTab: true, contextBridge: true })
+    expect(WORKSPACE_FEATURES_DEFAULTS).toEqual({ layoutMemory: true, problemsTab: true, contextBridge: true, testsTab: true })
   })
 
   it('read as the defaults from anything that is not an object', () => {
@@ -11,7 +11,9 @@ describe('workspace feature switches', () => {
   })
 
   it('turn one off only on an explicit false', () => {
-    expect(readWorkspaceFeatures({ problemsTab: false })).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true })
+    expect(readWorkspaceFeatures({ problemsTab: false })).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true })
+    // Phase 3 Part 2: the Tests tab, on unless turned off
+    expect(readWorkspaceFeatures({ testsTab: false }).testsTab).toBe(false)
   })
 
   // A hand-edited file: 'no' and 0 are not an explicit false, so the feature stays on
@@ -24,7 +26,8 @@ describe('workspace feature switches', () => {
     expect(writableWorkspaceFeatures({ ...WORKSPACE_FEATURES_DEFAULTS, layoutMemory: false })).toEqual({
       layoutMemory: false,
       problemsTab: true,
-      contextBridge: true
+      contextBridge: true,
+      testsTab: true
     })
   })
 })

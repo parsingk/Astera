@@ -4577,7 +4577,7 @@ export function registerIpc(
     if (next === null || typeof next !== 'object' || Array.isArray(next))
       throw new Error(`INVALID_WORKSPACE_FEATURES: ${String(next)}`)
     const o = next as Record<string, unknown>
-    for (const k of ['layoutMemory', 'problemsTab', 'contextBridge'])
+    for (const k of ['layoutMemory', 'problemsTab', 'contextBridge', 'testsTab'])
       if (typeof o[k] !== 'boolean') throw new Error(`INVALID_WORKSPACE_FEATURES: ${k}=${String(o[k])}`)
     await core.appSettings.setWorkspaceFeatures(next as WorkspaceFeatures)
   })

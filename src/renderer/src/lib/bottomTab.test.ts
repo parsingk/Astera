@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { shownBottomTab } from './bottomTab'
 
-const project = { runAvailable: true, kubeAvailable: true, problemsAvailable: true, terminalIds: [] as string[] }
+const project = { runAvailable: true, kubeAvailable: true, problemsAvailable: true, testsAvailable: true, terminalIds: [] as string[] }
 const home = { ...project, runAvailable: false }
 
 describe('shownBottomTab', () => {
@@ -19,6 +19,9 @@ describe('shownBottomTab', () => {
   // Final review I1: Layout: Agent Review, or a saved preset, asks for the Problems tab while it is turned off
   it('falls back to Run when the Problems tab is turned off, and shows it while it is on', () => {
     expect(shownBottomTab({ ...project, problemsAvailable: false, wanted: 'problems' })).toBe('run')
+    // Phase 3 Part 2: the Tests tab turned off falls back the same way
+    expect(shownBottomTab({ ...project, testsAvailable: false, wanted: 'tests' })).toBe('run')
+    expect(shownBottomTab({ ...project, wanted: 'tests' })).toBe('tests')
     expect(shownBottomTab({ ...project, wanted: 'problems' })).toBe('problems')
   })
 

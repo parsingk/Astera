@@ -19,6 +19,11 @@ const SWITCHES = [
     key: 'contextBridge',
     label: 'settings.workspace.contextBridge',
     hint: 'settings.workspace.contextBridgeHint'
+  },
+  {
+    key: 'testsTab',
+    label: 'settings.workspace.testsTab',
+    hint: 'settings.workspace.testsTabHint'
   }
 ] as const satisfies readonly { key: keyof WorkspaceFeatures; label: MessageKey; hint: MessageKey }[]
 
