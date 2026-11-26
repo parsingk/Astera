@@ -1185,7 +1185,9 @@ then the ones a person acted on that the task no longer has. A finding a person 
 `repair-requested`; when that repair ends well it is `resolved-pending-verification` until the task's checks
 or review run again; a round that ran over it without it makes it `verified`, and one that still has it
 makes it `open` again. Astera never reads a finding that simply stopped showing as fixed: a check that did
-not run, could not run, or counted more findings than it listed leaves the state as it was. No person sets
+not run, could not run, timed out, failed without listing its findings, or counted more findings than it
+listed leaves the state as it was, and so does a review that rejected the work without listing its issues.
+A repair that never started, or that ended without success, sends its findings back to `open`. No person sets
 `verified`.
 
 ```json
@@ -1196,9 +1198,12 @@ not run, could not run, or counted more findings than it listed leaves the state
 required and kept as one line of at most 300 characters. A dismissed finding stays on the app's Problems
 list, dimmed and out of the counts, stays dismissed when a later round finds it again, and is left out of a
 `tasks repair` that names no finding. It changes no verdict: a failed check still fails, a blocking review
-issue still blocks, and the automatic repairs still see it. **`tasks undismiss --task <taskId> --finding
-<ref>...`** puts each back where it was before. A reference the task does not have (for `undismiss`, one
-that is not dismissed) is a 2 and an unknown task a 4. Both are for a person: an agent session, an MCP
+issue still blocks, and the automatic repairs still see it. Only what the task's Problems rows show can be
+dismissed, the row for a check's unlisted findings included. **`tasks undismiss --task <taskId> --finding
+<ref>...`** takes it back to what still holds: `repair-requested` while a repair carrying it runs,
+`resolved-pending-verification` while the checks after its repair run, else `open`, which the next round
+settles. A reference the task's rows do not show (for `undismiss`, one that is not dismissed) is a 2 and an
+unknown task a 4. Both are for a person: an agent session, an MCP
 client and a plugin are refused with 5, since an agent could hide a problem this way.
 
 **`run-configs list --job <jobId>` prints `id`, `name` and `type`** for each run configuration of the
