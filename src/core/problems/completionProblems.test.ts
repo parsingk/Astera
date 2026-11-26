@@ -210,6 +210,17 @@ describe('finding states on the rows (Phase 3 Part 1b)', () => {
     expect(problemsKeyOf(c)).not.toBe(problemsKeyOf(a))
     expect(problemsKeyOf(a)).not.toBe(problemsKeyOf(state()))
   })
+
+  // Final review M1: at 20 changes a new note keeps the state and the count; its time still moves the key
+  it('moves the Problems key when a dismissal’s note changes at the history cap', () => {
+    const changes = (last: string) =>
+      Array.from({ length: 20 }, (_, i) => ({ at: i === 19 ? last : `2026-11-2${i % 10}T00:00:00Z`, by: 'person' as const, from: null, to: 'dismissed' as const, note: 'n' }))
+    const a = state()
+    a.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': { kind: 'check', state: 'dismissed', note: 'old', history: changes('2026-11-26T01:00:00Z') } }
+    const b = state()
+    b.tasks.find((t) => t.id === 't1')!.findingStates = { 'check:t1:aaaaaaaaaaaa': { kind: 'check', state: 'dismissed', note: 'new', history: changes('2026-11-26T02:00:00Z') } }
+    expect(problemsKeyOf(b)).not.toBe(problemsKeyOf(a))
+  })
 })
 
 describe('problemsKeyOf', () => {

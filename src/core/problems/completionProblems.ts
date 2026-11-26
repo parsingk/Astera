@@ -172,12 +172,31 @@ export function problemsKeyOf(state: OrchState): string {
       const checks = (t.checks ?? []).map((c) => `${c.configId}/${c.status}/${c.endedAt ?? ''}/${c.diagnostics?.length ?? 0}/${c.diagnosticsTotal ?? ''}`).join('+')
       const reviews = (t.reviewIssues ?? []).map((i) => `${i.id}/${i.file ?? ''}/${i.line ?? ''}`).join('+')
       const states = Object.entries(t.findingStates ?? {})
-        .map(([ref, r]) => `${ref}/${r.state}/${r.history.length}`)
+        // The newest change's time too: at the history cap a new note keeps the state and the count (final review M1)
+        .map(([ref, r]) => `${ref}/${r.state}/${r.history.length}/${r.history.at(-1)?.at ?? ''}`)
         .join('+')
       return `${t.id}:${checks}:${reviews}:${states}`
     })
     .join(';')
   return `${runs}|${tasks}`
+}
+
+/**
+ * The references a Task's Problems rows carry, as completionProblemsOf makes them: each check finding's, the check's own
+ * on the row for findings it did not list or on the row of a check that failed with none, and each review issue's that
+ * names a file. What a person may dismiss (final review I5).
+ */
+export function taskRowRefs(task: Task, folders: readonly string[] = []): Set<string> {
+  const out = new Set<string>()
+  for (const c of task.checks ?? []) {
+    const findings = c.diagnostics ?? []
+    for (const dg of findings) out.add(findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, base: folders, message: dg.message }))
+    if ((c.diagnosticsTotal ?? findings.length) > findings.length || (findings.length === 0 && failed(c)))
+      out.add(findingRef({ kind: 'check', taskId: task.id, source: c.configId, message: '' }))
+  }
+  for (const issue of task.reviewIssues ?? [])
+    if (issue.file !== undefined) out.add(findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title }))
+  return out
 }
 
 /**

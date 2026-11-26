@@ -109,7 +109,8 @@ describe('stampFindings', () => {
   it('does not verify a finding of a check that did not run, could not run, or listed fewer findings than it counted', () => {
     const findingStates = { [LINT]: record('resolved-pending-verification') }
     const prev = world({ checks: [lint(E1, 'failed', ['x is not defined'])], findingStates })
-    for (const round of [lint(E2, 'not-run'), lint(E2, 'error'), lint(E2, 'failed', ['y is unused'], 5)]) {
+    // Final review I1: a failed check that listed nothing, or one that timed out, proves nothing either
+    for (const round of [lint(E2, 'not-run'), lint(E2, 'error'), lint(E2, 'failed', ['y is unused'], 5), lint(E2, 'failed'), lint(E2, 'timed-out', ['y is unused'])]) {
       const got = statesOf(stampFindings(prev, world({ checks: [round], findingStates }), 'astera', E2))
       expect(got[LINT], round.status).toEqual(record('resolved-pending-verification'))
     }
@@ -133,6 +134,52 @@ describe('stampFindings', () => {
     expect(back[REVIEW].state).toBe('open')
     // The same round again (the same ids) is no new round
     expect(stampFindings(prev, world({ reviewIssues: [issue('i1', 'off by one')], findingStates, title: 'renamed' }), 'astera', E2).tasks[0].findingStates).toEqual(findingStates)
+  })
+
+  // Final review I1: a reviewer that rejected without writing its issues leaves one blocking issue with no file
+  it('does not verify review findings from a review that rejected without listing its issues', () => {
+    const findingStates = { [REVIEW]: record('resolved-pending-verification', { kind: 'review', source: undefined }) }
+    const prev = world({ reviewIssues: [issue('i1', 'off by one')], findingStates })
+    const rejected: ReviewIssue = { id: 'i9', severity: 'high', blocking: true, title: 'the reviewer rejected the work', description: 'd' }
+    expect(statesOf(stampFindings(prev, world({ reviewIssues: [rejected], findingStates }), 'astera', E2))[REVIEW]).toEqual(findingStates[REVIEW])
+    // One that still names the finding opens it again all the same
+    expect(statesOf(stampFindings(prev, world({ reviewIssues: [rejected, issue('i8', 'off by one')], findingStates }), 'astera', E2))[REVIEW].state).toBe('open')
+  })
+
+  // Final review I3: a repair that never started (its Dispatch removed again) or that no attempt carries any more once the
+  // Task left the repair is not being repaired
+  it('sends a repair whose Dispatch was removed back to open, and one no attempt carries once its Task left the repair', () => {
+    const task = { checks: [lint(E1, 'failed', ['x is not defined'])], findingStates: { [LINT]: record('repair-requested') } }
+    const removed = statesOf(stampFindings(world(task, [asked('d2', [LINT])]), world({ ...task, status: 'blocked' }), 'astera', LATER))[LINT]
+    expect(removed.state).toBe('open')
+    expect(removed.history.at(-1)).toMatchObject({ by: 'astera', from: 'repair-requested', to: 'open' })
+    // The load closed it; recovery has not decided yet: the Task is still dispatched, the record waits
+    const lost = asked('d2', [LINT], { endedAt: NOW, workerState: 'outcome_unknown' })
+    expect(statesOf(stampFindings(world(task, [lost]), world({ ...task, title: 'x' }, [lost]), 'astera', LATER))[LINT]).toEqual(record('repair-requested'))
+    // Recovery gave up on it: the Task failed
+    expect(statesOf(stampFindings(world(task, [lost]), world({ ...task, status: 'failed' }, [lost]), 'astera', LATER))[LINT].state).toBe('open')
+  })
+
+  // Final review M3: recovery's replacement carries the same findings; a dismissal made meanwhile stays
+  it('leaves a dismissal alone when recovery reopens the repair that carried it', () => {
+    const task = { checks: [lint(E1, 'failed', ['x is not defined'])], findingStates: { [LINT]: record('dismissed', { note: 'known' }) } }
+    const lost = asked('d2', [LINT], { endedAt: NOW, workerState: 'outcome_unknown' })
+    const got = statesOf(stampFindings(world(task, [lost]), world(task, [lost, asked('d3', [LINT], { retryOf: 'd2' })]), 'astera', LATER))
+    expect(got[LINT]).toEqual(record('dismissed', { note: 'known' }))
+  })
+
+  // Final review M2: the bound holds on every commit, a person's dismissal is the last thing it drops
+  it('keeps the bound on any commit, and drops a dismissal last', () => {
+    const many: Record<string, FindingRecord> = {}
+    const ref = (i: number) => `check:t1:${String(i).padStart(12, '0')}`
+    for (let i = 0; i < 101; i++) {
+      const at = `2026-11-${String(10 + Math.floor(i / 10)).padStart(2, '0')}T00:00:00.000Z`
+      many[ref(i)] = { kind: 'check', state: i === 0 ? 'dismissed' : 'open', history: [{ at, by: 'person', from: null, to: i === 0 ? 'dismissed' : 'open' }] }
+    }
+    const got = statesOf(stampFindings(world({ findingStates: many }), world({ findingStates: many, title: 'x' }), 'person', NOW))
+    expect(Object.keys(got)).toHaveLength(100)
+    expect(got[ref(0)]?.state).toBe('dismissed')
+    expect(got[ref(1)]).toBeUndefined()
   })
 
   it('never moves a dismissed finding on a round', () => {
