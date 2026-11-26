@@ -22,16 +22,17 @@ export const CONTEXT_EXCERPT_CHARS = 16_000
  */
 export interface ContextRef {
   schemaVersion: 1
-  kind: 'selection' | 'log' | 'diff'
+  /** `diagnostic`: one or more Problems rows (Phase 3 Part 1). */
+  kind: 'selection' | 'log' | 'diff' | 'diagnostic'
   /** The folder the piece belongs to: the explorer's project a file was opened from, or the project a run ran in. */
   root: string
-  /** The file, absolute, for a selection or a diff. */
+  /** The file, absolute, for a selection, a diff or one problem. */
   path?: string
   /** 1-based, inclusive. */
   range?: { startLine: number; endLine: number }
   /** What the file held when the piece was taken (contentRevision of its saved text). */
   revision?: string
-  /** The run or Job the piece came from. */
+  /** The run or Job the piece came from; for one problem, its finding reference (or its row id). */
   sourceId?: string
   /** A short name for the piece, as the person sees it. */
   label: string

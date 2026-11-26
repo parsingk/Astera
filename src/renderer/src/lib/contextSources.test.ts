@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { logContext, selectionContext } from './contextSources'
+import { logContext, problemsContext, selectionContext } from './contextSources'
+import type { Diagnostic } from '../../../core/problems/diagnostic'
+import { contextText } from '../../../core/context/contextRef'
 import { contentRevision } from '../../../core/context/contextRef'
 
 const DOC = 'line one\nline two\nline three\nline four\n'
@@ -82,5 +84,77 @@ describe('logContext', () => {
 
   it('refuses a log with nothing in it', () => {
     expect(logContext({ run, selection: '  ', tail: ['', ' '] })).toEqual({ ok: false, reason: 'empty' })
+  })
+})
+
+// Phase 3 Part 1: Problems rows sent to an agent through the W4 preview
+describe('problemsContext', () => {
+  const FILE = ['import a', 'const x = 1', 'const y = 2', 'call(x)', 'const z = 3', 'log(z)', 'end', 'tail one', 'tail two'].join('\n')
+  const row = (over: Partial<Diagnostic> = {}): Diagnostic => ({
+    schemaVersion: 1,
+    id: 'check:t1:lint:0',
+    ref: 'check:t1:0123456789ab',
+    source: { kind: 'check', id: 'plugin:lint', label: 'Lint' },
+    severity: 'error',
+    message: 'x is not defined',
+    path: 'D:\\repo\\src\\a.ts',
+    line: 4,
+    ...over
+  })
+
+  it('builds one problem’s context with the lines around it and the file’s revision', () => {
+    const r = problemsContext({ rows: [row()], root: 'D:\\repo', files: { 'D:\\repo\\src\\a.ts': FILE } })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.ref).toEqual({
+      schemaVersion: 1,
+      kind: 'diagnostic',
+      root: 'D:\\repo',
+      path: 'D:\\repo\\src\\a.ts',
+      range: { startLine: 4, endLine: 4 },
+      revision: contentRevision(FILE),
+      sourceId: 'check:t1:0123456789ab',
+      label: 'src/a.ts:4 Lint'
+    })
+    expect(r.excerpt).toBe(
+      [
+        'error src/a.ts:4 Lint: x is not defined',
+        '    1 | import a',
+        '    2 | const x = 1',
+        '    3 | const y = 2',
+        '  > 4 | call(x)',
+        '    5 | const z = 3',
+        '    6 | log(z)',
+        '    7 | end'
+      ].join('\n')
+    )
+    // The W4 text heads it with its kind and file
+    expect(contextText(r.ref, r.excerpt).text).toContain('## Context from Astera: diagnostic\n**File:** src/a.ts (line 4)')
+  })
+
+  it('lists several problems without one file, each with its own lines, and a row with no file by its words alone', () => {
+    const r = problemsContext({
+      rows: [row(), row({ id: 'review:t1:i1', ref: 'review:t1:aaaaaaaaaaaa', source: { kind: 'review', id: 'review', label: 'Review' }, severity: 'warning', message: 'off by one', line: 1 }), row({ id: 'check:t1:cfg', path: undefined, line: undefined, message: 'npm test failed' })],
+      root: 'D:\\repo',
+      files: { 'D:\\repo\\src\\a.ts': FILE }
+    })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.ref).toEqual({ schemaVersion: 1, kind: 'diagnostic', root: 'D:\\repo', label: '3 problems' })
+    expect(r.excerpt.split('\n\n')).toEqual([
+      expect.stringMatching(/^error src\/a\.ts:4 Lint: x is not defined\n/),
+      expect.stringMatching(/^warning src\/a\.ts:1 Review: off by one\n  > 1 \| import a\n/),
+      'error Lint: npm test failed'
+    ])
+  })
+
+  it('never includes a credential file’s lines, and lists its problem by its words', () => {
+    const r = problemsContext({ rows: [row({ path: 'D:\\repo\\.env', line: 2, message: 'bad key' })], root: 'D:\\repo', files: { 'D:\\repo\\.env': 'A=1\nTOKEN=abcdef1234567890\n' } })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.excerpt).toBe('error .env:2 Lint: bad key')
+    expect(r.excerpt).not.toContain('TOKEN')
+    expect(r.ref.revision).toBeUndefined()
+  })
+
+  it('refuses no rows', () => {
+    expect(problemsContext({ rows: [], root: 'D:\\repo', files: {} })).toEqual({ ok: false, reason: 'empty' })
   })
 })
