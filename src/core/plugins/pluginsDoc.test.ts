@@ -154,9 +154,12 @@ describe('docs/plugins.md', () => {
     expect(audit).toContain('`<profile>/plugins/audit-app.jsonl`')
     expect(audit).toContain(`kept to ${AUDIT_SEGMENT_BYTES / 1024 / 1024} MiB, with one older file beside it`)
     expect(audit).toContain(`within ${AUDIT_COALESCE_MS / 60_000} minute`)
-    expect(audit).toContain('never a setting value, a secret or what a call carried')
+    expect(audit).toContain('never a setting value or what a call carried')
+    // Final review M8: a failure's reason is the plugin's own words, hidden as its log is
+    expect(audit).toContain("a `failed` record's reason is the plugin's own words, with its secret settings hidden as in its log")
+    expect(audit).toContain('says how many more times it came')
     expect(audit).toContain('A removed plugin keeps its history')
-    expect(prose(section(guide, '### Panels'))).toContain('Removing the plugin also clears what its pages stored')
+    expect(prose(section(guide, '### Panels'))).toContain('Removing the plugin, from the app or the CLI, also clears what its pages stored')
   })
 
   // 2f final review m4: what a refused call leaves in the log is the Host's sentence, not the error code

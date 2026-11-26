@@ -198,11 +198,16 @@ describe('humanFor', () => {
       })
     ).toBe(
       [
-        '2026-11-26 09:05:03  acme.hello  updated 1.1.0  was 1.0.0; restricted-ui; granted nothing  (by cli)  (3 more)',
+        '2026-11-26 09:05:03  acme.hello  updated 1.1.0  was 1.0.0; restricted-ui; granted nothing  (by cli)  (3 times)',
         '2026-11-26 09:05:04  acme.hello  enabled'
       ].join(String.fromCharCode(10))
     )
     expect(humanFor('plugins-audit', { entries: [] })).toBe('no audit records yet')
+  })
+
+  // Final review M5: a time no date can hold, from a Host that is not this one, is shown as it came rather than failing
+  it('plugins audit shows a time no date can hold as it came, and the rest as usual', () => {
+    expect(humanFor('plugins-audit', { entries: [{ at: 1e20, plugin: 'p', event: 'enabled' }] })).toBe('100000000000000000000  p  enabled')
   })
 
   // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted

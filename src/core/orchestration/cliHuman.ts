@@ -597,12 +597,14 @@ export function humanFor(
       return entries
         .map((e) =>
           [
-            localTime(typeof e.at === 'number' ? new Date(e.at).toISOString() : e.at),
+            // A time no date can hold is shown as it came, not thrown on (final review M5)
+            typeof e.at === 'number' && Number.isFinite(new Date(e.at).getTime()) ? localTime(new Date(e.at).toISOString()) : str(e.at),
             str(e.plugin),
             [str(e.event), ...(typeof e.version === 'string' ? [e.version] : [])].join(' '),
             ...(typeof e.detail === 'string' ? [e.detail] : []),
             ...(typeof e.by === 'string' ? [`(by ${e.by})`] : []),
-            ...(typeof e.repeated === 'number' ? [`(${e.repeated} more)`] : [])
+            // How many times it came since the line before of its kind (final review M5: "more" read as one too many)
+            ...(typeof e.repeated === 'number' ? [`(${e.repeated} times)`] : [])
           ].join('  ')
         )
         .join('\n')
