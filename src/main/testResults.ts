@@ -83,6 +83,7 @@ export async function resultOfRun(a: {
   const base = {
     schemaVersion: 1 as const,
     projectPath: s.projectPath,
+    cwd: a.cwd,
     configId: a.config.id,
     configName: a.config.name,
     format: spec.format,

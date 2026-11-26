@@ -28,6 +28,8 @@ export interface ParsedReport {
 export interface TestRunResult {
   schemaVersion: 1
   projectPath: string
+  /** The folder the run worked in, absolute: its cases' files are relative to it. */
+  cwd: string
   configId: string
   configName: string
   format: TestReportSpec['format']

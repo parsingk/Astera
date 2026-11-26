@@ -4,6 +4,7 @@ import type { OrchState } from '../core/orchestration/state'
 import { isPathWithin } from '../core/files/tree'
 import { completionProblemsOf, problemsKeyOf, type RawProblem } from '../core/problems/completionProblems'
 import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic'
+import type { TestRunResult } from '../core/tests/model'
 import { UNC_LIKE } from './run/resolveLink'
 
 /** How many stats one ask runs at once. A share that stops answering holds a libuv thread per stat for its timeout
@@ -23,6 +24,9 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
   return out
 }
+
+/** Whether a file changed after a finding about it was made: what marks a row `changed`. */
+const changedAfter = (st: { mtimeMs: number }, producedAt: string | undefined): boolean => producedAt !== undefined && st.mtimeMs > Date.parse(producedAt)
 
 /** A file's modification time, or null when it is not there. */
 export async function statMtime(abs: string): Promise<{ mtimeMs: number } | null> {
@@ -86,13 +90,59 @@ export function completionProducer(deps: {
         for (const c of candidates) {
           const st = await statOnce(c.abs)
           if (!st) continue
-          const changed = rest.producedAt !== undefined && st.mtimeMs > Date.parse(rest.producedAt)
-          return { ...rest, path: c.abs, root: c.f, ...(changed ? { stale: 'changed' as const } : {}) }
+          return { ...rest, path: c.abs, root: c.f, ...(changedAfter(st, rest.producedAt) ? { stale: 'changed' as const } : {}) }
         }
         const last = candidates[candidates.length - 1]
         return { ...rest, path: last.abs, root: last.f, stale: 'missing' }
       }
       return mapLimited(raw, STAT_AT_ONCE, resolve)
+    }
+  }
+}
+
+/**
+ * A person's failed tests (Phase 3 Part 2): one row per failed or errored case of the last result of each of the
+ * project's configurations (main/testResults.ts), only from a result that is this run's own: none from a stale report,
+ * a stopped run, or a report that could not be read. A case's file is relative to the run's folder, inside it (the
+ * parsers drop any other); its row is marked `changed` or `missing` as a completion finding's is. No Task, so no
+ * `origin`: its fix is a new Job draft.
+ */
+export function testProducer(deps: {
+  results: (project: string) => Promise<TestRunResult[]>
+  stat: (abs: string) => Promise<{ mtimeMs: number } | null>
+}): DiagnosticProducer {
+  return {
+    id: 'test',
+    async diagnostics(project) {
+      const rows: { d: Diagnostic; abs?: string }[] = []
+      for (const r of await deps.results(project)) {
+        if (r.stale || r.outcome === 'stopped' || r.outcome === 'unknown') continue
+        for (const c of r.cases) {
+          if (c.status !== 'failed' && c.status !== 'errored') continue
+          const words = (c.failure?.message ?? '').split('\n')[0].trim()
+          const file = c.failure?.file ?? c.file
+          const abs = file !== undefined ? path.join(r.cwd, ...file.split('/')) : undefined
+          rows.push({
+            d: {
+              schemaVersion: 1,
+              id: `test:${r.configId}:${c.id}`,
+              source: { kind: 'test', id: r.configId, label: r.configName },
+              severity: 'error',
+              message: `${[...c.suite, c.name].join(' > ')}${words !== '' ? `: ${words}` : ''}`,
+              ...(abs !== undefined ? { path: abs } : {}),
+              ...(abs !== undefined && c.failure?.line !== undefined ? { line: c.failure.line } : {}),
+              producedAt: r.endedAt
+            },
+            ...(abs !== undefined ? { abs } : {})
+          })
+        }
+      }
+      return mapLimited(rows, STAT_AT_ONCE, async ({ d, abs }) => {
+        if (abs === undefined) return d
+        const st = await deps.stat(abs)
+        if (!st) return { ...d, stale: 'missing' as const }
+        return changedAfter(st, d.producedAt) ? { ...d, stale: 'changed' as const } : d
+      })
     }
   }
 }

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import path from 'node:path'
 import type { OrchState } from '../core/orchestration/state'
 import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic'
-import { completionProducer, createProblems, createProblemsPing } from './problems'
+import { completionProducer, createProblems, createProblemsPing, testProducer } from './problems'
+import type { TestRunResult } from '../core/tests/model'
 
 const PROJECT = path.resolve('/repo')
 const WT = path.resolve('/wt/t1')
@@ -233,5 +234,61 @@ describe('createProblemsPing', () => {
     expect(send).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(send).toHaveBeenCalledTimes(2)
+  })
+})
+
+// Phase 3 Part 2: a person's failed tests, from the last result of each configuration
+describe('testProducer', () => {
+  const RUN = path.resolve('/repo/web')
+  const T_RUN = '2026-11-26T01:00:05.000Z'
+  const result = (over: Partial<TestRunResult> = {}): TestRunResult => ({
+    schemaVersion: 1,
+    projectPath: PROJECT,
+    cwd: RUN,
+    configId: 'user:1',
+    configName: 'unit',
+    format: 'junit-xml',
+    runId: 'r1',
+    startedAt: '2026-11-26T01:00:00.000Z',
+    endedAt: T_RUN,
+    outcome: 'failed',
+    cases: [
+      { id: 'aaaaaaaaaaaa', file: 'src/a.test.ts', suite: ['math', 'nested'], name: 'subtracts', status: 'failed', failure: { message: 'expected 2 to be 3\n\nmore', file: 'src/a.test.ts', line: 9 } },
+      { id: 'bbbbbbbbbbbb', suite: ['com.example.CalcTest'], name: 'divides', status: 'errored', failure: { message: '/ by zero' } },
+      { id: 'cccccccccccc', file: 'src/a.test.ts', suite: [], name: 'adds', status: 'passed' },
+      { id: 'dddddddddddd', file: 'src/a.test.ts', suite: [], name: 'later', status: 'skipped' }
+    ],
+    counts: { passed: 1, failed: 1, skipped: 1, errored: 1 },
+    ...over
+  })
+  const produce = (results: TestRunResult[], files: Record<string, number> = {}) =>
+    testProducer({ results: async () => results, stat: async (abs) => (abs in files ? { mtimeMs: files[abs] } : null) }).diagnostics(PROJECT)
+
+  it('lists each failed or errored case of a fresh result with its place and words', async () => {
+    const rows = await produce([result()], { [at(RUN, 'src', 'a.test.ts')]: Date.parse(T_RUN) - 1000 })
+    expect(rows).toEqual([
+      {
+        schemaVersion: 1,
+        id: 'test:user:1:aaaaaaaaaaaa',
+        source: { kind: 'test', id: 'user:1', label: 'unit' },
+        severity: 'error',
+        message: 'math > nested > subtracts: expected 2 to be 3',
+        path: at(RUN, 'src', 'a.test.ts'),
+        line: 9,
+        producedAt: T_RUN
+      },
+      { schemaVersion: 1, id: 'test:user:1:bbbbbbbbbbbb', source: { kind: 'test', id: 'user:1', label: 'unit' }, severity: 'error', message: 'com.example.CalcTest > divides: / by zero', producedAt: T_RUN }
+    ])
+  })
+
+  it('lists nothing of a stale, stopped, or unknown result', async () => {
+    expect(await produce([result({ stale: true, outcome: 'unknown' }), result({ configId: 'user:2', outcome: 'stopped' }), result({ configId: 'user:3', outcome: 'unknown', reason: 'malformed' })])).toEqual([])
+  })
+
+  it('marks a row whose file changed since the run, or is gone', async () => {
+    const changed = await produce([result()], { [at(RUN, 'src', 'a.test.ts')]: Date.parse(T_RUN) + 1000 })
+    expect(changed[0].stale).toBe('changed')
+    const gone = await produce([result()])
+    expect(gone[0].stale).toBe('missing')
   })
 })

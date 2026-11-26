@@ -13,5 +13,8 @@ describe('test results in main', () => {
     expect(ipc).toMatch(/resultOfRun\(\{ status: e, config, cwd: core\.run\.cwdOf\(e\.runId\) \?\? e\.projectPath, read: readTestReport \}\)/)
     expect(ipc).toMatch(/await testResults\.record\(r\)\s*problemsPing\.touch\(\)\s*send\('tests:changed', e\.projectPath\)/)
     expect(ipc).toMatch(/testResults\.load\(project, new Set\(core\.runConfig\.get\(project\)\.map\(\(c\) => c\.id\)\)\)/)
+
+    // The Problems list's test producer reads the same results, for the configurations the project still has
+    expect(ipc).toMatch(/testProducer\(\{\s*results: \(p\) => testResults\.load\(p, new Set\(core\.runConfig\.get\(p\)\.map\(\(c\) => c\.id\)\)\),\s*stat: statMtime\s*\}\)/)
   })
 })

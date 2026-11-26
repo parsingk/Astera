@@ -251,7 +251,7 @@ import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
 import { createQuickOpen } from './quickOpen'
 import { createTextSearch } from './textSearch'
-import { completionProducer, createProblems, createProblemsPing, statMtime } from './problems'
+import { completionProducer, createProblems, createProblemsPing, statMtime, testProducer } from './problems'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
@@ -5301,6 +5301,11 @@ export function registerIpc(
           const s = orch?.deps.getState()
           return s ? idsOfProject(s, repoPathOf(core.worktrees.list(), p), core.worktrees.list()) : new Set<string>()
         },
+        stat: statMtime
+      }),
+      // A person's failed tests (Phase 3 Part 2), from the configurations the project still has
+      testProducer({
+        results: (p) => testResults.load(p, new Set(core.runConfig.get(p).map((c) => c.id))),
         stat: statMtime
       })
     ],

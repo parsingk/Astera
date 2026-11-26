@@ -16,6 +16,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }))
 const result = (over: Partial<TestRunResult> = {}): TestRunResult => ({
   schemaVersion: 1,
   projectPath: 'D:/a',
+  cwd: 'D:/a',
   configId: 'user:1',
   configName: 'unit',
   format: 'junit-xml',
@@ -57,7 +58,7 @@ describe('resultOfRun', () => {
 
   it('records a person’s run of a configuration with a test report, its counts from the report', async () => {
     const r = await resultOfRun({ status: status(), config, cwd: 'D:/a', read })
-    expect(r).toMatchObject({ projectPath: 'D:/a', configId: 'user:1', configName: 'unit', format: 'junit-xml', runId: 'r1', outcome: 'failed', counts: { passed: 0, failed: 1, skipped: 0, errored: 0 } })
+    expect(r).toMatchObject({ projectPath: 'D:/a', cwd: 'D:/a', configId: 'user:1', configName: 'unit', format: 'junit-xml', runId: 'r1', outcome: 'failed', counts: { passed: 0, failed: 1, skipped: 0, errored: 0 } })
     expect(r?.startedAt).toBe('2026-11-26T01:00:00.000Z')
   })
 
