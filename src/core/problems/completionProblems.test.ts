@@ -115,6 +115,15 @@ describe('completionProblemsOf', () => {
     expect(listed.find((f) => f.ref.startsWith('review:'))?.text).toBe('error src/a.ts:20 Review: off by one')
   })
 
+  // A Task of a round carries its run, not its Job: the Job's folder is found through the run, so the Host's
+  // tasks-repair reads an absolute path under the Job's folder as the row does
+  it('gives a round’s Task its attempts’ folders, newest first, then its Job’s folder found through its run', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    expect(t1.jobId).toBeUndefined()
+    expect(taskFoldersOf(s, t1)).toEqual([...new Set(s.dispatches.filter((d) => d.taskId === 't1').sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map((d) => d.cwd)), 'D:\\repo'])
+  })
+
   // Final review M9: the confirmation names the Job as well as the Task
   it('names the Job a row came from beside its Task', () => {
     const row = completionProblemsOf(state(), PROJECT_RUNS).find((p) => p.id === 'review:t1:i1')

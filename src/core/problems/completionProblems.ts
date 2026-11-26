@@ -11,10 +11,12 @@ export type RawProblem = Omit<Diagnostic, 'path' | 'stale' | 'root'> & { file?: 
 /**
  * Where a Task's findings were made: the folders of its attempts, newest first, then its Job's folder, each once. Main
  * looks for a finding's file in them in this order, and a finding's reference reads an absolute file under one of them as
- * the relative file it is (findingRef `base`), so the Problems row and the Host's repair agree on it.
+ * the relative file it is (findingRef `base`), so the Problems row and the Host's repair agree on it. A round's Task
+ * names its run, not its Job, so the Job is found through the run.
  */
-export function taskFoldersOf(state: Pick<OrchState, 'dispatches' | 'jobs'>, task: Pick<Task, 'id' | 'jobId'>): string[] {
-  const jobCwd = state.jobs.find((j) => j.id === task.jobId)?.cwd
+export function taskFoldersOf(state: Pick<OrchState, 'dispatches' | 'jobs' | 'runs'>, task: Pick<Task, 'id' | 'jobId' | 'runId'>): string[] {
+  const jobId = task.jobId ?? state.runs.find((r) => r.id === task.runId)?.jobId
+  const jobCwd = state.jobs.find((j) => j.id === jobId)?.cwd
   return [
     ...state.dispatches
       .filter((d) => d.taskId === task.id)
@@ -84,7 +86,7 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
     const job = state.jobs.find((j) => j.id === run.jobId)
     for (const task of tasksOf.get(run.id) ?? []) {
       const attempts = attemptsOf.get(task.id) ?? []
-      const folders = taskFoldersOf({ dispatches: attempts, jobs: job !== undefined ? [job] : [] }, { id: task.id, jobId: run.jobId })
+      const folders = taskFoldersOf({ dispatches: attempts, jobs: job !== undefined ? [job] : [], runs: [run] }, task)
       const origin = { runId: run.id, taskId: task.id, task: task.title, ...(job !== undefined ? { job: jobName(job) } : {}) }
       for (const c of task.checks ?? []) {
         const source = { kind: 'check' as const, id: c.configId, label: c.name }
