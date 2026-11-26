@@ -111,7 +111,7 @@ import {
 } from './types'
 import { runWorktrees } from './integrate'
 import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
-import { taskFindings, taskFoldersOf } from '../problems/completionProblems'
+import { taskFindings, taskFoldersOf, taskRowRefs } from '../problems/completionProblems'
 import { cleanNote, findingRevision, findingSourceOf, moveFinding } from '../problems/findingStates'
 import { isPathWithin } from '../files/tree'
 import { buildHandoverPrompt } from './handover'
@@ -5276,7 +5276,9 @@ export async function handleCommand(
       const recs = { ...(task.findingStates ?? {}) }
       const folders = taskFoldersOf(s, task)
       if (dismiss) {
-        const known = new Set([...taskFindings(task, folders).map((f) => f.ref), ...Object.keys(recs)])
+        // What its Problems rows show now, the row for a check's unlisted findings included; not a finding it no longer
+        // has (final review I4, I5)
+        const known = taskRowRefs(task, folders)
         const unknown = refs.filter((ref) => !known.has(ref))
         if (unknown.length > 0) return bad(`not a finding of task ${taskId}: ${unknown.join(', ')}`)
       } else {
@@ -5286,8 +5288,12 @@ export async function handleCommand(
       const revision = findingRevision(s, taskId)
       for (const ref of refs) {
         const rec = recs[ref]
-        // Back to where its newest dismissal found it, or open when that was its first state
-        const to = dismiss ? 'dismissed' : ([...(rec?.history ?? [])].reverse().find((c) => c.to === 'dismissed')?.from ?? 'open')
+        // Back to what still holds (final review I4): a repair only while an attempt carries it, waiting for the checks
+        // only while they run, else open, which the next round settles; never verified, which no person sets
+        const before = [...(rec?.history ?? [])].reverse().find((c) => c.to === 'dismissed')?.from
+        const repairing = s.dispatches.some((d) => d.taskId === taskId && d.endedAt === undefined && d.askedFindings?.some((f) => f.ref === ref) === true)
+        const checking = before === 'resolved-pending-verification' && (task.status === 'validating' || task.status === 'reviewing')
+        const to = dismiss ? 'dismissed' : repairing ? 'repair-requested' : checking ? 'resolved-pending-verification' : 'open'
         recs[ref] = moveFinding(rec, ref, to, { at: now, by: 'person', ...(revision !== undefined ? { revision } : {}), ...(dismiss ? { note } : {}) }, findingSourceOf(task, folders, ref))
       }
       await deps.setState({ ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, findingStates: recs } : t)) })

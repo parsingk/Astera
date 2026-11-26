@@ -38,6 +38,14 @@ describe('ownerMismatchOf', () => {
     expect(check('task-create', {})).toBe(null)
   })
 
+  // Final review M4: a person's repair request and dismissals name a Task too
+  it('refuses a repair request or a dismissal on another project’s Task', () => {
+    for (const cmd of ['tasks-repair', 'tasks-dismiss', 'tasks-undismiss']) {
+      expect(check(cmd, { task: 'tsk_theirs' }), cmd).toBe('task tsk_theirs does not belong to D:/mine')
+      expect(check(cmd, { task: 'tsk_mine' }), cmd).toBe(null)
+    }
+  })
+
   // A GitHub question's continue fast-forwards its Run from GitHub and rerun reruns its CI; reconverge pushes again
   it('refuses an answer to another project’s question, and reconverging another project’s Run', () => {
     expect(check('gate-resolve', { id: 'gat_theirs', resolution: 'continue' })).toBe('question gat_theirs does not belong to D:/mine')

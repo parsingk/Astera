@@ -35,7 +35,11 @@ export const TASK_ID_ARG: Record<string, string[]> = {
   'task-update': ['id'],
   'dispatch-show': ['task'],
   'gate-create': ['task'],
-  'worker-start': ['taskId', 'task']
+  'worker-start': ['taskId', 'task'],
+  // Phase 3 Part 1 (final review M4): a person's repair request and dismissals name their Task
+  'tasks-repair': ['task'],
+  'tasks-dismiss': ['task'],
+  'tasks-undismiss': ['task']
 }
 export const DISPATCH_ID_ARG: Record<string, string> = { 'worker-stop': 'dispatch' }
 /** G7a final review M3: an answer names its question, whose Task names the Run. A GitHub question's continue

@@ -107,7 +107,7 @@ describe('tasks-findings', () => {
 })
 
 describe('tasks-dismiss and tasks-undismiss', () => {
-  it('dismisses chosen findings with a cleaned note, by a person, and undismisses them back to where they were', async () => {
+  it('dismisses chosen findings with a cleaned note, by a person, and undismisses them to what still holds', async () => {
     const deps = depsOver(withStates(seeded({ status: 'failed' }), { [LINT_REF()]: rec('repair-requested') }))
     const r = await handleCommand(deps, APP, 'tasks-dismiss', { task: 't1', finding: [LINT_REF(), REVIEW_REF()], note: ' known\nflaky ' })
     expect(r).toEqual({ status: 200, body: { taskId: 't1', dismissed: 2 } })
@@ -117,9 +117,10 @@ describe('tasks-dismiss and tasks-undismiss', () => {
     expect(statesOf(deps)[REVIEW_REF()]).toMatchObject({ kind: 'review', state: 'dismissed', history: [{ from: null, to: 'dismissed' }] })
 
     expect(await handleCommand(deps, CLI, 'tasks-undismiss', { task: 't1', finding: LINT_REF() })).toEqual({ status: 200, body: { taskId: 't1', undismissed: 1 } })
-    expect(statesOf(deps)[LINT_REF()].state).toBe('repair-requested')
+    // Its repair is no longer running (the attempt ended): open, not repair-requested (final review I4)
+    expect(statesOf(deps)[LINT_REF()].state).toBe('open')
     expect(statesOf(deps)[LINT_REF()].note).toBeUndefined()
-    expect(statesOf(deps)[LINT_REF()].history.at(-1)).toEqual({ at: NOW, by: 'person', from: 'dismissed', to: 'repair-requested' })
+    expect(statesOf(deps)[LINT_REF()].history.at(-1)).toEqual({ at: NOW, by: 'person', from: 'dismissed', to: 'open' })
     await handleCommand(deps, CLI, 'tasks-undismiss', { task: 't1', finding: [REVIEW_REF()] })
     expect(statesOf(deps)[REVIEW_REF()].state).toBe('open')
   })
@@ -147,6 +148,46 @@ describe('tasks-dismiss and tasks-undismiss', () => {
     })
     expect((await handleCommand(deps, CLI, 'tasks-dismiss', { task: 'nope', finding: LINT_REF(), note: 'n' })).status).toBe(404)
     expect(deps.writes).toBe(0)
+  })
+
+  // Final review I4: back to a repair only while one carries it, to waiting for checks only while they run, else open
+  it('undismisses to a running repair, to checks still running, or to open', async () => {
+    const dismissedFrom = (from: FindingRecord['state']): FindingRecord => ({
+      kind: 'check',
+      source: 'plugin:lint',
+      state: 'dismissed',
+      note: 'n',
+      history: [
+        { at: NOW, by: 'person', from: null, to: from },
+        { at: NOW, by: 'person', from, to: 'dismissed', note: 'n' }
+      ]
+    })
+    const carrying = (s: OrchState): OrchState => ({
+      ...s,
+      dispatches: [...s.dispatches, { id: 'd9', taskId: 't1', provider: 'claude', accountId: 'accA', sessionId: 's9', cwd: dir, specPath: '', startedAt: NOW, repair: 'check-failure', askedFindings: [{ ref: LINT_REF(), text: 't' }] } as unknown as Dispatch]
+    })
+    const running = depsOver(carrying(withStates(seeded({ status: 'dispatched' }), { [LINT_REF()]: dismissedFrom('repair-requested') })))
+    await handleCommand(running, CLI, 'tasks-undismiss', { task: 't1', finding: LINT_REF() })
+    expect(statesOf(running)[LINT_REF()].state).toBe('repair-requested')
+    const checking = depsOver(withStates(seeded({ status: 'validating' }), { [LINT_REF()]: dismissedFrom('resolved-pending-verification') }))
+    await handleCommand(checking, CLI, 'tasks-undismiss', { task: 't1', finding: LINT_REF() })
+    expect(statesOf(checking)[LINT_REF()].state).toBe('resolved-pending-verification')
+    const settled = depsOver(withStates(seeded({ status: 'failed' }), { [LINT_REF()]: dismissedFrom('resolved-pending-verification') }))
+    await handleCommand(settled, CLI, 'tasks-undismiss', { task: 't1', finding: LINT_REF() })
+    expect(statesOf(settled)[LINT_REF()].state).toBe('open')
+  })
+
+  // Final review I4 and I5: a person dismisses what the Task's Problems rows show, the row standing for a check's unlisted
+  // findings included, and nothing it no longer has
+  it('dismisses the row a check’s unlisted findings stand for, and refuses a finding the Task no longer has', async () => {
+    const s = seeded({ status: 'failed' })
+    const t1 = s.tasks[0]
+    const more: OrchState = { ...s, tasks: [{ ...t1, checks: [{ ...t1.checks![0], diagnosticsTotal: 5 }] }] } as OrchState
+    const ownRef = findingRef({ kind: 'check', taskId: 't1', source: 'plugin:lint', message: '' })
+    const deps = depsOver(more)
+    expect(await handleCommand(deps, APP, 'tasks-dismiss', { task: 't1', finding: [LINT_REF(), ownRef], note: 'known' })).toEqual({ status: 200, body: { taskId: 't1', dismissed: 2 } })
+    const gone = depsOver(withStates(seeded({ status: 'failed' }), { [GONE]: rec('verified', 2) }))
+    expect(await handleCommand(gone, APP, 'tasks-dismiss', { task: 't1', finding: GONE, note: 'known' })).toMatchObject({ status: 400, body: { error: expect.stringContaining(GONE) } })
   })
 
   it('leaves dismissed findings out of a repair that names none', async () => {
