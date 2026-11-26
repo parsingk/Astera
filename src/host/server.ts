@@ -170,6 +170,8 @@ const HOST_MESSAGE_AUDIENCE: Record<HostMessage['t'], 'app' | 'any'> = {
   'blocks': 'app',
   'driver': 'app',
   'workspace': 'app',
+  'lsp-diagnostics': 'app',
+  'lsp-state': 'app',
   'hello': 'any',
   'protocol-mismatch': 'any',
   'retire-refused': 'any',

@@ -10,6 +10,7 @@ import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from
 import type { SlackForwardedEvent } from '../slack/forwarded'
 import type { SessionSignal } from '../sessions/sessionSignal'
 import type { McpHttpUrl } from '../mcp/httpUrls'
+import type { LspFileDiagnostics, LspOpenFile, LspServerStatus } from '../lsp/model'
 import type { ChatRollRefusedNotice } from '../chat/types'
 import {
   HOST_FEATURE_EVENTS,
@@ -165,6 +166,10 @@ export const HOST_FEATURE_REMOTE = 'remote-runtime'
 /** Plugins (plugin runtime design P5): this Host keeps `<profile>/plugins` and answers the `plugins-*` commands to this
  *  machine's app and CLI. Announced by every Host, like `remote-runtime`: the manager needs nothing a Host may lack. */
 export const HOST_FEATURE_PLUGINS = 'plugins'
+/** Language servers (Phase 3 Part 3): this Host takes `lsp-sync` and `lsp-saved` from its app, runs the servers for the
+ *  open files, pushes `lsp-diagnostics` and `lsp-state`, and answers the `lsp-*` commands to this machine's app and CLI.
+ *  Announced by every Host, like `plugins`. An app sends no `lsp-sync` to a Host without it. */
+export const HOST_FEATURE_LSP = 'lsp'
 /** Host-owned recovery (remote runtime design §2.6, DC-3): this Host decides and carries out the recovery of lost
  *  workers itself, while it drives, writes the Job Journal and no attached app keeps HOST_YIELD_RECOVERY. An app in
  *  front of a Host that announces it runs no reconciler of its own. Announced with `spawn`: recovery starts workers. */
@@ -412,6 +417,13 @@ export type ClientMessage =
    *  events (plugin Phase 3). Fire and forget, sent whoever owns Slack. Taken only from a greeted app, and dropped for a
    *  session the Host sources itself. A Host without the feature is sent none. */
   | { t: 'session-signal'; signal: SessionSignal }
+  /** The files open in the app's editor, whole each time, with the Python interpreter for each root that has a Python file
+   *  open (null for none), for a Host that announced HOST_FEATURE_LSP. `refresh` after a settings change: the Host starts
+   *  again what the change may have changed. Fire and forget; taken only from a greeted app. */
+  | { t: 'lsp-sync'; open: LspOpenFile[]; interpreters: Record<string, string | null>; refresh?: true }
+  /** Files saved in the editor or changed on disk, and files deleted on disk: the Host reads the open ones again and tells
+   *  a server that watches nothing itself of the rest. Fire and forget; taken only from a greeted app. */
+  | { t: 'lsp-saved'; paths: string[]; deleted?: string[] }
 
 export type HostMessage =
   | HostHelloMessage
@@ -543,3 +555,8 @@ export type HostMessage =
   /** An agent app workspace changed (HOST_FEATURE_WORKSPACE): to the greeted apps that yield
    *  `workspace` only. Additive. */
   | { t: 'workspace'; event: WorkspaceEvent }
+  /** Files whose language-server problems changed (HOST_FEATURE_LSP), each with its whole list (empty when cleared).
+   *  Additive. */
+  | { t: 'lsp-diagnostics'; files: LspFileDiagnostics[] }
+  /** Every language server's state, whole, on each change (HOST_FEATURE_LSP). Additive. */
+  | { t: 'lsp-state'; servers: LspServerStatus[] }

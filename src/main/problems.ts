@@ -5,6 +5,8 @@ import { isPathWithin } from '../core/files/tree'
 import { completionProblemsOf, problemsKeyOf, type RawProblem } from '../core/problems/completionProblems'
 import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic'
 import type { TestRunResult } from '../core/tests/model'
+import type { LspFileDiagnostics, LspServerStatus } from '../core/lsp/model'
+import { LSP_SERVERS } from '../core/lsp/languages'
 import { UNC_LIKE } from './run/resolveLink'
 
 /** How many stats one ask runs at once. A share that stops answering holds a libuv thread per stat for its timeout
@@ -143,6 +145,85 @@ export function testProducer(deps: {
         if (!st) return { ...d, stale: 'missing' as const }
         return changedAfter(st, d.producedAt) ? { ...d, stale: 'changed' as const } : d
       })
+    }
+  }
+}
+
+/**
+ * The language servers' problems (Phase 3 Part 3) for the project's files open in the editor, as the Host last pushed
+ * them (main/host/hostLsp.ts): one row per problem, with its column and range, under its server's name. A row is marked
+ * `changed` once its file changed after the server spoke, `missing` once it is gone. No Task: its fix is a new Job draft.
+ */
+export function lspProducer(deps: {
+  files: (project: string) => LspFileDiagnostics[]
+  /** Every server's state, for a note per root of the project that no server checks (final review I4). */
+  servers: () => LspServerStatus[]
+  stat: (abs: string) => Promise<{ mtimeMs: number } | null>
+}): DiagnosticProducer {
+  return {
+    id: 'lsp',
+    async diagnostics(project) {
+      // A root of the project its server is not checking: one note, so the list does not look clean (final review I4)
+      const unchecked = deps
+        .servers()
+        .filter((s) => s.why !== undefined && isPathWithin(project, s.root))
+        .map(
+          (s): Diagnostic => ({
+            schemaVersion: 1,
+            id: `lsp:unchecked:${s.server}:${s.root}`,
+            source: { kind: 'lsp', id: s.server, label: LSP_SERVERS[s.server].title },
+            severity: 'info',
+            message: s.reason ?? (s.why as string),
+            root: s.root,
+            unchecked: s.why
+          })
+        )
+      const files = deps.files(project)
+      // A file over the bound the servers read: said, not silently unchecked (final review M13)
+      const skipped = files
+        .filter((f) => f.skipped === 'too-large')
+        .map(
+          (f): Diagnostic => ({
+            schemaVersion: 1,
+            id: `lsp:skipped:${f.server}:${f.path}`,
+            source: { kind: 'lsp', id: f.server, label: LSP_SERVERS[f.server].title },
+            severity: 'info',
+            message: 'not checked: the file is larger than the language servers read',
+            path: f.path,
+            root: f.root,
+            unchecked: 'too-large',
+            producedAt: f.producedAt
+          })
+        )
+      const rows = files.flatMap((f) =>
+        f.problems.map(
+          (p, i): Diagnostic => ({
+            schemaVersion: 1,
+            id: `lsp:${f.server}:${f.path}:${p.line}:${p.column}:${p.code ?? ''}:${i}`,
+            source: { kind: 'lsp', id: f.server, label: LSP_SERVERS[f.server].title },
+            severity: p.severity,
+            message: p.message,
+            path: f.path,
+            root: f.root,
+            line: p.line,
+            column: p.column,
+            endLine: p.endLine,
+            endColumn: p.endColumn,
+            ...(p.code !== undefined ? { code: p.code } : {}),
+            producedAt: f.producedAt
+          })
+        )
+      )
+      // Each file is looked at once, however many rows it has (final review M15)
+      const paths = [...new Set([...skipped, ...rows].map((d) => d.path as string))]
+      const stats = new Map(paths.map((p, i) => [p, i]))
+      const looked = await mapLimited(paths, STAT_AT_ONCE, (p) => deps.stat(p))
+      const marked = [...skipped, ...rows].map((d) => {
+        const st = looked[stats.get(d.path as string) as number]
+        if (!st) return { ...d, stale: 'missing' as const }
+        return changedAfter(st, d.producedAt) ? { ...d, stale: 'changed' as const } : d
+      })
+      return [...unchecked, ...marked]
     }
   }
 }

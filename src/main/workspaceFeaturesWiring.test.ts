@@ -13,9 +13,9 @@ describe('workspace feature switches wiring', () => {
     expect(ipc).toContain("ipcMain.handle('settings.getWorkspaceFeatures', () => core.appSettings.getWorkspaceFeatures())")
   })
 
-  it('refuses a record whose four switches are not all booleans', () => {
+  it('refuses a record whose five switches are not all booleans', () => {
     expect(ipc).toMatch(/ipcMain\.handle\('settings\.setWorkspaceFeatures', async \(_e, next: unknown\) => \{/)
-    expect(ipc).toMatch(/for \(const k of \['layoutMemory', 'problemsTab', 'contextBridge', 'testsTab'\]\)\s*if \(typeof o\[k\] !== 'boolean'\) throw new Error\(`INVALID_WORKSPACE_FEATURES: /)
+    expect(ipc).toMatch(/for \(const k of \['layoutMemory', 'problemsTab', 'contextBridge', 'testsTab', 'languageServers'\]\)\s*if \(typeof o\[k\] !== 'boolean'\) throw new Error\(`INVALID_WORKSPACE_FEATURES: /)
     expect(ipc).toContain('await core.appSettings.setWorkspaceFeatures(next as WorkspaceFeatures)')
   })
 

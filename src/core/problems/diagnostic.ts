@@ -5,6 +5,7 @@
  */
 
 import type { FindingChange, FindingState } from '../orchestration/types'
+import type { LspWhy } from '../lsp/model'
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info'
 
@@ -49,6 +50,9 @@ export interface Diagnostic {
   /** The file as the finding named it, when it was not looked at: a name that leaves its folder or points at another
    *  machine. Shown, never opened. */
   unresolved?: string
+  /** Not a finding but a note that something was not checked (Phase 3 Part 3, final review I4 and M13): a language
+   *  server is not running for the row's root, and why, or the row's file was too large to read. The list words it. */
+  unchecked?: LspWhy | 'too-large'
 }
 
 /** What the Problems list asks of each source of findings. Main runs one per source and merges them. */

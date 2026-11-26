@@ -70,6 +70,21 @@ describe('the Problems tab off (Phase 1 gate)', () => {
     expect(app).toMatch(/if \(workspaceFeatures\?\.problemsTab === false\) setBottomTab\(\(cur\) => \(cur === 'problems' \? 'run' : cur\)\)\s*\}, \[workspaceFeatures\?\.problemsTab\]\)/)
   })
 
+  // Phase 3 Part 3: the editor's TS/JS and Python files go to the Host's language servers while the switch is on, and
+  // their saves and changes on disk follow
+  it('sends the open files to the language servers only while the switch is on, and every save and disk change', () => {
+    expect(app).toMatch(/const lspOpen = useMemo\(\(\) => \(workspaceFeatures\?\.languageServers === true \? lspOpenFiles\(fileTabs\) : \[\]\), \[workspaceFeatures\?\.languageServers, fileTabs\]\)/)
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*void window\.api\.lsp\.setOpen\(lspOpen\)\.catch\(\(\) => \{\}\)\s*\}, \[lspOpen\]\)/)
+    expect(app).toMatch(/onFileSavedRef\.current\(tab\.path\)\s*void window\.api\.lsp\.saved\(\[tab\.path\]\)\.catch\(\(\) => \{\}\)/)
+    // Final review I3: every change and deletion on disk, open in a tab or not, before the open-buffer check
+    expect(app).toMatch(
+      /if \(c\.kind === 'add' \|\| c\.kind === 'change'\) void window\.api\.lsp\.saved\(\[c\.path\]\)\.catch\(\(\) => \{\}\)\s*else if \(c\.kind === 'unlink'\) void window\.api\.lsp\.saved\(\[\], \[c\.path\]\)\.catch\(\(\) => \{\}\)\s*const id = `file:\$\{c\.path\}`/
+    )
+    expect(app.match(/window\.api\.lsp\.saved\(\[c\.path\]\)/g)).toHaveLength(1)
+    expect(app).toMatch(/\['lsp', t\('settings\.tab\.lsp'\)\]/)
+    expect(app).toMatch(/\{settingsTab === 'lsp' && <LanguageServerSettings project=\{currentProject\} \/>\}/)
+  })
+
   // Phase 3 Part 2: the Tests tab follows the Problems tab's rules
   it('asks main for test results only while the Tests tab is on, and moves the bottom panel off it while it is off', () => {
     expect(app).toMatch(/testsEnabled=\{testsOn\}/)

@@ -83,6 +83,8 @@ import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ReviewerSettings } from './components/ReviewerSettings'
 import { GithubSettings } from './components/GithubSettings'
 import { KubernetesSettings } from './components/KubernetesSettings'
+import { LanguageServerSettings } from './components/LanguageServerSettings'
+import { lspOpenFiles } from './lib/lspOpen'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { WorkspaceFeatureSettings } from './components/WorkspaceFeatureSettings'
@@ -827,6 +829,7 @@ export default function App(): React.JSX.Element {
     | 'notifications'
     | 'github'
     | 'kubernetes'
+    | 'lsp'
     | 'remote'
     | 'plugins'
     | 'extensions'
@@ -2179,6 +2182,7 @@ export default function App(): React.JSX.Element {
       () => {
         setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev))
         onFileSavedRef.current(tab.path)
+        void window.api.lsp.saved([tab.path]).catch(() => {})
         setProblemsAsk((n) => n + 1)
         return true
       },
@@ -2460,6 +2464,10 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     const onChange = (c: FileChange): void => {
       if (c.kind === 'add' || c.kind === 'change' || c.kind === 'unlink') invalidateImageCache(c.path)
+      // The language servers read the file from disk again, or hear it changed or went, open in a tab or not (Phase 3
+      // Part 3; final review I3: pyright watches nothing itself)
+      if (c.kind === 'add' || c.kind === 'change') void window.api.lsp.saved([c.path]).catch(() => {})
+      else if (c.kind === 'unlink') void window.api.lsp.saved([], [c.path]).catch(() => {})
       const id = `file:${c.path}`
       const buf = fileBuffersRef.current[id]
       if (!buf) return
@@ -4139,6 +4147,12 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
+  // Language servers (Phase 3 Part 3): the editor's TS/JS and Python files go to the Host whole each time the tabs change,
+  // and none while the switch is off (main forwards them, the Host diffs them)
+  const lspOpen = useMemo(() => (workspaceFeatures?.languageServers === true ? lspOpenFiles(fileTabs) : []), [workspaceFeatures?.languageServers, fileTabs])
+  useEffect(() => {
+    void window.api.lsp.setOpen(lspOpen).catch(() => {})
+  }, [lspOpen])
   /** The explorer's project's test results (Phase 3 Part 2, main/testResults.ts): undefined while asked for. Asked again
    *  when main says a run left a result (tests:changed) and when the switch or the project changes. */
   const testsOn = workspaceFeatures?.testsTab === true
@@ -6436,6 +6450,8 @@ export default function App(): React.JSX.Element {
                     ['notifications', t('settings.tab.notifications')],
                     ['github', 'GitHub'],
                     ['kubernetes', 'Kubernetes'],
+                    // Language servers (Phase 3 Part 3), beside the other tools Astera runs for a project
+                    ['lsp', t('settings.tab.lsp')],
                     ['worktree', 'Worktree'],
                     ['history', t('settings.tab.history')],
                     ['info', t('settings.tab.info')]
@@ -6869,6 +6885,7 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
                 {settingsTab === 'kubernetes' && <KubernetesSettings />}
+                {settingsTab === 'lsp' && <LanguageServerSettings project={currentProject} />}
                 {settingsTab === 'remote' && (
                   <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} {...(runtimeFocus !== null ? { focusRuntimeId: runtimeFocus } : {})} />
                 )}

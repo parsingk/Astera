@@ -139,6 +139,10 @@ import { attachGatewayLink } from './gatewayLink'
 import { readRemoteSettings } from '../core/remote/settings'
 import { loadIdentity, type RuntimeIdentity } from '../core/remote/identity'
 import { readMcpHttp } from '../core/settings/mcpHttp'
+import { readLanguageServers } from '../core/settings/languageServers'
+import { createNpm } from './plugins/npm'
+import { createLspInstaller } from './lsp/install'
+import { LSP_STOP_CAP_MS, createLspManager } from './lsp/manager'
 import { utf8CtypeFor } from '../core/terminal/utf8Locale'
 
 // Before any session or terminal is spawned: a Host started under no locale (the app from the Finder, or launchd)
@@ -388,6 +392,10 @@ async function main(): Promise<void> {
       // process. Never rejects.
       // An install from npm still running ends too, rather than outlive this Host (2e final review M8).
       plugins.stopNpm()
+      // The language servers stop with it too (Phase 3 Part 3): each sent shutdown and exit, then killed with what it
+      // started; capped the same way, and awaited beside the plugins. An install still running ends with npm's.
+      lspNpm.stopAll()
+      const lspStopped = disposeWithin(lspManager.stopAll(), LSP_STOP_CAP_MS, () => log.write(`the language servers were still stopping after ${LSP_STOP_CAP_MS / 1000} s; leaving anyway`))
       const pluginsStopped = disposeWithin(pluginRuntime.stopAll(), PLUGIN_STOP_CAP_MS, () =>
         log.write(`the plugins were still stopping after ${PLUGIN_STOP_CAP_MS / 1000} s; leaving anyway`)
       )
@@ -408,6 +416,7 @@ async function main(): Promise<void> {
       if (spawner) await spawner.closeAndSettle(SPAWN_DEADLINE_MS).catch((err) => log.write(`the spawns in flight could not be waited for: ${String(err)}`))
       // The plugins, awaited before the server closes (started at the top of this tail).
       await pluginsStopped
+      await lspStopped
       // A run report's comment already on its way finishes first, while the orch still answers its record. Capped. Never rejects.
       if (runReportPoster)
         await disposeWithin(runReportPoster.idle().catch(() => {}), RUN_REPORT_IDLE_CAP_MS, () =>
@@ -952,6 +961,23 @@ async function main(): Promise<void> {
     liveAccountIds: async () =>
       new Set((await hostSessions.listSessions()).filter((s) => s.alive && s.provider === 'codex' && s.accountId !== null).map((s) => s.accountId!))
   })
+  // Language servers (Phase 3 Part 3): installed after the person approves each in Settings (the plugins' npm, pinned
+  // versions and sha512), run for the app's open files, at most four at once, stopped when idle and when this Host leaves.
+  // The settings are read at each start, as the app writes them
+  const lspNpm = createNpm({ profileDir, env: process.env, node: process.execPath })
+  const lspInstaller = createLspInstaller({ profileDir, npm: lspNpm })
+  /** The app connection whose open set the servers serve (final review M6). */
+  let lspSyncSocket: number | null = null
+  const lspManager = createLspManager({
+    profileDir,
+    exec: process.execPath,
+    env: process.env,
+    installer: lspInstaller,
+    settings: () => readLanguageServers(path.join(profileDir, 'app-settings.json')),
+    emit: (files) => server.broadcast({ t: 'lsp-diagnostics', files }),
+    state: (servers) => server.broadcast({ t: 'lsp-state', servers }),
+    log: (m) => log.write(m)
+  })
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
   // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
@@ -1090,6 +1116,7 @@ async function main(): Promise<void> {
     plugins,
     pluginAudit,
     extensions,
+    lsp: { installer: lspInstaller, manager: lspManager },
     agentProfiles,
     policies,
     credentials,
@@ -1438,6 +1465,20 @@ async function main(): Promise<void> {
           if (sessionEvents && from.greeted && from.role === 'app') sessionEvents.forwarded(m.signal)
           return true
         }
+        // Phase 3 Part 3: the app's open files, whole each time, and its saves, for the language servers. From a greeted
+        // app only
+        if (m.t === 'lsp-sync') {
+          if (from.greeted && from.role === 'app') {
+            lspSyncSocket = from.socket
+            lspManager.sync(m.open, m.interpreters)
+            if (m.refresh) lspManager.refresh()
+          }
+          return true
+        }
+        if (m.t === 'lsp-saved') {
+          if (from.greeted && from.role === 'app') lspManager.saved(m.paths, m.deleted)
+          return true
+        }
         // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
         return (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false)
       },
@@ -1446,6 +1487,12 @@ async function main(): Promise<void> {
       // closes. A socket that never held a pty, which is every CLI call, runs no sweep (exits.ts).
       onClientGone: (from) => {
         exits?.appGone(from.socket)
+        // Phase 3 Part 3: no app, no open files; the servers stop after their idle wait. Only the connection that sent
+        // the open set takes it away: an old one noticed late after a reconnect must not close the new one's files
+        if (from.role === 'app' && from.socket === lspSyncSocket) {
+          lspSyncSocket = null
+          lspManager.appGone()
+        }
         // Phase 8 (N2): what this socket paused is resumed, so a dead app does not leave a pty frozen.
         handlePty?.socketGone(from.socket)
         procHolders.appGone(from.socket)

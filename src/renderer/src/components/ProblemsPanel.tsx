@@ -20,6 +20,15 @@ const SEVERITY_KEY = {
   info: 'problems.severity.info'
 } as const
 
+/** What was not checked and why (Phase 3 Part 3), written out so every key stays findable in the source. */
+const UNCHECKED_KEY = {
+  'not-installed': 'problems.unchecked.not-installed',
+  room: 'problems.unchecked.room',
+  crashed: 'problems.unchecked.crashed',
+  refused: 'problems.unchecked.refused',
+  'too-large': 'problems.unchecked.too-large'
+} as const
+
 const ICON: Record<DiagnosticSeverity, React.ReactNode> = {
   error: <CircleX size={13} className="problem-icon error" />,
   warning: <AlertTriangle size={13} className="problem-icon warning" />,
@@ -78,9 +87,18 @@ export function ProblemsPanel({
   /** Where it is, as the row shows it: relative to the project, or the name as written when it was not looked at. */
   const placeOf = (d: Diagnostic): string | null =>
     d.path !== undefined && projectRoot ? `${relativeTo(projectRoot, d.path)}${d.line !== undefined ? `:${d.line}` : ''}` : null
+  /** A root as a note names it: relative to the project, or the project's own folder name. */
+  const folderOf = (root: string | undefined): string =>
+    (root !== undefined && projectRoot ? relativeTo(projectRoot, root) : '') || (projectRoot ?? '').split(/[\\/]/).filter(Boolean).at(-1) || ''
   /** What the row says. */
   const messageOf = (d: Diagnostic): string =>
-    d.unlisted !== undefined ? t('problems.unlisted', { count: d.unlisted }) : d.message !== '' ? d.message : t('problems.checkFailed')
+    d.unchecked !== undefined
+      ? t(UNCHECKED_KEY[d.unchecked], { server: d.source.label, folder: folderOf(d.root) })
+      : d.unlisted !== undefined
+        ? t('problems.unlisted', { count: d.unlisted })
+        : d.message !== ''
+          ? d.message
+          : t('problems.checkFailed')
   const shown = (d: Diagnostic): string[] => [messageOf(d), placeOf(d) ?? d.unresolved ?? '', sourceOf(d)]
   const rows = useMemo(
     () => sortDiagnostics(filterDiagnostics(problems ?? [], { severities, text, shown }), sort, sourceOf),
@@ -208,7 +226,8 @@ export function ProblemsPanel({
                 }
                 title={d.origin ? d.origin.task : undefined}
               >
-                {actions !== undefined && (
+                {/* A note that something was not checked is not a finding to send or fix */}
+                {actions !== undefined && d.unchecked === undefined && (
                   <input
                     type="checkbox"
                     className="problem-choose"

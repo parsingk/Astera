@@ -5,6 +5,7 @@ import type { ClientInfo } from '../remote/frames'
 import { EXTENSION_COMMANDS } from '../../host/extensions/commands'
 import { AGENT_PROFILE_COMMANDS } from '../../host/agentProfiles/commands'
 import { CREDENTIAL_COMMANDS } from '../../host/credentials/commands'
+import { LSP_COMMANDS } from '../../host/lsp/commands'
 
 const p = (permission: string) => ({ clientId: 'cli_ab12', name: 'laptop', permission }) as never
 
@@ -40,6 +41,11 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
     const all = [...EXTENSION_COMMANDS, ...AGENT_PROFILE_COMMANDS, ...CREDENTIAL_COMMANDS]
     for (const cmd of ['agent-profiles-sandbox-setup', 'agent-profiles-sandbox-readiness', 'agent-profiles-sandbox-default-remove']) expect(all).toContain(cmd)
     for (const cmd of all) expect(controllerRefusal(cmd, p('full-control')), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+  })
+  // Phase 3 Part 3: the language servers run for this machine's app; a remote controller never installs or reads them
+  it('refuses every lsp-* command to a full-control controller', () => {
+    expect(LSP_COMMANDS.size).toBe(5)
+    for (const cmd of LSP_COMMANDS) expect(controllerRefusal(cmd, p('full-control')), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
   })
   // Observe mode design §3, §12: the audit log and the rules are this machine's app's and CLI's only
   it('never lists an audit or policies command, and refuses each at full control', () => {

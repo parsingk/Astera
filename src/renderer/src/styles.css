@@ -2228,6 +2228,11 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .tests-open { margin-left: auto; }
 .tests-failure { margin: 2px 0 4px 20px; padding: 6px 8px; background: var(--elevated); border-radius: var(--radius-sm); white-space: pre-wrap; font-size: 11px; max-height: 240px; overflow: auto; }
 .test-icon { flex: none; }
+/* Settings > language servers (Phase 3 Part 3) */
+.lsp-server { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.lsp-server-root { display: flex; flex-direction: column; gap: 2px; margin-left: 16px; }
+.lsp-root { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.lsp-log { margin: 2px 0 4px; padding: 6px 8px; background: var(--elevated); border-radius: var(--radius-sm); white-space: pre-wrap; font-size: 11px; max-height: 240px; overflow: auto; }
 .test-icon.passed { color: var(--ok); }
 .test-icon.failed { color: var(--danger); }
 .test-icon.skipped { color: var(--text-dim); }
