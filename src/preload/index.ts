@@ -43,6 +43,7 @@ const EVENT_CHANNELS = [
   'files:changed',
   'files:changedBatch',
   'problems:changed',
+  'tests:changed',
   'files:opProgress',
   'worktree:createProgress',
   'git:changed',
@@ -294,6 +295,9 @@ const api = {
   },
   problems: {
     list: invoke('problems.list')
+  },
+  tests: {
+    list: invoke('tests.list')
   },
   files: {
     list: invoke('files.list'),

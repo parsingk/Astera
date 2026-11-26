@@ -85,6 +85,8 @@ import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { createHostRoute } from './host/hostRoute'
 import { hostWritesFinding, stampFindings } from '../core/problems/findingStates'
+import { createTestResults, resultOfRun } from './testResults'
+import { readTestReport } from '../core/tests/read'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
 import { ownerMismatchOf } from '../core/orchestration/ownerCheck'
 import { exactGithubLifecycleDefaults } from '../core/github/lifecycleDefaults'
@@ -1595,6 +1597,25 @@ export function registerIpc(
   })
   // The Problems list asks again when what it is made of moved, whatever view is open (main/problems.ts)
   const problemsPing = createProblemsPing({ send: () => send('problems:changed', null) })
+  // The last test result of each configuration a person runs (Phase 3 Part 2): written as a run ends, read by the Tests
+  // tab and the Problems list
+  const testResults = createTestResults({ dir: path.join(app.getPath('userData'), 'test-results') })
+  const recordTestRun = async (e: RunStatus): Promise<void> => {
+    try {
+      const config = core.runConfig.get(e.projectPath).find((c) => c.id === e.configId)
+      const r = await resultOfRun({ status: e, config, cwd: core.run.cwdOf(e.runId) ?? e.projectPath, read: readTestReport })
+      if (!r) return
+      await testResults.record(r)
+      problemsPing.touch()
+      send('tests:changed', e.projectPath)
+    } catch (err) {
+      console.error(`test result of run ${e.runId} not kept: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  ipcMain.handle('tests.list', async (_e, project: string) => {
+    await assertAllowedPath(project)
+    return testResults.load(project, new Set(core.runConfig.get(project).map((c) => c.id)))
+  })
   const pushOrchState = (state: OrchState): void => {
     orchPushes.push(state)
     problemsPing.onState(state)
@@ -2001,6 +2022,8 @@ export function registerIpc(
     runBatcher.flush()
     if (e.status === 'exited') runEnds.delete(e.runId)
     send('run:status', e)
+    // A person's run of a configuration with a test report leaves its result (Phase 3 Part 2)
+    if (e.status === 'exited' && e.validation !== true) void recordTestRun(e)
     // A validation run's exit comes through this one channel too — RunManager has one onStatus.
     // Every other run's exit flows in as well; TaskValidator ignores a runId that is not a queue head.
     if (e.status === 'exited') orchValidator?.onRunExit({ runId: e.runId, exitCode: e.exitCode ?? 1 })

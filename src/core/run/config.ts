@@ -39,6 +39,9 @@ export interface RunStatus {
    *  a validation is not a failure but a gate (TaskValidator.markStopped). The stop button stays; a
    *  runaway validation must be stoppable. Absent, not false, on every other run. */
   validation?: true
+  /** On the exit of a run stopped by request (RunManager.stop): an exit code cannot say so (posix reports a signalled
+   *  child as 0), and a stopped run's test report is no result (Phase 3 Part 2). Absent on every other exit. */
+  stopped?: true
 }
 
 export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'

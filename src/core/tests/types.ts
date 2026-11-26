@@ -4,26 +4,7 @@
 import { createHash } from 'node:crypto'
 import { isUnder, relativeTo } from '../context/contextRef'
 
-export type TestStatus = 'passed' | 'failed' | 'skipped' | 'errored'
-
-/** One test case. `id` is stable across runs (its file, suites and name); a file is relative to the run's folder with
- *  `/`; a failure's place only when it is inside that folder. */
-export interface TestCase {
-  id: string
-  file?: string
-  suite: string[]
-  name: string
-  status: TestStatus
-  durationMs?: number
-  failure?: { message: string; file?: string; line?: number }
-}
-
-/** A report read: which framework wrote it when the report says, its cases, and whether some were left out. */
-export interface ParsedReport {
-  framework?: 'vitest' | 'pytest' | 'junit'
-  cases: TestCase[]
-  truncated?: true
-}
+export type { ParsedReport, TestCase, TestStatus } from './model'
 
 /** How much of a report is read: one file, a folder of them, the cases kept, a failure message's length. */
 export const TEST_BOUNDS = {

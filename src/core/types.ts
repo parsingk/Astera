@@ -1,3 +1,4 @@
+import type { TestRunResult } from './tests/model'
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type {
   KubeContexts,
@@ -1072,6 +1073,8 @@ export interface CoreEvents {
   'understanding:changed': string
   /** The project's problems may differ: ask problems.list again (main/problems.ts createProblemsPing). */
   'problems:changed': null
+  /** A project's test results changed (Phase 3 Part 2): the project path */
+  'tests:changed': string
   /** The open-task section's redraw trigger. **Not folded**, unlike 'understanding:changed' above —
    *  workUnits.json (what this section reads) is keyed by the raw session cwd, a different key space
    *  from understanding.json's origin-repo fold (ipc.ts's sessionTasks.* handlers explain why). The
@@ -1702,6 +1705,10 @@ export interface CoreApi {
    *  marked stale when it changed since or is gone (main/problems.ts). `projectPath` must pass the files path guard. */
   problems: {
     list(projectPath: string): Promise<Diagnostic[]>
+  }
+  /** The last test result of each configuration of a project (Phase 3 Part 2, main/testResults.ts) */
+  tests: {
+    list(projectPath: string): Promise<TestRunResult[]>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only
