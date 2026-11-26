@@ -1,7 +1,7 @@
 // A JUnit XML report as one result (Phase 3 Part 2). Vitest, pytest, Gradle, Maven Surefire and others write this
 // format. It is read by a forward-only scan of the subset a report uses (elements, attributes, text, CDATA, the five
 // named and numeric references): no library, and no DTD is processed, so a report's entities expand to nothing.
-import { TEST_BOUNDS, caseId, cutMessage, failurePlace, insideRun, type ParsedReport, type TestCase, type TestStatus } from './types'
+import { TEST_BOUNDS, caseId, cutMessage, failurePlace, insideRun, uniqueIds, type ParsedReport, type TestCase, type TestStatus } from './types'
 
 const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
 
@@ -43,11 +43,47 @@ function declarationEnd(xml: string, from: number): number {
   return -1
 }
 
+const SPACE = /\s/
+const NAME_END = /[\s=/>]/
+
+/** A tag's `name="value"` pairs, read in one pass whatever the tag holds (final review I2: a regex was quadratic on a
+ *  long body without `=`). */
 function attributes(body: string): Record<string, string> {
   const out: Record<string, string> = {}
-  const re = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
-  for (let m = re.exec(body); m !== null; m = re.exec(body)) out[m[1]] = decode(m[2] ?? m[3] ?? '')
+  const n = body.length
+  let i = 0
+  while (i < n && !SPACE.test(body[i])) i++
+  while (i < n) {
+    const from = i
+    while (i < n && SPACE.test(body[i])) i++
+    const start = i
+    while (i < n && !NAME_END.test(body[i])) i++
+    const key = body.slice(start, i)
+    while (i < n && SPACE.test(body[i])) i++
+    if (key !== '' && body[i] === '=') {
+      i++
+      while (i < n && SPACE.test(body[i])) i++
+      const quote = body[i]
+      if (quote === '"' || quote === "'") {
+        const close = body.indexOf(quote, i + 1)
+        if (close < 0) break
+        out[key] = decode(body.slice(i + 1, close))
+        i = close + 1
+      }
+    }
+    if (i === from) i++
+  }
   return out
+}
+
+/** pytest's module file from a case's class (`tests.test_calc`, `tests.test_calc.TestCls`): the segments before the
+ *  first in CapWords (a class), as a `.py` path. pytest writes them relative to its root, the run's folder. */
+function pytestModuleFile(dotted: string): string | undefined {
+  const segs = dotted.split('.')
+  const firstClass = segs.findIndex((x) => /^[A-Z]/.test(x))
+  const mod = firstClass < 0 ? segs : segs.slice(0, firstClass)
+  if (mod.length === 0 || mod.some((x) => x === '' || /[\s/\\[\]]/.test(x))) return undefined
+  return `${mod.join('/')}.py`
 }
 
 interface Open {
@@ -62,7 +98,10 @@ interface Open {
 }
 
 /** A report's cases, or null when the text is not a JUnit report (its first element is neither `testsuites` nor
- *  `testsuite`). `cwd` is the run's folder: files and places are made relative to it, and dropped outside it. */
+ *  `testsuite`) or ends before its root closes (cut short while written: final review I4). `cwd` is the run's folder:
+ *  files and places are made relative to it, and dropped outside it. A case's file comes from the report's own words for
+ *  it (a `file` attribute, Vitest's class, pytest's module), never from where its failure was raised, so a case keeps
+ *  its id whether it fails or passes (final review C3). */
 export function parseJunit(xml: string, cwd: string): ParsedReport | null {
   let framework: ParsedReport['framework']
   let root: string | null = null
@@ -71,6 +110,7 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
   let truncated = false
   let open: Open | null = null
   let capturing = false
+  let rootClosed = false
 
   const finish = (o: Open): void => {
     if (cases.length >= TEST_BOUNDS.cases) {
@@ -83,7 +123,15 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
     let suite: string[]
     let name = o.name
     let file = o.file !== undefined ? insideRun(cwd, o.file) : undefined
-    if (fw === 'vitest') {
+    let fileLevel = false
+    if (fw === 'pytest' && (o.classname ?? '') === '') {
+      // A module pytest could not collect: no class, and the module's dotted path as the name
+      const mod = pytestModuleFile(o.name)
+      file ??= mod !== undefined ? insideRun(cwd, mod) : undefined
+      name = file ?? o.name
+      suite = []
+      fileLevel = failed
+    } else if (fw === 'vitest') {
       // Vitest writes the describe blocks into the name and the file as the class
       const parts = o.name.split(' > ')
       name = parts[parts.length - 1]
@@ -91,9 +139,12 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
       file ??= o.classname !== undefined ? insideRun(cwd, o.classname) : undefined
     } else {
       suite = o.classname !== undefined && o.classname !== '' ? [o.classname] : suites.length > 0 ? [suites[suites.length - 1]] : []
+      // pytest's default family writes no file on a case: its class names the module
+      if (fw === 'pytest' && o.classname !== undefined) {
+        const mod = pytestModuleFile(o.classname)
+        file ??= mod !== undefined ? insideRun(cwd, mod) : undefined
+      }
     }
-    // pytest's default family writes no file on a case; its failure names it
-    file ??= place?.file
     // pytest counts a case's line from 0
     const caseLine = o.line !== undefined ? (fw === 'pytest' ? o.line + 1 : o.line) : undefined
     const at = place ?? (file !== undefined && caseLine !== undefined ? { file, line: caseLine } : undefined)
@@ -105,7 +156,8 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
       name,
       status: o.status,
       ...(o.time !== undefined ? { durationMs: Math.round(o.time * 1000) } : {}),
-      ...(failed ? { failure: { message: cutMessage(words), ...(at ?? {}) } } : {})
+      ...(failed ? { failure: { message: cutMessage(words), ...(at ?? {}) } } : {}),
+      ...(fileLevel ? { fileLevel: true as const } : {})
     })
   }
 
@@ -145,8 +197,11 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
     i = end + 1
     if (body.startsWith('/')) {
       const name = body.slice(1).trim()
-      if (name === 'testsuite') suites.pop()
-      else if ((name === 'failure' || name === 'error') && open) capturing = false
+      if (name === 'testsuite') {
+        suites.pop()
+        if (root === 'testsuite' && suites.length === 0) rootClosed = true
+      } else if (name === 'testsuites' && root === 'testsuites') rootClosed = true
+      if ((name === 'failure' || name === 'error') && open) capturing = false
       else if (name === 'testcase' && open) {
         finish(open)
         open = null
@@ -165,7 +220,8 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
       const said = attrs.name ?? ''
       if (/vitest/i.test(said)) framework = 'vitest'
       else if (/pytest/i.test(said)) framework = 'pytest'
-    }
+    } else if (name === 'testsuite' && framework === undefined && attrs.name === 'pytest') framework = 'pytest' // a root without a name, pytest before 7
+    if (name === 'testsuite' && selfClosing && root === 'testsuite' && suites.length === 0) rootClosed = true
     if (name === 'testsuite' && !selfClosing) suites.push(attrs.name ?? '')
     else if (name === 'testcase') {
       const time = attrs.time !== undefined ? Number.parseFloat(attrs.time) : NaN
@@ -187,6 +243,6 @@ export function parseJunit(xml: string, cwd: string): ParsedReport | null {
       capturing = !selfClosing
     } else if (open && name === 'skipped' && open.status === 'passed') open.status = 'skipped'
   }
-  if (root === null) return null
-  return { framework: framework ?? 'junit', cases, ...(truncated ? { truncated: true as const } : {}) }
+  if (root === null || (!rootClosed && !truncated)) return null
+  return { framework: framework ?? 'junit', cases: uniqueIds(cases), ...(truncated ? { truncated: true as const } : {}) }
 }

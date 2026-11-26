@@ -24,6 +24,37 @@ describe('parseVitestJson', () => {
     expect(r!.cases[3].failure).toMatchObject({ file: 'src/math.test.ts', line: 16 })
   })
 
+  // Final review C2: Vitest 4.1's JsonReporter writes a file that failed to load, or whose beforeAll threw, as a failed
+  // entry with its error in `message` and no failed assertion; that file is a failure, never a pass
+  it('reads a file that failed outside its tests as one errored case of that file', () => {
+    const report = {
+      success: false,
+      testResults: [
+        { name: '/work/proj/src/ok.test.ts', status: 'passed', message: '', assertionResults: [{ ancestorTitles: [], title: 'works', status: 'passed', failureMessages: [] }] },
+        { name: '/work/proj/src/broken.test.ts', status: 'failed', message: 'Failed to load url ./gone', assertionResults: [] },
+        { name: '/work/proj/src/hook.test.ts', status: 'failed', message: '', assertionResults: [{ ancestorTitles: ['db'], title: 'reads', status: 'skipped', failureMessages: [] }] },
+        { name: '/work/proj/src/real.test.ts', status: 'failed', message: '', assertionResults: [{ ancestorTitles: [], title: 'fails', status: 'failed', failureMessages: ['boom'] }] }
+      ]
+    }
+    const r = parseVitestJson(JSON.stringify(report), CWD)!
+    expect(r.cases.map((c) => [c.file, c.suite, c.name, c.status, c.fileLevel ?? false])).toEqual([
+      ['src/ok.test.ts', [], 'works', 'passed', false],
+      ['src/broken.test.ts', [], 'src/broken.test.ts', 'errored', true],
+      ['src/hook.test.ts', ['db'], 'reads', 'skipped', false],
+      ['src/hook.test.ts', [], 'src/hook.test.ts', 'errored', true],
+      ['src/real.test.ts', [], 'fails', 'failed', false]
+    ])
+    expect(r.cases[1].failure?.message).toBe('Failed to load url ./gone')
+    expect(r.cases[3].failure?.message).toBe('')
+  })
+
+  // Final review M12
+  it('gives two tests of the same name in one file two ids', () => {
+    const same = { ancestorTitles: ['math'], title: 'adds', status: 'passed', failureMessages: [] }
+    const r = parseVitestJson(JSON.stringify({ testResults: [{ name: '/work/proj/src/a.test.ts', status: 'passed', message: '', assertionResults: [same, same] }] }), CWD)!
+    expect(new Set(r.cases.map((c) => c.id)).size).toBe(2)
+  })
+
   it('gives the same case the same id as the JUnit report of the same run', () => {
     const json = parseVitestJson(fixture('vitest.json'), CWD)!.cases.map((c) => c.id)
     const xml = parseJunit(fixture('vitest-junit.xml'), CWD)!.cases.map((c) => c.id)

@@ -14,7 +14,14 @@ export interface TestCase {
   status: TestStatus
   durationMs?: number
   failure?: { message: string; file?: string; line?: number }
+  /** A failure of the file outside its tests (it failed to load, or a hook threw): named by its file, rerun by its file,
+   *  never by a name filter. */
+  fileLevel?: true
 }
+
+/** How far a rerun of a configuration's failures narrowed (core/tests/rerun.ts), and why it narrowed less. */
+export type RerunScope = 'failures' | 'files' | 'all'
+export type RerunWhy = 'not-narrowable' | 'package-manager' | 'unsafe-names' | 'file-level' | 'too-long'
 
 /** A report read: which framework wrote it when the report says, its cases, and whether some were left out. */
 export interface ParsedReport {

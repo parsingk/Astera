@@ -51,6 +51,69 @@ describe('parseJunit', () => {
     expect(x1?.cases[1].failure).toMatchObject({ file: 'tests/test_calc.py', line: 9 })
   })
 
+  // Final review C3 and I7: pytest's default family (xunit2) writes no file on a case, so the file comes from the case's
+  // own class (`tests.test_calc[.TestCls]`), never from where its failure was raised
+  it('gives a pytest case one id and its module’s file whether it fails or passes', () => {
+    const failing = parseJunit(fixture('pytest.xml'), CWD)!.cases
+    expect(failing.map((c) => c.file)).toEqual(Array(6).fill('tests/test_calc.py'))
+    const passing = parseJunit(fixture('pytest.xml').replace(/<failure message="assert \(10 \/ 4\) == 2">[\s\S]*?<\/failure>/, ''), CWD)!.cases
+    expect(passing[1]).toMatchObject({ name: 'test_divides', status: 'passed' })
+    expect(passing[1].id).toBe(failing[1].id)
+  })
+
+  it('reads a pytest module at the folder’s root and a test class as their module’s file, and keeps a conftest place for the failure only', () => {
+    const xml = `<testsuites name="pytest tests"><testsuite name="pytest">
+      <testcase classname="test_app" name="test_root" time="0.001"><failure message="no">test_app.py:9: AssertionError</failure></testcase>
+      <testcase classname="tests.test_calc.TestSame" name="test_in_class" time="0.001" />
+      <testcase classname="tests.test_db" name="test_uses_db" time="0.001"><error message="failed on setup">tests\\conftest.py:5: RuntimeError</error></testcase>
+    </testsuite></testsuites>`
+    const [root, inClass, setup] = parseJunit(xml, CWD)!.cases
+    expect(root).toMatchObject({ file: 'test_app.py', suite: ['test_app'] })
+    expect(inClass).toMatchObject({ file: 'tests/test_calc.py', suite: ['tests.test_calc.TestSame'] })
+    expect(setup).toMatchObject({ file: 'tests/test_db.py', failure: { file: 'tests/conftest.py', line: 5 } })
+    // A report pytest wrote before its root had a name says so on its suite
+    expect(parseJunit('<testsuites><testsuite name="pytest"><testcase classname="test_app" name="t" /></testsuite></testsuites>', CWD)).toMatchObject({ framework: 'pytest', cases: [{ file: 'test_app.py' }] })
+  })
+
+  it('reads a pytest collection error as one errored case of that module, named by its file', () => {
+    const xml = '<testsuites name="pytest tests"><testsuite name="pytest"><testcase classname="" name="tests.test_broken" time="0.000"><error message="collection failure">ImportError while importing test module</error></testcase></testsuite></testsuites>'
+    expect(parseJunit(xml, CWD)!.cases).toEqual([
+      expect.objectContaining({ file: 'tests/test_broken.py', suite: [], name: 'tests/test_broken.py', status: 'errored', fileLevel: true })
+    ])
+  })
+
+  it('never takes another framework’s case file from where its failure was raised', () => {
+    const xml = '<testsuite name="s"><testcase classname="CalcTest" name="t"><failure>at src/calc.test.js:4</failure></testcase><testcase classname="CalcTest" name="u" /></testsuite>'
+    const [failed, passed] = parseJunit(xml, CWD)!.cases
+    expect(failed.file).toBeUndefined()
+    expect(failed.failure).toMatchObject({ file: 'src/calc.test.js', line: 4 })
+    expect(passed.file).toBeUndefined()
+  })
+
+  // Final review I4: disk full, or a crash while the report is written
+  it('reads a report cut short before its root closes as no report', () => {
+    const cut = '<testsuites name="vitest tests"><testsuite name="src/a.test.ts"><testcase classname="src/a.test.ts" name="one" time="0"/><testcase classname="src/a.test.ts" name="two" time="0"><failure message="boom">AssertionError'
+    expect(parseJunit(cut, CWD)).toBeNull()
+    expect(parseJunit('<testsuite name="s"><testcase name="t" />', CWD)).toBeNull()
+    expect(parseJunit('<testsuite name="s"><testsuite name="inner"><testcase name="t" /></testsuite>', CWD)).toBeNull()
+    expect(parseJunit('<testsuite name="s" tests="0"/>', CWD)).toEqual({ framework: 'junit', cases: [] })
+  })
+
+  // Final review I2: attributes are read in one pass, whatever a tag holds
+  it('stays fast on a tag with a long body and no attribute', () => {
+    const started = Date.now()
+    parseJunit(`<testsuite name="s"><testcase ${'a'.repeat(200_000)} name="t" /></testsuite>`, CWD)
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
+  // Final review M12
+  it('gives two cases of the same name in one suite two ids, the same in the next run', () => {
+    const xml = '<testsuite name="s"><testcase classname="c" name="t" /><testcase classname="c" name="t"><failure>x</failure></testcase></testsuite>'
+    const a = parseJunit(xml, CWD)!.cases.map((c) => c.id)
+    expect(new Set(a).size).toBe(2)
+    expect(parseJunit(xml, CWD)!.cases.map((c) => c.id)).toEqual(a)
+  })
+
   it('reads a Surefire report’s errors as errored and skipped as skipped', () => {
     const r = parseJunit(fixture('surefire.xml'), CWD)
     expect(r?.framework).toBe('junit')

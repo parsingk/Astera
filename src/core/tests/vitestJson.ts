@@ -1,6 +1,8 @@
 // A Vitest `--reporter=json` report as one result (Phase 3 Part 2). The Jest-shaped JSON Vitest writes: a file per
-// `testResults` entry, its cases in `assertionResults`.
-import { TEST_BOUNDS, caseId, cutMessage, failurePlace, insideRun, type ParsedReport, type TestCase, type TestStatus } from './types'
+// `testResults` entry, its cases in `assertionResults`. A file that failed outside its tests (Vitest 4.1's JsonReporter
+// writes a load error or a throwing hook as the entry's `failed` status and `message`, with no failed assertion) gets one
+// errored case named by its file, the case Vitest's JUnit reporter writes for it.
+import { TEST_BOUNDS, caseId, cutMessage, failurePlace, insideRun, uniqueIds, type ParsedReport, type TestCase, type TestStatus } from './types'
 
 const STATUS: Record<string, TestStatus> = { passed: 'passed', failed: 'failed', skipped: 'skipped', pending: 'skipped', todo: 'skipped', disabled: 'skipped' }
 
@@ -24,6 +26,7 @@ export function parseVitestJson(json: string, cwd: string): ParsedReport | null 
     const named = (tr as { name?: unknown }).name
     const file = typeof named === 'string' ? insideRun(cwd, named) : undefined
     const list = (tr as { assertionResults?: unknown }).assertionResults
+    let failedHere = false
     for (const a of Array.isArray(list) ? list : []) {
       if (a === null || typeof a !== 'object') continue
       if (cases.length >= TEST_BOUNDS.cases) {
@@ -35,6 +38,7 @@ export function parseVitestJson(json: string, cwd: string): ParsedReport | null 
       const name = typeof r.title === 'string' ? r.title : ''
       const status = STATUS[typeof r.status === 'string' ? r.status : ''] ?? 'skipped'
       const failed = status === 'failed'
+      failedHere ||= failed
       const message = strings(r.failureMessages).join('\n')
       const line = typeof r.location?.line === 'number' ? r.location.line : undefined
       const at = failed ? (failurePlace(cwd, message) ?? (file !== undefined && line !== undefined ? { file, line } : undefined)) : undefined
@@ -48,6 +52,25 @@ export function parseVitestJson(json: string, cwd: string): ParsedReport | null 
         ...(failed ? { failure: { message: cutMessage(message), ...(at ?? {}) } } : {})
       })
     }
+    if ((tr as { status?: unknown }).status === 'failed' && !failedHere) {
+      if (cases.length >= TEST_BOUNDS.cases) {
+        truncated = true
+        break
+      }
+      const said = (tr as { message?: unknown }).message
+      const message = typeof said === 'string' ? said : ''
+      const name = file ?? (typeof named === 'string' ? named : '')
+      const at = failurePlace(cwd, message)
+      cases.push({
+        id: caseId(file, [], name),
+        ...(file !== undefined ? { file } : {}),
+        suite: [],
+        name,
+        status: 'errored',
+        failure: { message: cutMessage(message), ...(at ?? {}) },
+        fileLevel: true
+      })
+    }
   }
-  return { framework: 'vitest', cases, ...(truncated ? { truncated: true as const } : {}) }
+  return { framework: 'vitest', cases: uniqueIds(cases), ...(truncated ? { truncated: true as const } : {}) }
 }
