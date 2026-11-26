@@ -235,8 +235,17 @@ describe('공개 표면 — 두 낱말 명령', () => {
   // 플래그가 동사 자리에 오면 동사를 안 준 것이다 — `--json` 을 동사로 읽으면 엉뚱한 오류가 난다
   it('플래그를 동사로 읽지 않는다', () => {
     expect(parseArgs(['tasks', '--json'])).toEqual({
-      error: 'tasks needs one of: list, add, dispatch'
+      error: 'tasks needs one of: list, add, dispatch, repair'
     })
+  })
+
+  // Phase 3 Part 1: a person's repair request, findings named one flag each
+  it('reads tasks repair with its task, each finding named, and a dry run', () => {
+    expect(parseArgs(['tasks', 'repair', '--task', 't1', '--finding', 'check:t1:aaaaaaaaaaaa', '--finding', 'review:t1:bbbbbbbbbbbb', '--dry-run'])).toMatchObject({
+      cmd: 'tasks-repair',
+      args: { task: 't1', finding: ['check:t1:aaaaaaaaaaaa', 'review:t1:bbbbbbbbbbbb'], dryRun: true }
+    })
+    expect(parseArgs(['tasks', 'repair', '--task', 't1'])).toMatchObject({ cmd: 'tasks-repair', args: { task: 't1' } })
   })
 
   it('phase C 의 세 동사', () => {

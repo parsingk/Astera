@@ -1,5 +1,5 @@
 import type { OrchState } from '../orchestration/state'
-import type { CheckResult, ReviewSeverity } from '../orchestration/types'
+import type { AskedFinding, CheckResult, ReviewSeverity, Task } from '../orchestration/types'
 import type { Diagnostic, DiagnosticSeverity } from './diagnostic'
 import { findingRef } from './findingRef'
 
@@ -148,4 +148,35 @@ export function problemsKeyOf(state: OrchState): string {
     })
     .join(';')
   return `${runs}|${tasks}`
+}
+
+/**
+ * A Task's findings as a repair request names them (Phase 3 Part 1, `tasks-repair`): each Problems row of the Task, in
+ * the rows' order, with its reference (the same call completionProblemsOf makes for the row) and its words as one line,
+ * `severity place who: words`, the way the app's preview writes them. What the Host fills a reference's words from when
+ * the CLI names only the reference. A check's uncounted findings have no words of their own and are left out.
+ */
+export function taskFindings(task: Task): AskedFinding[] {
+  const out: AskedFinding[] = []
+  const place = (file: string | undefined, line: number | undefined): string => (file !== undefined ? `${file}${line !== undefined ? `:${line}` : ''} ` : '')
+  for (const c of task.checks ?? []) {
+    const findings = c.diagnostics ?? []
+    for (const dg of findings)
+      out.push({
+        ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, message: dg.message }),
+        text: `${checkSeverity(c, dg.severity)} ${place(dg.file, dg.line)}${c.name}: ${dg.message}`
+      })
+    if (findings.length === 0 && failed(c)) {
+      const said = c.summary !== undefined && c.summary.trim() !== '' && c.summary !== c.status ? c.summary.trim() : lastLine(c.outputTail)
+      out.push({ ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, message: '' }), text: `error ${c.name}: ${said ?? 'the check failed'}` })
+    }
+  }
+  for (const issue of task.reviewIssues ?? []) {
+    if (issue.file === undefined) continue
+    out.push({
+      ref: findingRef({ kind: 'review', taskId: task.id, file: issue.file, message: issue.title }),
+      text: `${REVIEW_SEVERITY[issue.severity] ?? 'warning'} ${place(issue.file, issue.line)}Review: ${issue.title}`
+    })
+  }
+  return out
 }

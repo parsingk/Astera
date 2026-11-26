@@ -207,6 +207,7 @@ const LISTING: Record<string, readonly string[]> = {
   // 못 찾는 것은 `--job` 의 계획이다. 명사 규칙은 첫 대시에서 잘라 `run` 을 명사로 읽는다.
   'run-configs-list': ['astera jobs list'],
   'task-update': ['astera tasks list'],
+  'tasks-repair': ['astera tasks list'],
   // **못 찾는 것은 `--account` 의 계정뿐이다.** 명사 규칙은 `skills list` 를 줄 텐데, 같은
   // `--account` 를 준 그 줄은 같은 404 다.
   'skills-list': ['astera accounts list'],

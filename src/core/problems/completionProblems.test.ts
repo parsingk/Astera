@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { OrchState } from '../orchestration/state'
-import { completionProblemsOf, problemsKeyOf } from './completionProblems'
+import { completionProblemsOf, problemsKeyOf, taskFindings } from './completionProblems'
 import { findingRef } from './findingRef'
 
 const job = (id: string, cwd: string) => ({ id, objective: id, cwd })
@@ -100,6 +100,19 @@ describe('completionProblemsOf', () => {
     expect(completionProblemsOf(next, PROJECT_RUNS).find((p) => p.id === 'review:t1:rvw_new')?.ref).toBe(byId['review:t1:i1'])
     // Every row of a Task carries one, the rows without a file and the uncounted ones too
     expect(rows.filter((p) => p.origin !== undefined).every((p) => typeof p.ref === 'string')).toBe(true)
+  })
+
+  // Phase 3 Part 1: what `tasks-repair` fills a reference's words from when the CLI names only the reference
+  it('lists each of a Task’s findings with its reference and its words, the references the rows carry', () => {
+    const s = state()
+    const t1 = s.tasks.find((t) => t.id === 't1')!
+    const listed = taskFindings(t1)
+    const rowRefs = completionProblemsOf(s, PROJECT_RUNS)
+      .filter((p) => p.origin?.taskId === 't1' && p.unlisted === undefined)
+      .map((p) => p.ref)
+    expect(listed.map((f) => f.ref)).toEqual(rowRefs)
+    expect(listed[0]).toEqual({ ref: rowRefs[0], text: 'error src/a.ts:3 Lint: missing import' })
+    expect(listed.find((f) => f.ref.startsWith('review:'))?.text).toBe('error src/a.ts:20 Review: off by one')
   })
 
   it('turns review issues that name a file into problems, by severity, timed by the last review', () => {
