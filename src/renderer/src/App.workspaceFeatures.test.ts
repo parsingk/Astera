@@ -60,7 +60,7 @@ describe('the Problems tab off (Phase 1 gate)', () => {
   it('draws the tab only on an explicit on, and asks main for problems only then', () => {
     expect(app).toMatch(/problemsEnabled=\{problemsOn\}/)
     // Final review I1: the shown tab falls back to Run while the Problems tab is off, whoever asked for it
-    expect(app).toMatch(/shownBottomTab\(\{\s*wanted: bottomTab,\s*runAvailable,\s*kubeAvailable,\s*problemsAvailable: workspaceFeatures\?\.problemsTab === true,\s*terminalIds: terminals\.map\(\(x\) => x\.id\)\s*\}\)/)
+    expect(app).toMatch(/shownBottomTab\(\{\s*wanted: bottomTab,\s*runAvailable,\s*kubeAvailable,\s*problemsAvailable: workspaceFeatures\?\.problemsTab === true,\s*testsAvailable: workspaceFeatures\?\.testsTab === true,\s*terminalIds: terminals\.map\(\(x\) => x\.id\)\s*\}\)/)
     expect(app).toMatch(/const problemsOn = workspaceFeatures\?\.problemsTab === true/)
     expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(!problemsOn\) return\s*if \(!currentProject\) \{\s*setProblems\(\[\]\)/)
   })
@@ -68,6 +68,14 @@ describe('the Problems tab off (Phase 1 gate)', () => {
   // A bottom panel saved on the Problems tab opens on Run while the tab is off
   it('moves the bottom panel off the Problems tab while it is off', () => {
     expect(app).toMatch(/if \(workspaceFeatures\?\.problemsTab === false\) setBottomTab\(\(cur\) => \(cur === 'problems' \? 'run' : cur\)\)\s*\}, \[workspaceFeatures\?\.problemsTab\]\)/)
+  })
+
+  // Phase 3 Part 2: the Tests tab follows the Problems tab's rules
+  it('asks main for test results only while the Tests tab is on, and moves the bottom panel off it while it is off', () => {
+    expect(app).toMatch(/testsEnabled=\{testsOn\}/)
+    expect(app).toMatch(/const testsOn = workspaceFeatures\?\.testsTab === true/)
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(!testsOn\) return\s*if \(!currentProject\) \{\s*setTestResults\(\[\]\)/)
+    expect(app).toMatch(/if \(workspaceFeatures\?\.testsTab === false\) setBottomTab\(\(cur\) => \(cur === 'tests' \? 'run' : cur\)\)\s*\}, \[workspaceFeatures\?\.testsTab\]\)/)
   })
 
   // Blocked as turned off: its key goes on to the focused element (keyRouting.ts) and the palette leaves it out

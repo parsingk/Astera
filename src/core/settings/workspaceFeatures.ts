@@ -3,7 +3,8 @@
 // and sending a piece of the workbench to an agent. The palette, go to file and find in files open only by their keys,
 // and a key is taken away in the shortcut settings. Phase 3 Part 2 adds the Tests tab.
 //
-// All three default on: they passed their reviews and screen checks (spec 9.3). They move together as one stored
+// All four default on: the Phase 1 three passed their reviews and screen checks (spec 9.3), and the Tests tab follows
+// them. They move together as one stored
 // object, the convention core/notify/settings.ts follows, so one place knows what a missing file means.
 //
 // node: no imports — the settings screen (renderer) and the settings store (main) both read this.
