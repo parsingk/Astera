@@ -112,6 +112,30 @@ describe('saveConfigsBatch', () => {
     expect(s.save).not.toHaveBeenCalled()
   })
 
+  // Phase 3 Part 2: a test report is read from inside the run's folder only
+  it('refuses a test report path that is absolute or climbs out with ..', async () => {
+    const s = store()
+    const out = await saveConfigsBatch({
+      projectPath: '/p',
+      configs: [
+        { ...dev, testReport: { format: 'junit-xml', path: '/tmp/r.xml' } },
+        { ...build, testReport: { format: 'vitest-json', path: '../r.json' } },
+        { ...dev, id: 'user:9', testReport: { format: 'junit-xml', path: 'reports/junit.xml' } }
+      ],
+      platform: 'linux',
+      assertConfigCwd: cwdOk,
+      store: s
+    })
+    expect(out).toEqual({
+      ok: false,
+      errors: [
+        { id: 'user:1', reason: 'INVALID_TEST_REPORT' },
+        { id: 'user:2', reason: 'INVALID_TEST_REPORT' }
+      ]
+    })
+    expect(s.save).not.toHaveBeenCalled()
+  })
+
   it('accepts http and https previewUrls, and on win32 does not read a URL as a command value', async () => {
     const s = store()
     const configs = [

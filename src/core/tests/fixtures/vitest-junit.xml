@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="4" failures="2" errors="0" time="0.0071224">
+    <testsuite name="src/math.test.ts" timestamp="2026-11-26T06:55:59.337Z" hostname="host" tests="4" failures="2" errors="0" skipped="1" time="0.0071224">
+        <testcase classname="src/math.test.ts" name="math &gt; adds" time="0.0010102">
+        </testcase>
+        <testcase classname="src/math.test.ts" name="math &gt; nested &gt; subtracts wrongly" time="0.0037148">
+            <failure message="expected 2 to be 3 // Object.is equality" type="AssertionError">
+AssertionError: expected 2 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 2
+
+ ❯ src/math.test.ts:9:21
+            </failure>
+        </testcase>
+        <testcase classname="src/math.test.ts" name="math &gt; later" time="0">
+            <skipped/>
+        </testcase>
+        <testcase classname="src/math.test.ts" name="top level &amp; &lt;special&gt; &quot;name&quot;" time="0.0014108">
+            <failure message="expected [ 1, 2 ] to deeply equal [ 1, 3 ]" type="AssertionError">
+AssertionError: expected [ 1, 2 ] to deeply equal [ 1, 3 ]
+
+- Expected
++ Received
+
+  [
+    1,
+-   3,
++   2,
+  ]
+
+ ❯ src/math.test.ts:16:18
+            </failure>
+        </testcase>
+    </testsuite>
+</testsuites>

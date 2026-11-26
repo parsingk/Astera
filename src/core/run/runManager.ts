@@ -194,6 +194,7 @@ export class RunManager {
       live.status.status = 'exited'
       live.status.exitCode = exitCode
       live.status.exitedAt = Date.now()
+      if (live.killed) live.status.stopped = true
       this.onStatus?.({ ...live.status })
       settle()
     })

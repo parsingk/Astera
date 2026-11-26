@@ -13,9 +13,12 @@ export function shownBottomTab(s: {
   runAvailable: boolean
   kubeAvailable: boolean
   problemsAvailable: boolean
+  /** The Tests tab is turned on (Phase 3 Part 2); off, it falls back as the Problems tab does. */
+  testsAvailable: boolean
   terminalIds: readonly string[]
 }): string {
-  const wanted = (s.wanted === 'kube' && !s.kubeAvailable) || (s.wanted === 'problems' && !s.problemsAvailable) ? 'run' : s.wanted
+  const wanted =
+    (s.wanted === 'kube' && !s.kubeAvailable) || (s.wanted === 'problems' && !s.problemsAvailable) || (s.wanted === 'tests' && !s.testsAvailable) ? 'run' : s.wanted
   if (wanted === 'kube' || isLogTabId(wanted) || isShellTabId(wanted) || s.runAvailable) return wanted
   return s.terminalIds.find((id) => id === wanted) ?? s.terminalIds[0] ?? (s.kubeAvailable ? 'kube' : 'run')
 }

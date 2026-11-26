@@ -6,6 +6,8 @@ import { RunTabStrip } from './RunTabStrip'
 import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
 import { ProblemsPanel } from './ProblemsPanel'
+import { TestsPanel } from './TestsPanel'
+import type { TestRunResult } from '../../../core/tests/model'
 import { problemCounts, type Diagnostic } from '../../../core/problems/diagnostic'
 import { FileIcon } from './FileIcon'
 import { KubeLogPanel } from './kube/KubeLogPanel'
@@ -46,6 +48,10 @@ export function BottomPanel({
   onOpenProblem,
   problemActions,
   onRefreshProblems,
+  testsEnabled,
+  testResults,
+  onOpenTest,
+  onRerunTests,
   terminals,
   terminalCwd,
   activeTab,
@@ -109,6 +115,12 @@ export function BottomPanel({
   onRefreshProblems: () => void
   /** Sending chosen problems to an agent and fixing them (Phase 3 Part 1); absent with the bridge off. */
   problemActions?: React.ComponentProps<typeof ProblemsPanel>['actions']
+  /** The Tests tab (Phase 3 Part 2): turned on in Settings > General, the project's results (undefined while asked),
+   *  where a case opens, and a rerun of a configuration, whole or only its failures. */
+  testsEnabled: boolean
+  testResults: TestRunResult[] | undefined
+  onOpenTest: (path: string, line?: number) => void
+  onRerunTests: (configId: string, failuresOnly: boolean) => void
   terminals: TerminalBuffer[]
   /** The folder the terminals were opened in — a relative path link in one resolves against it */
   terminalCwd: string | null
@@ -177,6 +189,8 @@ export function BottomPanel({
   /** The Problems tab counts what needs a look: errors and warnings, not notes. */
   const problemTally = problemCounts(problems ?? [])
   const problemsShown = problemTally.error + problemTally.warning
+  /** Failing cases of this run's own results, for the Tests tab's badge: a stale or unread one counts none. */
+  const testsFailing = (testResults ?? []).reduce((n, r) => (r.stale || (r.outcome !== 'failed' && r.outcome !== 'passed') ? n : n + r.counts.failed + r.counts.errored), 0)
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
   // so it is a span and keyboard access is wired by hand. A key that bubbled up from the nested ✕ has
@@ -229,6 +243,21 @@ export function BottomPanel({
                   {problemsShown}
                 </span>
               )}
+            </span>
+          )}
+          {runAvailable && testsEnabled && (
+            // The project's tests (Phase 3 Part 2), beside its problems: both read its runs
+            <span
+              role="tab"
+              data-tab-id="tests"
+              aria-selected={activeTab === 'tests'}
+              tabIndex={0}
+              className={activeTab === 'tests' ? 'bottom-tab on' : 'bottom-tab'}
+              onClick={() => onSelectTab('tests')}
+              onKeyDown={tabKeyDown('tests')}
+            >
+              {t('tests.tab')}
+              {testsFailing > 0 && <span className="bottom-tab-badge">{testsFailing}</span>}
             </span>
           )}
           {kubeAvailable && (
@@ -422,6 +451,11 @@ export function BottomPanel({
               onRefresh={onRefreshProblems}
               actions={problemActions}
             />
+          </div>
+        )}
+        {runAvailable && testsEnabled && (
+          <div className="bottom-body tests-body" style={{ display: activeTab === 'tests' ? 'flex' : 'none' }}>
+            <TestsPanel results={testResults} onOpen={onOpenTest} onRerun={onRerunTests} />
           </div>
         )}
         {kubeAvailable && (

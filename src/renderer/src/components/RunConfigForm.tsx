@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Jdk, PythonInterpreter, RunConfig } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
 import { buildCommand } from '../../../core/run/build'
-import { availableOptionalFields } from '../../../core/run/types'
+import { availableOptionalFields, type TestReportSpec } from '../../../core/run/types'
 import type { PackageManager } from '../../../core/run/config'
 import { toRelativeCwd } from '../../../core/run/config'
 import type { MessageKey } from '../../../core/i18n'
@@ -138,6 +138,9 @@ export function RunConfigForm({
   const normalizeOnBlur = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
+    // A test report with no path is no test report (Phase 3 Part 2)
+    const report = next.testReport as { path?: string } | undefined
+    if (report !== undefined && (report.path ?? '').trim() === '') delete next.testReport
     const name = typeof next.name === 'string' ? next.name.trim() : ''
     if (name !== '') setLastGoodName(name)
     next.name = name === '' ? lastGoodName : name
@@ -676,6 +679,31 @@ export function RunConfigForm({
             onChange={(e) => update({ ...draft, previewUrl: e.target.value })}
             onBlur={normalizeOnBlur}
           />
+        </div>
+      )}
+      {draft.type !== 'compound' && visible('testReport') && (
+        <div className="field">
+          <label>{t('run.field.testReport')}</label>
+          <div className="row">
+            <Select
+              items={[
+                { value: 'junit-xml', label: 'JUnit XML' },
+                { value: 'vitest-json', label: 'Vitest JSON' }
+              ]}
+              value={draft.testReport?.format ?? 'junit-xml'}
+              onChange={(v) => update({ ...draft, testReport: { format: v as TestReportSpec['format'], path: draft.testReport?.path ?? '' } })}
+              ariaLabel={t('run.form.testReportFormat')}
+            />
+            <input
+              type="text"
+              aria-label={t('run.form.testReportPath')}
+              placeholder={t('run.form.testReportPath')}
+              value={draft.testReport?.path ?? ''}
+              onChange={(e) => update({ ...draft, testReport: { format: draft.testReport?.format ?? 'junit-xml', path: e.target.value } })}
+              onBlur={normalizeOnBlur}
+            />
+          </div>
+          <span className="check-note">{t('run.form.testReportHint')}</span>
         </div>
       )}
       {visible('cwd') && (

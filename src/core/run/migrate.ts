@@ -1,4 +1,4 @@
-import type { RunConfig, RunConfigType } from './types'
+import { TEST_REPORT_FORMATS, type RunConfig, type RunConfigType } from './types'
 
 const KNOWN: RunConfigType[] = [
   'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
@@ -65,6 +65,14 @@ export function missingRequiredFields(config: RunConfig): string[] {
  *  half-filled configuration disappears at the next start with nothing said. What refuses an
  *  incomplete configuration is run.start, by name (missingRequiredFields above) — the point where it
  *  would otherwise become a command with a hole in it. */
+/** A configuration's `testReport` as stored: a known format and a path string (Phase 3 Part 2). */
+const isTestReportSpec = (v: unknown): boolean =>
+  v !== null &&
+  typeof v === 'object' &&
+  !Array.isArray(v) &&
+  (TEST_REPORT_FORMATS as readonly unknown[]).includes((v as { format?: unknown }).format) &&
+  typeof (v as { path?: unknown }).path === 'string'
+
 export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boolean }): RunConfig[] {
   if (!Array.isArray(value)) return []
   const out: RunConfig[] = []
@@ -84,6 +92,7 @@ export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boo
     if (o.temporary !== undefined && typeof o.temporary !== 'boolean') continue
     if (!isStringArray(o.beforeLaunch)) continue
     if (o.previewUrl !== undefined && typeof o.previewUrl !== 'string') continue
+    if (o.testReport !== undefined && !isTestReportSpec(o.testReport)) continue
 
     if (o.type === undefined) {
       if (typeof o.command !== 'string') continue

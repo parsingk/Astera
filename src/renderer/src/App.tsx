@@ -42,6 +42,8 @@ import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
 import { diffLines } from './lib/diffLines'
 import type { Diagnostic } from '../../core/problems/diagnostic'
+import type { TestRunResult } from '../../core/tests/model'
+import { rerunNote } from './lib/testTree'
 import { FINDING_NOTE_MAX } from '../../core/orchestration/types'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -4071,6 +4073,7 @@ export default function App(): React.JSX.Element {
     runAvailable,
     kubeAvailable,
     problemsAvailable: workspaceFeatures?.problemsTab === true,
+    testsAvailable: workspaceFeatures?.testsTab === true,
     terminalIds: terminals.map((x) => x.id)
   })
   const windowShown = useDocumentShown()
@@ -4135,6 +4138,52 @@ export default function App(): React.JSX.Element {
       off()
     }
   }, [])
+
+  /** The explorer's project's test results (Phase 3 Part 2, main/testResults.ts): undefined while asked for. Asked again
+   *  when main says a run left a result (tests:changed) and when the switch or the project changes. */
+  const testsOn = workspaceFeatures?.testsTab === true
+  const [testResults, setTestResults] = useState<TestRunResult[] | undefined>(undefined)
+  const [testsAsk, setTestsAsk] = useState(0)
+  useEffect(() => {
+    setTestResults(undefined)
+  }, [currentProject])
+  useEffect(() => {
+    if (!testsOn) return
+    if (!currentProject) {
+      setTestResults([])
+      return
+    }
+    let cancelled = false
+    void window.api.tests.list(currentProject).then(
+      (list) => {
+        if (!cancelled) setTestResults(list)
+      },
+      () => {
+        if (!cancelled) setTestResults([])
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [testsOn, currentProject, testsAsk])
+  useEffect(() => window.api.on('tests:changed', () => setTestsAsk((n) => n + 1)), [])
+  // A bottom panel on the Tests tab when its switch goes off moves to Run, as the Problems tab's does
+  useEffect(() => {
+    if (workspaceFeatures?.testsTab === false) setBottomTab((cur) => (cur === 'tests' ? 'run' : cur))
+  }, [workspaceFeatures?.testsTab])
+  /** A configuration run again from the Tests tab: main works out how far it narrows, and the toast says when less. */
+  const rerunTests = (configId: string, failuresOnly: boolean): void => {
+    if (!currentProject) return
+    void window.api.tests
+      .rerun(currentProject, configId, failuresOnly)
+      .then(
+        (r) => {
+          const note = failuresOnly ? rerunNote(r.scope, r.why) : null
+          if (note !== null) toast.info(t(note))
+        },
+        (e: unknown) => toast.error(t('tests.rerunFailed', { error: e instanceof Error ? e.message : String(e) }))
+      )
+  }
 
   /** The rail's Kubernetes icon: opens the panel on the Kubernetes tab, or collapses it while that tab shows. */
   const kubeRail = (): void => {
@@ -6008,6 +6057,10 @@ export default function App(): React.JSX.Element {
                     onOpenProblem={(file, line, column) => openFile(file, line !== undefined ? { line, ...(column !== undefined ? { col: column } : {}) } : undefined)}
                     problemActions={contextOn ? { send: sendProblems, fix: fixProblems, dismiss: dismissProblems, undismiss: undismissProblems } : undefined}
                     onRefreshProblems={() => setProblemsAsk((n) => n + 1)}
+                    testsEnabled={testsOn}
+                    testResults={testResults}
+                    onOpenTest={(file, line) => openFile(file, line !== undefined ? { line } : undefined)}
+                    onRerunTests={rerunTests}
                     onSendRunLog={(runId) => {
                       // A run's log to an agent (spec W4): what its console holds, through the same preview as a selection
                       const run = runs.find((r) => r.runId === runId)

@@ -140,6 +140,35 @@ Choose the appropriate configuration kind when adding one: Shell, npm, Node.js, 
 cargo, go, Python, pytest, Docker Compose, Dockerfile, .NET, or Compound. Use its fields for that
 tool rather than manually assembling every command. Read the Run console for output and errors.
 
+### Test results
+
+Add **Test report** to a configuration that runs tests: the format (JUnit XML or Vitest JSON) and where the run writes
+it, relative to the configuration's working folder. A file or, for JUnit XML, a folder of `*.xml` files works:
+
+- Vitest: `--reporter=junit --outputFile=report.xml`, or `--reporter=json --outputFile=report.json` with Vitest JSON
+- pytest: `--junitxml=report.xml`
+- Gradle: `build/test-results/test`
+- Maven: `target/surefire-reports`
+
+After each run you start, the **Tests** tab of the bottom panel shows the result: counts, how long it took, and the
+cases by file and suite, failing first. Open a case to read its failure, or **Open** to go to its line. Failed tests
+also appear in the Problems tab, where you can send them to an agent or start a Job to fix them.
+
+**Run again** reruns the configuration. **Run failures again** runs only what failed and updates the result: pytest by
+the failing tests, and a configuration with a Vitest JSON report (Node.js, Shell, or an npm, pnpm or yarn script) by
+the failing files and test names. When it cannot narrow that far, it runs the failing files (a file that failed outside
+its tests, a test name a shell cannot pass safely, a pnpm script on Windows whose test names need escaping, or more
+failures than one command line holds) or the whole configuration (any other configuration or report, a pytest
+configuration that names a target, a Shell command that chains or pipes commands, a bun script, or more failing files
+than one command line holds), and the message says why.
+
+A report left by an earlier run, a run you stopped, and a report that cannot be read or was cut short are never shown as
+passed: the tab says what happened instead, and such results do not reach the Problems tab. On a drive that keeps file
+times in two second steps (FAT or exFAT, and some network shares), the report of a run that ends within a second or two
+can read as an earlier run's. A Job's check that runs the
+configuration lists its failures among the check's findings, so the repair sees exactly which tests failed. Turn the tab
+off in Settings › General › **Tests tab**.
+
 ## Isolate work and open a pull request
 
 1. In a git project with a commit and branch, enable **Start in a separate worktree** in

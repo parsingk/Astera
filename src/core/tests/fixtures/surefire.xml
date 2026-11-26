@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shaped after a Maven Surefire TEST-*.xml (written by hand: no Maven on the machine the fixtures were made on) -->
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="com.example.CalcTest" time="0.052" tests="3" errors="1" skipped="1" failures="0">
+  <properties>
+    <property name="java.version" value="21"/>
+  </properties>
+  <testcase name="adds" classname="com.example.CalcTest" time="0.004"/>
+  <testcase name="divides" classname="com.example.CalcTest" time="0.002">
+    <error message="/ by zero" type="java.lang.ArithmeticException"><![CDATA[java.lang.ArithmeticException: / by zero
+	at com.example.CalcTest.divides(CalcTest.java:20)
+]]></error>
+    <system-out><![CDATA[dividing <10> by 0]]></system-out>
+  </testcase>
+  <testcase name="later" classname="com.example.CalcTest" time="0">
+    <skipped message="not yet"/>
+  </testcase>
+</testsuite>

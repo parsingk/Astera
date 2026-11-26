@@ -338,6 +338,22 @@ describe('createTaskValidation — github:ci', () => {
 })
 
 describe('createTaskValidation', () => {
+  // Final review C1: an ordinary Task's check is the default path, and it reads the report too
+  it('a failed check of an unsandboxed Task lists its test report’s failures as diagnostics', async () => {
+    const unit = [
+      { id: 'unit', name: 'unit', type: 'shell', command: 'node -e "process.exit(1)"', testReport: { format: 'junit-xml', path: 'report.xml' } }
+    ] as unknown as RunConfig[]
+    const h = rig({ stored: unit, checks: ['unit'] })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    expect((await h.started()).validation).toBe(true)
+    fs.writeFileSync(
+      path.join(h.cwd, 'report.xml'),
+      '<testsuite name="s"><testcase classname="src/a.test.ts" file="src/a.test.ts" name="adds"><failure message="boom">boom</failure></testcase></testsuite>'
+    )
+    await h.finish(1)
+    expect(h.task().checks?.[0]?.diagnostics).toEqual([expect.objectContaining({ file: 'src/a.test.ts', message: expect.stringContaining('adds'), severity: 'error' })])
+  })
+
   it('a passing check commits the Task completed and asks for nothing else (no review, no repair)', async () => {
     const h = rig({ review: false })
     h.validation.validator.enqueue({ taskId: h.taskId, cwd: h.cwd, configIds: ['seed:npm:test'] })

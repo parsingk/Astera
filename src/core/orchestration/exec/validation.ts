@@ -10,6 +10,7 @@
 // 실행 구성(앱의 RunConfigStore, Host 의 run-configs.json), 실행 관리자, 세션 생존 여부, 검토·수리의
 // 시작, continuity journal 의 첫 체크포인트 head(Host 에서는 언제나 null, R12), git diff.
 import { readFileSync, rmSync } from 'node:fs'
+import { readTestReport } from '../../tests/read'
 import os from 'node:os'
 import { t, type Lang, type MessageKey } from '../../i18n'
 import type { RunConfig } from '../../run/config'
@@ -165,6 +166,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
   // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
   // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
   const validator = new TaskValidator({
+    readTestReport,
     runner: {
       start: async ({ cwd, taskId, configId }) => {
         const st = c.getState()
@@ -201,6 +203,8 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         const env = base?.env
         // Its result names what the hiding took (fix round 2), never a value
         const hidden = base !== undefined && base.hidden.length > 0 ? { hiddenEnv: base.hidden } : {}
+        // A failed run's test failures are read from its report (Phase 3 Part 2), on either path
+        const report = config.testReport ? { testReport: config.testReport } : {}
         // validation: marks this run as not the user's. The run list and the global badge label it,
         // and run.stop routes markStopped by it (RunStatus.validation). Nothing waits for the user's
         // own runs any more — a validation starts beside them; same-tree validations are serialised
@@ -209,7 +213,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, ...(env ? { env } : {}) })
           // Deny rules only (Claude Code on Windows without its shell route into Codex's sandbox): its workers' shells ran
           // as the person, and so does this check, said on its result (the person's Q1)
-          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden }
+          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden, ...report }
         }
         // Inside the sandbox the workers ran in, as their CLI and account, or not at all: a check that cannot be put in it
         // is a question to a person (rule E5), never a run outside it nor the code's failure
@@ -252,7 +256,8 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           runId: started.runId,
           name: config.name,
           ...hidden,
-          ...(reasonFile !== null ? { sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) } : {})
+          ...(reasonFile !== null ? { sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) } : {}),
+          ...report
         }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),

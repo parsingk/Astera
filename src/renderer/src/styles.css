@@ -2211,6 +2211,26 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The Problems tab (ProblemsPanel.tsx): toggles with counts, a filter and a sort on one bar, the list below scrolling on
    its own. A row reads severity, message, place, source; a stale one is dimmed with its mark. */
 .problems-body { flex-direction: column; min-height: 0; }
+/* The Tests tab (Phase 3 Part 2) */
+.tests-body { flex-direction: column; min-height: 0; }
+.tests-panel { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; font-size: 12px; }
+.tests-list, .tests-tree { list-style: none; margin: 0; padding: 0; }
+.tests-config { border-bottom: 1px solid var(--border); padding: 4px 0; }
+.tests-config-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tests-config-toggle { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; padding: 0; }
+.tests-counts, .tests-time { color: var(--text-dim); white-space: nowrap; }
+.tests-note { margin: 2px 0 0 18px; color: var(--text-dim); }
+.tests-note.warn { color: var(--warn); }
+.tests-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.tests-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tests-name.link { background: none; border: none; color: var(--text); font: inherit; cursor: pointer; padding: 0; text-align: left; }
+.tests-name.link:hover { text-decoration: underline; }
+.tests-open { margin-left: auto; }
+.tests-failure { margin: 2px 0 4px 20px; padding: 6px 8px; background: var(--elevated); border-radius: var(--radius-sm); white-space: pre-wrap; font-size: 11px; max-height: 240px; overflow: auto; }
+.test-icon { flex: none; }
+.test-icon.passed { color: var(--ok); }
+.test-icon.failed { color: var(--danger); }
+.test-icon.skipped { color: var(--text-dim); }
 .problems-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; font-size: 12px; }
 .problems-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--line-soft); }
 .problems-toggle { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; font-size: 11.5px; opacity: 0.55; white-space: nowrap; }

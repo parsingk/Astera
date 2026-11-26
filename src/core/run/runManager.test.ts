@@ -392,6 +392,24 @@ describe('RunManager', () => {
       expect(statuses).toEqual(['running', 'stopping', 'exited'])
     })
 
+    // Phase 3 Part 2: an exit code cannot say a person stopped the run (posix reports a signalled child as 0); the
+    // exit status does, so its test result is not read as a pass
+    it('marks a run stopped on request as stopped on its exit, and a run that ended by itself not', () => {
+      const { mgr, spawned } = setup('win32')
+      const exits: { stopped?: true }[] = []
+      mgr.onStatus = (s) => {
+        if (s.status === 'exited') exits.push(s)
+      }
+      const a = mgr.start(startOpts())
+      mgr.stop(a.runId)
+      spawned[0].pty.exit(0)
+      const b = mgr.start(startOpts({ allowMultipleInstances: true } as never))
+      spawned[1].pty.exit(0)
+      expect(exits.map((s) => s.stopped)).toEqual([true, undefined])
+      expect(exits[1]).not.toHaveProperty('stopped')
+      expect(mgr.get(b.runId)?.status).toBe('exited')
+    })
+
     it('stop on a stopping or exited run does nothing', () => {
       const { mgr, killed, spawned } = setup('win32')
       const st = mgr.start(startOpts())

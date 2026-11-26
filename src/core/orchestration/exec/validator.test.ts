@@ -813,3 +813,67 @@ describe('TaskValidator — the sandbox of a sandboxed Task (Task K)', () => {
     expect(calls[0].results[1]).not.toHaveProperty('outsideSandbox')
   })
 })
+
+// Phase 3 Part 2: a check that runs a configuration with a test report lists the report's failures as its diagnostics
+describe('TaskValidator, test reports', () => {
+  const failing = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `c${i}`,
+      file: 'src/a.test.ts',
+      suite: ['math'],
+      name: `case ${i}`,
+      status: 'failed' as const,
+      failure: { message: `expected ${i}\n\ndiff`, file: 'src/a.test.ts', line: 10 + i }
+    }))
+  const withReport = (): ValidatorRunner & { started: number } => {
+    const r = { started: 0 } as ValidatorRunner & { started: number }
+    r.start = async (a) => {
+      r.started++
+      return { runId: `run_${r.started}`, name: a.configId.toUpperCase(), testReport: { format: 'junit-xml', path: 'report.xml' } }
+    }
+    r.output = () => 'out'
+    r.stop = () => {}
+    return r
+  }
+
+  it('attaches a failed check’s report failures as its diagnostics, at most 20 with the count', async () => {
+    const { onSettled, calls } = settledCalls()
+    const asked: { cwd: string; sinceMs: number }[] = []
+    const runner = withReport()
+    const v = new TaskValidator({
+      runner,
+      onSettled,
+      onCannotRun: async () => {},
+      readTestReport: async (a) => {
+        asked.push({ cwd: a.cwd, sinceMs: a.sinceMs })
+        return { outcome: 'failed', report: { cases: failing(25) } }
+      }
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['unit'] })
+    await vi.waitFor(() => expect(runner.started).toBe(1))
+    v.onRunExit({ runId: 'run_1', exitCode: 1 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    const r = calls[0].results[0]
+    expect(r).toMatchObject({ configId: 'unit', status: 'failed', exitCode: 1, diagnosticsTotal: 25 })
+    expect(r.diagnostics).toHaveLength(20)
+    // Final review I6: the failing test is the finding, so its words ("expected 3 to be 4", then "expected 5 to be 4")
+    // never make a still-failing test a new finding; the output tail carries them
+    expect(r.diagnostics?.[0]).toEqual({ file: 'src/a.test.ts', line: 10, message: 'math > case 0', severity: 'error' })
+    expect(asked[0].cwd).toBe(absPath('w1'))
+    expect(Number.isFinite(asked[0].sinceMs)).toBe(true)
+  })
+
+  it('attaches nothing from a stale or unreadable report, and keeps the exit code’s status', async () => {
+    for (const answer of [{ outcome: 'unknown' as const, stale: true as const, report: { cases: failing(2) } }, { outcome: 'unknown' as const, reason: 'missing' as const }]) {
+      const { onSettled, calls } = settledCalls()
+      const runner = withReport()
+      const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {}, readTestReport: async () => answer })
+      v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['unit'] })
+      await vi.waitFor(() => expect(runner.started).toBe(1))
+      v.onRunExit({ runId: 'run_1', exitCode: 1 })
+      await vi.waitFor(() => expect(calls).toHaveLength(1))
+      expect(calls[0].results[0].status).toBe('failed')
+      expect(calls[0].results[0]).not.toHaveProperty('diagnostics')
+    }
+  })
+})

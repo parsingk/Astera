@@ -1,8 +1,10 @@
 import { stripAnsi } from '../../rolling/detect'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
-import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
+import { CHECK_TIMEOUT_MS, type CheckDiagnostic, type CheckResult } from '../types'
 import { pluginIdOfCheck, unavailable, type PluginCheckAnswer } from '../pluginChecks'
 import { GITHUB_CI_CHECK } from '../../github/lifecycle'
+import type { TestReportSpec } from '../../run/types'
+import type { ReadReport } from '../../tests/read'
 
 // Validation run sequencing. Knows neither RunManager nor OrchState — only a runner and two callbacks,
 // which is what lets tests reach it (inside ipc.ts they could not).
@@ -55,7 +57,15 @@ export interface ValidatorRunner {
     taskId: string
     configId: string
   }): Promise<
-    | { runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[]; sandboxFailed?: (exitCode: number, output: string) => string | null }
+    | {
+        runId: string
+        name: string
+        outsideSandbox?: true
+        hiddenEnv?: string[]
+        sandboxFailed?: (exitCode: number, output: string) => string | null
+        /** The configuration's test report (Phase 3 Part 2): a failed run's failures are read from it */
+        testReport?: TestReportSpec
+      }
     | { unavailable: string; name: string }
     | 'skip'
   >
@@ -84,6 +94,8 @@ interface Pending {
   /** The check running now runs through Astera's check runner: its exit read for a sandbox that stopped before the check
    *  started (fix rounds 2 to 4, M1, N1 and R1); null for any other run. Set at each start */
   sandboxFailed: ((exitCode: number, output: string) => string | null) | null
+  /** The test report of the check running now, when its configuration names one (Phase 3 Part 2); set at each start */
+  testReport: TestReportSpec | null
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
    *  settling is an await, and a second exit landing inside it still finds the head at the front. This
@@ -141,6 +153,8 @@ export class TaskValidator {
        *  'skip', a round nobody needs any more (the Task left validating, or its round is already the Host's). */
       onHandedOff?: (a: { taskId: string; cwd: string; done: CheckResult[] }) => Promise<void | 'skip'>
       log?: (message: string) => void
+      /** Reads a check's test report (core/tests/read.ts; Phase 3 Part 2). Absent: a failed check lists no report failures. */
+      readTestReport?: (a: { cwd: string; spec: TestReportSpec; sinceMs: number }) => Promise<ReadReport>
       /** 테스트 주입용. 배선은 넘기지 않는다 */
       timeoutMs?: number
     }
@@ -156,7 +170,7 @@ export class TaskValidator {
     const configIds = [...new Set(a.configIds)]
     const entry: Pending = {
       taskId: a.taskId, cwd: a.cwd, configIds, index: 0, results: [...(a.done ?? [])],
-      runId: null, name: null, outsideSandbox: false, hiddenEnv: [], sandboxFailed: null, startedAt: null, settling: false, stopped: false,
+      runId: null, name: null, outsideSandbox: false, hiddenEnv: [], sandboxFailed: null, testReport: null, startedAt: null, settling: false, stopped: false,
       timedOut: false, timedOutOnce: new Set(), erroredOnce: new Set(), timer: null
     }
     const q = this.queues.get(a.cwd)
@@ -271,12 +285,13 @@ export class TaskValidator {
       return
     }
     const passed = a.exitCode === 0
-    head.results.push({
+    const result: CheckResult = {
       configId, name, status: passed ? 'passed' : 'failed', exitCode: a.exitCode, outputTail: output,
       startedAt: head.startedAt ?? undefined, endedAt: now,
       ...(head.outsideSandbox ? { outsideSandbox: true as const } : {}),
       ...(head.hiddenEnv.length > 0 ? { hiddenEnv: [...head.hiddenEnv] } : {})
-    })
+    }
+    head.results.push(result)
     if (passed && head.index + 1 < head.configIds.length) {
       // 같은 이유로 runId·name 을 먼저 지운다(위 첫 timeout 자리와 같은 창) — 지우지 않으면 다음
       // check 의 시작이 끝나기 전에 이 check 의 중복 exit 가 도착했을 때 그것이 다음 check 의 결과로
@@ -296,10 +311,44 @@ export class TaskValidator {
       // 아이디가 이름 대신 보인다는 뜻이고, 조회를 들이는 비용을 아직 치르지 않았다.
       for (const rest of head.configIds.slice(head.index + 1))
         head.results.push({ configId: rest, name: rest, status: 'not-run' })
-    void this.deps
-      .onSettled({ taskId: head.taskId, results: head.results })
+    // A failed check whose configuration names a test report lists the report's failures (Phase 3 Part 2), read before
+    // the round is settled; the head keeps its cwd's queue meanwhile, as an asked plugin check does
+    const spec = head.testReport
+    const reading = !passed && spec !== null && this.deps.readTestReport ? this.reportFailures(head.cwd, spec, head.startedAt ?? now) : null
+    void (async () => {
+      const found = reading ? await reading : null
+      if (found) Object.assign(result, found)
+      await this.deps.onSettled({ taskId: head.taskId, results: head.results })
+    })()
       .catch((e) => this.deps.log?.(`validation settle failed task=${head.taskId}: ${String(e)}`))
       .finally(() => this.advance(cwd, head))
+  }
+
+  /** A failed check's test report as its diagnostics: each failed or errored case, at most 20, with the count beyond.
+   *  Only a fresh report that failed counts; a stale, unreadable or passing one adds nothing and changes no status. A
+   *  diagnostic names the test only: a finding's fingerprint is its message, and a still-failing test whose words changed
+   *  ("expected 3 to be 4", then "expected 5 to be 4") stays the same finding (final review I6). The words are in the
+   *  check's output tail. */
+  private async reportFailures(cwd: string, spec: TestReportSpec, startedAt: string): Promise<{ diagnostics: CheckDiagnostic[]; diagnosticsTotal?: number } | null> {
+    try {
+      const r = await this.deps.readTestReport!({ cwd, spec, sinceMs: Date.parse(startedAt) })
+      if (r.outcome !== 'failed' || r.stale || !r.report) return null
+      const failed = r.report.cases.filter((c) => c.status === 'failed' || c.status === 'errored')
+      if (failed.length === 0) return null
+      const diagnostics = failed.slice(0, 20).map((c): CheckDiagnostic => {
+        const file = c.failure?.file ?? c.file
+        return {
+          ...(file !== undefined ? { file } : {}),
+          ...(file !== undefined && c.failure?.line !== undefined ? { line: c.failure.line } : {}),
+          message: [...c.suite, c.name].join(' > '),
+          severity: 'error'
+        }
+      })
+      return { diagnostics, ...(failed.length > diagnostics.length ? { diagnosticsTotal: failed.length } : {}) }
+    } catch (e) {
+      this.deps.log?.(`test report of a check not read cwd=${cwd}: ${String(e)}`)
+      return null
+    }
   }
 
   /** The user stopped this validation run (run.stop). Only the mark is left here; the judgement is made
@@ -390,6 +439,7 @@ export class TaskValidator {
         head.outsideSandbox = outcome.outsideSandbox === true
         head.hiddenEnv = outcome.hiddenEnv ?? []
         head.sandboxFailed = outcome.sandboxFailed ?? null
+        head.testReport = outcome.testReport ?? null
         head.startedAt = new Date().toISOString()
         head.timer = setTimeout(() => {
           if (head.runId !== outcome.runId || head.settling) return

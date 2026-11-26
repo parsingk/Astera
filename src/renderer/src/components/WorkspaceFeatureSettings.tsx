@@ -2,8 +2,8 @@ import type { WorkspaceFeatures } from '../../../core/settings/workspaceFeatures
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 
-/** The three Phase 1 features that act without a key, in the order a person meets them: the layout that comes back at
- *  start, the Problems tab, and the buttons that send a piece of the workbench to an agent. */
+/** The features that act without a key, in the order a person meets them: the layout that comes back at start, the
+ *  Problems tab, the buttons that send a piece of the workbench to an agent (the Phase 1 three), and the Tests tab. */
 const SWITCHES = [
   {
     key: 'layoutMemory',
@@ -19,6 +19,11 @@ const SWITCHES = [
     key: 'contextBridge',
     label: 'settings.workspace.contextBridge',
     hint: 'settings.workspace.contextBridgeHint'
+  },
+  {
+    key: 'testsTab',
+    label: 'settings.workspace.testsTab',
+    hint: 'settings.workspace.testsTabHint'
   }
 ] as const satisfies readonly { key: keyof WorkspaceFeatures; label: MessageKey; hint: MessageKey }[]
 

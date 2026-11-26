@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="2" skipped="1" tests="6" time="0.116" timestamp="2026-11-26T15:56:19.635299+09:00" hostname="host"><testcase classname="tests.test_calc" name="test_adds" time="0.000" /><testcase classname="tests.test_calc" name="test_divides" time="0.001"><failure message="assert (10 / 4) == 2">def test_divides():
+&gt;       assert 10 / 4 == 2
+E       assert (10 / 4) == 2
+
+tests\test_calc.py:9: AssertionError</failure></testcase><testcase classname="tests.test_calc" name="test_later" time="0.000"><skipped type="pytest.skip" message="later">/work/proj\tests\test_calc.py:12: later</skipped></testcase><testcase classname="tests.test_calc" name="test_same[1-2]" time="0.001"><failure message="assert 1 == 2">a = 1, b = 2
+
+    @pytest.mark.parametrize("a,b", [(1, 2), (2, 2)])
+    def test_same(a, b):
+&gt;       assert a == b
+E       assert 1 == 2
+
+tests\test_calc.py:19: AssertionError</failure></testcase><testcase classname="tests.test_calc" name="test_same[2-2]" time="0.000" /><testcase classname="tests.test_calc" name="test_uses_broken" time="0.000"><error message="failed on setup with &quot;RuntimeError: fixture failed&quot;">@pytest.fixture
+    def broken():
+&gt;       raise RuntimeError("fixture failed")
+E       RuntimeError: fixture failed
+
+tests\test_calc.py:24: RuntimeError</error></testcase></testsuite></testsuites>
