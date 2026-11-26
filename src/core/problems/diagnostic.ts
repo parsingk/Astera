@@ -4,6 +4,8 @@
  * this file.
  */
 
+import type { FindingChange, FindingState } from '../orchestration/types'
+
 export type DiagnosticSeverity = 'error' | 'warning' | 'info'
 
 /** One problem, version 1. */
@@ -39,6 +41,9 @@ export interface Diagnostic {
   origin?: { runId: string; taskId: string; task: string; job?: string }
   /** The file changed after the finding (`changed`) or is not there (`missing`): it may no longer hold. */
   stale?: 'changed' | 'missing'
+  /** Where it stands, for a finding a person acted on (Phase 3 Part 1b, Task.findingStates): its state, a dismissal's
+   *  note, and the changes, oldest first. */
+  finding?: { state: FindingState; note?: string; history: FindingChange[] }
   /** This row stands for that many findings the producer kept no detail of (a check keeps 20 and counts the rest). */
   unlisted?: number
   /** The file as the finding named it, when it was not looked at: a name that leaves its folder or points at another
@@ -90,9 +95,9 @@ export function filterDiagnostics(
   return list.filter((d) => f.severities.has(d.severity) && (text === '' || shown(d).some((s) => s.toLowerCase().includes(text))))
 }
 
-/** How many of each severity, for the tab and the toggles. */
+/** How many of each severity, for the tab and the toggles. A dismissed finding counts for nothing (Phase 3 Part 1b). */
 export function problemCounts(list: readonly Diagnostic[]): Record<DiagnosticSeverity, number> {
   const out: Record<DiagnosticSeverity, number> = { error: 0, warning: 0, info: 0 }
-  for (const d of list) out[d.severity]++
+  for (const d of list) if (d.finding?.state !== 'dismissed') out[d.severity]++
   return out
 }

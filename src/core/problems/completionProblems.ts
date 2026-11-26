@@ -48,6 +48,12 @@ const lastLine = (tail: string | undefined): string | undefined =>
 
 const failed = (c: CheckResult): boolean => c.status === 'failed' || c.status === 'timed-out' || c.status === 'error'
 
+/** A row's `finding`, when a person acted on it (Phase 3 Part 1b). */
+const findingOf = (task: Task, ref: string): Pick<Diagnostic, 'finding'> => {
+  const r = task.findingStates?.[ref]
+  return r ? { finding: { state: r.state, ...(r.note !== undefined ? { note: r.note } : {}), history: r.history } } : {}
+}
+
 /**
  * The first producers of the Problems list (spec W5, audit §8 item 7): what Jobs' completion found. For each Job with a
  * run among `runIds` (the project's, as main's ownership check gives them), its latest run only, since a later run
@@ -95,10 +101,12 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         // The check as a whole: what its row without a file and its uncounted findings name
         const checkRef = findingRef({ kind: 'check', taskId: task.id, source: c.configId, message: '' })
         findings.forEach((dg, i) => {
+          const ref = findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, base: folders, message: dg.message })
           out.push({
             schemaVersion: 1,
             id: `check:${task.id}:${c.configId}:${i}`,
-            ref: findingRef({ kind: 'check', taskId: task.id, source: c.configId, file: dg.file, base: folders, message: dg.message }),
+            ref,
+            ...findingOf(task, ref),
             source,
             severity: checkSeverity(c, dg.severity),
             message: dg.message,
@@ -111,11 +119,11 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
         })
         const unlisted = (c.diagnosticsTotal ?? findings.length) - findings.length
         if (unlisted > 0) {
-          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, ref: checkRef, source, severity: 'info', message: '', unlisted, ...at, origin, folders })
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}:more`, ref: checkRef, ...findingOf(task, checkRef), source, severity: 'info', message: '', unlisted, ...at, origin, folders })
         }
         if (findings.length === 0 && failed(c)) {
           const said = c.summary !== undefined && c.summary.trim() !== '' && c.summary !== c.status ? c.summary.trim() : lastLine(c.outputTail)
-          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, ref: checkRef, source, severity: 'error', message: said ?? '', ...at, origin, folders })
+          out.push({ schemaVersion: 1, id: `check:${task.id}:${c.configId}`, ref: checkRef, ...findingOf(task, checkRef), source, severity: 'error', message: said ?? '', ...at, origin, folders })
         }
       }
       // The last review attempt's end; with none on record (an external reviewer writes its issues without one), the
@@ -129,10 +137,12 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
           .at(-1) ?? task.updatedAt
       for (const issue of task.reviewIssues ?? []) {
         if (issue.file === undefined) continue
+        const ref = findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title })
         out.push({
           schemaVersion: 1,
           id: `review:${task.id}:${issue.id}`,
-          ref: findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title }),
+          ref,
+          ...findingOf(task, ref),
           source: { kind: 'review', id: 'review', label: 'Review' },
           severity: REVIEW_SEVERITY[issue.severity] ?? 'warning',
           message: issue.title,
@@ -150,17 +160,21 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
 
 /**
  * What the Problems list is made of, as a key that moves when it does: the runs, and each Task's check rounds (by when
- * they ended and what they found) and review issues. main compares it on every orchestration write and tells the
- * renderer to ask again only when it moved, whatever view is open; a status move alone does not move it.
+ * they ended and what they found), review issues and the states of the findings a person acted on (Phase 3 Part 1b).
+ * main compares it on every orchestration write and tells the renderer to ask again only when it moved, whatever view is
+ * open; a status move alone does not move it.
  */
 export function problemsKeyOf(state: OrchState): string {
   const runs = state.runs.map((r) => `${r.id}:${r.jobId}:${r.ordinal}`).join(',')
   const tasks = state.tasks
-    .filter((t) => t.runId !== undefined && ((t.checks?.length ?? 0) > 0 || (t.reviewIssues?.length ?? 0) > 0))
+    .filter((t) => t.runId !== undefined && ((t.checks?.length ?? 0) > 0 || (t.reviewIssues?.length ?? 0) > 0 || t.findingStates !== undefined))
     .map((t) => {
       const checks = (t.checks ?? []).map((c) => `${c.configId}/${c.status}/${c.endedAt ?? ''}/${c.diagnostics?.length ?? 0}/${c.diagnosticsTotal ?? ''}`).join('+')
       const reviews = (t.reviewIssues ?? []).map((i) => `${i.id}/${i.file ?? ''}/${i.line ?? ''}`).join('+')
-      return `${t.id}:${checks}:${reviews}`
+      const states = Object.entries(t.findingStates ?? {})
+        .map(([ref, r]) => `${ref}/${r.state}/${r.history.length}`)
+        .join('+')
+      return `${t.id}:${checks}:${reviews}:${states}`
     })
     .join(';')
   return `${runs}|${tasks}`

@@ -68,4 +68,11 @@ describe('problemCounts', () => {
   it('counts each severity', () => {
     expect(problemCounts(LIST)).toEqual({ error: 2, warning: 1, info: 1 })
   })
+
+  // Phase 3 Part 1b: a finding a person dismissed stays listed, dimmed, and counts for nothing
+  it('leaves dismissed problems out of the counts', () => {
+    const dismissed = d({ id: 'f', severity: 'error', finding: { state: 'dismissed', note: 'known', history: [] } })
+    const asked = d({ id: 'g', severity: 'warning', finding: { state: 'repair-requested', history: [] } })
+    expect(problemCounts([...LIST, dismissed, asked])).toEqual({ error: 2, warning: 2, info: 1 })
+  })
 })
