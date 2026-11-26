@@ -112,6 +112,13 @@ export interface ReviewIssue {
 
 /** 왜 이 Dispatch 가 열렸는가 — check 가 실패했거나 검토가 blocking 이슈를 냈다 */
 export type RepairReason = 'check-failure' | 'review-failure'
+
+/** A finding a person chose for a repair (Phase 3 Part 1): its reference (core/problems/findingRef.ts) and what it says,
+ *  as one line; bounded by taskRepair.ts capAsked. */
+export interface AskedFinding {
+  ref: string
+  text: string
+}
 /** 앱이 특별히 다루는 Gate. exhausted 의 해소는 retry-once / mark-failed 로 갈라지고(server.ts 의
  *  gate-resolve), blocked 는 보통 Gate 처럼 풀린다 — 질문이 왜 막혔는지 말한다 */
 export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable' | GitHubGateKind
@@ -636,6 +643,9 @@ export interface Dispatch {
    *  적을 수 있어(`LostAttempt.grantedExtra`), "사람이 허락했다" 는 문구가 재시작을 거쳐도 참으로
    *  남는다. */
   grantedExtra?: true
+  /** A repair a person asked for (`tasks-repair`, Phase 3 Part 1), with the findings they chose: the worker reads them
+   *  first, and the repair is outside the automatic budget (repairCountIn skips it). */
+  askedFindings?: AskedFinding[]
 }
 
 export interface Message {

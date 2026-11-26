@@ -82,7 +82,8 @@ export const repairCountOf = (s: OrchState, taskId: string): number =>
 
 /** repairCountOf over one Task's Dispatches already gathered (performance audit M1) */
 export const repairCountIn = (ds: readonly Dispatch[]): number =>
-  ds.filter((d) => d.repair !== undefined && (d.outcome !== undefined || d.endedAt === undefined)).length
+  // A repair a person asked for is outside the automatic budget (Phase 3 Part 1): it never uses up the next round's
+  ds.filter((d) => d.repair !== undefined && d.askedFindings === undefined && (d.outcome !== undefined || d.endedAt === undefined)).length
 
 /** 보고를 낸(outcome 있는) 검토 Dispatch 수. 유실된 검토는 라운드를 먹지 않는다 */
 export const reviewRoundOf = (s: OrchState, taskId: string): number =>

@@ -80,6 +80,16 @@ describe('repairCountOf / reviewRoundOf / latestImplDispatch', () => {
   it('검토가 아닌 것 중 가장 늦게 시작한 Dispatch 가 마지막 구현·수리다', () => {
     expect(latestImplDispatch(s, 'tsk_1')?.id).toBe('dsp_3')
   })
+  // Phase 3 Part 1: a repair a person asked for is outside the automatic budget, so it never uses up the next round's
+  it('does not count a repair a person asked for against the automatic budget', () => {
+    const asked = state({
+      dispatches: [
+        dispatch({ id: 'dsp_2', repair: 'check-failure', startedAt: '2026-09-19T00:01:00.000Z' }),
+        dispatch({ id: 'dsp_p', repair: 'check-failure', startedAt: '2026-09-19T00:05:00.000Z', askedFindings: [{ ref: 'check:tsk_1:aaaaaaaaaaaa', text: 'x' }] })
+      ]
+    })
+    expect(repairCountOf(asked, 'tsk_1')).toBe(1)
+  })
   it('다른 Task 의 Dispatch 는 세지 않는다', () => {
     expect(repairCountOf(s, 'tsk_other')).toBe(0)
     expect(latestImplDispatch(s, 'tsk_other')).toBeUndefined()

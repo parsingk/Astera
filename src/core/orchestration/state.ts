@@ -21,6 +21,7 @@ import {
   type MessageType,
   type Outcome,
   type RepairReason,
+  type AskedFinding,
   type Project,
   type Job,
   type JobRun,
@@ -708,6 +709,8 @@ export function openDispatch(
     /** The Dispatch types into a session already running (worker-start `--terminal`): that session runs as whatever it
      *  was started as, so no agent profile is recorded for this attempt. */
     reusesSession?: boolean
+    /** A repair a person asked for, with the findings they chose (Phase 3 Part 1, taskRepair.ts). */
+    askedFindings?: AskedFinding[]
   },
   now: string
 ): Res<Dispatch> {
@@ -768,6 +771,7 @@ export function openDispatch(
     // 열 때 한 번만 적는다 — 나중에 카운트로 되짚지 않는다(Dispatch.grantedExtra 의 주석, 전체 브랜치
     // 리뷰 Finding 3).
     ...(a.ignoreCircuit ? { grantedExtra: true } : {}),
+    ...(a.askedFindings && a.askedFindings.length > 0 ? { askedFindings: a.askedFindings } : {}),
     // The worker's spawn reads it from here (worker-start, recovery): what the Task runs as when it is opened
     ...(profile !== undefined ? { agentProfileId: profile } : {})
   }

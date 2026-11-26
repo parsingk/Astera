@@ -12,9 +12,11 @@ import {
   FAILURE_LIMIT,
   isPlaceholderSessionId,
   placeholderSessionId,
+  type AskedFinding,
   type Dispatch,
   type Task
 } from '../types'
+import { capAsked } from '../taskRepair'
 import type { KnowledgeFiles } from '../../knowledge/detect'
 import { buildSpecFile, lifecycleRepairPrompt, repairWorkerPrompt } from './coordinator'
 import type { OrchServerDeps } from '../command'
@@ -90,6 +92,7 @@ function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string },
       maxFixAttempts,
       checks: task.checks,
       issues: task.reviewIssues,
+      ...(d.askedFindings ? { asked: d.askedFindings } : {}),
       // **repairs > maxFixAttempts 로 판정하지 않는다(전체 브랜치 리뷰, Finding 3 — 두 번째 자리).**
       // repairCountOf 는 크래시로 잃은 repair Dispatch 와 그것을 잇는 recovery 의 replacement 를
       // 둘 다 센다(둘 다 `.repair` 가 있다) — 그 유령들은 이전 라운드에서 와서 영영 남으므로, 세
@@ -239,7 +242,13 @@ export async function repairOnce(
   deps: RepairDeps,
   /** `from`: the state with the person's answer, not yet committed — the Dispatch opens on it and both are written at
    *  once, so no loop sees the Task ready in between (G3c1 final review M4). Absent: the committed state. */
-  a: { taskId: string; from?: OrchState }
+  a: {
+    taskId: string
+    from?: OrchState
+    /** A person's repair request (`tasks-repair`, Phase 3 Part 1): the findings they chose, which ride on the Dispatch,
+     *  bounded, are read first by the worker, and keep this repair outside the automatic budget. */
+    asked?: readonly AskedFinding[]
+  }
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const s = a.from ?? deps.getState()
   const task = s.tasks.find((x) => x.id === a.taskId)
@@ -265,7 +274,8 @@ export async function repairOnce(
       // A lifecycle Task's first repair has no attempt before it (GitHub lifecycle G3c1)
       ...(prior ? { retryOf: prior.id } : {}),
       repair: reason,
-      ignoreCircuit: true
+      ignoreCircuit: true,
+      ...(a.asked && a.asked.length > 0 ? { askedFindings: capAsked(a.asked) } : {})
     },
     deps.now()
   )
