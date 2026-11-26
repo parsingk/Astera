@@ -255,9 +255,8 @@ import { createQuickOpen } from './quickOpen'
 import { createTextSearch } from './textSearch'
 import { completionProducer, createProblems, createProblemsPing, lspProducer, statMtime, testProducer } from './problems'
 import { createHostLspView, createInterpreterLookup, venvInterpreterFor } from './host/hostLsp'
-import { languageServerPathProblem, type LanguageServerSettings } from '../core/settings/languageServers'
+import { interpreterPathProblem, languageServerPathProblem, type LanguageServerSettings } from '../core/settings/languageServers'
 import type { LspOpenFile } from '../core/lsp/model'
-import { isUnder as isUnderRoot } from '../core/context/contextRef'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
@@ -1659,18 +1658,21 @@ export function registerIpc(
     const ok: LspOpenFile[] = []
     for (const f of Array.isArray(files) ? files : []) {
       const o = (typeof f === 'object' && f !== null ? f : {}) as { path?: unknown; root?: unknown }
-      if (typeof o.path !== 'string' || typeof o.root !== 'string' || !isUnderRoot(o.root, o.path)) continue
+      // isPathWithin resolves `..`, as the files IPC does (final review M7)
+      if (typeof o.path !== 'string' || typeof o.root !== 'string' || !isPathWithin(o.root, o.path)) continue
       if (!allowed.has(o.root)) allowed.set(o.root, await assertAllowedPath(o.root).then(() => true, () => false))
       if (allowed.get(o.root)) ok.push({ path: o.path, root: o.root })
     }
     await lspView.setOpen(ok)
   })
-  ipcMain.handle('lsp.saved', (_e, paths: unknown) => {
-    lspView.saved(Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [])
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : [])
+  ipcMain.handle('lsp.saved', (_e, paths: unknown, deleted: unknown) => {
+    lspView.saved(strings(paths), strings(deleted))
   })
   ipcMain.handle('lsp.status', () => lspAnswer(lspRoute, 'lsp-status', {}))
   ipcMain.handle('lsp.install', (_e, server: string) => lspAnswer(lspInstallRoute, 'lsp-install', { server }))
   ipcMain.handle('lsp.remove', (_e, server: string) => lspAnswer(lspRoute, 'lsp-remove', { server }))
+  ipcMain.handle('lsp.restart', (_e, server: string, root: string) => lspAnswer(lspRoute, 'lsp-restart', { server, root }))
   ipcMain.handle('lsp.log', (_e, server: string, root: string) => lspAnswer(lspRoute, 'lsp-log', { server, root }))
   // The virtual environment found inside a project, which the person may allow pyright to use there
   ipcMain.handle('lsp.venvFor', async (_e, project: string) => {
@@ -1685,10 +1687,14 @@ export function registerIpc(
       const problem = languageServerPathProblem(server, p)
       if (problem !== null) throw new Error(`INVALID_LANGUAGE_SERVER_PATH: ${problem}`)
     }
+    if (typeof next?.python?.interpreter === 'string' && next.python.interpreter !== '') {
+      const problem = interpreterPathProblem(next.python.interpreter)
+      if (problem !== null) throw new Error(`INVALID_INTERPRETER_PATH: ${problem}`)
+    }
     await core.appSettings.setLanguageServers(next)
-    // A language turned on or off, or another interpreter, reaches the Host with the open set again; a path is read when
-    // its server next starts
-    await lspView.connected()
+    // A language turned on or off, another interpreter or another path reaches the Host with the open set again, marked
+    // for a refresh: what that changed starts again (final review C2)
+    await lspView.refresh()
   })
   const pushOrchState = (state: OrchState): void => {
     orchPushes.push(state)
@@ -5385,6 +5391,7 @@ export function registerIpc(
       // The language servers' problems for the open files (Phase 3 Part 3), while their switch is on
       lspProducer({
         files: (p) => (core.appSettings.getWorkspaceFeatures().languageServers ? lspView.files(p) : []),
+        servers: () => (core.appSettings.getWorkspaceFeatures().languageServers ? lspView.servers() : []),
         stat: statMtime
       })
     ],

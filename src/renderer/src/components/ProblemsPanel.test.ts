@@ -45,6 +45,15 @@ describe('ProblemsPanel', () => {
     expect(bottom).toMatch(/actions=\{problemActions\}/)
   })
 
+  // Final review I4 and M13 (Phase 3 Part 3): a root or file no language server checked is said in the person's
+  // language, and is a note, not a finding to send or fix
+  it('words what was not checked, with the server and the folder, and offers no checkbox on it', () => {
+    for (const key of ['problems.unchecked.not-installed', 'problems.unchecked.room', 'problems.unchecked.crashed', 'problems.unchecked.refused', 'problems.unchecked.too-large'])
+      expect(src).toContain(`'${key}'`)
+    expect(src).toMatch(/d\.unchecked !== undefined\s*\? t\(UNCHECKED_KEY\[d\.unchecked\], \{ server: d\.source\.label, folder: folderOf\(d\.root\) \}\)/)
+    expect(src).toMatch(/\{actions !== undefined && d\.unchecked === undefined && \(/)
+  })
+
   // Phase 3 Part 1b: a finding a person acted on says where it stands; its chip opens its history under the row
   it('shows a recorded finding’s state as a chip that opens its history, and dims a dismissed row', () => {
     expect(src).toMatch(/const chip = findingChipKey\(d\)/)
@@ -116,7 +125,7 @@ describe('the Problems tab', () => {
 
 describe('ProblemsPanel, rows without a place (final review I2, M10, C1)', () => {
   it('says a failed check with no words of its own failed, and counts findings it kept no detail of', () => {
-    expect(src).toMatch(/d\.unlisted !== undefined \? t\('problems\.unlisted', \{ count: d\.unlisted \}\) : d\.message !== '' \? d\.message : t\('problems\.checkFailed'\)/)
+    expect(src).toMatch(/d\.unlisted !== undefined\s*\? t\('problems\.unlisted', \{ count: d\.unlisted \}\)\s*: d\.message !== ''\s*\? d\.message\s*: t\('problems\.checkFailed'\)/)
   })
 
   it('shows a name it would not look at, dimmed, with why on hover, and never opens it', () => {

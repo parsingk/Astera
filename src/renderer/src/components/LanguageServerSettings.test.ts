@@ -25,7 +25,7 @@ const pyright: LspInstalled = {
 }
 const noop = (): void => {}
 const row = (installed: LspInstalled, statuses: LspServerStatus[] = [], busy = false): string =>
-  renderToStaticMarkup(React.createElement(ServerRow, { installed, statuses, busy, onInstall: noop, onRemove: noop, onLog: noop, logs: {} }))
+  renderToStaticMarkup(React.createElement(ServerRow, { installed, statuses, busy, onInstall: noop, onRemove: noop, onLog: noop, onRestart: noop, logs: {} }))
 
 describe('LanguageServerSettings', () => {
   it('asks before an install, naming each package’s name, version, licence, size and folder', () => {
@@ -56,6 +56,19 @@ describe('LanguageServerSettings', () => {
     expect(html).toContain('it exited on its own (code 3)')
     expect(html).toContain(en('lsp.why.room'))
     expect(html).toContain(en('lsp.note.older-typescript'))
+  })
+
+  // Final review I4: a failed root, or one stopped to make room, has a way back; a running one does not need it
+  it('offers Restart for a root that crashed or was stopped to make room, and says how each comes back', () => {
+    const html = row({ ...pyright, installed: true }, [
+      { server: 'python', root: 'C:\\proj', status: 'running', pid: 4 },
+      { server: 'python', root: 'C:\\other', status: 'failed', why: 'crashed' },
+      { server: 'python', root: 'C:\\third', status: 'stopped', why: 'room' }
+    ])
+    expect(html.match(new RegExp(`<button[^>]*>${en('lsp.restart')}</button>`, 'g'))).toHaveLength(2)
+    expect(en('lsp.why.crashed')).toMatch(/Restart/)
+    expect(en('lsp.why.room')).toMatch(/sav/i)
+    expect(src).toMatch(/window\.api\.lsp\.restart\(server, root\)/)
   })
 
   it('installs and removes through the Host, and keeps a project’s venv choice in venvProjects', () => {

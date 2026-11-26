@@ -3,7 +3,7 @@ import path from 'node:path'
 import type { OrchState } from '../core/orchestration/state'
 import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic'
 import { completionProducer, createProblems, createProblemsPing, lspProducer, testProducer } from './problems'
-import type { LspFileDiagnostics } from '../core/lsp/model'
+import type { LspFileDiagnostics, LspServerStatus } from '../core/lsp/model'
 import type { TestRunResult } from '../core/tests/model'
 
 const PROJECT = path.resolve('/repo')
@@ -308,7 +308,7 @@ describe('lspProducer', () => {
     ]
   }
   const produce = (files: LspFileDiagnostics[], mtimes: Record<string, number> = {}) =>
-    lspProducer({ files: () => files, stat: async (abs) => (abs in mtimes ? { mtimeMs: mtimes[abs] } : null) }).diagnostics(PROJECT)
+    lspProducer({ files: () => files, servers: () => [], stat: async (abs) => (abs in mtimes ? { mtimeMs: mtimes[abs] } : null) }).diagnostics(PROJECT)
 
   it('one row per problem with column and range, and a stale mark once the file changed', async () => {
     const rows = await produce([file], { [file.path]: Date.parse(T) - 1000 })
@@ -333,5 +333,40 @@ describe('lspProducer', () => {
     expect(changed[0].stale).toBe('changed')
     expect((await produce([file]))[0].stale).toBe('missing')
     expect((await produce([{ ...file, server: 'typescript5' }], { [file.path]: 0 }))[0].source.label).toBe('TypeScript 5')
+  })
+
+  // Final review I4: a root no server checks is said in the list, not left looking clean
+  it('says once per root of the project why its server is not checking it, and nothing for a running one', async () => {
+    const servers: LspServerStatus[] = [
+      { server: 'typescript', root: PROJECT, status: 'stopped', why: 'room', reason: 'stopped to make room for another server' },
+      { server: 'python', root: PROJECT, status: 'failed', why: 'crashed', reason: 'exited with code 3' },
+      { server: 'typescript', root: at(PROJECT, 'packages', 'web'), status: 'stopped', why: 'not-installed', reason: 'not installed' },
+      { server: 'typescript5', root: path.resolve('/other'), status: 'stopped', why: 'not-installed' },
+      { server: 'python', root: at(PROJECT, 'tools'), status: 'running' }
+    ]
+    const rows = await lspProducer({ files: () => [], servers: () => servers, stat: async () => null }).diagnostics(PROJECT)
+    expect(rows).toEqual([
+      { schemaVersion: 1, id: `lsp:unchecked:typescript:${PROJECT}`, source: { kind: 'lsp', id: 'typescript', label: 'TypeScript' }, severity: 'info', message: 'stopped to make room for another server', root: PROJECT, unchecked: 'room' },
+      { schemaVersion: 1, id: `lsp:unchecked:python:${PROJECT}`, source: { kind: 'lsp', id: 'python', label: 'Python' }, severity: 'info', message: 'exited with code 3', root: PROJECT, unchecked: 'crashed' },
+      expect.objectContaining({ id: `lsp:unchecked:typescript:${at(PROJECT, 'packages', 'web')}`, unchecked: 'not-installed' })
+    ])
+  })
+
+  // Final review M13: a file over the bound is said, not silently unchecked
+  it('says a file the Host skipped as too large was not checked', async () => {
+    const big: LspFileDiagnostics = { root: PROJECT, path: at(PROJECT, 'big.ts'), server: 'typescript', producedAt: T, problems: [], skipped: 'too-large' }
+    const rows = await produce([big], { [big.path]: Date.parse(T) - 1 })
+    expect(rows).toEqual([
+      { schemaVersion: 1, id: `lsp:skipped:typescript:${big.path}`, source: { kind: 'lsp', id: 'typescript', label: 'TypeScript' }, severity: 'info', message: 'not checked: the file is larger than the language servers read', path: big.path, root: PROJECT, unchecked: 'too-large', producedAt: T }
+    ])
+  })
+
+  // Final review M15: a file with many problems is looked at once
+  it('stats each file once, however many problems it has', async () => {
+    const stat = vi.fn(async () => ({ mtimeMs: 0 }))
+    const many: LspFileDiagnostics = { ...file, problems: Array.from({ length: 50 }, (_, i) => ({ ...file.problems[0], line: i + 1 })) }
+    const rows = await lspProducer({ files: () => [many], servers: () => [], stat }).diagnostics(PROJECT)
+    expect(rows).toHaveLength(50)
+    expect(stat).toHaveBeenCalledTimes(1)
   })
 })

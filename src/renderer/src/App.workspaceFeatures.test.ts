@@ -76,7 +76,11 @@ describe('the Problems tab off (Phase 1 gate)', () => {
     expect(app).toMatch(/const lspOpen = useMemo\(\(\) => \(workspaceFeatures\?\.languageServers === true \? lspOpenFiles\(fileTabs\) : \[\]\), \[workspaceFeatures\?\.languageServers, fileTabs\]\)/)
     expect(app).toMatch(/useEffect\(\(\) => \{\s*void window\.api\.lsp\.setOpen\(lspOpen\)\.catch\(\(\) => \{\}\)\s*\}, \[lspOpen\]\)/)
     expect(app).toMatch(/onFileSavedRef\.current\(tab\.path\)\s*void window\.api\.lsp\.saved\(\[tab\.path\]\)\.catch\(\(\) => \{\}\)/)
-    expect(app).toMatch(/if \(c\.kind !== 'change' && c\.kind !== 'add'\) return\s*\/\/ [^\n]*\n\s*void window\.api\.lsp\.saved\(\[c\.path\]\)\.catch\(\(\) => \{\}\)/)
+    // Final review I3: every change and deletion on disk, open in a tab or not, before the open-buffer check
+    expect(app).toMatch(
+      /if \(c\.kind === 'add' \|\| c\.kind === 'change'\) void window\.api\.lsp\.saved\(\[c\.path\]\)\.catch\(\(\) => \{\}\)\s*else if \(c\.kind === 'unlink'\) void window\.api\.lsp\.saved\(\[\], \[c\.path\]\)\.catch\(\(\) => \{\}\)\s*const id = `file:\$\{c\.path\}`/
+    )
+    expect(app.match(/window\.api\.lsp\.saved\(\[c\.path\]\)/g)).toHaveLength(1)
     expect(app).toMatch(/\['lsp', t\('settings\.tab\.lsp'\)\]/)
     expect(app).toMatch(/\{settingsTab === 'lsp' && <LanguageServerSettings project=\{currentProject\} \/>\}/)
   })

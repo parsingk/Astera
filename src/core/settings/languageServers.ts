@@ -37,6 +37,14 @@ export async function readLanguageServers(filePath: string): Promise<LanguageSer
 
 /** Why a path cannot replace Astera's install, or null: it must be absolute and name what Astera runs, TypeScript 7's
  *  native `tsc` for TypeScript, pyright's `langserver.index.js` for Python. */
+/** Why an interpreter typed in Settings cannot be pyright's, or null: a relative one is not kept, and a batch file would
+ *  run through a shell (final review M13). Refused, not dropped: the person typed it. */
+export function interpreterPathProblem(p: string): string | null {
+  if (!path.isAbsolute(p)) return `not an absolute path: ${p}`
+  if (/\.(?:bat|cmd)$/i.test(p)) return `a batch file, which pyright would run through a shell: ${p}`
+  return null
+}
+
 export function languageServerPathProblem(server: 'typescript' | 'python', p: string): string | null {
   if (!path.isAbsolute(p)) return `not an absolute path: ${p}`
   const name = path.basename(p).toLowerCase()

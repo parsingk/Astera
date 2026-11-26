@@ -26,7 +26,7 @@ const STATUS_KEY: Record<LspServerStatus['status'], MessageKey> = {
 }
 
 /** One server: whether it is installed (and its version), Install or Remove, and each root it runs for with its state,
- *  why it stopped, its notes and its log. */
+ *  why it stopped, its notes, its log, and Restart for one that crashed or was stopped to make room (final review I4). */
 export function ServerRow({
   installed,
   statuses,
@@ -34,6 +34,7 @@ export function ServerRow({
   onInstall,
   onRemove,
   onLog,
+  onRestart,
   logs
 }: {
   installed: LspInstalled
@@ -42,6 +43,7 @@ export function ServerRow({
   onInstall(): void
   onRemove(): void
   onLog(root: string): void
+  onRestart(root: string): void
   logs: Record<string, string[] | undefined>
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -72,6 +74,11 @@ export function ServerRow({
             <button type="button" onClick={() => onLog(s.root)}>
               {t('lsp.log')}
             </button>
+            {(s.why === 'crashed' || s.why === 'room') && (
+              <button type="button" onClick={() => onRestart(s.root)}>
+                {t('lsp.restart')}
+              </button>
+            )}
           </div>
           {s.why !== undefined && <span className="settings-hint is-warning">{t(`lsp.why.${s.why}` as MessageKey)}</span>}
           {s.reason !== undefined && <span className="settings-hint">{s.reason}</span>}
@@ -181,6 +188,14 @@ export function LanguageServerSettings({ project }: { project: string | null }):
     }
   }
 
+  const restart = async (server: LspServerId, root: string): Promise<void> => {
+    try {
+      await window.api.lsp.restart(server, root)
+    } catch (e) {
+      toast.error(t('lsp.restartFailed', { title: LSP_SERVERS[server].title, error: errorOf(e) }))
+    }
+  }
+
   const useVenv = (use: boolean): void => {
     if (settings === null || project === null) return
     const s = settings
@@ -227,6 +242,7 @@ export function LanguageServerSettings({ project }: { project: string | null }):
           onInstall={() => void install(row)}
           onRemove={() => void remove(row)}
           onLog={(root) => void showLog(row.server, root)}
+          onRestart={(root) => void restart(row.server, root)}
           logs={logs[row.server] ?? {}}
         />
       ))}

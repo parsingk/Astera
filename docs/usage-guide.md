@@ -191,13 +191,18 @@ only that server is installed, and the server's status says so. A setting path r
 7's `tsc`, or pyright's `langserver.index.js`); a project's own `node_modules` is never used.
 
 The servers run in this computer's Astera Host: one for each project and language with an open file, at most four at
-once, each stopped a minute after its last file closes. A file over 2 MB is not checked. A file is checked as it is on
-disk: after you save it, or when an agent changes it.
+once, each stopped a minute after its last file closes. When a project is not being checked (its server is not
+installed, was stopped to make room for another, or stopped after crashing three times), the Problems tab says so in
+one row; saving a file in a project stopped to make room starts its server again, and **Restart** in Settings ›
+**Language servers** starts either again. A file over 2 MB is not checked, and the Problems tab says that too. A file is
+checked as it is on disk: after you save it, or when an agent changes it; pyright also hears of Python files changed or
+deleted on disk that are not open.
 
 pyright is always given an absolute interpreter: a project's virtual environment once you choose **Use in this
 project** for it, else the interpreter you set, else the first one found on this computer outside the project. With
-none, problems about packages that are not installed are not shown, since they would not be real. A `.bat` or `.cmd`
-interpreter is never used.
+none, problems about packages that are not installed are not shown, since they would not be real. Nothing inside the
+project is run to find the interpreter. An interpreter you set must be an absolute path, and a `.bat` or `.cmd` one is
+refused.
 
 Not supported, by design: completion, rename, formatting, code actions, hover, go to definition, inlay hints, an
 underline in the editor, and language servers on a remote runtime. Turn the feature off in Settings › General ›

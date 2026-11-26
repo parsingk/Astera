@@ -2464,6 +2464,10 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     const onChange = (c: FileChange): void => {
       if (c.kind === 'add' || c.kind === 'change' || c.kind === 'unlink') invalidateImageCache(c.path)
+      // The language servers read the file from disk again, or hear it changed or went, open in a tab or not (Phase 3
+      // Part 3; final review I3: pyright watches nothing itself)
+      if (c.kind === 'add' || c.kind === 'change') void window.api.lsp.saved([c.path]).catch(() => {})
+      else if (c.kind === 'unlink') void window.api.lsp.saved([], [c.path]).catch(() => {})
       const id = `file:${c.path}`
       const buf = fileBuffersRef.current[id]
       if (!buf) return
@@ -2472,8 +2476,6 @@ export default function App(): React.JSX.Element {
         return
       }
       if (c.kind !== 'change' && c.kind !== 'add') return
-      // The language servers read the file from disk again (Phase 3 Part 3), whatever the buffer does with it
-      void window.api.lsp.saved([c.path]).catch(() => {})
       void window.api.files.read(c.path).then(
         (d) => {
           // What is typed but not yet sent counts as edited: a reload must not take it (second pass R2-1).

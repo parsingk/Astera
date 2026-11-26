@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { languageServerPathProblem, languageServersOf, readLanguageServers } from './languageServers'
+import { interpreterPathProblem, languageServerPathProblem, languageServersOf, readLanguageServers } from './languageServers'
 
 // Phase 3 Part 3: the "언어 서버" settings in app-settings.json, narrowed the same way by main's store and the Host
 const dirs: string[] = []
@@ -44,5 +44,15 @@ describe('languageServerPathProblem', () => {
     expect(languageServerPathProblem('python', path.resolve('p', 'langserver.index.js'))).toBeNull()
     expect(languageServerPathProblem('python', path.resolve('p', 'pyright.js'))).not.toBeNull()
     expect(languageServerPathProblem('python', 'langserver.index.js')).not.toBeNull()
+  })
+})
+
+// Final review M13: the field kept showing an interpreter the settings silently dropped
+describe('interpreterPathProblem', () => {
+  it('refuses a relative interpreter and a batch file, and takes an absolute one', () => {
+    expect(interpreterPathProblem('python.exe')).toMatch(/absolute/)
+    expect(interpreterPathProblem(path.resolve('py', 'python.cmd'))).toMatch(/batch/)
+    expect(interpreterPathProblem(path.resolve('py', 'PYTHON.BAT'))).toMatch(/batch/)
+    expect(interpreterPathProblem(path.resolve('py', 'python.exe'))).toBeNull()
   })
 })

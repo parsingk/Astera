@@ -1717,10 +1717,13 @@ export interface CoreApi {
   /** Language servers (Phase 3 Part 3): the editor's open files and saves, and Settings > language servers */
   lsp: {
     setOpen(files: LspOpenFile[]): Promise<void>
-    saved(paths: string[]): Promise<void>
+    /** Saved or changed on disk, and deleted on disk */
+    saved(paths: string[], deleted?: string[]): Promise<void>
     status(): Promise<{ servers: LspServerStatus[]; installed: LspInstalled[] }>
     install(server: string): Promise<unknown>
     remove(server: string): Promise<unknown>
+    /** Starts a server for a root again: a failed one, or one stopped to make room */
+    restart(server: string, root: string): Promise<unknown>
     log(server: string, root: string): Promise<{ lines: string[] }>
     venvFor(project: string): Promise<string | null>
   }

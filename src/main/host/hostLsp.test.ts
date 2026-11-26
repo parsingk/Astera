@@ -54,6 +54,31 @@ describe('createHostLspView', () => {
     expect(r.sent[1]).toEqual({ t: 'lsp-saved', paths: [path.join(A, 'a.ts')] })
   })
 
+  // Final review C2 and I3: a settings change asks the Host to refresh; deletions on disk ride with the saves
+  it('sends the open set marked for a refresh, and deletions with the saves', async () => {
+    const r = rig()
+    const open = [{ path: path.join(A, 'a.ts'), root: A }]
+    await r.view.setOpen(open)
+    await r.view.refresh()
+    expect(r.sent[1]).toEqual({ t: 'lsp-sync', open, interpreters: {}, refresh: true })
+    r.view.saved([path.join(A, 'b.py')], [path.join(A, 'gone.py')])
+    expect(r.sent[2]).toEqual({ t: 'lsp-saved', paths: [path.join(A, 'b.py')], deleted: [path.join(A, 'gone.py')] })
+    r.view.saved([], [path.join(A, 'gone2.py')])
+    expect(r.sent[3]).toEqual({ t: 'lsp-saved', paths: [], deleted: [path.join(A, 'gone2.py')] })
+    r.view.saved([], [])
+    expect(r.sent).toHaveLength(4)
+  })
+
+  // Final review M13: a file over the bound is kept as skipped, so the Problems list can say it was not checked
+  it('keeps a file the Host skipped as too large, and forgets it once it has problems or none', () => {
+    const r = rig()
+    const skipped = { root: A, path: path.join(A, 'big.ts'), server: 'typescript' as const, producedAt: '2026-11-26T01:00:00.000Z', problems: [], skipped: 'too-large' as const }
+    r.view.pushed({ t: 'lsp-diagnostics', files: [skipped] })
+    expect(r.view.files(A)).toEqual([skipped])
+    r.view.pushed({ t: 'lsp-diagnostics', files: [{ ...skipped, skipped: undefined }] })
+    expect(r.view.files(A)).toEqual([])
+  })
+
   it('replaces a file’s problems per push and clears all when the Host drops', () => {
     const r = rig()
     const file = { root: A, path: path.join(A, 'a.ts'), server: 'typescript' as const, producedAt: '2026-11-26T01:00:00.000Z', problems: [problem] }

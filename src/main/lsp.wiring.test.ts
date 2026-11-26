@@ -19,17 +19,32 @@ describe('language servers in main', () => {
     expect(ipc).toContain('client.onStatusChange(() => lspView.status())')
   })
 
+  // Final review I4: the servers' states feed a note per unchecked root
   it('feeds Problems only while the switch is on', () => {
-    expect(ipc).toMatch(/lspProducer\(\{\s*files: \(p\) => \(core\.appSettings\.getWorkspaceFeatures\(\)\.languageServers \? lspView\.files\(p\) : \[\]\),\s*stat: statMtime\s*\}\)/)
+    expect(ipc).toMatch(
+      /lspProducer\(\{\s*files: \(p\) => \(core\.appSettings\.getWorkspaceFeatures\(\)\.languageServers \? lspView\.files\(p\) : \[\]\),\s*servers: \(\) => \(core\.appSettings\.getWorkspaceFeatures\(\)\.languageServers \? lspView\.servers\(\) : \[\]\),\s*stat: statMtime\s*\}\)/
+    )
+  })
+
+  // Final review C2, I3, M7, M13: a settings change refreshes, deletions ride with the saves, the open set's guard
+  // resolves `..`, and an interpreter that cannot be pyright's is refused
+  it('refreshes after a settings change, passes deletions, guards with isPathWithin, and refuses a bad interpreter', () => {
+    expect(ipc).toMatch(/await core\.appSettings\.setLanguageServers\(next\)[\s\S]{0,300}await lspView\.refresh\(\)/)
+    expect(ipc).toMatch(/interpreterPathProblem\(next\.python\.interpreter\)/)
+    expect(ipc).toMatch(/ipcMain\.handle\('lsp\.saved', \(_e, paths: unknown, deleted: unknown\) => \{\s*lspView\.saved\(strings\(paths\), strings\(deleted\)\)/)
+    expect(ipc).toMatch(/!isPathWithin\(o\.root, o\.path\)\) continue/)
+    expect(ipc).toMatch(/ipcMain\.handle\('lsp\.restart', \(_e, server: string, root: string\) => lspAnswer\(lspRoute, 'lsp-restart', \{ server, root \}\)\)/)
   })
 
   it('answers the window: open files, saves, status, install, remove, log, a project’s venv, and the settings', () => {
-    for (const ch of ['lsp.setOpen', 'lsp.saved', 'lsp.status', 'lsp.install', 'lsp.remove', 'lsp.log', 'lsp.venvFor', 'settings.getLanguageServers', 'settings.setLanguageServers'])
+    for (const ch of ['lsp.setOpen', 'lsp.saved', 'lsp.status', 'lsp.install', 'lsp.remove', 'lsp.restart', 'lsp.log', 'lsp.venvFor', 'settings.getLanguageServers', 'settings.setLanguageServers'])
       expect(ipc, ch).toContain(`ipcMain.handle('${ch}'`)
     expect(ipc).toMatch(/languageServerPathProblem\(/)
-    expect(preload).toMatch(/lsp: \{\s*setOpen: invoke\('lsp\.setOpen'\),\s*saved: invoke\('lsp\.saved'\),\s*status: invoke\('lsp\.status'\),\s*install: invoke\('lsp\.install'\),\s*remove: invoke\('lsp\.remove'\),\s*log: invoke\('lsp\.log'\),\s*venvFor: invoke\('lsp\.venvFor'\)\s*\}/)
+    expect(preload).toMatch(/lsp: \{\s*setOpen: invoke\('lsp\.setOpen'\),\s*saved: invoke\('lsp\.saved'\),\s*status: invoke\('lsp\.status'\),\s*install: invoke\('lsp\.install'\),\s*remove: invoke\('lsp\.remove'\),\s*restart: invoke\('lsp\.restart'\),\s*log: invoke\('lsp\.log'\),\s*venvFor: invoke\('lsp\.venvFor'\)\s*\}/)
     expect(preload).toContain("getLanguageServers: invoke('settings.getLanguageServers'),")
     expect(types).toContain('getLanguageServers(): Promise<LanguageServerSettings>')
+    expect(types).toContain('saved(paths: string[], deleted?: string[]): Promise<void>')
+    expect(types).toContain('restart(server: string, root: string): Promise<unknown>')
     expect(types).toMatch(/'lsp:state'/)
   })
 })

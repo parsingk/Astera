@@ -309,6 +309,7 @@ const api = {
     status: invoke('lsp.status'),
     install: invoke('lsp.install'),
     remove: invoke('lsp.remove'),
+    restart: invoke('lsp.restart'),
     log: invoke('lsp.log'),
     venvFor: invoke('lsp.venvFor')
   },

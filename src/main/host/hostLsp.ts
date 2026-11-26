@@ -1,8 +1,9 @@
 // The app's view of the Host's language servers (Phase 3 Part 3). The window says which files are open (`setOpen`, whole
-// each time) and which were saved; this sends them to a Host that announced `lsp`, with the Python interpreter for each
-// root that has a Python file open, and sends the whole set again after every handshake. The Host pushes each file's
-// problems and every server's state; this keeps the latest per file for the Problems list and forgets them all when the
-// Host goes. It never throws, the hostDriver.ts rule. ipc.ts only wires it.
+// each time) and which were saved, changed or deleted on disk; this sends them to a Host that announced `lsp`, with the
+// Python interpreter for each root that has a Python file open, and sends the whole set again after every handshake and,
+// marked for a refresh, after a settings change. The Host pushes each file's problems and every server's state; this
+// keeps the latest per file (a file skipped as too large too) for the Problems list and forgets them all when the Host
+// goes. It never throws, the hostDriver.ts rule. ipc.ts only wires it.
 import { isUnder } from '../../core/context/contextRef'
 import { foldPathCase } from '../../core/files/paths'
 import { HOST_FEATURE_LSP, type ClientMessage, type HostMessage } from '../../core/host/protocol'
@@ -12,9 +13,11 @@ import { venvInterpreterPaths, type PythonInterpreter } from '../../core/run/pyt
 
 export interface HostLspView {
   setOpen(files: LspOpenFile[]): Promise<void>
-  saved(paths: string[]): void
+  saved(paths: string[], deleted?: string[]): void
   pushed(m: HostMessage): void
   connected(): Promise<void>
+  /** After a settings change: the open set again, marked for the Host to start again what the change may have changed. */
+  refresh(): Promise<void>
   status(): void
   files(project: string): LspFileDiagnostics[]
   servers(): LspServerStatus[]
@@ -73,7 +76,7 @@ export function createHostLspView(d: {
     }
   }
 
-  const sendOpen = async (): Promise<void> => {
+  const sendOpen = async (refresh = false): Promise<void> => {
     const mine = ++asks
     if (!speaks()) return
     const files = open
@@ -87,7 +90,7 @@ export function createHostLspView(d: {
     }
     // A newer set went out while this one asked: it is the one the Host needs
     if (mine !== asks) return
-    d.send({ t: 'lsp-sync', open: files, interpreters })
+    d.send({ t: 'lsp-sync', open: files, interpreters, ...(refresh ? { refresh: true as const } : {}) })
   }
 
   return {
@@ -95,15 +98,15 @@ export function createHostLspView(d: {
       open = files
       return sendOpen()
     },
-    saved(paths) {
-      if (paths.length > 0 && speaks()) d.send({ t: 'lsp-saved', paths })
+    saved(paths, deleted = []) {
+      if (paths.length + deleted.length > 0 && speaks()) d.send({ t: 'lsp-saved', paths, ...(deleted.length > 0 ? { deleted } : {}) })
     },
     pushed(m) {
       try {
         if (m.t === 'lsp-diagnostics') {
           for (const f of m.files) {
             const key = `${f.server}|${foldPathCase(f.path)}`
-            if (f.problems.length === 0) problems.delete(key)
+            if (f.problems.length === 0 && f.skipped === undefined) problems.delete(key)
             else problems.set(key, f)
           }
           d.changed()
@@ -116,6 +119,7 @@ export function createHostLspView(d: {
       }
     },
     connected: () => sendOpen(),
+    refresh: () => sendOpen(true),
     status() {
       let connected = false
       try {
