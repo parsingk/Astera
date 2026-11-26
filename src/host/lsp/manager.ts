@@ -14,7 +14,7 @@ import { languageOf } from '../../core/lsp/languages'
 import { projectTypescriptMajor } from '../../core/lsp/projectTypescript'
 import { pythonPathFor, typescriptServerFor } from '../../core/lsp/servers'
 import type { LanguageServerSettings, LspFileDiagnostics, LspLanguage, LspNote, LspOpenFile, LspProblem, LspServerId, LspServerStatus, LspWhy } from '../../core/lsp/model'
-import { lspLaunch, lspLogFile, startLspSession, type LspSession } from './session'
+import { LSP_TIMINGS, lspLaunch, lspLogFile, startLspSession, type LspSession } from './session'
 
 export interface LspManagerTimings {
   /** How long a server with no open file is kept. */
@@ -30,6 +30,9 @@ export interface LspManagerTimings {
 }
 
 export const LSP_MANAGER_TIMINGS: LspManagerTimings = { idleMs: 60_000, backoffMs: [1000, 2000], stableMs: 30_000, failAfter: 3, maxServers: 4 }
+
+/** How long a leaving Host waits for its language servers: a stop's grace after `exit`, the kill's, and a second more. */
+export const LSP_STOP_CAP_MS = LSP_TIMINGS.stopGraceMs * 2 + 1_000
 
 /** A file larger than this is not sent to a server. */
 export const LSP_FILE_MAX_BYTES = 2 * 1024 * 1024

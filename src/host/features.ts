@@ -6,6 +6,7 @@ import {
   HOST_FEATURE_DRIVER,
   HOST_FEATURE_EVENTS,
   HOST_FEATURE_JOURNAL,
+  HOST_FEATURE_LSP,
   HOST_FEATURE_MCP_HTTP,
   HOST_FEATURE_RECOVERY,
   HOST_FEATURE_SESSION_SIGNALS,
@@ -41,7 +42,8 @@ export function hostFeatures(a: { spawns: boolean; slack?: boolean; workspace?: 
   // `workspace` rides no spawner: the Host answers `app js` from any session, and index.ts asks for it
   // on every platform the workspace runs on (workspaceSupported: win32, linux, darwin). `mcp-http` (MCP HTTP §3)
   // rides nothing: every Host supervises the entrance, and one without the CLI paths reports it failed. `plugins`
-  // (plugin runtime design P5) rides nothing either: every Host keeps its profile's plugins.
+  // (plugin runtime design P5) rides nothing either: every Host keeps its profile's plugins, and `lsp` (Phase 3 Part 3)
+  // the same: every Host runs its app's language servers.
   // `session-signals` (plugin Phase 3) rides the spawner: the session events come from the rolling's hook tap and chains.
   return [
     ...spawning,
@@ -52,6 +54,7 @@ export function hostFeatures(a: { spawns: boolean; slack?: boolean; workspace?: 
     HOST_FEATURE_MCP_HTTP,
     HOST_FEATURE_REMOTE,
     HOST_FEATURE_PLUGINS,
+    HOST_FEATURE_LSP,
     ...(a.workspace === true ? [HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKSPACE_SIZE] : [])
   ]
 }

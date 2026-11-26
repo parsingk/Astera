@@ -4,6 +4,7 @@
 import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } from './remoteSessions'
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
+import { LSP_COMMANDS, lspCommand } from './lsp/commands'
 import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
 import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
 import { CREDENTIAL_COMMANDS, type HostCredentials } from './credentials/commands'
@@ -625,6 +626,9 @@ export function createHostOrch(a: {
   /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
    *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
   extensions?: Pick<HostExtensions, 'command'>
+  /** The language servers (Phase 3 Part 3): every `lsp-*` command, for this machine's app and CLI, routed like the
+   *  extensions. Absent: all of them answer 501. */
+  lsp?: Pick<Parameters<typeof lspCommand>[0], 'installer' | 'manager'>
   /** The agent profiles (Agent Profiles design §4): every `agent-profiles-*` command, for this machine's app and CLI,
    *  routed like the extensions. Absent: all of them answer 501. */
   agentProfiles?: Pick<HostAgentProfiles, 'command'>
@@ -2306,6 +2310,20 @@ export function createHostOrch(a: {
                 marks
               })
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Language servers**, for this machine's app and CLI (Phase 3 Part 3), the same way: no gate lists them, and an
+        // agent's shell may read their states but not install or remove one.
+        if (LSP_COMMANDS.has(cmd)) {
+          const answered = a.lsp
+            ? await lspCommand({
+                cmd,
+                args,
+                installer: a.lsp.installer,
+                manager: a.lsp.manager,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {})
+              })
+            : { status: 501, body: { error: 'this Host does not run language servers' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // **The findings** (lifecycle design §7, §8), the same way, before the agent profiles: the names are theirs to
