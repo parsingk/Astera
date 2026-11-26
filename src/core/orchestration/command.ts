@@ -110,7 +110,7 @@ import {
   type TaskStatus
 } from './types'
 import { runWorktrees } from './integrate'
-import { repairEligibility } from './taskRepair'
+import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
 import { taskFindings } from '../problems/completionProblems'
 import { isPathWithin } from '../files/tree'
 import { buildHandoverPrompt } from './handover'
@@ -5221,7 +5221,7 @@ export async function handleCommand(
         const r = resolveGate(s, { gateId: verdict.gateId as string, resolution: 'retry-once' }, now)
         if (!r.ok) return refused(r)
         from = r.state
-      } else from = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'ready' as const, updatedAt: now } : t)) }
+      } else from = readyForRepair(s, taskId, now)
       const opened = await deps.repairOnce({ taskId, from, asked })
       // Nothing was committed: the Task and its Gate stay as they were
       if (!opened.ok) return conflict(`the repair could not be opened: ${opened.error}`)
@@ -5229,7 +5229,8 @@ export async function handleCommand(
         .getState()
         .dispatches.filter((x) => x.taskId === taskId && x.askedFindings !== undefined)
         .at(-1)
-      return okBody({ taskId, via: verdict.via, ...(d ? { repairDispatchId: d.id } : {}) })
+      // How many findings rode, one per reference and at most ASKED_FINDINGS_MAX (final review M11)
+      return okBody({ taskId, via: verdict.via, ...(d ? { repairDispatchId: d.id } : {}), asked: capAsked(asked).length })
     }
     /** 질문에 답한다 — `gate-resolve` 의 공개 이름(공개 CLI 설계 §5 Phase B).
      *  답을 받는 플래그 이름도 사람의 말로 바뀐다(`--answer`). 서버 안에서는 한 자리로 간다 —

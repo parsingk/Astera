@@ -588,7 +588,10 @@ export function humanFor(
       return policyText(data)
     // Phase 3 Part 1: the attempt a person's repair request opened, or how the task would take one
     case 'tasks-repair': {
-      if (typeof data.repairDispatchId === 'string') return `asked task ${str(data.taskId)} for a repair (attempt ${data.repairDispatchId})`
+      if (typeof data.repairDispatchId === 'string') {
+        const n = typeof data.asked === 'number' ? data.asked : 0
+        return `asked task ${str(data.taskId)} to fix ${n} finding${n === 1 ? '' : 's'} (attempt ${data.repairDispatchId})`
+      }
       const how =
         data.via === 'failed'
           ? 'it failed'

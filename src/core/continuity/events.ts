@@ -390,7 +390,9 @@ function dispatchEvents(prev: OrchState, next: OrchState, now: string, stamp: st
           accountId: d.accountId,
           retryOf: d.retryOf ?? null,
           review: d.review === true,
-          repair: d.repair ?? null
+          repair: d.repair ?? null,
+          // A person's repair (Phase 3 Part 1): which findings they asked for, by reference only (final review M12)
+          ...(d.askedFindings ? { askedFindings: d.askedFindings.map((f) => f.ref) } : {})
         })
       )
       if (!isPlaceholder(d.sessionId)) out.push(started())

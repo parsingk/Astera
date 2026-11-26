@@ -80,11 +80,20 @@ describe('tasks-repair', () => {
   it('reopens a completed Task and opens one repair in a single write, with the app’s words for the finding', async () => {
     const deps = depsOver(seeded({ status: 'completed' }))
     const r = await handleCommand(deps, APP, 'tasks-repair', { task: 't1', finding: LINT_REF(), texts: { [LINT_REF()]: 'error src/a.ts:3 Lint: x is not defined' } })
-    expect(r).toEqual({ status: 200, body: { taskId: 't1', via: 'reopen', repairDispatchId: 'd2' } })
+    expect(r).toEqual({ status: 200, body: { taskId: 't1', via: 'reopen', repairDispatchId: 'd2', asked: 1 } })
     expect(deps.onces).toHaveLength(1)
     expect(deps.onces[0].from?.tasks[0].status).toBe('ready')
     expect(deps.onces[0].asked).toEqual([{ ref: LINT_REF(), text: 'error src/a.ts:3 Lint: x is not defined' }])
     expect(deps.writes).toBe(1)
+  })
+
+  // Final review I1: in the same write, so the loop never sees the dependent ready beside the reopened Task
+  it('takes back a ready Task built on the reopened one in the write that opens the repair', async () => {
+    const s = seeded({ status: 'completed' })
+    const withDependent = { ...s, tasks: [...s.tasks, { ...s.tasks[0], id: 't2', title: 'next', deps: ['t1'], status: 'ready' as const, checks: [], reviewIssues: [] }] }
+    const deps = depsOver(withDependent)
+    expect((await handleCommand(deps, APP, 'tasks-repair', { task: 't1' })).status).toBe(200)
+    expect(deps.onces[0].from?.tasks.find((t) => t.id === 't2')?.status).toBe('pending')
   })
 
   it('answers a Task’s exhausted repairs Gate as retry-once, with the findings', async () => {
