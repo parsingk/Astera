@@ -8,7 +8,7 @@ import { foldPathCase } from '../../core/files/paths'
 import { HOST_FEATURE_LSP, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { languageOf } from '../../core/lsp/languages'
 import type { LanguageServerSettings, LspFileDiagnostics, LspOpenFile, LspServerStatus } from '../../core/lsp/model'
-import type { PythonInterpreter } from '../../core/run/python'
+import { venvInterpreterPaths, type PythonInterpreter } from '../../core/run/python'
 
 export interface HostLspView {
   setOpen(files: LspOpenFile[]): Promise<void>
@@ -22,17 +22,32 @@ export interface HostLspView {
 
 const batch = (p: string): boolean => /\.(?:bat|cmd)$/i.test(p)
 
+/** The virtual environment's interpreter inside a project, found by looking whether its file is there (fs.access), never
+ *  by running it: the person has not allowed it yet (final review C1). */
+export async function venvInterpreterFor(root: string, exists: (p: string) => Promise<boolean>, platform: string): Promise<string | null> {
+  for (const candidate of venvInterpreterPaths(root, platform)) if (!batch(candidate) && (await exists(candidate))) return candidate
+  return null
+}
+
 /** pyright's interpreter for a root (design §5 Part 3, the person's decision): the project's own virtual environment once
  *  the person allowed it for that project, else the interpreter the person picked, else the first one found outside the
- *  project, else none. A batch file is never one (pyright would run it through a shell). */
-export function pickInterpreter(root: string, settings: LanguageServerSettings, found: readonly PythonInterpreter[]): string | null {
-  const usable = found.filter((i) => !batch(i.path))
-  if (settings.python.venvProjects.some((p) => isUnder(p, root) && isUnder(root, p))) {
-    const venv = usable.find((i) => isUnder(root, i.path))
-    if (venv) return venv.path
+ *  project, else none; none at all while Python is off. A batch file is never one (pyright would run it through a
+ *  shell). Nothing inside the project runs to find it (final review C1): an allowed venv is only checked to exist, and the
+ *  search outside skips every candidate inside the project. */
+export function createInterpreterLookup(d: {
+  exists(p: string): Promise<boolean>
+  listOutside(root: string): Promise<PythonInterpreter[]>
+  platform: string
+}): (root: string, settings: LanguageServerSettings) => Promise<string | null> {
+  return async (root, settings) => {
+    if (!settings.python.enabled) return null
+    if (settings.python.venvProjects.some((p) => isUnder(p, root) && isUnder(root, p))) {
+      const venv = await venvInterpreterFor(root, d.exists, d.platform)
+      if (venv !== null) return venv
+    }
+    if (settings.python.interpreter !== undefined && !batch(settings.python.interpreter)) return settings.python.interpreter
+    return (await d.listOutside(root)).find((i) => !batch(i.path) && !isUnder(root, i.path))?.path ?? null
   }
-  if (settings.python.interpreter !== undefined && !batch(settings.python.interpreter)) return settings.python.interpreter
-  return usable.find((i) => !isUnder(root, i.path))?.path ?? null
 }
 
 export function createHostLspView(d: {

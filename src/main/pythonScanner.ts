@@ -67,6 +67,8 @@ export interface PythonScanner {
   /** The detected interpreters for one project: its venv (if any) plus whatever is on PATH, deduped.
    *  Never rejects — a scan that fails answers what it could confirm (possibly nothing). */
   list(projectPath: string): Promise<PythonInterpreter[]>
+  /** The interpreters outside the project, nothing inside it checked or run (Phase 3 Part 3). Never rejects. */
+  listOutside(projectPath: string): Promise<PythonInterpreter[]>
 }
 
 export function createPythonScanner(deps: PythonScannerDeps = liveDeps): PythonScanner {
@@ -144,6 +146,36 @@ export function createPythonScanner(deps: PythonScannerDeps = liveDeps): PythonS
     return result
   }
 
+  /** The interpreters outside a project (Phase 3 Part 3, final review C1): what PATH resolves to, without any candidate
+   *  inside the project, a venv or a PATH entry an activated venv put there, ever being checked or run. Cached per
+   *  project and PATH like `list`. */
+  const outsideCache = new Map<string, Promise<PythonInterpreter[]>>()
+  const listOutside = (projectPath: string): Promise<PythonInterpreter[]> => {
+    const root = foldPathCase(projectPath, deps.platform).replace(/[\\/]+$/, '')
+    const key = `${root}\n--PATH--\n${envPath() ?? ''}`
+    const hit = outsideCache.get(key)
+    if (hit) return hit
+    const inside = (p: string): boolean => {
+      const f = foldPathCase(p, deps.platform)
+      return f === root || f.startsWith(`${root}\\`) || f.startsWith(`${root}/`)
+    }
+    const result = pathPythons()
+      .then((found) => found.filter((p) => !inside(p)))
+      .then(async (candidates) => {
+        const seen = new Set<string>()
+        const unique = candidates.filter((c) => {
+          const k = foldPathCase(c, deps.platform)
+          if (seen.has(k)) return false
+          seen.add(k)
+          return true
+        })
+        return (await Promise.all(unique.map(verify))).filter((p): p is PythonInterpreter => p !== null)
+      })
+      .catch(() => [] as PythonInterpreter[])
+    outsideCache.set(key, result)
+    return result
+  }
+
   // Two opens at once share one scan without further bookkeeping: the cache holds the scan's promise
   // and is checked and set with no await in between, so whichever open finishes its venv check second
   // finds the first one's scan already there.
@@ -152,7 +184,8 @@ export function createPythonScanner(deps: PythonScannerDeps = liveDeps): PythonS
       return lookup(projectPath, foldPathCase(projectPath, deps.platform)).catch(
         () => [] as PythonInterpreter[]
       )
-    }
+    },
+    listOutside
   }
 }
 
@@ -161,4 +194,9 @@ const scanner = createPythonScanner()
 /** The detected Python interpreters for one project (see createPythonScanner). */
 export function listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]> {
   return scanner.list(projectPath)
+}
+
+/** The detected Python interpreters outside a project, nothing of it run (createPythonScanner's listOutside). */
+export function listOutsidePythonInterpreters(projectPath: string): Promise<PythonInterpreter[]> {
+  return scanner.listOutside(projectPath)
 }

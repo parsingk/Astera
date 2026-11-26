@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import path from 'node:path'
 import type { ClientMessage } from '../../core/host/protocol'
 import type { LspProblem } from '../../core/lsp/model'
-import { createHostLspView, pickInterpreter } from './hostLsp'
+import { createHostLspView, createInterpreterLookup, venvInterpreterFor } from './hostLsp'
+import { venvInterpreterPaths } from '../../core/run/python'
 import { languageServersOf } from '../../core/settings/languageServers'
 
 // Phase 3 Part 3: the app's side of the Host's language servers
@@ -87,19 +88,38 @@ describe('createHostLspView', () => {
 })
 
 // pyright's interpreter for a root (design §5 Part 3, the person's decision): the project's venv once allowed for it,
-// else the one the person picked, else the first found outside the project; never a batch file
-describe('pickInterpreter', () => {
-  const venv = path.join(A, '.venv', 'Scripts', 'python.exe')
+// else the one the person picked, else the first found outside the project; never a batch file. Final review C1: nothing
+// inside the project runs to find it: an allowed venv is only checked to exist, and the search outside skips the project
+describe('createInterpreterLookup', () => {
+  const venv = venvInterpreterPaths(A, process.platform)[0]
   const outside = path.resolve('py', 'python.exe')
-  const found = [{ path: venv, version: '3.12.1' }, { path: path.resolve('py', 'python3.cmd'), version: '3.9' }, { path: outside, version: '3.11.4' }]
-  it('uses the project’s venv only when the person allowed it for that project', () => {
-    expect(pickInterpreter(A, languageServersOf({ python: { venvProjects: [A] } }), found)).toBe(venv)
-    expect(pickInterpreter(A, languageServersOf(undefined), found)).toBe(outside)
+  const rig = (existing: string[] = [venv]) => {
+    const exists = vi.fn(async (p: string) => existing.includes(p))
+    const listOutside = vi.fn(async (_root: string) => [{ path: path.resolve('py', 'python3.cmd'), version: '3.9' }, { path: outside, version: '3.11.4' }])
+    return { exists, listOutside, lookup: createInterpreterLookup({ exists, listOutside, platform: process.platform }) }
+  }
+
+  it('never runs a project interpreter: an allowed venv is only checked to exist, the search skips the project', async () => {
+    const r = rig()
+    expect(await r.lookup(A, languageServersOf({ python: { venvProjects: [A] } }))).toBe(venv)
+    expect(r.listOutside).not.toHaveBeenCalled()
+    expect(await r.lookup(A, languageServersOf(undefined))).toBe(outside)
+    expect(r.listOutside).toHaveBeenCalledWith(A)
+    // Not allowed: the venv is not even looked at
+    expect(r.exists.mock.calls.filter((c) => c[0] === venv)).toHaveLength(1)
   })
-  it('takes the person’s own interpreter before the first one found, and none when there is none', () => {
+
+  it('takes the person’s own interpreter before the one found, and none while Python is off', async () => {
     const own = path.resolve('mine', 'python.exe')
-    expect(pickInterpreter(A, languageServersOf({ python: { interpreter: own } }), found)).toBe(own)
-    expect(pickInterpreter(A, languageServersOf(undefined), [{ path: venv, version: '3.12' }])).toBeNull()
-    expect(pickInterpreter(A, languageServersOf(undefined), [])).toBeNull()
+    const r = rig()
+    expect(await r.lookup(A, languageServersOf({ python: { interpreter: own } }))).toBe(own)
+    expect(await r.lookup(A, languageServersOf({ python: { enabled: false } }))).toBeNull()
+    expect(await rig([]).lookup(A, languageServersOf({ python: { venvProjects: [A] } }))).toBe(outside)
+  })
+
+  it('names the venv found in a project by looking, never by running it', async () => {
+    const r = rig()
+    expect(await venvInterpreterFor(A, r.exists, process.platform)).toBe(venv)
+    expect(await venvInterpreterFor(A, rig([]).exists, process.platform)).toBeNull()
   })
 })

@@ -99,3 +99,19 @@ describe('createPythonScanner', () => {
     expect(m.access.mock.calls.some((c) => c[0].toLowerCase().includes('proj'))).toBe(true)
   })
 })
+
+// Phase 3 Part 3, final review C1: pyright's interpreter is looked for without running anything of the project: no venv
+// candidate inside it, and no PATH entry inside it either (an activated venv puts one there)
+describe('createPythonScanner().listOutside', () => {
+  it('never runs an interpreter inside the project, a venv or a PATH entry', async () => {
+    const venv = 'D:\\proj\\.venv\\Scripts\\python.exe'
+    const m = machine({ exists: new Set([SYSTEM, venv]), onPath: `${venv}\r\n${SYSTEM}\r\n` })
+    const scanner = createPythonScanner(m.deps)
+    expect(await scanner.listOutside('D:\\proj')).toEqual([{ path: SYSTEM, version: '3.11.4' }])
+    expect(m.version.mock.calls.map((c) => c[0])).toEqual([SYSTEM])
+    expect(m.access.mock.calls.map((c) => c[0])).not.toContain(venv)
+    // Asked again for the same root, nothing runs again
+    await scanner.listOutside('d:\\PROJ')
+    expect(m.version).toHaveBeenCalledTimes(1)
+  })
+})

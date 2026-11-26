@@ -254,7 +254,7 @@ import { createFileIndex } from './fileIndex'
 import { createQuickOpen } from './quickOpen'
 import { createTextSearch } from './textSearch'
 import { completionProducer, createProblems, createProblemsPing, lspProducer, statMtime, testProducer } from './problems'
-import { createHostLspView, pickInterpreter } from './host/hostLsp'
+import { createHostLspView, createInterpreterLookup, venvInterpreterFor } from './host/hostLsp'
 import { languageServerPathProblem, type LanguageServerSettings } from '../core/settings/languageServers'
 import type { LspOpenFile } from '../core/lsp/model'
 import { isUnder as isUnderRoot } from '../core/context/contextRef'
@@ -302,7 +302,7 @@ import { isThemeId } from '../core/theme/themes'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
-import { listPythonInterpreters } from './pythonScanner'
+import { listOutsidePythonInterpreters, listPythonInterpreters } from './pythonScanner'
 import { hasPythonProject } from '../core/run/python'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
@@ -1633,11 +1633,14 @@ export function registerIpc(
     return testResults.load(project, testConfigsOf(project))
   })
   // Language servers (Phase 3 Part 3): the window's open files and saves go to the Host through whatever client is up;
-  // its problems come back for the Problems list, its servers' states to Settings (main/host/hostLsp.ts)
+  // its problems come back for the Problems list, its servers' states to Settings (main/host/hostLsp.ts). pyright's
+  // interpreter is found without running anything inside the project (final review C1)
+  const fileExists = (p: string): Promise<boolean> => fs.access(p).then(() => true, () => false)
+  const interpreterLookup = createInterpreterLookup({ exists: fileExists, listOutside: listOutsidePythonInterpreters, platform: process.platform })
   const lspView = createHostLspView({
     status: () => hostClient?.status() ?? { connected: false, features: [] },
     send: (m) => hostClient?.send(m) ?? false,
-    interpreterFor: async (root) => pickInterpreter(root, core.appSettings.getLanguageServers(), await listPythonInterpreters(root).catch(() => [])),
+    interpreterFor: (root) => interpreterLookup(root, core.appSettings.getLanguageServers()),
     changed: () => problemsPing.touch(),
     stateChanged: (servers) => send('lsp:state', servers),
     log: orchLog
@@ -1672,8 +1675,7 @@ export function registerIpc(
   // The virtual environment found inside a project, which the person may allow pyright to use there
   ipcMain.handle('lsp.venvFor', async (_e, project: string) => {
     await assertAllowedPath(project)
-    const found = await listPythonInterpreters(project).catch(() => [])
-    return found.find((i) => isUnderRoot(project, i.path) && !/\.(?:bat|cmd)$/i.test(i.path))?.path ?? null
+    return venvInterpreterFor(project, fileExists, process.platform)
   })
   ipcMain.handle('settings.getLanguageServers', () => core.appSettings.getLanguageServers())
   ipcMain.handle('settings.setLanguageServers', async (_e, next: LanguageServerSettings) => {
