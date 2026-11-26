@@ -11,13 +11,17 @@ const orch = readFileSync(path.join(host, 'orch.ts'), 'utf8')
 const server = readFileSync(path.join(host, 'server.ts'), 'utf8')
 
 describe('the language servers in the Host', () => {
+  // Final review C2 and I3: a settings change refreshes after the sync; a deletion on disk rides with the saves
   it('takes the open set and the saves from a greeted app only', () => {
-    expect(index).toMatch(/if \(m\.t === 'lsp-sync'\) \{\s*if \(from\.greeted && from\.role === 'app'\) lspManager\.sync\(m\.open, m\.interpreters\)\s*return true\s*\}/)
-    expect(index).toMatch(/if \(m\.t === 'lsp-saved'\) \{\s*if \(from\.greeted && from\.role === 'app'\) lspManager\.saved\(m\.paths\)\s*return true\s*\}/)
+    expect(index).toMatch(
+      /if \(m\.t === 'lsp-sync'\) \{\s*if \(from\.greeted && from\.role === 'app'\) \{\s*lspSyncSocket = from\.socket\s*lspManager\.sync\(m\.open, m\.interpreters\)\s*if \(m\.refresh\) lspManager\.refresh\(\)\s*\}\s*return true\s*\}/
+    )
+    expect(index).toMatch(/if \(m\.t === 'lsp-saved'\) \{\s*if \(from\.greeted && from\.role === 'app'\) lspManager\.saved\(m\.paths, m\.deleted\)\s*return true\s*\}/)
   })
 
-  it('closes everything when the app’s connection goes, and stops every server when the Host leaves', () => {
-    expect(index).toMatch(/if \(from\.role === 'app'\) lspManager\.appGone\(\)/)
+  // Final review M6: only the connection that sent the open set takes it away when it goes
+  it('closes everything when the app’s syncing connection goes, and stops every server when the Host leaves', () => {
+    expect(index).toMatch(/if \(from\.role === 'app' && from\.socket === lspSyncSocket\) \{\s*lspSyncSocket = null\s*lspManager\.appGone\(\)\s*\}/)
     expect(index).toMatch(/disposeWithin\(lspManager\.stopAll\(\), LSP_STOP_CAP_MS,/)
   })
 

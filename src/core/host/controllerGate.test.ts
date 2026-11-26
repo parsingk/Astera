@@ -44,7 +44,7 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
   })
   // Phase 3 Part 3: the language servers run for this machine's app; a remote controller never installs or reads them
   it('refuses every lsp-* command to a full-control controller', () => {
-    expect(LSP_COMMANDS.size).toBe(4)
+    expect(LSP_COMMANDS.size).toBe(5)
     for (const cmd of LSP_COMMANDS) expect(controllerRefusal(cmd, p('full-control')), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
   })
   // Observe mode design §3, §12: the audit log and the rules are this machine's app's and CLI's only

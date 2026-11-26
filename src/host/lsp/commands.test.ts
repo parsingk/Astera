@@ -14,20 +14,29 @@ function rig(over: { install?: () => Promise<void> } = {}) {
     install: vi.fn(over.install ?? (async () => {})),
     remove: vi.fn(async () => {})
   }
+  const order: string[] = []
   const manager = {
     status: vi.fn(() => running),
-    stopServer: vi.fn(async () => {}),
+    refresh: vi.fn(() => {
+      order.push('refresh')
+    }),
+    restart: vi.fn(),
+    withServerStopped: vi.fn(async (id: string, fn: () => Promise<void>) => {
+      order.push(`stop ${id}`)
+      await fn()
+      order.push(`start ${id}`)
+    }),
     logFile: vi.fn((server: string, root: string) => `/logs/${server}-${root}.log`)
   }
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { agentRefusal?: string; readLog?: (f: string) => Promise<string> } = {}) =>
     lspCommand({ cmd, args, installer, manager, ...extra })
-  return { installer, manager, call }
+  return { installer, manager, call, order }
 }
 
 describe('lspCommand', () => {
   it('names its commands, and which change what is installed', () => {
-    expect([...LSP_COMMANDS]).toEqual(['lsp-status', 'lsp-install', 'lsp-remove', 'lsp-log'])
-    expect([...LSP_CHANGES]).toEqual(['lsp-install', 'lsp-remove'])
+    expect([...LSP_COMMANDS]).toEqual(['lsp-status', 'lsp-install', 'lsp-remove', 'lsp-restart', 'lsp-log'])
+    expect([...LSP_CHANGES]).toEqual(['lsp-install', 'lsp-remove', 'lsp-restart'])
   })
 
   it('answers the status: each running server and what is installed', async () => {
@@ -39,6 +48,8 @@ describe('lspCommand', () => {
     const r = rig()
     expect(await r.call('lsp-install', { server: 'python' })).toEqual({ status: 200, body: { server: 'python', installed: true } })
     expect(r.installer.install).toHaveBeenCalledWith('python')
+    // Final review C2: what was refused for want of it starts once it is there
+    expect(r.manager.refresh).toHaveBeenCalledTimes(1)
     expect((await r.call('lsp-install', { server: 'rust' })).status).toBe(400)
     expect((await r.call('lsp-install', {})).status).toBe(400)
   })
@@ -56,17 +67,23 @@ describe('lspCommand', () => {
     }
   })
 
-  it('stops a server everywhere before removing it', async () => {
+  // Final review M12: nothing starts the server again while its folder is being removed, and what used it is told after
+  it('removes a server while it is kept stopped everywhere, then refreshes', async () => {
     const r = rig()
-    const order: string[] = []
-    r.manager.stopServer.mockImplementation(async () => {
-      order.push('stop')
-    })
     r.installer.remove.mockImplementation(async () => {
-      order.push('remove')
+      r.order.push('remove')
     })
     expect(await r.call('lsp-remove', { server: 'typescript5' })).toEqual({ status: 200, body: { server: 'typescript5', installed: false } })
-    expect(order).toEqual(['stop', 'remove'])
+    expect(r.order).toEqual(['stop typescript5', 'remove', 'start typescript5', 'refresh'])
+  })
+
+  // Final review I4: a server that failed or was stopped to make room starts again when the person asks
+  it('restarts a server for a root, and refuses one without a root', async () => {
+    const r = rig()
+    expect(await r.call('lsp-restart', { server: 'python', root: '/r' })).toEqual({ status: 200, body: { server: 'python', root: '/r', restarted: true } })
+    expect(r.manager.restart).toHaveBeenCalledWith('python', '/r')
+    expect((await r.call('lsp-restart', { server: 'python' })).status).toBe(400)
+    expect((await r.call('lsp-restart', { server: 'python', root: '/r' }, { agentRefusal: 'for a person' })).status).toBe(403)
   })
 
   it('reads the last 200 lines of a server’s log for a root, and none when it has none', async () => {

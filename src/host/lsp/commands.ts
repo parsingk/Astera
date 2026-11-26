@@ -1,13 +1,14 @@
 // The Host's `lsp-*` commands (Phase 3 Part 3), for this machine's app and CLI: the servers' states and what is
-// installed, an install or a removal the person approved in Settings, and a server's log. No gate lists them, so a remote
-// controller, an MCP client and a plugin are refused by default; an agent's shell may read but not change.
+// installed, an install or a removal the person approved in Settings, a restart they asked for, and a server's log. No
+// gate lists them, so a remote controller, an MCP client and a plugin are refused by default; an agent's shell may read
+// but not change.
 import { promises as fs } from 'node:fs'
 import type { LspInstalled, LspServerId, LspServerStatus } from '../../core/lsp/model'
 
-export const LSP_COMMANDS: ReadonlySet<string> = new Set(['lsp-status', 'lsp-install', 'lsp-remove', 'lsp-log'])
+export const LSP_COMMANDS: ReadonlySet<string> = new Set(['lsp-status', 'lsp-install', 'lsp-remove', 'lsp-restart', 'lsp-log'])
 
-/** The ones that change what is installed. */
-export const LSP_CHANGES: ReadonlySet<string> = new Set(['lsp-install', 'lsp-remove'])
+/** The ones that change what is installed or what runs. */
+export const LSP_CHANGES: ReadonlySet<string> = new Set(['lsp-install', 'lsp-remove', 'lsp-restart'])
 
 /** How many of a log's last lines `lsp-log` answers. */
 export const LSP_LOG_LINES = 200
@@ -26,7 +27,13 @@ export async function lspCommand(a: {
   cmd: string
   args: Record<string, unknown>
   installer: { list(): Promise<LspInstalled[]>; install(id: LspServerId): Promise<void>; remove(id: LspServerId): Promise<void> }
-  manager: { status(): LspServerStatus[]; stopServer(id: LspServerId): Promise<void>; logFile(server: LspServerId, root: string): string }
+  manager: {
+    status(): LspServerStatus[]
+    refresh(): void
+    restart(server: LspServerId, root: string): void
+    withServerStopped(id: LspServerId, fn: () => Promise<void>): Promise<void>
+    logFile(server: LspServerId, root: string): string
+  }
   agentRefusal?: string
   /** For tests: how a log is read. */
   readLog?: (file: string) => Promise<string>
@@ -43,11 +50,18 @@ export async function lspCommand(a: {
       } catch (e) {
         return failure(e)
       }
+      // What was refused for want of it starts now (final review C2)
+      a.manager.refresh()
       return { status: 200, body: { server: id, installed: true } }
     case 'lsp-remove':
-      await a.manager.stopServer(id)
-      await a.installer.remove(id)
+      // Kept stopped while its folder goes, so nothing starts it halfway (final review M12)
+      await a.manager.withServerStopped(id, () => a.installer.remove(id))
+      a.manager.refresh()
       return { status: 200, body: { server: id, installed: false } }
+    case 'lsp-restart':
+      if (typeof a.args.root !== 'string' || a.args.root === '') return { status: 400, body: { error: 'lsp-restart needs the root the server runs for' } }
+      a.manager.restart(id, a.args.root)
+      return { status: 200, body: { server: id, root: a.args.root, restarted: true } }
     case 'lsp-log': {
       if (typeof a.args.root !== 'string' || a.args.root === '') return { status: 400, body: { error: 'lsp-log needs the root the server runs for' } }
       const read = a.readLog ?? ((f: string) => fs.readFile(f, 'utf8'))

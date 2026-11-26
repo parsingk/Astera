@@ -41,19 +41,22 @@ const launch = (mode: string, env: Record<string, string> = {}, over: Partial<Ls
   ...over
 })
 
-function run(l: LspLaunch, timings: Parameters<typeof startLspSession>[1]['timings'] = {}) {
+function run(l: LspLaunch, timings: Parameters<typeof startLspSession>[1]['timings'] = {}, extra: Partial<Parameters<typeof startLspSession>[1]> = {}) {
   const calls: Array<[string, LspProblem[]]> = []
   const exits: Array<{ crashed: boolean; reason: string }> = []
+  const troubles: string[] = []
   let ready = false
   const session = startLspSession(l, {
     spawn,
     timings,
     onDiagnostics: (p, problems) => calls.push([p, problems]),
     onReady: () => (ready = true),
-    onExit: (why) => exits.push(why)
+    onExit: (why) => exits.push(why),
+    onTrouble: (reason) => troubles.push(reason),
+    ...extra
   })
   const latest = (p: string): LspProblem[] | undefined => calls.filter(([q]) => q === p).at(-1)?.[1]
-  return { session, calls, exits, latest, ready: () => ready }
+  return { session, calls, exits, troubles, latest, ready: () => ready }
 }
 
 describe('startLspSession', () => {
@@ -135,6 +138,103 @@ describe('startLspSession', () => {
     await r.session.shutdown()
   })
 
+  // Final review I2: pyright skips the overrides when a project has its own config file, so the Host drops those codes
+  it('drops the codes it was launched to drop', async () => {
+    const r = run(launch('codes', {}, { dropCodes: ['reportMissingImports', 'reportMissingModuleSource'] }))
+    const file = path.join(root, 'm.py')
+    r.session.open(file, 'import x\n')
+    await vi.waitFor(() => expect(r.latest(file)?.map((x) => x.code)).toEqual(['reportAssignmentType']), { timeout: 8000 })
+    await r.session.shutdown()
+  })
+
+  // Final review I3: pyright watches nothing itself; a server launched to be told hears of a file changed on disk
+  it('tells a server launched with watchFiles of a change on disk, and offers the capability only then', async () => {
+    const r = run(launch('watch', {}, { watchFiles: true }))
+    const file = path.join(root, 'a.py')
+    r.session.open(file, 'x = 1\n')
+    await vi.waitFor(() => expect(r.ready()).toBe(true), { timeout: 8000 })
+    await new Promise((res) => setTimeout(res, 200))
+    r.session.changed(path.join(root, 'util.py'), 'changed')
+    r.session.changed(path.join(root, 'gone.py'), 'deleted')
+    const told = (re: RegExp): boolean => r.calls.some(([p, probs]) => p === file && probs.some((x) => re.test(x.message)))
+    await vi.waitFor(() => expect([told(/util\.py 2$/), told(/gone\.py 3$/)]).toEqual([true, true]), { timeout: 8000 })
+    await r.session.shutdown()
+    const plain = run(launch('watch'))
+    const f2 = path.join(root, 'b.py')
+    plain.session.open(f2, 'x = 1\n')
+    await vi.waitFor(() => expect(plain.ready()).toBe(true), { timeout: 8000 })
+    plain.session.changed(path.join(root, 'util.py'), 'changed')
+    await new Promise((res) => setTimeout(res, 300))
+    expect(plain.calls.some(([, probs]) => probs.some((x) => x.message.startsWith('changed')))).toBe(false)
+    await plain.session.shutdown()
+  })
+
+  // Final review M3: a pull that does not answer is asked once more, and a second silence is said
+  it('asks a silent pull once more, and says so when the second is silent too', async () => {
+    const once = run(launch('pull-first-silent'), { pullMs: 300 })
+    const file = path.join(root, 'a.ts')
+    once.session.open(file, 'ERROR\n')
+    await vi.waitFor(() => expect(once.latest(file)?.[0]?.line).toBe(1), { timeout: 8000 })
+    expect(once.troubles).toEqual([])
+    await once.session.shutdown()
+    const never = run(launch('pull-silent'), { pullMs: 300 })
+    never.session.open(path.join(root, 'b.ts'), 'ERROR\n')
+    await vi.waitFor(() => expect(never.troubles).toHaveLength(1), { timeout: 8000 })
+    expect(never.troubles[0]).toMatch(/did not answer/)
+    await never.session.shutdown()
+  })
+
+  // Final review M4: only a project file a server reports on its own is kept unopened, as TypeScript 7's tsconfig errors
+  it('keeps a push for a file never opened only for a tsconfig or jsconfig', async () => {
+    const r = run(launch('push-stray'))
+    const file = path.join(root, 'a.ts')
+    r.session.open(file, 'ERROR\n')
+    await vi.waitFor(() => expect(r.latest(path.join(root, 'tsconfig.json'))?.[0]?.code).toBe('5102'), { timeout: 8000 })
+    expect(r.calls.some(([p]) => p === path.join(root, 'other.ts'))).toBe(false)
+    await r.session.shutdown()
+  })
+
+  // Final review M5: a document closed and opened again never reuses a version an earlier answer could still name
+  it('never reuses a version after a close and a reopen', async () => {
+    const r = run(launch('version'))
+    const file = path.join(root, 'a.ts')
+    r.session.open(file, 'x\n')
+    await vi.waitFor(() => expect(r.latest(file)?.[0]?.message).toBe('v1'), { timeout: 8000 })
+    r.session.close(file)
+    r.session.open(file, 'x\n')
+    await vi.waitFor(() => expect(r.latest(file)?.[0]?.message).toBe('v2'), { timeout: 8000 })
+    await r.session.shutdown()
+  })
+
+  // Final review M10: refreshes are coalesced, and a stderr without line ends is cut, not kept growing
+  it('pulls once for a burst of refreshes, and cuts a stderr that never ends its line', async () => {
+    const r = run(launch('refresh-storm'))
+    const file = path.join(root, 'a.ts')
+    r.session.open(file, 'x\n')
+    await vi.waitFor(() => expect(r.ready()).toBe(true), { timeout: 8000 })
+    await new Promise((res) => setTimeout(res, 600))
+    const n = Number(/pulls=(\d+)/.exec(r.latest(file)?.[0]?.message ?? '')?.[1])
+    expect(n).toBeGreaterThan(0)
+    expect(n).toBeLessThanOrEqual(3)
+    await r.session.shutdown()
+    const l = launch('stderr-noline')
+    const s2 = run(l)
+    await vi.waitFor(() => expect(s2.ready()).toBe(true), { timeout: 8000 })
+    await new Promise((res) => setTimeout(res, 400))
+    await s2.session.shutdown()
+    const lines = readFileSync(l.log, 'utf8').split('\n').filter((x) => x.includes('[stderr]'))
+    expect(lines.length).toBeGreaterThan(0)
+    expect(Math.max(...lines.map((x) => x.length))).toBeLessThan(70 * 1024)
+  })
+
+  // Final review M11: elsewhere than Windows, what is left of a server's process group ends with it
+  it('ends what is left of the process group when a server exits, elsewhere than Windows', async () => {
+    const ended: number[] = []
+    const r = run(launch('crash'), {}, { platform: 'linux', endGroup: (pid) => ended.push(pid) })
+    await vi.waitFor(() => expect(r.exits).toHaveLength(1), { timeout: 8000 })
+    expect(ended).toEqual([r.session.pid])
+  })
+
   it.runIf(process.platform === 'win32')('matches the server’s lower-case encoded drive to the opened document', async () => {
     const r = run(launch('uri-lower'))
     const file = path.join(root, '한 글.ts')
@@ -155,6 +255,7 @@ describe('lspLaunch', () => {
     platform: 'win32',
     arch: 'x64',
     exists: () => true,
+    readText: () => JSON.stringify({ name: 'typescript', version: '5.9.3' }),
     ...over
   })
 
@@ -172,6 +273,23 @@ describe('lspLaunch', () => {
     expect(l.env.ASTERA_SESSION).toBeUndefined()
     expect((l.configuration?.('python') as { pythonPath: string }).pythonPath).toBe(path.join(path.resolve('prof'), 'language-servers', 'no-python', 'python'))
     expect(l.log).toMatch(/[\\/]logs[\\/]python-[0-9a-f]{8}\.log$/)
+  })
+
+  // Final review M14: the TypeScript next to typescript-language-server must be the pinned 5.9.3, or tls falls back to the
+  // project's own
+  it('refuses typescript5 when its TypeScript is not the pinned version', () => {
+    expect(lspLaunch(base({ server: 'typescript5', readText: () => JSON.stringify({ name: 'typescript', version: '5.4.0' }) }))).toEqual({ refused: expect.stringContaining('5.9.3'), why: 'not-installed' })
+    expect('refused' in lspLaunch(base({ server: 'typescript5', readText: () => JSON.stringify({ name: 'typescript', version: '5.9.3' }) }))).toBe(false)
+  })
+
+  it('launches pyright with the codes to drop and watching files when it has no interpreter', () => {
+    const none = lspLaunch(base({ pythonPath: pythonPathFor(null, path.resolve('prof')) })) as LspLaunch
+    expect(none.dropCodes).toEqual(['reportMissingImports', 'reportMissingModuleSource'])
+    expect(none.watchFiles).toBe(true)
+    const withOne = lspLaunch(base({ pythonPath: { pythonPath: path.resolve('py', 'python.exe'), missingImportsOff: false } })) as LspLaunch
+    expect(withOne.dropCodes).toBeUndefined()
+    expect(withOne.watchFiles).toBe(true)
+    expect((lspLaunch(base({ server: 'typescript' })) as LspLaunch).watchFiles).toBeUndefined()
   })
 
   it('gives typescript5 a tsserver path it checked, and no typings installer', () => {

@@ -418,11 +418,12 @@ export type ClientMessage =
    *  session the Host sources itself. A Host without the feature is sent none. */
   | { t: 'session-signal'; signal: SessionSignal }
   /** The files open in the app's editor, whole each time, with the Python interpreter for each root that has a Python file
-   *  open (null for none), for a Host that announced HOST_FEATURE_LSP. Fire and forget; taken only from a greeted app. */
-  | { t: 'lsp-sync'; open: LspOpenFile[]; interpreters: Record<string, string | null> }
-  /** Files saved in the editor or changed on disk while open: the Host reads them again. Fire and forget; taken only from a
-   *  greeted app. */
-  | { t: 'lsp-saved'; paths: string[] }
+   *  open (null for none), for a Host that announced HOST_FEATURE_LSP. `refresh` after a settings change: the Host starts
+   *  again what the change may have changed. Fire and forget; taken only from a greeted app. */
+  | { t: 'lsp-sync'; open: LspOpenFile[]; interpreters: Record<string, string | null>; refresh?: true }
+  /** Files saved in the editor or changed on disk, and files deleted on disk: the Host reads the open ones again and tells
+   *  a server that watches nothing itself of the rest. Fire and forget; taken only from a greeted app. */
+  | { t: 'lsp-saved'; paths: string[]; deleted?: string[] }
 
 export type HostMessage =
   | HostHelloMessage

@@ -13,7 +13,7 @@
 // 1 MiB a second); an exit that was not asked for is a crash, one after `shutdown`/`exit` never is.
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { hostWorkerBaseEnv } from '../../core/host/spawn'
 import { killProcessTree } from '../../core/run/kill'
@@ -55,6 +55,12 @@ export interface LspLaunch {
   log: string
   /** Folders made before the spawn (typescript-language-server's TEMP). */
   ensureDirs?: string[]
+  /** Problem codes never passed on: pyright's missing-import ones when it has no interpreter, since a project's own
+   *  pyright config makes it skip the overrides that turn them off (final review I2). */
+  dropCodes?: string[]
+  /** It is told of files changed on disk (`workspace/didChangeWatchedFiles`): pyright watches nothing itself (final review
+   *  I3). TypeScript 7 watches the disk on its own and is not offered this. */
+  watchFiles?: true
 }
 
 /** The environment a server starts with: the Host's own without what is the Host's alone and without any ASTERA_
@@ -91,9 +97,18 @@ export function lspLaunch(d: {
   platform?: string
   arch?: string
   exists?: (p: string) => boolean
+  /** For tests: how a package.json is read. */
+  readText?: (p: string) => string
 }): LspLaunch | LspRefused {
   const platform = d.platform ?? process.platform
   const exists = d.exists ?? existsSync
+  const readText = d.readText ?? ((p: string): string => {
+    try {
+      return readFileSync(p, 'utf8')
+    } catch {
+      return ''
+    }
+  })
   if (pathToUri(d.root, platform) === null) return { refused: `a server cannot be pointed at ${d.root}`, why: 'refused' }
   const log = lspLogFile(d.profileDir, d.server, d.root, platform)
   const missing = (p: string): LspRefused => ({ refused: `not installed: ${p} is missing`, why: 'not-installed' })
@@ -109,6 +124,16 @@ export function lspLaunch(d: {
     const tsserver = path.join(packageDir(d.profileDir, pins![1]), 'lib', 'tsserver.js')
     if (!exists(cli)) return missing(cli)
     if (!exists(tsserver)) return missing(tsserver)
+    // typescript-language-server reads this package.json and, when it is not a TypeScript, runs the project's own; the
+    // pinned version is checked at every launch, crash restarts too (final review M14)
+    const tsPackage = path.join(path.dirname(path.dirname(tsserver)), 'package.json')
+    let version: unknown
+    try {
+      version = (JSON.parse(readText(tsPackage)) as { version?: unknown }).version
+    } catch {
+      version = undefined
+    }
+    if (version !== pins![1].version) return { refused: `not installed: ${tsPackage} is not TypeScript ${pins![1].version}`, why: 'not-installed' }
     const tmp = path.join(lspDir(d.profileDir), 'tmp')
     return {
       server: d.server,
@@ -131,7 +156,9 @@ export function lspLaunch(d: {
     args: [entry, '--stdio'],
     env: serverEnv(d.env, { ELECTRON_RUN_AS_NODE: '1' }),
     configuration: (section) => pyrightConfiguration(section, python),
-    log
+    log,
+    watchFiles: true,
+    ...(python.missingImportsOff ? { dropCodes: ['reportMissingImports', 'reportMissingModuleSource'] } : {})
   }
 }
 
@@ -139,6 +166,9 @@ export interface LspSession {
   readonly pid: number | undefined
   open(path: string, text: string): void
   close(path: string): void
+  /** A file it has not open changed on disk (final review I3): told as `workspace/didChangeWatchedFiles` to a server
+   *  launched with `watchFiles`, nothing to another. */
+  changed(path: string, kind: 'created' | 'changed' | 'deleted'): void
   shutdown(): Promise<void>
 }
 
@@ -157,16 +187,46 @@ const LANGUAGE_ID: Readonly<Record<string, string>> = {
 const languageIdOf = (p: string): string => LANGUAGE_ID[path.extname(p).slice(1).toLowerCase()] ?? 'plaintext'
 
 /** What Astera offers a server: UTF-16 positions only, configuration and refresh answered, pull diagnostics through a
- *  dynamic registration (pyright needs the flag), versioned pushes, progress tokens. */
-const CLIENT_CAPABILITIES = {
+ *  dynamic registration (pyright needs the flag), versioned pushes, progress tokens, and watched files to a server
+ *  launched to be told of them. */
+const clientCapabilities = (l: LspLaunch): unknown => ({
   general: { positionEncodings: ['utf-16'] },
-  workspace: { configuration: true, workspaceFolders: true, diagnostics: { refreshSupport: true } },
+  workspace: {
+    configuration: true,
+    workspaceFolders: true,
+    diagnostics: { refreshSupport: true },
+    ...(l.watchFiles ? { didChangeWatchedFiles: { dynamicRegistration: true } } : {})
+  },
   textDocument: {
     synchronization: { dynamicRegistration: false, didSave: false },
     diagnostic: { dynamicRegistration: true },
     publishDiagnostics: { versionSupport: true }
   },
   window: { workDoneProgress: true }
+})
+
+/** A file a server reports on its own that is not open: a tsconfig or jsconfig (TypeScript 7's config errors). Any other
+ *  is left out: a closed file's late answer, or a flood of URIs (final review M4). */
+const CONFIG_FILE = /^[tj]sconfig[^/\\]*\.json$/i
+
+/** The longest stderr line kept; a longer one is cut rather than kept growing (final review M10). */
+const STDERR_LINE_MAX = 64 * 1024
+
+/** Elsewhere than Windows, what is left of a server's process group once it exited: SIGTERM, then SIGKILL after a grace
+ *  (the plugin runtime's endGroup, final review M11). A group with nothing left in it is no error. */
+function endProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
+  }, 2_000).unref()
 }
 
 interface Doc {
@@ -184,8 +244,12 @@ export function startLspSession(
     onDiagnostics(path: string, problems: LspProblem[]): void
     onReady(): void
     onExit(why: { crashed: boolean; reason: string }): void
+    /** Something the person should see on the server's status: a pull that did not answer twice. */
+    onTrouble?(reason: string): void
     platform?: string
     now?: () => number
+    /** For tests: how what is left of a process group is ended elsewhere than Windows. */
+    endGroup?: (pid: number) => void
   }
 ): LspSession {
   const t: LspTimings = { ...LSP_TIMINGS, ...d.timings }
@@ -227,6 +291,11 @@ export function startLspSession(
   let finished = false
   let crashReason: string | null = null
   let pulls = false
+  /** One version counter for the whole session: a document closed and opened again never reuses one (final review M5). */
+  let nextVersion = 0
+  const droppedCodes = new Set(l.dropCodes ?? [])
+  const kept = (problems: LspProblem[]): LspProblem[] =>
+    droppedCodes.size === 0 ? problems : problems.filter((x) => x.code === undefined || !droppedCodes.has(x.code))
   let resolveExit: () => void = () => {}
   const exited = new Promise<void>((r) => (resolveExit = r))
 
@@ -256,7 +325,8 @@ export function startLspSession(
     d.onExit(why)
   }
 
-  const pull = (doc: Doc): void => {
+  /** A pull that does not answer is asked once more; a second silence goes on the server's status (final review M3). */
+  const pull = (doc: Doc, again = true): void => {
     const asked = doc.version
     client.request('textDocument/diagnostic', { textDocument: { uri: doc.uri } }, { timeoutMs: t.pullMs }).then(
       (res) => {
@@ -264,13 +334,29 @@ export function startLspSession(
         if (!cur || cur.version !== asked) return
         const r = (typeof res === 'object' && res !== null ? res : {}) as { kind?: unknown; items?: unknown }
         if (r.kind === 'unchanged') return
-        d.onDiagnostics(cur.path, toProblems(r.items))
+        d.onDiagnostics(cur.path, kept(toProblems(r.items)))
       },
-      (e: unknown) => say(`pull of ${doc.path} failed: ${e instanceof Error ? e.message : String(e)}`)
+      (e: unknown) => {
+        const message = e instanceof Error ? e.message : String(e)
+        say(`pull of ${doc.path} failed: ${message}`)
+        const cur = docs.get(key(doc.path))
+        if (!cur || cur.version !== asked || finished || stopping) return
+        if (again && (e as { code?: unknown })?.code === 'timeout') return pull(cur, false)
+        d.onTrouble?.(`a pull of ${doc.path} did not answer: ${message}`)
+      }
     )
   }
   const pullAll = (): void => {
     if (ready && pulls) for (const doc of docs.values()) pull(doc)
+  }
+  // A burst of refreshes (TypeScript 7 sends one per disk change) pulls once (final review M10)
+  let pullTimer: ReturnType<typeof setTimeout> | null = null
+  const pullAllSoon = (): void => {
+    if (pullTimer) return
+    pullTimer = setTimeout(() => {
+      pullTimer = null
+      pullAll()
+    }, 50)
   }
 
   const sendOpen = (doc: Doc): void => {
@@ -286,11 +372,11 @@ export function startLspSession(
     const doc = docs.get(key(named))
     if (doc) {
       if (typeof p.version === 'number' && p.version !== doc.version) return
-      d.onDiagnostics(doc.path, toProblems(p.diagnostics))
+      d.onDiagnostics(doc.path, kept(toProblems(p.diagnostics)))
       return
     }
-    // A file never opened (TypeScript 7's tsconfig errors), kept only inside the root
-    if (isUnder(l.root, named)) d.onDiagnostics(named, toProblems(p.diagnostics))
+    // A file never opened: only a tsconfig or jsconfig inside the root (TypeScript 7's config errors)
+    if (CONFIG_FILE.test(path.basename(named)) && isUnder(l.root, named)) d.onDiagnostics(named, kept(toProblems(p.diagnostics)))
   }
 
   const onRequest = (method: string, params: unknown): unknown => {
@@ -305,11 +391,11 @@ export function startLspSession(
         if (Array.isArray(p.registrations) && p.registrations.some((r: unknown) => (r as { method?: unknown } | null)?.method === 'textDocument/diagnostic')) {
           const was = pulls
           pulls = true
-          if (!was) pullAll()
+          if (!was) pullAllSoon()
         }
         return null
       case 'workspace/diagnostic/refresh':
-        setTimeout(pullAll, 0)
+        pullAllSoon()
         return null
       default:
         // client/unregisterCapability, window/workDoneProgress/create, window/showMessageRequest and the rest
@@ -351,8 +437,9 @@ export function startLspSession(
     })
   } catch (e) {
     queueMicrotask(() => finish({ crashed: true, reason: `it could not be started: ${e instanceof Error ? e.message : String(e)}` }))
-    return { pid: undefined, open: () => {}, close: () => {}, shutdown: async () => {} }
+    return { pid: undefined, open: () => {}, close: () => {}, changed: () => {}, shutdown: async () => {} }
   }
+  const pid = proc.pid
   say(`started pid ${proc.pid ?? '?'}: ${l.file} ${l.args.join(' ')}`)
   proc.stdout?.on('data', (chunk: Buffer) => feed(chunk))
   let partial = ''
@@ -361,12 +448,17 @@ export function startLspSession(
     const parts = text.split('\n')
     partial = parts.pop() ?? ''
     for (const line of parts) say(`[stderr] ${line.replace(/\r$/, '')}`)
+    if (partial.length > STDERR_LINE_MAX) {
+      say(`[stderr] ${partial.slice(0, STDERR_LINE_MAX)}… (cut)`)
+      partial = ''
+    }
   })
   proc.stdin?.on('error', () => {
     // A server that went: its exit says so
   })
   proc.on('error', (e) => finish({ crashed: true, reason: `it could not be started: ${e.message}` }))
   proc.on('exit', (code, signal) => {
+    if (platform !== 'win32' && pid !== undefined) (d.endGroup ?? endProcessGroup)(pid)
     if (stopping && crashReason === null) return finish({ crashed: false, reason: `stopped (exit ${code ?? signal})` })
     const how = code !== null ? `code ${code}` : `signal ${signal}`
     finish({ crashed: true, reason: crashReason ?? (ready ? `it exited on its own (${how})` : `it exited before it was ready (${how})`) })
@@ -382,7 +474,7 @@ export function startLspSession(
         rootUri,
         rootPath: l.root,
         workspaceFolders: rootUri === null ? null : [{ uri: rootUri, name: path.basename(l.root) }],
-        capabilities: CLIENT_CAPABILITIES,
+        capabilities: clientCapabilities(l),
         ...(l.initializationOptions !== undefined ? { initializationOptions: l.initializationOptions } : {})
       },
       { timeoutMs: t.initializeMs }
@@ -416,7 +508,7 @@ export function startLspSession(
       const had = docs.get(k)
       const uri = pathToUri(p, platform)
       if (uri === null) return
-      const doc: Doc = { path: p, uri, version: (had?.version ?? 0) + 1, text }
+      const doc: Doc = { path: p, uri, version: ++nextVersion, text }
       docs.set(k, doc)
       if (!ready || finished) return
       if (had) client.notify('textDocument/didClose', { textDocument: { uri: had.uri } })
@@ -429,6 +521,12 @@ export function startLspSession(
       docs.delete(k)
       if (ready && !finished) client.notify('textDocument/didClose', { textDocument: { uri: had.uri } })
       d.onDiagnostics(had.path, [])
+    },
+    changed(p, kind) {
+      if (!l.watchFiles || !ready || finished) return
+      const uri = pathToUri(p, platform)
+      if (uri === null) return
+      client.notify('workspace/didChangeWatchedFiles', { changes: [{ uri, type: kind === 'created' ? 1 : kind === 'changed' ? 2 : 3 }] })
     },
     async shutdown() {
       if (finished) return
@@ -443,6 +541,7 @@ export function startLspSession(
         client.notify('exit')
         proc?.stdin?.end()
       }
+      if (pullTimer) clearTimeout(pullTimer)
       if (!(await exitedWithin(t.stopGraceMs))) {
         killTree()
         if (!(await exitedWithin(t.stopGraceMs))) finish({ crashed: false, reason: 'it was killed and its end was not seen' })

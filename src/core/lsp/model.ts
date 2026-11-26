@@ -30,6 +30,8 @@ export interface LspFileDiagnostics {
   server: LspServerId
   producedAt: string
   problems: LspProblem[]
+  /** The file was not sent to a server: larger than 2 MiB (final review M13). Its problems are empty. */
+  skipped?: 'too-large'
 }
 
 /** Why a server's status carries a word for the person: the project seems to use an older TypeScript, or the

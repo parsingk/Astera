@@ -966,6 +966,8 @@ async function main(): Promise<void> {
   // The settings are read at each start, as the app writes them
   const lspNpm = createNpm({ profileDir, env: process.env, node: process.execPath })
   const lspInstaller = createLspInstaller({ profileDir, npm: lspNpm })
+  /** The app connection whose open set the servers serve (final review M6). */
+  let lspSyncSocket: number | null = null
   const lspManager = createLspManager({
     profileDir,
     exec: process.execPath,
@@ -1466,11 +1468,15 @@ async function main(): Promise<void> {
         // Phase 3 Part 3: the app's open files, whole each time, and its saves, for the language servers. From a greeted
         // app only
         if (m.t === 'lsp-sync') {
-          if (from.greeted && from.role === 'app') lspManager.sync(m.open, m.interpreters)
+          if (from.greeted && from.role === 'app') {
+            lspSyncSocket = from.socket
+            lspManager.sync(m.open, m.interpreters)
+            if (m.refresh) lspManager.refresh()
+          }
           return true
         }
         if (m.t === 'lsp-saved') {
-          if (from.greeted && from.role === 'app') lspManager.saved(m.paths)
+          if (from.greeted && from.role === 'app') lspManager.saved(m.paths, m.deleted)
           return true
         }
         // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
@@ -1481,8 +1487,12 @@ async function main(): Promise<void> {
       // closes. A socket that never held a pty, which is every CLI call, runs no sweep (exits.ts).
       onClientGone: (from) => {
         exits?.appGone(from.socket)
-        // Phase 3 Part 3: no app, no open files; the servers stop after their idle wait
-        if (from.role === 'app') lspManager.appGone()
+        // Phase 3 Part 3: no app, no open files; the servers stop after their idle wait. Only the connection that sent
+        // the open set takes it away: an old one noticed late after a reconnect must not close the new one's files
+        if (from.role === 'app' && from.socket === lspSyncSocket) {
+          lspSyncSocket = null
+          lspManager.appGone()
+        }
         // Phase 8 (N2): what this socket paused is resumed, so a dead app does not leave a pty frozen.
         handlePty?.socketGone(from.socket)
         procHolders.appGone(from.socket)

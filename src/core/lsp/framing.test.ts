@@ -54,4 +54,14 @@ describe('framing', () => {
     expect(r.got).toEqual([{}])
     expect(r.errors).toHaveLength(1)
   })
+
+  // Final review M10: a large message read in small chunks is copied once, not once per chunk
+  it('reads a 60 MB message in 16 KB chunks without copying it per chunk', () => {
+    const r = read()
+    const m = encodeMessage({ big: 'x'.repeat(60 * 1024 * 1024) })
+    const started = Date.now()
+    for (let i = 0; i < m.length; i += 16 * 1024) r.feed(m.subarray(i, i + 16 * 1024))
+    expect(r.got).toHaveLength(1)
+    expect(Date.now() - started).toBeLessThan(3000)
+  })
 })

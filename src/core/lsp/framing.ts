@@ -18,9 +18,22 @@ export function encodeMessage(body: unknown): Buffer {
 export function createMessageReader(o: { maxBytes: number; onMessage(m: unknown): void; onError(e: Error): void }): (chunk: Buffer) => void {
   let pending: Buffer = Buffer.alloc(0)
   let stopped = false
+  // While a body longer than what has arrived is awaited, chunks are kept aside and joined once it is whole: joining each
+  // chunk onto the rest copied a large message once per chunk (final review M10)
+  let awaited = -1
+  let parts: Buffer[] = []
+  let partsLength = 0
   return (chunk) => {
     if (stopped) return
-    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
+    if (awaited >= 0) {
+      parts.push(chunk)
+      partsLength += chunk.length
+      if (pending.length + partsLength < awaited) return
+      pending = Buffer.concat([pending, ...parts])
+      parts = []
+      partsLength = 0
+      awaited = -1
+    } else pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
     for (;;) {
       const end = pending.indexOf(SEPARATOR)
       if (end < 0) {
@@ -45,7 +58,10 @@ export function createMessageReader(o: { maxBytes: number; onMessage(m: unknown)
         return
       }
       const start = end + SEPARATOR.length
-      if (pending.length < start + length) return
+      if (pending.length < start + length) {
+        awaited = start + length
+        return
+      }
       const body = pending.subarray(start, start + length).toString('utf8')
       pending = pending.subarray(start + length)
       let parsed: unknown

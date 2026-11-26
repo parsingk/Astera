@@ -3,7 +3,7 @@ import path from 'node:path'
 import type { LanguageServerSettings, LspFileDiagnostics, LspProblem, LspServerId, LspServerStatus } from '../../core/lsp/model'
 import { languageServersOf } from '../../core/settings/languageServers'
 import { createLspManager } from './manager'
-import type { LspLaunch, LspRefused, LspSession } from './session'
+import type { LspLaunch, LspRefused, LspSession, startLspSession } from './session'
 
 // Phase 3 Part 3: the Host's language servers, one per root and language, against fake sessions (no processes)
 const A = path.resolve('rootA')
@@ -13,8 +13,9 @@ interface Fake {
   launch: LspLaunch
   opens: Array<[string, string]>
   closes: string[]
+  changes: Array<[string, string]>
   shutdowns: number
-  cb: { onDiagnostics(p: string, problems: LspProblem[]): void; onReady(): void; onExit(why: { crashed: boolean; reason: string }): void }
+  cb: Parameters<typeof startLspSession>[1]
 }
 
 function rig(o: {
@@ -24,6 +25,10 @@ function rig(o: {
   settings?: LanguageServerSettings
   refuse?: (server: LspServerId) => LspRefused | null
   timings?: Parameters<typeof createLspManager>[0]['timings']
+  settingsFail?: boolean
+  launchFile?: () => string
+  readDelay?: () => Promise<void>
+  now?: () => number
 } = {}) {
   const files: Record<string, string> = { ...(o.files ?? {}) }
   const sessions: Fake[] = []
@@ -35,21 +40,25 @@ function rig(o: {
     exec: 'electron',
     env: {},
     installer: { installed: async (id) => (o.installed ?? ['typescript', 'typescript5', 'python']).includes(id) },
-    settings: async () => o.settings ?? languageServersOf(undefined),
+    settings: async () => {
+      if (o.settingsFail) throw new Error('app-settings.json could not be read')
+      return o.settings ?? languageServersOf(undefined)
+    },
     emit: (f) => emitted.push(f),
     state: (s) => states.push(s),
     log: () => {},
     launch: (d) => {
       pythonPaths.push(d.pythonPath?.pythonPath)
       const refused = o.refuse?.(d.server) ?? null
-      return refused ?? { server: d.server, root: d.root, file: 'x', args: [], env: {}, log: 'l' }
+      return refused ?? { server: d.server, root: d.root, file: o.launchFile?.() ?? 'x', args: [], env: {}, log: 'l' }
     },
     start: (launch, cb) => {
-      const f: Fake = { launch, opens: [], closes: [], shutdowns: 0, cb }
+      const f: Fake = { launch, opens: [], closes: [], changes: [], shutdowns: 0, cb }
       sessions.push(f)
       const s: LspSession = {
         pid: 100 + sessions.length,
         open: (p, text) => f.opens.push([p, text]),
+        changed: (p, kind) => f.changes.push([p, kind]),
         close: (p) => {
           f.closes.push(p)
           cb.onDiagnostics(p, [])
@@ -62,12 +71,14 @@ function rig(o: {
       return s
     },
     readFile: async (p) => {
+      await o.readDelay?.()
       const text = files[p]
       if (text === undefined) throw new Error(`ENOENT ${p}`)
       return Buffer.from(text, 'utf8')
     },
     stat: async (p) => (files[p] === undefined ? null : { size: o.sizes?.[p] ?? files[p].length }),
     exists: () => true,
+    ...(o.now ? { now: o.now } : {}),
     timings: { idleMs: 60_000, backoffMs: [10, 10], stableMs: 10_000, failAfter: 3, maxServers: 4, ...o.timings }
   })
   const last = (p: string): LspProblem[] | undefined => emitted.flat().filter((f) => f.path === p).at(-1)?.problems
@@ -92,6 +103,20 @@ describe('createLspManager', () => {
     expect(r.live()).toHaveLength(2)
     await vi.waitFor(() => expect(r.live()).toHaveLength(0))
     expect(r.m.status()).toEqual([])
+  })
+
+  // Final review M3: a pull that did not answer twice is said on the server's status, not only in its log
+  it('shows on the server status what the session said went wrong, until it is ready again', async () => {
+    const r = rig({ files: { [at(A, 'a.ts')]: 'a' } })
+    r.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    await r.m.settled()
+    const s = r.sessions[0]
+    s.cb.onReady()
+    const before = r.states.length
+    s.cb.onTrouble?.('a pull of a.ts did not answer: timeout')
+    expect(r.m.status()[0]).toMatchObject({ status: 'running', reason: 'a pull of a.ts did not answer: timeout' })
+    await vi.waitFor(() => expect(r.states.length).toBeGreaterThan(before))
+    expect(r.states.at(-1)?.[0]?.reason).toBe('a pull of a.ts did not answer: timeout')
   })
 
   it('closes what left the open set and clears its problems', async () => {
@@ -227,16 +252,172 @@ describe('createLspManager', () => {
     await r.m.stopAll()
   })
 
-  it('stops every server at stopAll, and one server everywhere at stopServer', async () => {
+  it('stops every server at stopAll, and one server everywhere at withServerStopped', async () => {
     const B = path.resolve('rootB')
     const r = rig({ files: { [at(A, 'a.ts')]: 'a', [at(B, 'b.ts')]: 'b', [at(A, 'c.py')]: 'c' } })
     r.m.sync([{ path: at(A, 'a.ts'), root: A }, { path: at(B, 'b.ts'), root: B }, { path: at(A, 'c.py'), root: A }], {})
     await r.m.settled()
-    await r.m.stopServer('typescript')
+    await r.m.withServerStopped('typescript', async () => {})
     expect(r.sessions.filter((s) => s.launch.server === 'typescript').every((s) => s.shutdowns === 1)).toBe(true)
     expect(r.m.status().map((s) => s.server)).toEqual(['python'])
     await r.m.stopAll()
     expect(r.live()).toEqual([])
     expect(r.m.logFile('python', A)).toMatch(/python-[0-9a-f]{8}\.log$/)
+  })
+
+  // Final review C2: the first use: tabs restored at launch meet a server not yet installed; the install must start it
+  it('starts a server refused as not installed once it is installed, and moves a TypeScript 5 root when its server comes', async () => {
+    let missing = true
+    const ts5 = { [at(A, 'a.ts')]: 'a', [at(A, 'package.json')]: JSON.stringify({ devDependencies: { typescript: '^5.9.0' } }) }
+    const installed: LspServerId[] = ['typescript']
+    const r = rig({ files: { ...ts5, [at(A, 'b.py')]: 'b' }, installed, refuse: (sv) => (sv === 'python' && missing ? { refused: 'not installed', why: 'not-installed' } : null) })
+    r.m.sync([{ path: at(A, 'a.ts'), root: A }, { path: at(A, 'b.py'), root: A }], {})
+    await r.m.settled()
+    expect(r.sessions.map((x) => x.launch.server)).toEqual(['typescript'])
+    missing = false
+    installed.push('typescript5')
+    r.m.refresh()
+    await r.m.settled()
+    expect(r.sessions.map((x) => x.launch.server).sort()).toEqual(['python', 'typescript', 'typescript5'])
+    expect(r.sessions[0].shutdowns).toBe(1)
+    expect(r.m.status().map((x) => `${x.server}:${x.status}`).sort()).toEqual(['python:starting', 'typescript5:starting'])
+    await r.m.stopAll()
+  })
+
+  it('restarts a running server whose launch changed (a path set in Settings) on refresh', async () => {
+    let file = 'one'
+    const r = rig({ files: { [at(A, 'a.ts')]: 'a' }, launchFile: () => file })
+    r.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    await r.m.settled()
+    r.m.refresh()
+    await r.m.settled()
+    expect(r.sessions).toHaveLength(1)
+    file = 'two'
+    r.m.refresh()
+    await r.m.settled()
+    expect(r.sessions.map((x) => x.launch.file)).toEqual(['one', 'two'])
+    expect(r.sessions[0].shutdowns).toBe(1)
+    await r.m.stopAll()
+  })
+
+  // Final review I1: initialize timing out at the steady-run mark reset the count every time
+  it('marks failed a server that never becomes ready, however long each attempt took', async () => {
+    let clock = 0
+    const r = rig({ files: { [at(A, 'a.ts')]: 'a' }, timings: { stableMs: 30_000 }, now: () => clock })
+    r.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    await r.m.settled()
+    for (let i = 0; i < 3; i++) {
+      await vi.waitFor(() => expect(r.sessions).toHaveLength(i + 1))
+      clock += 31_000
+      r.sessions[i].cb.onExit({ crashed: true, reason: 'it did not answer initialize' })
+    }
+    await new Promise((res) => setTimeout(res, 50))
+    expect(r.sessions).toHaveLength(3)
+    expect(r.m.status()[0]).toMatchObject({ status: 'failed', why: 'crashed' })
+  })
+
+  // Final review I3: pyright watches nothing itself; a Python file changed on disk that is not open is told to it
+  it('tells a Python server of a change to a file it has not open, and nothing to a TypeScript one', async () => {
+    const r = rig({ files: { [at(A, 'a.py')]: 'a', [at(A, 'b.ts')]: 'b' } })
+    r.m.sync([{ path: at(A, 'a.py'), root: A }, { path: at(A, 'b.ts'), root: A }], {})
+    await r.m.settled()
+    r.m.saved([at(A, 'util.py'), at(A, 'pyproject.toml'), at(A, 'notes.md')], [at(A, 'gone.py')])
+    await r.m.settled()
+    const py = r.sessions.find((x) => x.launch.server === 'python')!
+    const ts = r.sessions.find((x) => x.launch.server === 'typescript')!
+    expect(py.changes).toEqual([[at(A, 'util.py'), 'changed'], [at(A, 'pyproject.toml'), 'changed'], [at(A, 'gone.py'), 'deleted']])
+    expect(ts.changes).toEqual([])
+    await r.m.stopAll()
+  })
+
+  // Final review I4: a root stopped to make room comes back when the person saves a file in it; a failed one on restart
+  it('starts again a root stopped to make room when a file of it is saved, and a failed one on restart', async () => {
+    const roots = ['r1', 'r2', 'r3', 'r4', 'r5'].map((n) => path.resolve(n))
+    const files = Object.fromEntries(roots.map((root) => [at(root, 'a.ts'), 'x']))
+    const r = rig({ files })
+    r.m.sync(roots.map((root) => ({ path: at(root, 'a.ts'), root })), {})
+    await r.m.settled()
+    expect(r.m.status().find((x) => x.root === roots[0])).toMatchObject({ status: 'stopped', why: 'room' })
+    r.files[at(roots[0], 'a.ts')] = 'y'
+    r.m.saved([at(roots[0], 'a.ts')])
+    await r.m.settled()
+    expect(r.m.status().find((x) => x.root === roots[0])?.status).toBe('starting')
+    expect(r.live()).toHaveLength(4)
+    const one = rig({ files: { [at(A, 'a.ts')]: 'a' } })
+    one.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    await one.m.settled()
+    for (let i = 0; i < 3; i++) {
+      await vi.waitFor(() => expect(one.sessions).toHaveLength(i + 1))
+      one.sessions[i].cb.onExit({ crashed: true, reason: 'boom' })
+    }
+    await vi.waitFor(() => expect(one.m.status()[0]?.status).toBe('failed'))
+    one.m.restart('typescript', A)
+    await one.m.settled()
+    expect(one.sessions).toHaveLength(4)
+    await r.m.stopAll()
+    await one.m.stopAll()
+  })
+
+  // Final review M1
+  it('keeps to four servers when a crashed one restarts', async () => {
+    const roots = ['r1', 'r2', 'r3', 'r4', 'r5'].map((n) => path.resolve(n))
+    const files = Object.fromEntries(roots.map((root) => [at(root, 'a.ts'), 'x']))
+    const r = rig({ files, timings: { backoffMs: [30, 30] } })
+    r.m.sync(roots.slice(0, 4).map((root) => ({ path: at(root, 'a.ts'), root })), {})
+    await r.m.settled()
+    r.sessions[0].cb.onExit({ crashed: true, reason: 'boom' })
+    // The crashed process is gone: it no longer counts as live
+    r.sessions[0].shutdowns = 1
+    r.m.sync(roots.map((root) => ({ path: at(root, 'a.ts'), root })), {})
+    await r.m.settled()
+    await new Promise((res) => setTimeout(res, 100))
+    await r.m.settled()
+    expect(r.live().length).toBeLessThanOrEqual(4)
+    await r.m.stopAll()
+  })
+
+  // Final review M2
+  it('stops at stopAll a server an open set still being read would have started', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((res) => (release = res))
+    const r = rig({ files: { [at(A, 'a.ts')]: 'a' }, readDelay: () => gate })
+    r.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    // The open set is being read when the Host leaves
+    await new Promise((res) => setTimeout(res, 20))
+    const stopping = r.m.stopAll()
+    release()
+    await stopping
+    await r.m.settled()
+    expect(r.live()).toEqual([])
+  })
+
+  // Final review M7, M8, M13
+  it('refuses a path that leaves its root through .., reads unreadable settings as off, and says a file is too large', async () => {
+    const big = at(A, 'big.ts')
+    const r = rig({ files: { [at(A, 'a.ts')]: 'a', [big]: 'x' }, sizes: { [big]: 3 * 1024 * 1024 } })
+    r.m.sync([{ path: path.join(A, '..', 'elsewhere', 'a.ts'), root: A }, { path: big, root: A }], {})
+    await r.m.settled()
+    expect(r.sessions).toEqual([])
+    await vi.waitFor(() => expect(r.emitted.flat().find((f) => f.path === big)).toMatchObject({ skipped: 'too-large', problems: [] }))
+    const off = rig({ files: { [at(A, 'a.ts')]: 'a' }, settingsFail: true })
+    off.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    await off.m.settled()
+    expect(off.sessions).toEqual([])
+  })
+
+  // Final review M12: a removal runs inside the manager's chain, after its servers stopped, before any sync relaunches
+  it('runs a removal after stopping that server everywhere, before the next sync', async () => {
+    const r = rig({ files: { [at(A, 'a.py')]: 'a' } })
+    r.m.sync([{ path: at(A, 'a.py'), root: A }], {})
+    await r.m.settled()
+    const order: string[] = []
+    const done = r.m.withServerStopped('python', async () => {
+      order.push(`removed with ${r.live().length} live`)
+    })
+    r.m.sync([{ path: at(A, 'a.py'), root: A }], {})
+    await done
+    await r.m.settled()
+    expect(order).toEqual(['removed with 0 live'])
+    await r.m.stopAll()
   })
 })

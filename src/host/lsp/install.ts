@@ -68,7 +68,8 @@ export function createLspInstaller(d: {
     try {
       const spec = `${p.name}@${p.version}`
       // The arguments packAndExtract uses; extraction waits for the checksum
-      const r = await d.npm(['pack', spec, '--prefix', '.', '--ignore-scripts', '--pack-destination', '.'], { cwd: staging })
+      // A 28 MB fetch on a slow line outlasts npm's own two minutes; the app's route waits ten (final review M9)
+      const r = await d.npm(['pack', spec, '--prefix', '.', '--ignore-scripts', '--pack-destination', '.'], { cwd: staging, timeoutMs: 10 * 60_000 })
       if (r.code !== 0) throw new NpmFailed(`npm could not fetch ${spec}: ${npmOutputTail(r.stderr || r.stdout, 6)}`, /\b(?:E404|ETARGET)\b/.test(r.stderr + r.stdout))
       const tarballs = (await fs.readdir(staging)).filter((n) => n.endsWith('.tgz'))
       if (tarballs.length !== 1) throw new NpmFailed(`npm fetched ${spec} but wrote ${tarballs.length} tarballs`)

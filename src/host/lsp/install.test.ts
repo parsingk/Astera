@@ -25,14 +25,16 @@ const pin = (name: string, version: string, b: Buffer, over: Partial<PinnedPacka
 /** An npm whose `pack` writes the tarball named for the spec it was asked for. */
 const fakeNpm = (tarballs: Record<string, Buffer>) => {
   const calls: string[][] = []
-  const run: NpmRun = async (args, { cwd }) => {
+  const timeouts: Array<number | undefined> = []
+  const run: NpmRun = async (args, { cwd, timeoutMs }) => {
     calls.push(args)
+    timeouts.push(timeoutMs)
     const b = tarballs[args[1]]
     if (args[0] !== 'pack' || !b) return { code: 1, stdout: '', stderr: `npm ERR! 404 ${args[1]}` }
     await fs.writeFile(path.join(cwd, 'x.tgz'), b)
     return { code: 0, stdout: '', stderr: '' }
   }
-  return { run, calls }
+  return { run, calls, timeouts }
 }
 
 describe('createLspInstaller', () => {
@@ -46,6 +48,8 @@ describe('createLspInstaller', () => {
     await installer.install('typescript5')
     expect(npm.calls.map((c) => c.slice(0, 2))).toEqual([['pack', 'typescript-language-server@6.1.0'], ['pack', 'typescript@5.9.3']])
     expect(npm.calls[0]).toContain('--ignore-scripts')
+    // Final review M9: a slow fetch has the ten minutes the app's route waits, not npm's own two
+    expect(npm.timeouts).toEqual([10 * 60_000, 10 * 60_000])
     expect(existsSync(path.join(packageDir(prof, pins[0]), 'lib', 'cli.mjs'))).toBe(true)
     expect(existsSync(path.join(packageDir(prof, pins[1]), 'lib', 'tsserver.js'))).toBe(true)
     expect(await installer.installed('typescript5')).toBe(true)
