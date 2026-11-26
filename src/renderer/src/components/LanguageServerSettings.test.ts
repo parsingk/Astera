@@ -68,6 +68,8 @@ describe('LanguageServerSettings', () => {
     expect(html.match(new RegExp(`<button[^>]*>${en('lsp.restart')}</button>`, 'g'))).toHaveLength(2)
     expect(en('lsp.why.crashed')).toMatch(/Restart/)
     expect(en('lsp.why.room')).toMatch(/sav/i)
+    // Found on screen: a changed path restarts the server at once (refresh), it does not wait for the next start
+    expect(en('lsp.path.hint')).toMatch(/restarts/)
     expect(src).toMatch(/window\.api\.lsp\.restart\(server, root\)/)
   })
 

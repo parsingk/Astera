@@ -79,6 +79,16 @@ describe('createHostLspView', () => {
     expect(r.view.files(A)).toEqual([])
   })
 
+  // Found on screen in the fix pass: Problems words the servers' states (final review I4), so a state change asks it again
+  it('asks the Problems list again when the servers’ states change, and when the Host drops with servers listed', () => {
+    const r = rig()
+    r.view.pushed({ t: 'lsp-state', servers: [{ server: 'typescript', root: A, status: 'failed', why: 'crashed' }] })
+    expect(r.changed).toHaveBeenCalledTimes(1)
+    r.status.connected = false
+    r.view.status()
+    expect(r.changed).toHaveBeenCalledTimes(2)
+  })
+
   it('replaces a file’s problems per push and clears all when the Host drops', () => {
     const r = rig()
     const file = { root: A, path: path.join(A, 'a.ts'), server: 'typescript' as const, producedAt: '2026-11-26T01:00:00.000Z', problems: [problem] }

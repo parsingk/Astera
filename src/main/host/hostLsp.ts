@@ -57,7 +57,7 @@ export function createHostLspView(d: {
   status(): { connected: boolean; features: readonly string[] }
   send(m: ClientMessage): boolean
   interpreterFor(root: string): Promise<string | null>
-  /** The Problems list asks again. */
+  /** The Problems list asks again: a file's problems or a server's state changed (it notes roots no server checks). */
   changed(): void
   stateChanged(servers: LspServerStatus[]): void
   log(m: string): void
@@ -113,6 +113,7 @@ export function createHostLspView(d: {
         } else if (m.t === 'lsp-state') {
           servers = m.servers
           d.stateChanged(servers)
+          d.changed()
         }
       } catch (e) {
         d.log(`lsp: a push could not be applied: ${e instanceof Error ? e.message : String(e)}`)
@@ -128,13 +129,13 @@ export function createHostLspView(d: {
         // read as gone
       }
       if (connected) return
-      const had = problems.size > 0
+      const had = problems.size > 0 || servers.length > 0
       problems = new Map()
-      if (had) d.changed()
       if (servers.length > 0) {
         servers = []
         d.stateChanged(servers)
       }
+      if (had) d.changed()
     },
     files: (project) => [...problems.values()].filter((f) => isUnder(project, f.path)),
     servers: () => servers

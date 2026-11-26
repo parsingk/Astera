@@ -1627,7 +1627,7 @@ export const ko = {
   'lsp.language.python': 'Python 사용',
   'lsp.path.typescript': 'TypeScript 7 실행 파일 경로',
   'lsp.path.python': 'pyright 의 langserver.index.js 경로',
-  'lsp.path.hint': '비워 두면 Astera 가 설치한 서버를 씁니다. 바꾼 경로는 서버가 다음에 시작할 때 적용됩니다.',
+  'lsp.path.hint': '비워 두면 Astera 가 설치한 서버를 씁니다. 경로를 바꾸면 그 서버가 바뀐 경로로 바로 다시 시작합니다.',
   'lsp.interpreter': 'Python 인터프리터',
   'lsp.interpreter.hint': '비워 두면 이 컴퓨터에서 찾은 인터프리터를 씁니다. 하나도 없으면 설치되지 않은 패키지 문제는 보여 주지 않습니다.',
   'lsp.venv.found': '이 프로젝트의 가상 환경: {path}',

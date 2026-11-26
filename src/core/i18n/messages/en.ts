@@ -1543,7 +1543,7 @@ export const en: Record<keyof typeof ko, string> = {
   'lsp.language.python': 'Use for Python',
   'lsp.path.typescript': 'TypeScript 7 executable path',
   'lsp.path.python': 'Path to pyright\'s langserver.index.js',
-  'lsp.path.hint': 'Leave empty to use the server Astera installed. A changed path applies when the server next starts.',
+  'lsp.path.hint': 'Leave empty to use the server Astera installed. Changing a path restarts that server with it at once.',
   'lsp.interpreter': 'Python interpreter',
   'lsp.interpreter.hint': 'Leave empty to use one found on this computer. With none, problems about packages that are not installed are not shown.',
   'lsp.venv.found': 'This project\'s virtual environment: {path}',

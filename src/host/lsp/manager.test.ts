@@ -300,6 +300,27 @@ describe('createLspManager', () => {
     await r.m.stopAll()
   })
 
+  // Found on screen in the fix pass: a person who fixes the path a crashing server ran expects it to try again
+  it('starts again on refresh a failed server whose launch changed, and leaves one whose launch did not', async () => {
+    let file = 'bad'
+    const r = rig({ files: { [at(A, 'a.ts')]: 'a' }, launchFile: () => file, timings: { failAfter: 2 } })
+    r.m.sync([{ path: at(A, 'a.ts'), root: A }], {})
+    await r.m.settled()
+    r.sessions[0].cb.onExit({ crashed: true, reason: 'exit 1' })
+    await vi.waitFor(() => expect(r.sessions).toHaveLength(2))
+    r.sessions[1].cb.onExit({ crashed: true, reason: 'exit 1' })
+    expect(r.m.status()[0]).toMatchObject({ status: 'failed', why: 'crashed' })
+    r.m.refresh()
+    await r.m.settled()
+    expect(r.sessions).toHaveLength(2)
+    file = 'good'
+    r.m.refresh()
+    await r.m.settled()
+    expect(r.sessions.map((x) => x.launch.file)).toEqual(['bad', 'bad', 'good'])
+    expect(r.m.status()[0]).toMatchObject({ status: 'starting' })
+    await r.m.stopAll()
+  })
+
   // Final review I1: initialize timing out at the steady-run mark reset the count every time
   it('marks failed a server that never becomes ready, however long each attempt took', async () => {
     let clock = 0

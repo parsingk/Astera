@@ -1500,7 +1500,7 @@ export const es: Catalog = {
   'lsp.language.python': 'Usar con Python',
   'lsp.path.typescript': 'Ruta del ejecutable de TypeScript 7',
   'lsp.path.python': 'Ruta de langserver.index.js de pyright',
-  'lsp.path.hint': 'Déjalo vacío para usar el servidor que instaló Astera. Una ruta cambiada se aplica cuando el servidor vuelve a iniciarse.',
+  'lsp.path.hint': 'Déjalo vacío para usar el servidor que instaló Astera. Al cambiar una ruta, ese servidor se reinicia con ella al momento.',
   'lsp.interpreter': 'Intérprete de Python',
   'lsp.interpreter.hint': 'Déjalo vacío para usar uno encontrado en este equipo. Si no hay ninguno, no se muestran los problemas de paquetes que no están instalados.',
   'lsp.venv.found': 'Entorno virtual de este proyecto: {path}',

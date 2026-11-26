@@ -1488,7 +1488,7 @@ export const ja: Catalog = {
   'lsp.language.python': 'Python で使う',
   'lsp.path.typescript': 'TypeScript 7 の実行ファイルのパス',
   'lsp.path.python': 'pyright の langserver.index.js のパス',
-  'lsp.path.hint': '空にすると Astera がインストールしたサーバーを使います。変えたパスはサーバーが次に起動するときに使われます。',
+  'lsp.path.hint': '空にすると Astera がインストールしたサーバーを使います。パスを変えると、そのサーバーは新しいパスですぐに再起動します。',
   'lsp.interpreter': 'Python インタープリター',
   'lsp.interpreter.hint': '空にするとこのコンピューターで見つけたインタープリターを使います。ひとつもなければ、インストールされていないパッケージの問題は表示しません。',
   'lsp.venv.found': 'このプロジェクトの仮想環境: {path}',

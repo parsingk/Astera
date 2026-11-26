@@ -512,7 +512,8 @@ export function createLspManager(d: {
             await stopSrv(srv, { remove: true })
             continue
           }
-          if (srv.session === null) continue
+          // A failed one is compared too: a person who changed what it runs (a path fixed in Settings) expects it to try again
+          if (srv.session === null && srv.status !== 'failed') continue
           const python = srv.language === 'python' ? pythonPathFor(interpreterFor(srv.root), d.profileDir, d.exists) : undefined
           const l = launch({ server: srv.server, root: srv.root, profileDir: d.profileDir, exec: d.exec, env: d.env, settings, ...(python ? { pythonPath: python } : {}), platform })
           if ('refused' in l || [l.file, ...l.args].join('\0') !== srv.launchKey) await stopSrv(srv, { remove: true })
