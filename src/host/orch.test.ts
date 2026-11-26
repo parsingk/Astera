@@ -5064,6 +5064,36 @@ describe('a Run’s end at the commit points', () => {
     expect(orch.state().tasks[0].title).toBe('renamed')
     expect(orch.state().tasks[0].findingStates?.[ref]).toEqual(after)
   })
+
+  // The app sends a person's dismissal as the Host command (main routes it), since a put's records are not taken
+  it('keeps an app’s dismissal sent as a command, and a state-put cannot take it away or forge one', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const id = task.value.id
+    const withCheck: OrchState = {
+      ...task.state,
+      tasks: task.state.tasks.map((t) => ({ ...t, checks: [{ configId: 'c1', name: 'Lint', status: 'failed', endedAt: NOW, diagnostics: [{ file: 'a.ts', line: 1, message: 'x' }] }] }))
+    }
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(withCheck), 'utf8')
+    const orch = orchOver({ now: () => LATER })
+    const listed = (await orch.call({ cmd: 'tasks-findings', args: { task: id }, sessionId: '', from: app })).body as { findings: { ref: string }[] }
+    const ref = listed.findings[0].ref
+    expect((await orch.call({ cmd: 'tasks-dismiss', args: { task: id, finding: [ref], note: 'known' }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().tasks[0].findingStates?.[ref]).toMatchObject({ state: 'dismissed', note: 'known' })
+    const got = await stateNow(orch)
+    const mirror: OrchState = { ...got.state, tasks: got.state.tasks.map(({ findingStates: _unheard, ...t }) => t) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: mirror, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().tasks[0].findingStates?.[ref]?.state).toBe('dismissed')
+    // A put that carries a record of its own changes nothing
+    const again = await stateNow(orch)
+    const forged: OrchState = { ...again.state, tasks: again.state.tasks.map((t) => ({ ...t, findingStates: {} })) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: forged, version: again.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().tasks[0].findingStates?.[ref]?.state).toBe('dismissed')
+  })
 })
 
 describe('How It Works at the commit points (E1 Task 3)', () => {

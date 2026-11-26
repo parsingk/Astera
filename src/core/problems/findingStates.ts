@@ -23,6 +23,12 @@ import { findingRef } from './findingRef'
  *  repair section quotes findings by, exec/coordinator.ts `seen`). */
 const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
+/**
+ * The commands a person changes a record by hand with. The app's commands run in main and reach the Host as a put, whose
+ * records the Host does not take (stampFindings `fromApp`), so main sends these to the Host as the commands they are.
+ */
+export const hostWritesFinding = (cmd: string): boolean => cmd === 'tasks-dismiss' || cmd === 'tasks-undismiss'
+
 /** A person's note as it is kept: one line, nothing unseen, at most FINDING_NOTE_MAX characters. */
 export function cleanNote(text: string): string {
   const one = text.replace(UNSEEN, ' ').replace(/\s+/g, ' ').trim()

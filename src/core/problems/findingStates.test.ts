@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { emptyState, type OrchState } from '../orchestration/state'
 import type { CheckResult, Dispatch, FindingRecord, ReviewIssue, Task } from '../orchestration/types'
 import { findingRef } from './findingRef'
-import { cleanNote, moveFinding, stampFindings } from './findingStates'
+import { cleanNote, hostWritesFinding, moveFinding, stampFindings } from './findingStates'
 
 // Phase 3 Part 1b: a finding a person acted on keeps a state across rounds, every automatic change derived from what a
 // commit moved (a repair carrying it opened or ended, a check or review round written)
@@ -179,6 +179,15 @@ describe('stampFindings', () => {
     const prev = world({ checks: [lint(E1, 'failed', ['x is not defined'])], findingStates }, [dispatch({ endedAt: E1, outcome: 'failed' })])
     const next = world({ checks: [lint(E1, 'failed', ['x is not defined'])], findingStates, title: 'renamed' }, [dispatch({ endedAt: E1, outcome: 'failed' })])
     expect(stampFindings(prev, next, 'person', NOW)).toBe(next)
+  })
+})
+
+describe('hostWritesFinding', () => {
+  // The app's commands run in main and reach the Host as a put, whose records the Host does not take: a person's
+  // dismissal is sent to the Host as the command instead
+  it('names the commands a person changes records with, and nothing else', () => {
+    expect(['tasks-dismiss', 'tasks-undismiss'].every(hostWritesFinding)).toBe(true)
+    expect(['tasks-repair', 'tasks-findings', 'task-update'].some(hostWritesFinding)).toBe(false)
   })
 })
 

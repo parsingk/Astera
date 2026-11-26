@@ -82,7 +82,8 @@ import { createCredentialsRoute } from './host/credentialsRoute'
 import { createFindingsRoute } from './host/findingsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
 import { createSourcesRoute } from './host/sourcesRoute'
-import { createHostGitHubRoute } from './host/hostGitHubRoute'
+import { createHostGitHubRoute, createHostRoute } from './host/hostGitHubRoute'
+import { hostWritesFinding, stampFindings } from '../core/problems/findingStates'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
 import { ownerMismatchOf } from '../core/orchestration/ownerCheck'
 import { exactGithubLifecycleDefaults } from '../core/github/lifecycleDefaults'
@@ -1326,7 +1327,12 @@ export function registerIpc(
    *  store-shaped facade it builds over this, and `startHostClient` fills it from every `orch-state`
    *  push. Constructed unconditionally, because the pushes arrive whether or not the Jobs feature is
    *  switched on in this app, and an empty mirror costs nothing. */
-  const orchMirror = createMirrorStore({ call: orchCall })
+  // The Host's finding stamp run over main's own writes too (Phase 3 Part 1b): a repair asked here marks its findings at
+  // once, without waiting for the Host's next push
+  const orchMirror = createMirrorStore({
+    call: orchCall,
+    stamp: (prev, next) => stampFindings(prev, next, 'person', new Date().toISOString(), { fromApp: true })
+  })
   /** Refills the mirror from the Host after a handshake, so a commit pushed while the socket was down
    *  is not simply missed. Null until `bootOrch` has run — the first handshake needs no refill,
    *  because `bootOrch` fills the mirror itself and waits for that handshake to do it. */
@@ -4955,6 +4961,10 @@ export function registerIpc(
   // The app's GitHub commands go to the Host (GitHub lifecycle G7a, `needsHostGitHub`): this process's copy of the
   // command layer has no gh, so a lifecycle Job made here or a GitHub question's continue or rerun answered 409.
   const hostGitHub = createHostGitHubRoute({ call: (m) => orchCall(m) })
+  const hostFindings = createHostRoute({
+    call: (m) => orchCall(m),
+    notRunning: "The Astera Host is not running, and it keeps the findings' states. Start it and try again."
+  })
   const orchLocalCommand = async (projectPath: string, cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
       await assertAllowedPath(projectPath)
       // The server is not up — a boot that failed, or one still in flight. Not 'orchestration is
@@ -4985,6 +4995,8 @@ export function registerIpc(
       }
       // After the ownership check, which holds for the Host's commands as for this process's own
       if (needsHostGitHub(orch.deps.getState(), cmd, args ?? {})) return hostGitHub(cmd, args ?? {})
+      // A person's dismissals are the Host's records: written there, then pushed here (Phase 3 Part 1b)
+      if (hostWritesFinding(cmd)) return hostFindings(cmd, args ?? {})
       try {
         return await orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
       } catch (err) {
