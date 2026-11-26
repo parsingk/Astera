@@ -32,6 +32,7 @@ import {
   type OrchState
 } from '../core/orchestration/state'
 import { outcomeOf } from '../core/orchestration/view'
+import type { FindingRecord } from '../core/orchestration/types'
 import type { HostChecks } from './checks'
 import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import type { OrchCaller } from '../core/host/orchProtocol'
@@ -5030,6 +5031,38 @@ describe('a Run’s end at the commit points', () => {
     const bare = orchOver({ now: () => LATER })
     expect((await bare.call({ cmd: 'state-put', args: { state: finished }, sessionId: '', from: app })).status).toBe(200)
     expect(bare.state().runs[0].endedAt).toBe(NOW)
+  })
+
+  // Phase 3 Part 1b: finding states move at the same commit points, and the app's mirror cannot take them away
+  it('a worker_done commit moves a person’s asked finding to resolved-pending-verification, and a state-put cannot take it away', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const ref = `check:${task.value.id}:aaaaaaaaaaaa`
+    const dsp = openDispatch(
+      task.state,
+      { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md', repair: 'check-failure', askedFindings: [{ ref, text: 'error a.ts:1 Lint: x' }] },
+      NOW
+    )
+    if (!dsp.ok) throw new Error(dsp.error)
+    const asked: FindingRecord = { kind: 'check', source: 'c1', state: 'repair-requested', history: [{ at: NOW, by: 'person', from: null, to: 'repair-requested' }] }
+    const seeded: OrchState = { ...dsp.state, tasks: dsp.state.tasks.map((t) => ({ ...t, findingStates: { [ref]: asked } })) }
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(seeded), 'utf8')
+    const orch = orchOver({ now: () => LATER, aliveSessionIds: () => new Set(['ses_w']) })
+    const send = { cmd: 'send', args: { type: 'worker_done', taskId: task.value.id, dispatchId: dsp.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, sessionId: 'ses_w' }
+    expect((await orch.call(send)).status).toBe(200)
+    const after = orch.state().tasks[0].findingStates?.[ref]
+    expect(after?.state).toBe('resolved-pending-verification')
+    expect(after?.history.at(-1)).toMatchObject({ at: LATER, by: 'astera', from: 'repair-requested', to: 'resolved-pending-verification' })
+    // The app's mirror without the records: the Host keeps its own
+    const got = await stateNow(orch)
+    const mirror: OrchState = { ...got.state, tasks: got.state.tasks.map(({ findingStates: _unheard, ...t }) => ({ ...t, title: 'renamed' })) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: mirror, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().tasks[0].title).toBe('renamed')
+    expect(orch.state().tasks[0].findingStates?.[ref]).toEqual(after)
   })
 })
 

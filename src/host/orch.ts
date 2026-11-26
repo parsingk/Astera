@@ -67,6 +67,7 @@ import type { HostWorkUnits } from './hostWorkUnits'
 import { ensureProject, findProject } from '../core/orchestration/projects'
 import type { SessionWorkUnit } from '../core/workUnit/types'
 import { justFinished, runRecordInputOf, stampRunEnds } from '../core/orchestration/runRecord'
+import { stampFindings } from '../core/problems/findingStates'
 import { stampRunReports } from '../core/runReport/stamp'
 import { actorGroupOf, stampActedBy } from '../core/orchestration/actedBy'
 import type { WorkspaceManager } from './workspace/manager'
@@ -878,7 +879,10 @@ export function createHostOrch(a: {
         // The diff base, read before the save moves memory: each commit is journaled once, from here.
         const prev = store.get()
         // A Run this commit finishes is stamped with when (observe deferred minor b), and every later commit keeps it.
-        const next = stampRunReports(prev, stampRunEnds(prev, stampActedBy(prev, sent, group), a.now()), { spent: a.spentTokens })
+        // The findings a person acted on move with what the commit moved (Phase 3 Part 1b).
+        const next = stampRunReports(prev, stampRunEnds(prev, stampFindings(prev, stampActedBy(prev, sent, group), group, a.now()), a.now()), {
+          spent: a.spentTokens
+        })
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
         // own: a `state-put` arriving while this commit is still writing would otherwise read the
         // pre-commit number, pass the check, and land a whole state that does not contain this
@@ -1119,7 +1123,10 @@ export function createHostOrch(a: {
     // Who answered a Gate or forced a completion is stamped the same way: the app's write is a person's, and a group the
     // Host stamped before is kept over the mirror that lacks it. A put that stands in for the load keeps what it carries.
     const acted = hadState ? stampActedBy(prev, state, 'person') : state
-    const ended = stampRunEnds(prev, acted, a.now(), { standsInForLoad: !hadState })
+    // The findings a person acted on move with what the put moved, from the Host's own records: the app changes them only
+    // through the Host's commands, so a mirror that lacks or alters them changes nothing (Phase 3 Part 1b).
+    const found = hadState ? stampFindings(prev, acted, 'person', a.now(), { fromApp: true }) : acted
+    const ended = stampRunEnds(prev, found, a.now(), { standsInForLoad: !hadState })
     // The report of a Run this put finishes is built here, in the same commit; one the Host stored is kept over the mirror.
     const landed = stampRunReports(prev, ended, { spent: a.spentTokens, standsInForLoad: !hadState })
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
