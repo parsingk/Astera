@@ -68,7 +68,8 @@ describe('the Host import fence (constraint 10)', () => {
       readdirSync(d)
         .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
         .map((f) => path.join(d, f))
-    const starts = [...inDir(here), ...inDir(path.join(here, 'workspace'))]
+    // The language servers (Phase 3 Part 3) are named too, beside what index.ts reaches of them
+    const starts = [...inDir(here), ...inDir(path.join(here, 'workspace')), ...inDir(path.join(here, 'lsp'))]
     expect(starts.length).toBeGreaterThan(10)
     expect(fenceViolations(srcRoot, starts)).toEqual([])
   })
