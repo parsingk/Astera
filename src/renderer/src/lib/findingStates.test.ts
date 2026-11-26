@@ -18,8 +18,19 @@ const row = (over: Partial<Diagnostic> = {}): Diagnostic => ({
 describe('finding chips', () => {
   it('names a recorded finding’s state, and nothing for a row without a record', () => {
     expect(findingChipKey(row({ finding: { state: 'repair-requested', history: [] } }))).toBe('problems.finding.repair-requested')
-    expect(findingChipKey(row({ finding: { state: 'open', history: [] } }))).toBe('problems.finding.open')
+    const asked = { at: 'x', by: 'person' as const, from: null, to: 'repair-requested' as const }
+    expect(findingChipKey(row({ finding: { state: 'open', history: [asked, { at: 'y', by: 'astera', from: 'repair-requested', to: 'open' }] } }))).toBe('problems.finding.open')
     expect(findingChipKey(row())).toBeNull()
+  })
+
+  // Screen check: a finding dismissed and taken back, never repaired, is just open again; "still there" would say a repair
+  // was tried
+  it('shows no chip for an open finding that was only dismissed and taken back', () => {
+    const history = [
+      { at: 'x', by: 'person' as const, from: null, to: 'dismissed' as const, note: 'known' },
+      { at: 'y', by: 'person' as const, from: 'dismissed' as const, to: 'open' as const }
+    ]
+    expect(findingChipKey(row({ finding: { state: 'open', history } }))).toBeNull()
     expect(findingStateKey('resolved-pending-verification')).toBe('problems.finding.resolved-pending-verification')
   })
 
