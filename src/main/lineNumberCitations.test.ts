@@ -22,6 +22,12 @@ import path from 'node:path'
 // "이게 주석인가"는 판별하지 않고 모든 줄을 그냥 스캔한다. 단순하고 튼튼한 편이 똑똑한 편보다
 // 낫다: 오탐이 실제로 나오면 그때 좁히는 것이 comment-detection을 제대로 하려는 것보다 작은 변경이다.
 //
+// 그 오탐이 실제로 나와서 한 번 좁혔다: 파일 이름이 src 안의 어느 파일과도 맞지 않는 인용은 우리 파일
+// 인용이 아니므로 넘어간다. 발견 문구(`error src/a.ts:3 Lint: ...`)나 테스트 보고서의 실패 위치처럼 지어낸
+// 경로를 데이터로 담은 fixture 가 열 곳 넘게 생겼고, 그 파일들을 CITATION_DATA_FILES 에 다 올리면 orch.test.ts
+// 같은 큰 파일이 통째로 검사에서 빠진다. 비교는 파일 이름만으로 한다: 디렉터리가 바뀌어도 이름이 같으면 여전히
+// 인용으로 잡힌다. 대가는 이름이 바뀌었거나 지워진 우리 파일을 가리키는 낡은 인용은 더는 잡히지 않는다는 것이다.
+//
 // 파일 이름 없이 "(:줄번호)"만 남기는 자기 자신 참조(같은 파일 안에서 "저 위 그 지점"을 가리키는
 // 형태)도 잡는다. 콜론 바로 앞에 "("가 오는 모양만 잡으므로 삼항 연산자나 비율 표기와는 오탐이 나지
 // 않는다 — 삼항의 콜론 앞은 공백, 비율의 콜론 앞은 숫자이지 "("가 아니다. node_modules 예외는 여기엔
@@ -70,15 +76,23 @@ const CITATION_DATA_FILES = new Set([
   'src/renderer/src/lib/contextSources.test.ts'
 ])
 
+/** 인용의 파일 이름(마지막 `/` 뒤, 줄 번호 앞)이 우리 src 파일 이름 가운데 하나인가. 아니면 지어낸 경로다. */
+function citesOurs(citation: string, ours: ReadonlySet<string>): boolean {
+  const file = citation.replace(/:\d+(?:-\d+)?$/, '')
+  return ours.has(file.slice(file.lastIndexOf('/') + 1))
+}
+
 function findViolations(): string[] {
   const violations: string[] = []
-  for (const file of collect(SRC_ROOT, [])) {
+  const files = collect(SRC_ROOT, [])
+  const ours = new Set(files.map((f) => path.basename(f)))
+  for (const file of files) {
     const rel = path.relative(path.dirname(SRC_ROOT), file).replace(/\\/g, '/')
     if (CITATION_DATA_FILES.has(rel)) continue
     const lines = readFileSync(file, 'utf8').split('\n')
     lines.forEach((line, i) => {
       for (const citation of line.match(CITATION_RE) ?? []) {
-        if (isAllowed(citation)) continue
+        if (isAllowed(citation) || !citesOurs(citation, ours)) continue
         violations.push(`${rel}:${i + 1}: ${citation}`)
       }
       // 파일 이름이 없으니 node_modules 예외가 적용될 여지가 없다 — 전부 위반이다.
@@ -95,5 +109,15 @@ describe('줄 번호가 아니라 심볼 이름으로 인용한다', () => {
     // 실패하면 각 항목을 심볼 이름으로 — 심볼이 없으면 감싸는 심볼 + 인용부호로 감싼 짧은
     // 문구로 — 바꾼다.
     expect(findViolations()).toEqual([])
+  })
+
+  it('src 에 없는 파일 이름은 우리 파일 인용이 아니고, 있는 파일 이름은 디렉터리가 달라도 인용이다', () => {
+    // 이 파일도 검사 대상이라 인용 모양은 이어 붙여 만든다
+    const ours = new Set(['ipc.ts', 'App.tsx'])
+    expect(citesOurs('src/a.ts' + ':3', ours)).toBe(false)
+    expect(citesOurs('file:///work/proj/src/b.test.ts' + ':7', ours)).toBe(false)
+    expect(citesOurs('main/ipc.ts' + ':12', ours)).toBe(true)
+    expect(citesOurs('ipc.ts' + ':12-14', ours)).toBe(true)
+    expect(citesOurs('renderer/src/App.tsx' + ':40', ours)).toBe(true)
   })
 })

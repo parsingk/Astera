@@ -58,6 +58,12 @@ A guard test (`src/main/lineNumberCitations.test.ts`) scans `src/**/*.ts` and `s
 not try to detect "is this a comment" — it scans every line, on purpose, because a false positive is a
 smaller problem to fix later than getting comment-detection right now would be to build.
 
+That false positive arrived on 2026-11-26: more than a dozen test files hold made-up paths as data (a finding's text
+`error src/a.ts:3 Lint: ...`, a test report's failure place). The guard now skips a citation whose file name matches no
+`.ts` or `.tsx` file in `src/`, since it cites no file of ours. It compares file names only, so a citation still counts
+when the directory around a real name changes. The cost: a stale citation to a file of ours that was since renamed or
+deleted is no longer caught.
+
 **This rule covers all committed prose, not only what the guard test can reach.** `docs/` and
 `.superpowers/` are git-ignored and absent from a fresh clone, so a test that runs in CI cannot
 meaningfully guard them — but a stale citation in a design note is exactly as misleading as one in a
