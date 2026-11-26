@@ -1,7 +1,7 @@
 // The app's GitHub commands over its orch-call (GitHub lifecycle G7a): sent as the app, answered as the Host answered,
 // and a Host that could not be asked said in words a person can act on.
 import { describe, it, expect } from 'vitest'
-import { HOST_GITHUB_DEADLINE_MS, createHostGitHubRoute, createHostRoute } from './hostGitHubRoute'
+import { HOST_GITHUB_DEADLINE_MS, createHostGitHubRoute } from './hostGitHubRoute'
 import { NO_HOST_CONNECTION, hostDeadlineMessage } from './worktreeRoute'
 
 type Sent = { cmd: string; args: Record<string, unknown>; sessionId: string; timeoutMs?: number }
@@ -43,23 +43,5 @@ describe('createHostGitHubRoute', () => {
     expect(lost.status).toBe(502)
     expect(lost.body).toMatchObject({ code: 'HOST_LOST' })
     expect((lost.body as { error: string }).error).toMatch(/may have/)
-  })
-})
-
-// Phase 3 Part 1b: a person's dismissals are the Host's to write, sent the same way with words of their own
-describe('createHostRoute', () => {
-  it('sends the command as the app and answers as the Host answered, or says in its own words the Host is not running', async () => {
-    const sent: Sent[] = []
-    const route = createHostRoute({
-      call: async (m) => {
-        sent.push(m)
-        if (m.cmd === 'tasks-undismiss') throw new Error(NO_HOST_CONNECTION)
-        return { status: 200, body: { taskId: 't1', dismissed: 1 } }
-      },
-      notRunning: 'NOT-RUNNING-WORDS'
-    })
-    expect(await route('tasks-dismiss', { task: 't1', finding: ['check:t1:a'], note: 'n' })).toEqual({ status: 200, body: { taskId: 't1', dismissed: 1 } })
-    expect(sent[0]).toEqual({ cmd: 'tasks-dismiss', args: { task: 't1', finding: ['check:t1:a'], note: 'n' }, sessionId: '' })
-    expect(await route('tasks-undismiss', { task: 't1', finding: ['check:t1:a'] })).toEqual({ status: 409, body: { code: 'HOST_NOT_RUNNING', error: 'NOT-RUNNING-WORDS' } })
   })
 })

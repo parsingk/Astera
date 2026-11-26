@@ -44,6 +44,22 @@ describe('createMirrorStore', () => {
     expect(call).toHaveBeenCalledWith({ cmd: 'state-put', args: { state: m.getState() }, sessionId: '' })
   })
 
+  // Final review I2: the stamped state is what was sent, so it is what a refusal takes back and a reply confirms
+  it('puts a refused stamped write back, and takes the version of one that landed', async () => {
+    const stamp = (_prev: unknown, next: { jobs: unknown[] }) => ({ ...next, jobs: [...next.jobs, { id: 'stamped' }] })
+    const refused = createMirrorStore({ call: vi.fn().mockResolvedValue({ status: 500, body: {} }), stamp: stamp as never })
+    const first = emptyState()
+    refused.accept(first, 3)
+    await expect(refused.setState({ ...emptyState(), jobs: [{ id: 'job_2' }] } as never)).rejects.toThrow(/refused/)
+    expect(refused.getState()).toBe(first)
+    const call = vi.fn().mockResolvedValue({ status: 200, body: { version: 9 } })
+    const landed = createMirrorStore({ call, stamp: stamp as never })
+    landed.accept(emptyState(), 3)
+    await landed.setState({ ...emptyState(), jobs: [{ id: 'job_2' }] } as never)
+    await landed.setState({ ...emptyState(), jobs: [{ id: 'job_3' }] } as never)
+    expect(call.mock.calls[1][0].args.version).toBe(9)
+  })
+
   it('아직 아무것도 못 받았으면 읽기도 거절한다', () => {
     const m = createMirrorStore({ call: vi.fn() })
     expect(() => m.getState()).toThrow(/not loaded/)
