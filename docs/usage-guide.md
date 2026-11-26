@@ -169,6 +169,40 @@ can read as an earlier run's. A Job's check that runs the
 configuration lists its failures among the check's findings, so the repair sees exactly which tests failed. Turn the tab
 off in Settings › General › **Tests tab**.
 
+### Language server diagnostics
+
+TypeScript, JavaScript and Python files you open in the editor are checked by a language server, and their problems
+appear in the Problems tab with the line and column; a row opens its file there, and can be sent to an agent or made
+into a new Job draft like any other.
+
+Install the servers in Settings › **Language servers**. Each **Install** first shows the packages it fetches (name,
+exact version, licence, size, and the folder they go to); Astera uses a package only after checking it is the exact one
+it pinned. Nothing is fetched until you approve it.
+
+| Server | Checks | Packages |
+|---|---|---|
+| TypeScript | TS and JS projects on TypeScript 6 or later, or with no TypeScript of their own | TypeScript 7.0.2's own language server (Apache-2.0, about 28 MB) |
+| TypeScript 5 | projects whose own TypeScript is below 6 | typescript-language-server 6.1.0 with TypeScript 5.9.3 (Apache-2.0, about 26 MB) |
+| Python | Python files | pyright 1.1.414 (MIT, about 19 MB) |
+
+Which TypeScript a project uses is read from its `node_modules/typescript/package.json`, or else from the `typescript`
+range in its `package.json`; nothing of the project runs. A project below TypeScript 6 is checked by TypeScript 7 when
+only that server is installed, and the server's status says so. A setting path replaces an installed server (TypeScript
+7's `tsc`, or pyright's `langserver.index.js`); a project's own `node_modules` is never used.
+
+The servers run in this computer's Astera Host: one for each project and language with an open file, at most four at
+once, each stopped a minute after its last file closes. A file over 2 MB is not checked. A file is checked as it is on
+disk: after you save it, or when an agent changes it.
+
+pyright is always given an absolute interpreter: a project's virtual environment once you choose **Use in this
+project** for it, else the interpreter you set, else the first one found on this computer outside the project. With
+none, problems about packages that are not installed are not shown, since they would not be real. A `.bat` or `.cmd`
+interpreter is never used.
+
+Not supported, by design: completion, rename, formatting, code actions, hover, go to definition, inlay hints, an
+underline in the editor, and language servers on a remote runtime. Turn the feature off in Settings › General ›
+**Language server diagnostics**.
+
 ## Isolate work and open a pull request
 
 1. In a git project with a commit and branch, enable **Start in a separate worktree** in
