@@ -52,9 +52,15 @@ function fakeSessions() {
   const proxies: { partition: string; config: unknown }[] = []
   const pairingRefused: string[] = []
   const wiped: string[] = []
+  /** What the wipe waits for, and whether it fails: set by a test. */
+  const wipe: { gate: Promise<void>; fail: boolean } = { gate: Promise.resolve(), fail: false }
   const makeSession = (partition: string) => ({
     partition,
-    clearStorageData: async () => void wiped.push(`${partition} storage`),
+    clearStorageData: async () => {
+      wiped.push(`${partition} storage`)
+      await wipe.gate
+      if (wipe.fail) throw new Error('disk busy')
+    },
     clearCache: async () => void wiped.push(`${partition} cache`),
     on: (ev: string, fn: (e: { preventDefault: () => void }) => void) => {
       if (ev === 'will-download') fn({ preventDefault: () => void downloadsRefused.push(partition) })
@@ -72,11 +78,11 @@ function fakeSessions() {
     setPermissionCheckHandler: (fn: () => boolean) => void (!fn() && permissionRefusals.push(`${partition} check`))
   })
   const sessionOf = (partition: string): unknown => cache.get(partition) ?? { partition }
-  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused, wiped }
+  return { fromPartition, handlers, made, permissionRefusals, sessionOf, downloadsRefused, proxies, pairingRefused, wiped, wipe }
 }
 
 let tokens = 0
-const make = (rows: PluginRow[] | null, o: { audit?: PluginAudit } = {}) => {
+const make = (rows: PluginRow[] | null, o: { audit?: PluginAudit; log?: (m: string) => void } = {}) => {
   const sessions = fakeSessions()
   currentSessions = sessions
   const trusted: { id: number; guest: unknown }[] = []
@@ -89,7 +95,8 @@ const make = (rows: PluginRow[] | null, o: { audit?: PluginAudit } = {}) => {
     untrustGuest: (id) => void untrusted.push(id),
     now: () => 1000,
     token: () => `tok${++tokens}`,
-    ...(o.audit ? { audit: o.audit } : {})
+    ...(o.audit ? { audit: o.audit } : {}),
+    ...(o.log ? { log: o.log } : {})
   })
   return { guests, sessions, trusted, untrusted }
 }
@@ -408,7 +415,7 @@ describe('final review fixes', () => {
   // one key for the writer to count
   it('records an opened panel, a refused bridge call under one key per kind, and a refused attach without its token', async () => {
     const recs: [PluginAuditRecord, string | undefined][] = []
-    const m = make([row()], { audit: { record: (e, k) => void recs.push([e, k]), flushed: async () => {} } })
+    const m = make([row()], { audit: { record: (e, k) => void recs.push([e, k]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
     const { p } = await open(m, 21)
     await expect(m.guests.call(21, 'files.read', null)).rejects.toThrow('UNKNOWN_METHOD: files.read')
     await expect(m.guests.call(21, 'files.read', null)).rejects.toThrow('UNKNOWN_METHOD: files.read')
@@ -459,6 +466,96 @@ describe('final review fixes', () => {
     await m.guests.refresh()
     await m.guests.refresh()
     expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  // Final review I2 (a): turning it off stops the watch, so a removal outside the app is caught when it is opened again
+  it('wipes a plugin turned off, then removed and installed again outside the app, before its page is served again', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa' })]
+    const m = make(rows)
+    await open(m, 31)
+    rows[0] = row({ enabled: false, installId: 'aaaaaaaaaaaa' })
+    await m.guests.refresh()
+    expect(m.sessions.wiped).toEqual([])
+    rows[0] = row({ installId: 'bbbbbbbbbbbb' })
+    expect((await m.guests.prepare('hello-panel', 'main', null)).ok).toBe(true)
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  // Final review I2 (b): removed and installed again between two looks reads as an update by installedAt alone
+  it('wipes a plugin removed and installed again between two looks of the watch', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa', installedAt: 1 })]
+    const m = make(rows)
+    const { g } = await open(m, 32)
+    rows[0] = row({ installId: 'bbbbbbbbbbbb', installedAt: 2 })
+    await m.guests.refresh()
+    expect(g.closed).toBe(true)
+    expect(m.sessions.wiped).toEqual(['plugin-hello-panel storage', 'plugin-hello-panel cache'])
+  })
+
+  it('keeps the storage of an update, which keeps its install id', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa', installedAt: 1 })]
+    const m = make(rows)
+    const { g } = await open(m, 33)
+    rows[0] = row({ installId: 'aaaaaaaaaaaa', installedAt: 2 })
+    await m.guests.refresh()
+    expect(g.closed).toBe(true)
+    expect((await m.guests.prepare('hello-panel', 'main', null)).ok).toBe(true)
+    expect(m.sessions.wiped).toEqual([])
+  })
+
+  // Final review M7: a page still running cannot write after the wipe began, and a prepare does not race it
+  it('closes a removed plugin’s pages before wiping, and a prepare waits for the wipe', async () => {
+    const rows = [row({ installId: 'aaaaaaaaaaaa' })]
+    const m = make(rows)
+    const { g } = await open(m, 34)
+    const order: string[] = []
+    const close = g.close
+    g.close = () => {
+      order.push('close')
+      close()
+    }
+    let release: () => void = () => {}
+    m.sessions.wipe.gate = new Promise<void>((r) => (release = r))
+    const wiped = m.sessions.wiped
+    const push = wiped.push.bind(wiped)
+    wiped.push = (...items: string[]) => {
+      order.push(...items)
+      return push(...items)
+    }
+    rows[0] = row({ installId: 'bbbbbbbbbbbb' })
+    await m.guests.refresh()
+    expect(order.slice(0, 2)).toEqual(['close', 'plugin-hello-panel storage'])
+    let prepared = false
+    const p = m.guests.prepare('hello-panel', 'main', null).then((r) => (prepared = r.ok))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(prepared).toBe(false)
+    release()
+    await p
+    expect(prepared).toBe(true)
+  })
+
+  it('says in its log when a wipe fails', async () => {
+    const said: string[] = []
+    const rows = [row()]
+    const m = make(rows, { log: (s) => void said.push(s) })
+    await open(m, 35)
+    m.sessions.wipe.fail = true
+    rows.length = 0
+    await m.guests.refresh()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(said).toEqual([expect.stringMatching(/^the panel storage of hello-panel could not be cleared: disk busy/)])
+  })
+
+  // Final review M9: a wiped partition still names its plugin, so plugins audit --id finds the refusal
+  it('names the plugin of a refused attach after its storage was wiped', async () => {
+    const recs: [PluginAuditRecord, string | undefined][] = []
+    const rows = [row()]
+    const m = make(rows, { audit: { record: (e, k) => void recs.push([e, k]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
+    await open(m, 36)
+    rows.length = 0
+    await m.guests.refresh()
+    expect(m.guests.decideAttach({ partition: 'plugin-hello-panel', src: 'astera-plugin://hello-panel/x.html' }, {})).toBe('refuse')
+    expect(recs.at(-1)).toEqual([{ plugin: 'hello-panel', event: 'attach-refused', detail: 'astera-plugin://hello-panel/x.html' }, 'hello-panel attach'])
   })
 
   it('keeps the panel storage of a plugin turned off or installed again, and touches no session never used', async () => {

@@ -76,11 +76,20 @@ describe('plugin panels: final review wiring', () => {
     expect(handler).toMatch(/const answer = await panelGuests\.hold\(id, plugins\.remove\(id\)\)\s*\n[^\n]*\n\s*if \(answer\.ok\) panelGuests\.forget\(id, \{ wipe: true \}\)/)
   })
 
-  // Phase 2 gate, spec E3 "audit": the app's half of the log, in the profile's plugins folder beside the Host's
-  it('gives the panel guests the app’s audit file beside the Host’s', () => {
-    expect(read('index.ts')).toMatch(
-      /const panelGuests = createPanelGuests\(\{[\s\S]*?audit: createPluginAudit\(\{\s*file: path\.join\(pluginsRoot\(app\.getPath\('userData'\)\), AUDIT_APP_FILE\)/
+  // Phase 2 gate, spec E3 "audit": the app's half of the log, in the profile's plugins folder beside the Host's, its
+  // errors and a failed wipe in a log of the app's own (final review M6), and written out at quit (final review I1)
+  it('gives the panel guests the app’s audit file beside the Host’s, a log, and drains the audit at quit', () => {
+    const src = read('index.ts')
+    expect(src).toMatch(/const pluginPanelsLog = lineLog\(path\.join\(app\.getPath\('userData'\), 'plugin-panels\.log'\)\)/)
+    expect(src).toMatch(
+      /const pluginAudit = createPluginAudit\(\{\s*file: path\.join\(pluginsRoot\(app\.getPath\('userData'\)\), AUDIT_APP_FILE\),\s*onError: \(m\) => pluginPanelsLog\(`plugins audit: \$\{m\}`\)/
     )
+    expect(src).toMatch(/const panelGuests = createPanelGuests\(\{[\s\S]*?audit: pluginAudit,\s*log: pluginPanelsLog/)
+    // Beside the logs' own flush at quit, in the handler that does it (there is more than one will-quit)
+    for (const event of ['before-quit', 'will-quit']) {
+      const handlers = src.split(`app.on('${event}'`).slice(1).map((h) => h.slice(0, h.indexOf('\n})')))
+      expect(handlers.find((h) => h.includes('flushAllLogsSync()')), event).toContain('pluginAudit.drainSync()')
+    }
   })
 
   // M7: the bridge imports nothing but electron, so the two preloads can never share a chunk a sandbox cannot load

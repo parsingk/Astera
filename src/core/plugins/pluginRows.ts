@@ -16,6 +16,8 @@ export interface PluginRow {
   displayName?: string
   /** When this copy was installed: a later one is a reinstall (`plugins dev`, the CLI), whose old pages are stale. */
   installedAt?: number
+  /** Which install this is: an update keeps it, a removal and install again does not (final review I2). */
+  installId?: string
   contributes?: { commands: { id: string; title: string; panel: string }[]; panels: { id: string; title: string }[] }
 }
 
@@ -39,6 +41,7 @@ export function pluginRowsOf(body: unknown): PluginRow[] {
       ...(typeof o.ui === 'string' ? { ui: o.ui } : {}),
       ...(typeof o.displayName === 'string' ? { displayName: o.displayName } : {}),
       ...(typeof o.installedAt === 'number' ? { installedAt: o.installedAt } : {}),
+      ...(typeof o.installId === 'string' ? { installId: o.installId } : {}),
       ...(c && Array.isArray(c.panels) && Array.isArray(c.commands) ? { contributes: c } : {})
     })
   }

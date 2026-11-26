@@ -257,6 +257,15 @@ function buildMacMenu(): Menu {
  *  guest belongs to an agent — the guard would let an agent's tab walk off this machine. */
 const agentGuests = new AgentGuestRegistry((id) => webContents.fromId(id))
 
+/** The panel guests' own log: a wipe or an audit write that failed, which nobody asked about (Phase 2 gate final review M6). */
+const pluginPanelsLog = lineLog(path.join(app.getPath('userData'), 'plugin-panels.log'))
+/** The app's half of the plugin audit log (Workspace & Plugin Platform V2 spec E3), beside the Host's, which reads both.
+ *  Drained at quit, as Electron waits on no promise there (final review I1). */
+const pluginAudit = createPluginAudit({
+  file: path.join(pluginsRoot(app.getPath('userData')), AUDIT_APP_FILE),
+  onError: (m) => pluginPanelsLog(`plugins audit: ${m}`)
+})
+
 /** Plugin panel guests (ADR-008), built here for the same reason as agentGuests: createWindow's attach guard asks it, and
  *  registerIpc gives it the Host's plugin list and answers its bridge. */
 const panelGuests = createPanelGuests({
@@ -266,11 +275,8 @@ const panelGuests = createPanelGuests({
   untrustGuest: untrustPluginGuest,
   now: Date.now,
   token: () => randomBytes(16).toString('hex'),
-  // The app's half of the plugin audit log (Workspace & Plugin Platform V2 spec E3), beside the Host's, which reads both
-  audit: createPluginAudit({
-    file: path.join(pluginsRoot(app.getPath('userData')), AUDIT_APP_FILE),
-    onError: (m) => console.log(`plugins audit: ${m}`)
-  })
+  audit: pluginAudit,
+  log: pluginPanelsLog
 })
 
 /** Loads the app's own page into the window. Split from createWindow because on macOS/Linux the
@@ -1663,6 +1669,8 @@ app.on('before-quit', () => {
   // What the logs hold so far, written now (stage 3, task 3): a quit that never reaches will-quit (a
   // crash in a window's teardown) still leaves them on disk. Synchronous, once — acceptable at quit.
   flushAllLogsSync()
+  // And the plugin audit's records and the counts still open in their windows, the same way
+  pluginAudit.drainSync()
 })
 // win32 quits once every window is closed. macOS has the opposite convention, and it genuinely fits
 // this app — sessions keep running in the background, and rolling and Slack notifications need to
@@ -1761,4 +1769,5 @@ app.on('will-quit', () => {
 // flight, so no line goes into a file that is being renamed.
 app.on('will-quit', () => {
   flushAllLogsSync()
+  pluginAudit.drainSync()
 })

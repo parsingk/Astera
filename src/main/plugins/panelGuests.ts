@@ -100,6 +100,8 @@ export function createPanelGuests(d: {
   token: () => string
   /** The plugin audit log (Workspace & Plugin Platform V2 spec E3): panels opened, bridge calls and attaches refused. */
   audit?: PluginAudit
+  /** The app's own log: what nobody asked about, such as a wipe that failed. */
+  log?: (m: string) => void
 }) {
   let listPlugins = d.listPlugins ?? (async () => [])
   /** Prepared pages by their exact URL: each admits one guest, once (review I3). */
@@ -113,8 +115,13 @@ export function createPanelGuests(d: {
   const pending = new Map<string, Prepared>()
   /** Live guests: what they were prepared as, their recent call times, and how to close them. */
   const guests = new Map<number, { snapshot: Snapshot; calls: number[]; close: () => void }>()
-  /** Which plugin a partition is, for an audit record of an attach refused in it. */
+  /** Which plugin a partition is, for an audit record of an attach refused in it. Kept after a wipe: it is only a name. */
   const pluginOfPartition = new Map<string, string>()
+  /** The install each partition this run prepared was prepared from, until its storage is wiped: a plugin no longer
+   *  listed, or listed as another install (removed and installed again, final review I2), is wiped when either is seen. */
+  const known = new Map<string, { pluginId: string; installId?: string }>()
+  /** A wipe under way, which a prepare in the same partition waits for (final review M7). */
+  const wiping = new Map<string, Promise<void>>()
 
   const refusedHere = (status: number): Response => new Response(null, { status })
 
@@ -143,20 +150,27 @@ export function createPanelGuests(d: {
    *  session never set up in this run holds nothing, as a plugin session keeps nothing after the app quits. */
   const forget = (pluginId: string, o?: { wipe?: true }): void => {
     roots.delete(pluginSchemeHost(pluginId))
-    const partition = pluginPartition(pluginId)
-    if (o?.wipe && setUp.has(partition)) {
-      const s = d.fromPartition(partition)
-      void s.clearStorageData().catch(() => {})
-      void s.clearCache().catch(() => {})
-      // Wiped once: a refresh after this does not find it again
-      pluginOfPartition.delete(partition)
-    }
     for (const [url, p] of prepared) if (p.pluginId === pluginId) prepared.delete(url)
     for (const [id, g] of guests) {
       if (g.snapshot.pluginId !== pluginId) continue
       guests.delete(id)
       d.untrustGuest(id)
       g.close()
+    }
+    // After its pages are closed, so none writes into the session as it is cleared (final review M7)
+    const partition = pluginPartition(pluginId)
+    if (o?.wipe && setUp.has(partition)) {
+      const s = d.fromPartition(partition)
+      const wipe = Promise.all([s.clearStorageData(), s.clearCache()]).then(
+        () => undefined,
+        (e: unknown) => d.log?.(`the panel storage of ${pluginId} could not be cleared: ${e instanceof Error ? e.message : String(e)}`)
+      )
+      wiping.set(partition, wipe)
+      void wipe.then(() => {
+        if (wiping.get(partition) === wipe) wiping.delete(partition)
+      })
+      // Wiped once: a refresh after this does not find it again
+      known.delete(partition)
     }
   }
 
@@ -222,7 +236,12 @@ export function createPanelGuests(d: {
       const addressProblem = pluginHostProblem(pluginId)
       if (addressProblem !== null) return { ok: false, code: 'address', reason: addressProblem }
       const partition = pluginPartition(pluginId)
+      // Removed and installed again since this run prepared it, whenever that was: the old page's storage goes first
+      const before = known.get(partition)
+      if (before && before.installId !== p.installId) forget(pluginId, { wipe: true })
+      await wiping.get(partition)
       pluginOfPartition.set(partition, pluginId)
+      known.set(partition, { pluginId, ...(p.installId !== undefined ? { installId: p.installId } : {}) })
       const url = pluginPageUrl(pluginId, p.ui as string, panelId, d.token())
       roots.set(host, p.dir)
       await setUpSession(partition, host)
@@ -353,8 +372,12 @@ export function createPanelGuests(d: {
       for (const p of prepared.values()) watched.add(p.pluginId)
       for (const p of list) if (roots.has(pluginSchemeHost(p.id))) watched.add(p.id)
       for (const host of roots.keys()) if (!list.some((p) => pluginSchemeHost(p.id) === host)) roots.delete(host)
-      // One no longer listed was removed: its panel storage goes with it, its panels closed or not
-      for (const id of [...pluginOfPartition.values()]) if (!list.some((r) => r.id === id)) forget(id, { wipe: true })
+      // One no longer listed was removed, and one listed as another install was removed and installed again: its panel
+      // storage goes, its panels closed or not
+      for (const k of [...known.values()]) {
+        const row = list.find((r) => r.id === k.pluginId)
+        if (!row || row.installId !== k.installId) forget(k.pluginId, { wipe: true })
+      }
       for (const id of watched) if (unusablePlugin(id, list.find((r) => r.id === id)) !== null) forget(id)
       // Installed again since a page was prepared (plugins dev, the CLI): its panels end, and each asks for the new page
       const stale = (pluginId: string, installedAt: number | undefined): boolean => {
