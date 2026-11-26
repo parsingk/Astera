@@ -392,7 +392,16 @@ const STEPS: Record<
             : // `plugins init` refused a folder that holds files: another name or folder fixes it, no command does
               cmd === 'plugins-init'
               ? []
-              : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
+              : // A refused repair request (Phase 3 Part 1): its reason says what to do instead. A question in the
+                // way is answered; a task that moved on or lost its folder is fixed by a new Job; one at work is
+                // waited for
+                cmd === 'tasks-repair'
+                ? details.reason === 'blocked-by-gate'
+                  ? ['astera questions list --status open']
+                  : details.reason === 'run-ended' || details.reason === 'dependents-started' || details.reason === 'folder-gone'
+                    ? ['astera jobs create --objective <text>']
+                    : ['astera tasks list']
+                : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).
   //

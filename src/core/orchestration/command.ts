@@ -5184,7 +5184,7 @@ export async function handleCommand(
      * person's own shell: an agent is refused, and MCP, controllers and plugins never get here (no gate lists it). The
      * findings come as references (core/problems/findingRef.ts); the app sends each one's words as the person saw them,
      * the CLI only the references, whose words come from the Task's own findings (taskFindings); with none named, every
-     * finding the Task has. Which Tasks take it is taskRepair.ts's rule, refused with its reason and code (409) otherwise;
+     * finding the Task has. Which Tasks take it is taskRepair.ts's rule, refused with its reason (409) otherwise;
      * `--dry-run` answers that verdict and changes nothing. The Task goes back to ready (a failed or completed one, past
      * the transition table as mark-failed goes, or a blocked one through its exhausted repairs Gate's retry-once) in the
      * state handed to repairOnce, which opens the repair Dispatch on it and commits both at once, as retry-once does.
@@ -5212,7 +5212,8 @@ export async function handleCommand(
       if (unknown.length > 0) return bad(`not a finding of task ${taskId}: ${unknown.join(', ')}`)
       if (asked.length === 0) return bad(`task ${taskId} has no findings to fix; name one with --finding`)
       const verdict = repairEligibility(s, taskId, isFolder)
-      if (!verdict.ok) return { status: 409, body: { error: verdict.detail, code: verdict.reason } }
+      // `reason`, the word the CLI's envelope carries in `details` (cliOutput.ts refusalDetailsOf)
+      if (!verdict.ok) return { status: 409, body: { error: verdict.detail, reason: verdict.reason } }
       if (args.dryRun === true) return okBody({ taskId, via: verdict.via })
       if (!deps.repairOnce) return conflict('a repair cannot be opened here')
       let from: OrchState

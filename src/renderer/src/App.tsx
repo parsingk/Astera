@@ -4903,7 +4903,7 @@ export default function App(): React.JSX.Element {
     const failedCall = (e: unknown): { status: number; body: unknown } => ({ status: 0, body: { error: e instanceof Error ? e.message : String(e) } })
     const dry = await window.api.orch.command(root, 'tasks-repair', { ...request, dryRun: true }).catch(failedCall)
     if (dry.status === 409) {
-      const code = (dry.body as { code?: string } | null)?.code ?? 'not-repairable'
+      const code = (dry.body as { reason?: string } | null)?.reason ?? 'not-repairable'
       const ok = await confirmModal({
         title: t('problems.fix.cannotTitle'),
         body: `${t(`problems.fix.refused.${code}` as MessageKey)} ${t('problems.fix.offerDraft')}`,

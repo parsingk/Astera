@@ -386,6 +386,14 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'CONFLICT', cmd: 'host-stop' })).toEqual(['astera host status'])
   })
 
+  // Phase 3 Part 1 screen check: a refused repair request pointed at `astera status`, which says nothing about why
+  it('points a refused repair request at what its reason calls for', () => {
+    const steps = (reason: string): readonly string[] => nextStepsFor({ code: 'CONFLICT', cmd: 'tasks-repair', details: { reason } })
+    expect(steps('blocked-by-gate')).toEqual(['astera questions list --status open'])
+    for (const r of ['run-ended', 'dependents-started', 'folder-gone']) expect(steps(r), r).toEqual(['astera jobs create --objective <text>'])
+    for (const r of ['busy', 'not-repairable']) expect(steps(r), r).toEqual(['astera tasks list'])
+  })
+
   /**
    * **3 만은 순서가 뒤집힌다.** Host 에 닿지 못한 것이 그 코드의 뜻이고, 영수증을 묻는 명령도 Host 가
    * 있어야 답한다 — 목록을 위에서부터 따르는 에이전트는 "모르겠다" 를 한 번 더 받고 나서야 그것을

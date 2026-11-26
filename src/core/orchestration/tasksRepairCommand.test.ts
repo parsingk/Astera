@@ -99,11 +99,11 @@ describe('tasks-repair', () => {
 
   it('refuses with the reason when the Task cannot take a repair, and changes nothing', async () => {
     const deps = depsOver(seeded({ status: 'completed', runEnded: true }))
-    expect(await handleCommand(deps, APP, 'tasks-repair', { task: 't1' })).toMatchObject({ status: 409, body: { code: 'run-ended' } })
+    expect(await handleCommand(deps, APP, 'tasks-repair', { task: 't1' })).toMatchObject({ status: 409, body: { reason: 'run-ended' } })
     const gone = depsOver(seeded({ status: 'failed', cwd: path.join(dir, 'reaped') }))
-    expect(await handleCommand(gone, APP, 'tasks-repair', { task: 't1' })).toMatchObject({ status: 409, body: { code: 'folder-gone' } })
+    expect(await handleCommand(gone, APP, 'tasks-repair', { task: 't1' })).toMatchObject({ status: 409, body: { reason: 'folder-gone' } })
     const other = depsOver(seeded({ status: 'blocked', gate: 'other' }))
-    expect(await handleCommand(other, APP, 'tasks-repair', { task: 't1' })).toMatchObject({ status: 409, body: { code: 'blocked-by-gate' } })
+    expect(await handleCommand(other, APP, 'tasks-repair', { task: 't1' })).toMatchObject({ status: 409, body: { reason: 'blocked-by-gate' } })
     for (const d of [deps, gone, other]) {
       expect(d.onces).toEqual([])
       expect(d.writes).toBe(0)
