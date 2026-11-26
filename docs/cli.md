@@ -1146,6 +1146,36 @@ rather than placing a second worker. With `--request-id` a
 retry does not place a second worker; a refusal leaves no receipt, so the same id works once the cause
 is fixed.
 
+**`tasks repair --task <taskId> [--finding <ref>]... [--dry-run]` asks a task to fix the findings a
+person chose**, the app's **Fix with an agent** on the Problems tab. A finding is named by its reference, the
+form the app's Problems rows carry (`check:<taskId>:<hex>`, `review:<taskId>:<hex>`); it stays the same
+whether the check wrote the file's path relative or absolute within the task's folder. With no `--finding` the request names every
+finding the task has now. At most 20 ride on one repair, and the answer's `asked` says how many did. The
+repair runs in the folder of the task's last attempt, its worker reads the findings first, and the task's
+checks run again after it. A person's repair is not counted in the automatic repair budget.
+
+```json
+{"ok":true,"data":{"taskId":"tsk_2","via":"reopen","repairDispatchId":"dsp_7","asked":3}}
+```
+
+A failed task takes it; so does a task blocked by its exhausted repairs question (the same as answering
+that question with one more try), and a completed task while its run has not ended and no task built on it,
+down the whole chain, has started. Reopening a completed task sends the tasks waiting on it back to
+`pending` until it completes again, so none starts on the result being repaired. Anything else is refused
+with 6 and nothing changes, `error.details.reason` saying why:
+
+- `run-ended`: the completed task's run has ended;
+- `dependents-started`: a task built on it has started;
+- `folder-gone`: the folder of its last attempt is not there any more (often removed after a merge);
+- `folder-in-use`: another task's attempt is working in that folder right now;
+- `blocked-by-gate`: it waits on another question;
+- `busy`: it is working now;
+- `not-repairable`: any other state, or a task with no attempt to repair (a lifecycle task).
+
+An unknown task is a 4, and a `--finding` the task does not have is a 2. It is for a person, so an agent
+session, an MCP client and a plugin are refused with 5. `--dry-run` answers whether the task would take it,
+and how many findings would go, and changes nothing.
+
 **`run-configs list --job <jobId>` prints `id`, `name` and `type`** for each run configuration of the
 Job's folder: the ones the app's Run menu shows there, saved and detected. Nothing else about a
 configuration is printed, so its command and environment stay in the app. A run id is a 4, as it is
