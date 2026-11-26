@@ -132,7 +132,9 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       retryOf: attempt.dispatchId,
       // 유실된 attempt 가 repair 였다면 새 attempt 도 repair 다 — 그 Task 는 아직 수렴 중이고, 세션을
       // 잃은 워커에게도 무엇이 실패했는지 다시 말해야 한다(아래 specFileContent).
-      ...(attempt.repair ? { repair: attempt.repair } : {})
+      ...(attempt.repair ? { repair: attempt.repair } : {}),
+      // Still the person's repair: outside the automatic budget, their findings first (final review I4)
+      ...(attempt.askedFindings ? { askedFindings: attempt.askedFindings } : {})
     },
     now
   )
@@ -185,6 +187,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         // 실제로 retry-once 를 눌렀을 때만 참이고, recovery 가 다시 세는 것과 무관하게 크래시를
         // 넘어 살아남는다.
         ...(attempt.grantedExtra ? { extra: true } : {}),
+        ...(attempt.askedFindings ? { asked: attempt.askedFindings } : {}),
         // What GitHub said, as performRepair writes it for a lifecycle Task (GitHub lifecycle G3c1)
         ...(isLifecycleTask(task) ? { github: lifecycleRepairFacts(deps.getState(), task) } : {})
       }
