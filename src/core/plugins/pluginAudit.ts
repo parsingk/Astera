@@ -13,9 +13,10 @@
 //
 // **Never in the way.** Writes are queued and never awaited by the action they record; a write that fails loses its
 // lines and is said once to the owner's log until a write lands again.
-import { promises as fs } from 'node:fs'
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { stripControls } from '../context/contextRef'
+import { INVISIBLE } from './manifest'
 
 export const AUDIT_FILE = 'audit.jsonl'
 export const AUDIT_APP_FILE = 'audit-app.jsonl'
@@ -65,24 +66,34 @@ export interface PluginAudit {
   record(e: PluginAuditRecord, coalesce?: string): void
   /** Settles once every record queued so far was written or failed. */
   flushed(): Promise<void>
+  /** Writes every open window's count now, as its window ending would, then settles like `flushed`: for a process on
+   *  its way out, whose window timers would never fire (final review I1). */
+  drain(): Promise<void>
+  /** The same, at once: what is queued and every open count, appended synchronously. For Electron's quit, which does not
+   *  wait on a promise. A write the async chain already took may still land after it. */
+  drainSync(): void
 }
 
-/** A field as it is kept: on one line, without control characters, at most AUDIT_DETAIL_MAX long. */
+/** Direction overrides and other invisible format characters, which would make a terminal line read other than it is. */
+const INVISIBLE_ALL = new RegExp(INVISIBLE.source, 'g')
+
+/** A field as it is kept: on one line, without control or invisible characters, at most AUDIT_DETAIL_MAX long. */
 const clean = (s: string): string => {
-  const one = stripControls(s.replace(/[\r\n\t]+/g, ' ')).text
+  const one = stripControls(s.replace(/[\r\n\t]+/g, ' ')).text.replace(INVISIBLE_ALL, '')
   return one.length > AUDIT_DETAIL_MAX ? `${one.slice(0, AUDIT_DETAIL_MAX - 1)}…` : one
 }
 
+/** A record as it is kept, cleaned when it is made: a window holds no more of it than the file will (review M3). */
+const cleaned = (e: PluginAuditRecord): PluginAuditRecord => ({
+  plugin: clean(e.plugin),
+  event: e.event,
+  ...(e.by !== undefined ? { by: clean(e.by) } : {}),
+  ...(e.version !== undefined ? { version: clean(e.version) } : {}),
+  ...(e.detail !== undefined ? { detail: clean(e.detail) } : {})
+})
+
 const lineOf = (at: number, e: PluginAuditRecord, repeated?: number): string =>
-  `${JSON.stringify({
-    at,
-    plugin: clean(e.plugin),
-    event: e.event,
-    ...(e.by !== undefined ? { by: clean(e.by) } : {}),
-    ...(e.version !== undefined ? { version: clean(e.version) } : {}),
-    ...(e.detail !== undefined ? { detail: clean(e.detail) } : {}),
-    ...(repeated !== undefined ? { repeated } : {})
-  })}\n`
+  `${JSON.stringify({ at, ...e, ...(repeated !== undefined ? { repeated } : {}) })}\n`
 
 const codeOf = (err: unknown): unknown => (err as { code?: unknown } | null)?.code
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -188,6 +199,32 @@ export function createPluginAudit(o: {
     queue = queue.then(write)
   }
 
+  /** Every open window's count, as lines, and the windows gone: their timers then find nothing to write. */
+  const takeWindows = (): string[] => {
+    const lines = [...windows.values()].filter((w) => w.count > 0).map((w) => lineOf(w.lastAt, w.last, w.count))
+    windows.clear()
+    return lines
+  }
+
+  /** Whether the file ends mid-line, read at once; false for a file that is not there. */
+  const tornSync = (): boolean => {
+    let fd: number
+    try {
+      fd = openSync(o.file, 'r')
+    } catch {
+      return false
+    }
+    try {
+      const n = fstatSync(fd).size
+      if (n === 0) return false
+      const b = Buffer.alloc(1)
+      readSync(fd, b, 0, 1, n - 1)
+      return b[0] !== 0x0a
+    } finally {
+      closeSync(fd)
+    }
+  }
+
   /** Coalesce windows by key: how many more came, and the last of them. */
   const windows = new Map<string, { count: number; last: PluginAuditRecord; lastAt: number }>()
 
@@ -205,9 +242,10 @@ export function createPluginAudit(o: {
   }
 
   return {
-    record(e, coalesce) {
+    record(made, coalesce) {
       try {
-        const at = e.at ?? now()
+        const at = made.at ?? now()
+        const e = cleaned(made)
         if (coalesce !== undefined) {
           const w = windows.get(coalesce)
           if (w) {
@@ -224,7 +262,28 @@ export function createPluginAudit(o: {
         report(`a record could not be made: ${messageOf(err)}`)
       }
     },
-    flushed: () => queue
+    flushed: () => queue,
+    drain() {
+      for (const line of takeWindows()) enqueue(line)
+      return queue
+    },
+    drainSync() {
+      const lines = [...pending, ...takeWindows()]
+      pending = []
+      if (lines.length === 0) return
+      try {
+        mkdirSync(path.dirname(o.file), { recursive: true })
+        appendFileSync(o.file, (tornSync() ? '\n' : '') + lines.join(''))
+        failing = false
+      } catch (e) {
+        if (!failing) {
+          failing = true
+          report(`${o.file} could not be written, and ${lines.length} record${lines.length === 1 ? ' was' : 's were'} lost: ${messageOf(e)}`)
+        }
+      }
+      // Measured again by the next async write: this one moved the end
+      size = null
+    }
   }
 }
 
@@ -235,7 +294,8 @@ const optionalString = (x: unknown): boolean => x === undefined || typeof x === 
 function entryOf(x: unknown): PluginAuditEntry | null {
   if (x === null || typeof x !== 'object') return null
   const v = x as Record<string, unknown>
-  if (typeof v.at !== 'number' || !Number.isFinite(v.at) || typeof v.plugin !== 'string' || !isEvent(v.event)) return null
+  // A time no Date can hold would fail whoever shows it (final review M5)
+  if (typeof v.at !== 'number' || !Number.isFinite(new Date(v.at).getTime()) || typeof v.plugin !== 'string' || !isEvent(v.event)) return null
   if (!optionalString(v.by) || !optionalString(v.version) || !optionalString(v.detail)) return null
   if (v.repeated !== undefined && !(Number.isSafeInteger(v.repeated) && (v.repeated as number) > 0)) return null
   return {

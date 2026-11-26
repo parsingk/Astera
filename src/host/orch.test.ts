@@ -134,7 +134,7 @@ describe('createHostOrch', () => {
     it('records its refused calls and its sensitive calls, each under one key per command, and nothing for its reads', async () => {
       const { jobId } = await seed()
       const recs: [unknown, string | undefined][] = []
-      const orch = orchOver({ pluginAudit: { record: (e, key) => void recs.push([e, key]), flushed: async () => {} } })
+      const orch = orchOver({ pluginAudit: { record: (e, key) => void recs.push([e, key]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
       await orch.ready()
       for (let i = 0; i < 2; i++)
         await orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: pluginCaller(['jobs.read']) })
@@ -147,6 +147,16 @@ describe('createHostOrch', () => {
         [{ plugin: 'astera-hello', event: 'call', detail: 'jobs-run' }, 'astera-hello call jobs-run']
       ])
     })
+    // Final review M3: a plugin that varies the name of a command no plugin may send is still one burst
+    it('groups its refused calls to commands no plugin may send under one key', async () => {
+      await seed()
+      const keys: (string | undefined)[] = []
+      const orch = orchOver({ pluginAudit: { record: (_e, key) => void keys.push(key), flushed: async () => {}, drain: async () => {}, drainSync: () => {} } })
+      await orch.ready()
+      for (const cmd of ['state-put', 'made-up-1', 'made-up-2']) await orch.call({ cmd, args: {}, sessionId: '', from: pluginCaller([]) })
+      expect(keys).toEqual(['astera-hello call-refused unlisted', 'astera-hello call-refused unlisted', 'astera-hello call-refused unlisted'])
+    })
+
     it('commits under its own name, with no session whatever it named', async () => {
       const { jobId } = await seed()
       const actors: unknown[] = []

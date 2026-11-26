@@ -136,7 +136,7 @@ describe('pluginsCommand records changes in the audit log', () => {
   const recorder = (): PluginAudit & { recs: PluginAuditRecord[] } => {
     const recs: PluginAuditRecord[] = []
     // The time a change was asked for is the clock's: these tests are about what a record says
-    return { recs, record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {} }
+    return { recs, record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
   }
   const answering = (body: unknown, status = 200) => async () => ({ status, body })
 
@@ -177,6 +177,24 @@ describe('pluginsCommand records changes in the audit log', () => {
     await pluginsCommand({ manager, cmd: 'plugins-enable', args: { id: 'p' }, role: 'app', marks: { effects: 0 }, audit })
     await pluginsCommand({ manager, cmd: 'plugins-disable', args: { id: 'p' }, role: 'app', marks: { effects: 0 }, audit })
     expect(audit.recs).toEqual([{ plugin: 'p', event: 'enabled', by: 'app', version: '2.0.0' }])
+  })
+
+  // Final review M4: enabling a plugin that failed starts it again, which the record says
+  it('records a re-enable that started a failed plugin again', async () => {
+    const audit = recorder()
+    const manager = fake()
+    manager.setEnabled = vi.fn(async () => ({ status: 200, body: { id: 'p', version: '2.0.0', changed: true, restarted: true } }))
+    await pluginsCommand({ manager, cmd: 'plugins-enable', args: { id: 'p' }, role: 'cli', marks: { effects: 0 }, audit })
+    expect(audit.recs).toEqual([{ plugin: 'p', event: 'enabled', by: 'cli', version: '2.0.0', detail: 'started again' }])
+  })
+
+  // Final review M11: an agent's shell retrying in a loop is one line and a count
+  it('groups a change refused again and again under one key', async () => {
+    const keys: (string | undefined)[] = []
+    const audit: PluginAudit = { record: (_e, k) => void keys.push(k), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
+    for (let i = 0; i < 2; i++)
+      await pluginsCommand({ manager: fake(), cmd: 'plugins-install', args: { path: '/p/evil', grant: [] }, role: 'cli', agentRefusal: 'no', marks: { effects: 0 }, audit })
+    expect(keys).toEqual(['/p/evil change-refused plugins-install', '/p/evil change-refused plugins-install'])
   })
 
   it('records a removal, with what could not be deleted', async () => {
@@ -288,7 +306,8 @@ describe('index.ts gives the Host a plugin manager', () => {
     expect(src).toMatch(/const pluginRuntime = createPluginRuntime\(\{[\s\S]*?\n    audit: pluginAudit,\n/)
     expect(src).toMatch(/createHostOrch\(\{[\s\S]*?\n    plugins,\n    pluginAudit,\n/)
     const leave = src.slice(src.indexOf('const leave = '), src.indexOf('const hostVersion'))
-    expect(leave).toContain('await disposeWithin(pluginAudit.flushed(), LEAVE_LOG_FLUSH_CAP_MS')
+    // Final review I1: drained, so a burst's count still open in its window reaches the file
+    expect(leave).toContain('await disposeWithin(pluginAudit.drain(), LEAVE_LOG_FLUSH_CAP_MS')
   })
   // Plugin runtime design P2, P11: the Host's own executable on the launcher beside its bundle, enabled plugins started
   // once the Host listens, and stopped when it leaves.

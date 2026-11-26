@@ -327,6 +327,7 @@ export function createPluginManager(d: {
       permissions: r.granted,
       requested: m?.permissions ?? [],
       installedAt: r.installedAt,
+      ...(r.installId !== undefined ? { installId: r.installId } : {}),
       dir,
       source: r.source
     }
@@ -602,6 +603,7 @@ export function createPluginManager(d: {
         enabled: previous?.enabled ?? true,
         granted,
         installedAt: now(),
+        installId: previous?.installId ?? hex(),
         source
       }
       try {
@@ -627,7 +629,7 @@ export function createPluginManager(d: {
       const launch = enabled && d.runtime?.status(r.id)?.status === 'failed' ? await runnable(r) : null
       if (launch && d.runtime) {
         d.runtime.restart(launch)
-        return { status: 200, body: { ...(await view(r)), changed: true } }
+        return { status: 200, body: { ...(await view(r)), changed: true, restarted: true } }
       }
       return { status: 200, body: { ...(await view(r)), changed: false } }
     }

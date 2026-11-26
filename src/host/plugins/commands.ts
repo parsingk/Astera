@@ -39,6 +39,7 @@ const sourceOf = (source: unknown): string => {
 /** The audit record of a change command's answer (Workspace & Plugin Platform V2 spec E3, "audit"), or null: a change
  *  that was made, or one refused (403). Names only: a setting's key, never its value. */
 function changeRecord(cmd: string, args: Record<string, unknown>, by: string, answer: PluginsAnswer): PluginAuditRecord | null {
+  // The coalesce key comes with it from pluginsCommand: a refusal repeated in a loop is one line and a count
   const body = (typeof answer.body === 'object' && answer.body !== null ? answer.body : {}) as Record<string, unknown>
   if (answer.status === 403) {
     const plugin = str(args.id) ?? str(args.path) ?? str(args.npm) ?? str(args.file) ?? '?'
@@ -56,7 +57,8 @@ function changeRecord(cmd: string, args: Record<string, unknown>, by: string, an
       return replaced !== undefined ? { ...at, event: 'updated', detail: `was ${replaced}; ${what}` } : { ...at, event: 'installed', detail: what }
     }
     case 'plugins-enable':
-      return { ...at, event: 'enabled' }
+      // Enabling a plugin that failed starts it again (design P11): a change though the flag stays (final review M4)
+      return { ...at, event: 'enabled', ...(body.restarted === true ? { detail: 'started again' } : {}) }
     case 'plugins-disable':
       return { ...at, event: 'disabled' }
     case 'plugins-remove':
@@ -91,7 +93,8 @@ export async function pluginsCommand(a: {
   const answer = await answerOf(a)
   if (a.audit && PLUGIN_CHANGES.has(a.cmd)) {
     const rec = changeRecord(a.cmd, a.args, a.role ?? 'unknown', answer)
-    if (rec) a.audit.record({ ...rec, at: asked })
+    // A change refused again and again (an agent's shell in a loop) is one line and a count (final review M11)
+    if (rec) a.audit.record({ ...rec, at: asked }, rec.event === 'change-refused' ? `${rec.plugin} change-refused ${a.cmd}` : undefined)
   }
   return answer
 }

@@ -426,8 +426,9 @@ async function main(): Promise<void> {
           eventLog.close()
           // And observe mode's records still on their way to the disk, capped the same way. Never rejects.
           await disposeWithin(auditRecorder.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
-          // And the plugin audit log's records, the plugins' last exits among them, capped the same way. Never rejects.
-          await disposeWithin(pluginAudit.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
+          // And the plugin audit log's records, the plugins' last exits among them and a burst's count still open in its
+          // window, capped the same way. Never rejects.
+          await disposeWithin(pluginAudit.drain(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           // And the tokens read since the last save, capped the same way. Never rejects.
           await disposeWithin(tokenStore.save(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           registry.killAll()

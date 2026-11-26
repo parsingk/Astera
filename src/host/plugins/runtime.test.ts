@@ -170,7 +170,7 @@ describe('createPluginRuntime', () => {
   // Phase 2 gate, spec E3 "audit": a plugin's start, its crashes, a stop asked for and a give-up outlive its log
   it('records a start, a crash exit, a requested stop and a give-up in the audit', async () => {
     const recs: [unknown, string | undefined][] = []
-    const audit: PluginAudit = { record: (e, key) => void recs.push([e, key]), flushed: async () => {} }
+    const audit: PluginAudit = { record: (e, key) => void recs.push([e, key]), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
     const { r } = runtime({ failAfter: 2 }, { audit })
     r.start(plugin('crashy', `export default { activate() { throw new Error('nope') } }`))
     await until(() => expect(r.status('crashy')?.status).toBe('failed'))

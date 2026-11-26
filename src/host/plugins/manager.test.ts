@@ -151,6 +151,7 @@ describe('install', () => {
       permissions: ['jobs.read', 'jobs.create'],
       requested: ['jobs.read', 'jobs.create'],
       installedAt: 1_000,
+      installId: expect.stringMatching(/^[0-9a-f]{12}$/),
       dir: dirOf,
       source: { kind: 'folder', path: src }
     })
@@ -283,6 +284,21 @@ describe('install', () => {
     expect(r.body).toMatchObject({ version: '1.1.0', enabled: false, status: 'disabled', permissions: ['jobs.read'], installedAt: 2_000, replaced: '1.0.0' })
     expect(await listed()).toHaveLength(1)
     expect(await leftovers()).toEqual([])
+  })
+
+  // Final review I2: an identity an update keeps and a removal does not, so the app can tell a plugin installed again
+  // under the same id from an update, whenever it looks
+  it('gives an install an id that an update keeps and a removal and install again does not', async () => {
+    const src = await plugin(FOLDER)
+    const first = body(await manager.install({ path: src, grant: [] })).installId
+    expect(first).toMatch(/^[0-9a-f]{12}$/)
+    await plugin(FOLDER, { version: '1.1.0' })
+    expect(body(await manager.install({ path: src, grant: [] })).installId).toBe(first)
+    expect(body(await manager.get('@acme/astera-jira')).installId).toBe(first)
+    await manager.remove('@acme/astera-jira')
+    const again = body(await manager.install({ path: src, grant: [] })).installId
+    expect(again).toMatch(/^[0-9a-f]{12}$/)
+    expect(again).not.toBe(first)
   })
 
   it('installs a plugin this Astera will not run, and says why', async () => {
@@ -649,7 +665,7 @@ describe('with a runtime (plugin runtime design P11)', () => {
     expect(await m.setEnabled('@acme/astera-jira', true)).toMatchObject({ body: { status: 'running', changed: true } })
     rt.statuses.set('@acme/astera-jira', { status: 'failed', reason: 'activate threw: x' })
     expect(await m.list()).toMatchObject({ body: { plugins: [{ status: 'failed', reason: 'activate threw: x' }] } })
-    expect(await m.setEnabled('@acme/astera-jira', true)).toMatchObject({ body: { status: 'running', changed: true } })
+    expect(await m.setEnabled('@acme/astera-jira', true)).toMatchObject({ body: { status: 'running', changed: true, restarted: true } })
     expect(rt.calls).toEqual(['start @acme/astera-jira', 'stop @acme/astera-jira', 'start @acme/astera-jira', 'restart @acme/astera-jira'])
   })
 

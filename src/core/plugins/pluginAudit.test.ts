@@ -65,6 +65,10 @@ describe('the plugin audit log', () => {
     const [first, second] = await linesOf(file)
     expect(first.plugin).toBe('a[31m')
     expect(first.detail).toBe('line one line two[2J end')
+    // Review: direction overrides would make a terminal line read other than it is
+    audit.record({ plugin: 'a', event: 'call-refused', detail: `jobs${String.fromCharCode(0x202e)}-list${String.fromCharCode(0x2066)}` })
+    await audit.flushed()
+    expect((await linesOf(file))[2].detail).toBe('jobs-list')
     expect(second.detail).toHaveLength(AUDIT_DETAIL_MAX)
     expect(second.detail?.endsWith('…')).toBe(true)
   })
@@ -94,6 +98,59 @@ describe('the plugin audit log', () => {
     audit.record({ plugin: 'acme.flood', event: 'bridge-refused', detail: 'TOO_MANY_CALLS' }, 'acme.flood bridge TOO_MANY_CALLS')
     await audit.flushed()
     expect(await linesOf(file)).toHaveLength(3)
+  })
+
+  // Final review I1: a process that leaves inside a window kept the count in memory only
+  it('drain writes the count of a window still open, and the writer goes on', async () => {
+    const file = path.join(dir, 'audit.jsonl')
+    const t = manualTimers()
+    const audit = createPluginAudit({ file, now: () => 3, setTimer: t.setTimer })
+    for (let i = 0; i < 5; i++) audit.record({ plugin: 'p', event: 'call-refused', detail: 'x' }, 'p call-refused x')
+    await audit.drain()
+    expect(await linesOf(file)).toEqual([
+      { at: 3, plugin: 'p', event: 'call-refused', detail: 'x' },
+      { at: 3, plugin: 'p', event: 'call-refused', detail: 'x', repeated: 4 }
+    ])
+    // The window is gone: its timer finds nothing to write, and a record after it starts a new one
+    t.fire()
+    audit.record({ plugin: 'p', event: 'call-refused', detail: 'x' }, 'p call-refused x')
+    await audit.flushed()
+    expect(await linesOf(file)).toHaveLength(3)
+  })
+
+  // Final review I1: Electron does not wait on a promise at quit, so the app writes what it holds at once
+  it('drainSync writes the queued records and the open counts at once', async () => {
+    const file = path.join(dir, 'plugins', 'audit-app.jsonl')
+    const t = manualTimers()
+    const audit = createPluginAudit({ file, now: () => 8, setTimer: t.setTimer })
+    audit.record({ plugin: 'p', event: 'panel-opened', detail: 'panel main' })
+    for (let i = 0; i < 3; i++) audit.record({ plugin: 'p', event: 'bridge-refused', detail: 'TOO_MANY_CALLS' }, 'p bridge TOO_MANY_CALLS')
+    audit.drainSync()
+    const lines = await linesOf(file)
+    expect(lines.map((l) => [l.event, l.repeated])).toEqual([
+      ['panel-opened', undefined],
+      ['bridge-refused', undefined],
+      ['bridge-refused', 2]
+    ])
+    // What the async chain was given already finds nothing left to write twice
+    await audit.flushed()
+    expect(await linesOf(file)).toHaveLength(3)
+  })
+
+  // Final review M10: the writer's side of a torn line, a Review Focus item
+  it('starts a new line after a torn last line left by a writer that died', async () => {
+    const file = path.join(dir, 'audit.jsonl')
+    await fs.writeFile(file, `${JSON.stringify({ at: 1, plugin: 'a', event: 'installed' })}\n{"at":2,"plugin":"a","eve`)
+    const audit = createPluginAudit({ file, now: () => 3 })
+    audit.record({ plugin: 'a', event: 'enabled' })
+    await audit.flushed()
+    expect((await readPluginAudit([file], { lines: 10 })).map((e) => e.at)).toEqual([1, 3])
+    const sync = path.join(dir, 'sync.jsonl')
+    await fs.writeFile(sync, '{"at":2,"plug')
+    const other = createPluginAudit({ file: sync, now: () => 4 })
+    other.record({ plugin: 'a', event: 'enabled' })
+    other.drainSync()
+    expect((await readPluginAudit([sync], { lines: 10 })).map((e) => e.at)).toEqual([4])
   })
 
   it('writes nothing more when a coalesced key saw only its first record', async () => {
@@ -158,6 +215,8 @@ describe('the plugin audit log', () => {
         '{"at":2,"plugin":"a","eve',
         JSON.stringify({ at: 3, plugin: 'a', event: 'not-an-event' }),
         JSON.stringify({ at: 'x', plugin: 'a', event: 'enabled' }),
+        // Final review M5: a number no date can hold
+        JSON.stringify({ at: 1e20, plugin: 'a', event: 'enabled' }),
         JSON.stringify({ at: 4, plugin: 'a', event: 'enabled' }),
         ''
       ].join('\n')

@@ -32,7 +32,7 @@ import type { ControllerKind, OrchCall, OrchCaller } from '../core/host/orchProt
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
 import type { ControlPlaneReport } from '../core/controlPlane/report'
-import { PLUGIN_SENSITIVE_COMMANDS, pluginRefusal } from '../core/host/pluginGate'
+import { PLUGIN_COMMAND_PERMISSIONS, PLUGIN_SENSITIVE_COMMANDS, pluginRefusal } from '../core/host/pluginGate'
 import type { PluginAudit } from '../core/plugins/pluginAudit'
 import { sanitizeForController } from '../core/remote/sanitize'
 import { t } from '../core/i18n'
@@ -1850,7 +1850,9 @@ export function createHostOrch(a: {
         if (from?.role === 'plugin') {
           const refused = pluginRefusal(cmd, from.plugin)
           if (refused) {
-            if (from.plugin) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call-refused', detail: refused.body.error }, `${from.plugin.id} call-refused ${cmd}`)
+            // A command no plugin may send is one kind, whatever name the plugin chose (final review M3)
+            const kind = Object.hasOwn(PLUGIN_COMMAND_PERMISSIONS, cmd) ? cmd : 'unlisted'
+            if (from.plugin) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call-refused', detail: refused.body.error }, `${from.plugin.id} call-refused ${kind}`)
             return refused
           }
           if (from.plugin && PLUGIN_SENSITIVE_COMMANDS.has(cmd)) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call', detail: cmd }, `${from.plugin.id} call ${cmd}`)
