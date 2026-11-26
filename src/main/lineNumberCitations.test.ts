@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -22,11 +23,14 @@ import path from 'node:path'
 // "이게 주석인가"는 판별하지 않고 모든 줄을 그냥 스캔한다. 단순하고 튼튼한 편이 똑똑한 편보다
 // 낫다: 오탐이 실제로 나오면 그때 좁히는 것이 comment-detection을 제대로 하려는 것보다 작은 변경이다.
 //
-// 그 오탐이 실제로 나와서 한 번 좁혔다: 파일 이름이 src 안의 어느 파일과도 맞지 않는 인용은 우리 파일
-// 인용이 아니므로 넘어간다. 발견 문구(`error src/a.ts:3 Lint: ...`)나 테스트 보고서의 실패 위치처럼 지어낸
-// 경로를 데이터로 담은 fixture 가 열 곳 넘게 생겼고, 그 파일들을 CITATION_DATA_FILES 에 다 올리면 orch.test.ts
-// 같은 큰 파일이 통째로 검사에서 빠진다. 비교는 파일 이름만으로 한다: 디렉터리가 바뀌어도 이름이 같으면 여전히
-// 인용으로 잡힌다. 대가는 이름이 바뀌었거나 지워진 우리 파일을 가리키는 낡은 인용은 더는 잡히지 않는다는 것이다.
+// 그 오탐이 실제로 나와서 한 번 좁혔다: 파일 이름이 우리 .ts·.tsx 파일(git 이 추적하는 전부와 아직 올리지 않은 src
+// 의 새 파일, ourFileNames) 어느 것과도 맞지 않는 인용은 우리 파일 인용이 아니므로 넘어간다. 발견 문구(`error
+// src/a.ts:3 Lint: ...`)나 테스트 보고서의 실패 위치처럼 지어낸 경로를 데이터로 담은 fixture 가 열 곳 넘게 생겼고,
+// 그 파일들을 CITATION_DATA_FILES 에 다 올리면 orch.test.ts 같은 큰 파일이 통째로 검사에서 빠진다. 비교는 파일
+// 이름만으로 한다: 디렉터리가 바뀌어도 이름이 같으면 여전히 인용으로 잡힌다. 진짜 인용은 쓰는 순간 그 파일이 있으니
+// 그때 잡혀서 들어올 수 없다. 그래서 나중에 그 파일 이름이 바뀌어도 잡을 인용이 남아 있지 않다. 남는 대가는
+// fixture 가 우리 파일과 같은 흔한 이름(types.ts 뒤에 줄 번호)을 쓰면 여전히 걸린다는 것이고, 그때는 fixture 의
+// 이름을 바꾼다.
 //
 // 파일 이름 없이 "(:줄번호)"만 남기는 자기 자신 참조(같은 파일 안에서 "저 위 그 지점"을 가리키는
 // 형태)도 잡는다. 콜론 바로 앞에 "("가 오는 모양만 잡으므로 삼항 연산자나 비율 표기와는 오탐이 나지
@@ -82,10 +86,19 @@ function citesOurs(citation: string, ours: ReadonlySet<string>): boolean {
   return ours.has(file.slice(file.lastIndexOf('/') + 1))
 }
 
+/** 우리 .ts·.tsx 파일 이름들: git 이 추적하는 전부(src 밖의 빌드 설정, packages, examples 까지)와 아직 git 에 올리지 않은
+ *  src 의 새 파일. git 이 답하지 않으면 검사가 몰래 약해지지 않도록 실패한다. */
+function ourFileNames(): Set<string> {
+  const listed = spawnSync('git', ['ls-files', '*.ts', '*.tsx'], { cwd: path.dirname(SRC_ROOT), encoding: 'utf8' })
+  if (listed.status !== 0) throw new Error(`git ls-files failed: ${listed.stderr || listed.error?.message}`)
+  const names = listed.stdout.split('\n').filter(Boolean).map((f) => path.posix.basename(f))
+  return new Set([...names, ...collect(SRC_ROOT, []).map((f) => path.basename(f))])
+}
+
 function findViolations(): string[] {
   const violations: string[] = []
   const files = collect(SRC_ROOT, [])
-  const ours = new Set(files.map((f) => path.basename(f)))
+  const ours = ourFileNames()
   for (const file of files) {
     const rel = path.relative(path.dirname(SRC_ROOT), file).replace(/\\/g, '/')
     if (CITATION_DATA_FILES.has(rel)) continue
@@ -119,5 +132,12 @@ describe('줄 번호가 아니라 심볼 이름으로 인용한다', () => {
     expect(citesOurs('main/ipc.ts' + ':12', ours)).toBe(true)
     expect(citesOurs('ipc.ts' + ':12-14', ours)).toBe(true)
     expect(citesOurs('renderer/src/App.tsx' + ':40', ours)).toBe(true)
+  })
+
+  it('우리 파일에는 src 밖의 것(빌드 설정, packages, examples)도 들어간다', () => {
+    const ours = ourFileNames()
+    expect(ours.has('electron.vite.config.ts')).toBe(true)
+    expect(ours.has('lineNumberCitations.test.ts')).toBe(true)
+    expect(citesOurs('electron.vite.config.ts' + ':12', ours)).toBe(true)
   })
 })
