@@ -16,6 +16,10 @@ export const DIFF_MAX_BYTES = 1024 * 1024
 const TIMEOUT_MS = 30_000
 /** Every read: paths as written, never a glob (`[id].tsx` is that file, not `d.tsx`), and names unescaped. */
 const QUOTEPATH_OFF = ['--literal-pathspecs', '-c', 'core.quotePath=false']
+/** A diff that never rewrites the index: a live Job's changes are read from the folder its agent works in, and a refresh
+ *  there holds .git/index.lock, so the agent's `git add` at that moment fails. git diff ignores --no-optional-locks (git
+ *  2.45, measured) and stops only on this; the answer is the same, as both compare contents (trackedTreeState below). */
+const NO_INDEX_WRITE = ['-c', 'diff.autoRefreshIndex=false']
 export { CHANGES_MAX_FILES } from './changedFile'
 /** The diff a person gets from plain `git diff`, whatever their config adds: no colour, no external diff tool, no text
  *  conversion filters. */
@@ -40,9 +44,9 @@ const statusOf = (letter: string): ChangedFile['status'] =>
   letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : letter === 'R' ? 'renamed' : 'modified'
 
 /** `--name-status -z`: a status field, then one path, or two for a rename or copy. */
-function parseNameStatus(out: string): Array<{ status: ChangedFile['status']; path: string; oldPath?: string }> {
+function parseNameStatus(out: string): Array<{ status: ChangedFile['status']; path: string; oldPath?: string; letter: string }> {
   const parts = out.split('\0')
-  const files: Array<{ status: ChangedFile['status']; path: string; oldPath?: string }> = []
+  const files: Array<{ status: ChangedFile['status']; path: string; oldPath?: string; letter: string }> = []
   for (let i = 0; i < parts.length; ) {
     const field = parts[i++]
     if (!field) continue
@@ -51,8 +55,8 @@ function parseNameStatus(out: string): Array<{ status: ChangedFile['status']; pa
       const oldPath = parts[i++]
       const path = parts[i++]
       // A copy leaves its source in place: what changed is a new file.
-      files.push(letter === 'R' ? { status: 'renamed', path, oldPath } : { status: 'added', path })
-    } else files.push({ status: statusOf(letter), path: parts[i++] })
+      files.push(letter === 'R' ? { status: 'renamed', path, oldPath, letter } : { status: 'added', path, letter })
+    } else files.push({ status: statusOf(letter), path: parts[i++], letter })
   }
   return files
 }
@@ -83,12 +87,15 @@ export async function readChanges(
   const maxFiles = o.maxFiles ?? CHANGES_MAX_FILES
   const opts = { cwd: repo, timeoutMs: TIMEOUT_MS, trim: false }
   const [names, nums] = await Promise.all([
-    run([...QUOTEPATH_OFF, 'diff', ...PLAIN, '--name-status', '-z', '-M', ...range(base, head), '--'], opts),
-    run([...QUOTEPATH_OFF, 'diff', ...PLAIN, '--numstat', '-z', '-M', ...range(base, head), '--'], opts)
+    run([...QUOTEPATH_OFF, ...NO_INDEX_WRITE, 'diff', ...PLAIN, '--name-status', '-z', '-M', ...range(base, head), '--'], opts),
+    run([...QUOTEPATH_OFF, ...NO_INDEX_WRITE, 'diff', ...PLAIN, '--numstat', '-z', '-M', ...range(base, head), '--'], opts)
   ])
   if (!names.ok || !nums.ok) return null
   const counts = parseNumstat(nums.stdout)
-  const all = parseNameStatus(names.stdout)
+  // With the index left alone, --name-status lists a file whose time alone moved as modified, while --numstat compares its
+  // content and leaves it out (git 2.45, measured; a mode change stays, as 0 0): one modified here and not there changed
+  // nothing. Only an M: a conflict (U) or a type change (T) is never left out on this account
+  const all = parseNameStatus(names.stdout).filter((f) => f.letter !== 'M' || counts.has(f.path))
   const files = all.slice(0, maxFiles).map((f) => {
     const c = counts.get(f.path) ?? {}
     const file: ChangedFile = { id: fileIdOf(f), path: f.path, ...(f.oldPath !== undefined ? { oldPath: f.oldPath } : {}), status: f.status }
@@ -179,7 +186,7 @@ export async function readFileDiff(
 ): Promise<{ diff: string; truncated: boolean } | null> {
   const maxBytes = o.maxBytes ?? DIFF_MAX_BYTES
   const paths = f.oldPath !== undefined ? [f.oldPath, f.path] : [f.path]
-  const args = [...QUOTEPATH_OFF, 'diff', ...PLAIN, '-M', ...range(base, head), '--', ...paths]
+  const args = [...QUOTEPATH_OFF, ...NO_INDEX_WRITE, 'diff', ...PLAIN, '-M', ...range(base, head), '--', ...paths]
   let out: Buffer
   if (o.run) {
     const r = await o.run(args, { cwd: repo, timeoutMs: TIMEOUT_MS, trim: false })
@@ -210,7 +217,7 @@ export async function trackedTreeState(cwd: string): Promise<string | null> {
   // the same either way: both compare contents, and the patch leaves out a file whose time alone moved.
   const status = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], { cwd, timeoutMs: TIMEOUT_MS, trim: false })
   if (!status.ok) return null
-  const diff = await gitHashed(['-c', 'diff.autoRefreshIndex=false', 'diff', ...PLAIN, '--binary', '--end-of-options', 'HEAD', '--'], cwd)
+  const diff = await gitHashed([...NO_INDEX_WRITE, 'diff', ...PLAIN, '--binary', '--end-of-options', 'HEAD', '--'], cwd)
   if (diff === null) return null
   return `${headRev.stdout}\n${status.stdout}\n${diff}`
 }

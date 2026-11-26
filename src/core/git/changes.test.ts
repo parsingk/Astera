@@ -238,6 +238,33 @@ describe('git reads are bounded and literal', { timeout: 60_000 }, () => {
   })
 })
 
+// A live Job's changes are read from the folder its agent works in (head null): a read that rewrites the index holds
+// .git/index.lock, and the agent's `git add` at that moment fails (Phase 3 research; as trackedTreeState below)
+describe('the live reads', { timeout: 30_000 }, () => {
+  it('read a working tree without rewriting the index', async () => {
+    const repo = await makeRepo()
+    try {
+      await write(repo, 'same.txt', 'same\n')
+      commit(repo, 'base')
+      const base = head(repo)
+      await write(repo, 'f.txt', 'changed\n')
+      const index = path.join(repo, '.git', 'index')
+      // A file whose content stays and whose time alone moves: its stat data in the index is stale, and git diff compares
+      // its content and then rewrites the index under index.lock unless told not to
+      const later = new Date(Date.now() + 60_000)
+      await fs.utimes(path.join(repo, 'same.txt'), later, later)
+      const before = await fs.readFile(index)
+      const files = await readChanges(repo, base, null)
+      expect(files?.map((f) => f.path)).toEqual(['f.txt'])
+      expect((await fs.readFile(index)).equals(before)).toBe(true)
+      expect((await readFileDiff(repo, base, null, files![0]))?.diff).toContain('+changed')
+      expect((await fs.readFile(index)).equals(before)).toBe(true)
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('trackedTreeState', { timeout: 30_000 }, () => {
   // It is read before and after an external review, in a folder a person or another git may be using. A status that
   // rewrites the index holds .git/index.lock, and their `git add` at that moment fails with "index.lock: File exists".
