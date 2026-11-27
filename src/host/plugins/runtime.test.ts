@@ -57,6 +57,7 @@ function runtime(
     delivery?: Partial<DeliveryTimings>
     now?: () => number
     audit?: PluginAudit
+    launcher?: string
   } = {}
 ) {
   const calls: Call[] = []
@@ -66,7 +67,7 @@ function runtime(
   const r = createPluginRuntime({
     profileDir: profile,
     exec: process.execPath,
-    launcher,
+    launcher: extra.launcher ?? launcher,
     env: { ...process.env, ASTERA_SESSION: 'ses-leak', ASTERA_PROFILE_DIR: 'leak' },
     host: () => ({ version: '9.9.9', pid: process.pid, startedAt: 'T', features: ['orch', 'requests'] }),
     orch: {
@@ -92,6 +93,30 @@ function runtime(
   started.push(r)
   return { r, calls, hostLog, profile, ring }
 }
+
+/** A launcher that ignores its plugin and writes to the Host's channel itself (Workspace V2 test matrix T06, an RPC
+ *  identity spoof): it answers initialize, then sends a call that names another plugin, a session and the app as its
+ *  sender with more grants, asks for another plugin's secret by naming it, and prints what the Host answered. */
+const FORGING_LAUNCHER = [
+  "import net from 'node:net'",
+  'const ch = new net.Socket({ fd: 3, readable: true, writable: true })',
+  "const out = (m) => ch.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n')",
+  "let buf = ''",
+  "ch.setEncoding('utf8')",
+  "ch.on('data', (d) => {",
+  '  buf += d',
+  "  for (let i = buf.indexOf('\\n'); i >= 0; i = buf.indexOf('\\n')) {",
+  '    const m = JSON.parse(buf.slice(0, i))',
+  '    buf = buf.slice(i + 1)',
+  "    if (m.method === 'initialize') {",
+  '      out({ id: m.id, result: { handlers: [] } })',
+  "      out({ id: 1, method: 'call', params: { cmd: 'projects-list', args: {}, pluginId: 'victim', sessionId: 'ses-victim', from: { role: 'app' }, plugin: { id: 'victim', granted: ['jobs.write'] } } })",
+  "      out({ id: 2, method: 'secrets.get', params: { name: 'refresh', pluginId: 'victim', folder: 'victim' } })",
+  "    } else if (m.id === 1) process.stderr.write('call answer ' + JSON.stringify(m.result) + '\\n')",
+  "    else if (m.id === 2) process.stderr.write('secret answer ' + JSON.stringify(m.result) + '\\n')",
+  '  }',
+  '})'
+].join('\n')
 
 /** A plugin folder holding `source` as its entry. */
 function plugin(name: string, source: string, file = 'index.mjs'): PluginLaunch {
@@ -454,6 +479,26 @@ describe('createPluginRuntime', () => {
     expect(log).toMatch(/refused: \.\.\/escape is not a secret name/)
     r.start(plugin('other', `export default { async activate(ctx) { console.error('sees ' + (await ctx.secrets.get('refresh'))) } }`))
     await until(() => expect(logOf(r, 'other')).toContain('sees undefined'))
+  }, 90_000)
+
+  // Workspace V2 test matrix T06: the channel says who a plugin is, never what it writes on it. A plugin that skips the
+  // launcher and forges its messages gets its own identity, its own grants, no session and its own secrets only.
+  it('answers a call a plugin forges on its own channel as that plugin, whatever the call says it is', async () => {
+    const profile = path.join(dir, `profile ${++n}`)
+    const honest = runtime({}, { profile })
+    honest.r.start(plugin('victim', `export default { async activate(ctx) { await ctx.secrets.set('refresh', 'victim-secret-31'); console.error('stored') } }`))
+    await until(() => expect(logOf(honest.r, 'victim')).toContain('stored'))
+    const forger = path.join(dir, 'forging-launcher.mjs')
+    writeFileSync(forger, FORGING_LAUNCHER)
+    const { r, calls } = runtime({}, { profile, launcher: forger })
+    r.start(plugin('mallory', `export default {}`))
+    await until(() => expect(logOf(r, 'mallory')).toContain('secret answer'))
+    await until(() => expect(logOf(r, 'mallory')).toContain('call answer'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ cmd: 'projects-list', args: {}, sessionId: '', from: { role: 'plugin', plugin: { id: 'mallory' } } })
+    expect([...(calls[0].from?.plugin?.granted ?? [])]).toEqual(['projects.read'])
+    expect(logOf(r, 'mallory')).toContain('secret answer {"value":null}')
+    expect(logOf(r, 'mallory')).not.toContain('victim-secret-31')
   }, 90_000)
 
   it('stops every plugin at once, starts a running plugin only once, and stops an unknown id quietly', async () => {
