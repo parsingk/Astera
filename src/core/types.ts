@@ -20,6 +20,7 @@ import type { ReviewerSettings } from './settings/externalReviewers'
 import type { TextSearchAnswer } from './files/textMatch'
 import type { Diagnostic } from './problems/diagnostic'
 import type { PanelRefusalCode } from './plugins/pluginRows'
+import type { Chord } from './keys/binding'
 import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
@@ -1086,6 +1087,9 @@ export interface CoreEvents {
   'problems:changed': null
   /** The Host's plugin list differs from the last one main read (Phase 2 remaining): ask plugins.list again. */
   'plugins:changed': null
+  /** One of the app's keys was pressed in a plugin panel, whose page never passes it to this document: main kept it from
+   *  the page (main/plugins/panelGuests.ts), and the renderer runs it as from a text field (test matrix T17, finding A1). */
+  'plugins:panelKey': Chord
   /** A project's test results changed (Phase 3 Part 2): the project path */
   'tests:changed': string
   /** Every language server's state, whole (Phase 3 Part 3) */
@@ -2224,6 +2228,9 @@ export interface PluginPanelsApi {
     panelId: string,
     projectRoot: string | null
   ): Promise<{ ok: true; url: string; partition: string } | { ok: false; code: PanelRefusalCode; reason: string }>
+  /** The keys main takes from a panel's page for the app, right now (lib/keyRouting.ts panelChords). Every other key stays
+   *  the page's. */
+  panelKeys(chords: Chord[]): void
 }
 
 export interface PluginsApi {

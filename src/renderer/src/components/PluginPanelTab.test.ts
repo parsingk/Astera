@@ -119,3 +119,22 @@ describe('a guest main ended, final review', () => {
     expect(src).toMatch(/setTimeout\(\(\) => \{\s*if \(!mounted\.current\) return\s*autoReopens\.current \+= 1\s*setAttempt\(\(n\) => n \+ 1\)\s*\}, NOT_READY_RETRY_MS\)/)
   })
 })
+
+// Test matrix T17, finding A1: opening a panel left the focus on the page body, so keys went nowhere until a click. A
+// panel tab now takes the focus as a terminal and the editor do: when it becomes its pane's active tab, when its command
+// runs again for it, and once its page is first ready if it is active then; not while a closing tab holds activation focus.
+describe('the focus', () => {
+  it('moves into the guest when the tab is active and its page is ready, or the command asks for it again', () => {
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(active && ready\.current && !activationFocusHeld\(\)\) viewRef\.current\?\.focus\(\)\s*\}, \[active, nonce\]\)/)
+    expect(src).toMatch(/const loaded = \(\): void => \{\s*if \(!ready\.current\) \{\s*ready\.current = true\s*if \(latest\.current\.active && !activationFocusHeld\(\)\) view\.focus\(\)\s*\}\s*latest\.current\.onLoaded\(\)\s*\}/)
+    expect(src).toMatch(/<PluginGuest key=\{state\.url\}[^>]*active=\{active\}[^>]*nonce=\{nonce\}/)
+  })
+
+  it('is active only as its pane’s shown tab in the active pane; the sidebar’s view takes no focus by itself', () => {
+    const grid = readFileSync(path.join(here, 'PaneGrid.tsx'), 'utf8')
+    expect(grid).toMatch(/<PluginPanelTab[^>]*nonce=\{pluginNonces\[tabId\] \?\? 0\}\s*active=\{visible && pane\.id === activePaneId\}/)
+    const app = readFileSync(path.join(here, '..', 'App.tsx'), 'utf8')
+    const sidebar = app.slice(app.indexOf("sidebarPane === 'plugin' && shownPluginView ?"))
+    expect(sidebar.slice(0, sidebar.indexOf('/>'))).not.toContain('active=')
+  })
+})

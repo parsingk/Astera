@@ -575,3 +575,94 @@ describe('final review fixes', () => {
     expect(never.sessions.wiped).toEqual([])
   })
 })
+
+// Test matrix T17, finding A1: a key pressed in a plugin panel stays in the guest's page, which is another renderer, so
+// the app's shortcuts did nothing there. Main sees the guest's real key presses first (Electron's before-input-event,
+// which a page's own synthetic events never reach) and takes the ones the app says are its own right now.
+describe('the app’s keys in a panel', () => {
+  const palette = { ctrl: true, shift: true, alt: false, meta: false, code: 'KeyP' }
+  const close = { ctrl: true, shift: false, alt: false, meta: false, code: 'KeyW' }
+  const press = (over: Record<string, unknown> = {}) => ({ type: 'keyDown', key: 'P', code: 'KeyP', control: true, shift: true, alt: false, meta: false, isAutoRepeat: false, ...over })
+  const guestAt = (id: number, partition: string) => {
+    const listeners = new Map<string, (...a: unknown[]) => void>()
+    return {
+      id,
+      session: currentSessions!.sessionOf(partition),
+      setWindowOpenHandler: () => {},
+      on: (ev: string, fn: (...a: unknown[]) => void) => void listeners.set(ev, fn),
+      once: (ev: string, fn: (...a: unknown[]) => void) => void listeners.set(ev, fn),
+      emit: (ev: string, ...a: unknown[]) => listeners.get(ev)?.(...a)
+    }
+  }
+  const opened = async (m: ReturnType<typeof make>, id: number) => {
+    const p = await m.guests.prepare('hello-panel', 'main', null)
+    if (!p.ok) throw new Error(p.reason)
+    m.guests.decideAttach({ partition: p.partition, src: p.url }, {})
+    const g = guestAt(id, p.partition)
+    expect(m.guests.attached(g as never)).toBe(true)
+    return g
+  }
+  /** Sends one key press to the guest; whether the page would see it, and what the app was handed. */
+  const key = (g: ReturnType<typeof guestAt>, sent: unknown[], over: Record<string, unknown> = {}) => {
+    const e = { preventDefault: vi.fn() }
+    const before = sent.length
+    g.emit('before-input-event', e, press(over))
+    return { pageSees: e.preventDefault.mock.calls.length === 0, handed: sent.slice(before) }
+  }
+
+  it('takes the app’s key before the page sees it and hands the app each press once', async () => {
+    const m = make([row()])
+    const sent: unknown[] = []
+    m.guests.keysTo((c) => void sent.push(c))
+    m.guests.setAppKeys([palette, close])
+    const g = await opened(m, 51)
+    expect(key(g, sent)).toEqual({ pageSees: false, handed: [palette] })
+    expect(key(g, sent, { code: 'KeyW', key: 'w', shift: false })).toEqual({ pageSees: false, handed: [close] })
+    // Held down: still the app's, but not handed again, as the window's own listener runs no repeat
+    expect(key(g, sent, { isAutoRepeat: true })).toEqual({ pageSees: false, handed: [] })
+    // The key coming up is the page's
+    expect(key(g, sent, { type: 'keyUp' })).toEqual({ pageSees: true, handed: [] })
+  })
+
+  it('leaves the page every other key: typing, the same key with other modifiers', async () => {
+    const m = make([row()])
+    const sent: unknown[] = []
+    m.guests.keysTo((c) => void sent.push(c))
+    m.guests.setAppKeys([palette])
+    const g = await opened(m, 52)
+    expect(key(g, sent, { code: 'KeyA', key: 'a', control: false, shift: false })).toEqual({ pageSees: true, handed: [] })
+    expect(key(g, sent, { shift: false })).toEqual({ pageSees: true, handed: [] })
+    expect(key(g, sent, { alt: true })).toEqual({ pageSees: true, handed: [] })
+    expect(key(g, sent, { meta: true })).toEqual({ pageSees: true, handed: [] })
+  })
+
+  it('takes the keys the app sent last, none before it has sent any, and nothing that is not a key', async () => {
+    const m = make([row()])
+    const sent: unknown[] = []
+    m.guests.keysTo((c) => void sent.push(c))
+    const g = await opened(m, 53)
+    expect(key(g, sent)).toEqual({ pageSees: true, handed: [] })
+    // Rebound, or no longer the app's right now: the page has it again
+    m.guests.setAppKeys([palette])
+    m.guests.setAppKeys([close])
+    expect(key(g, sent)).toEqual({ pageSees: true, handed: [] })
+    expect(key(g, sent, { code: 'KeyW', key: 'w', shift: false })).toEqual({ pageSees: false, handed: [close] })
+    // What is not a list of keys takes nothing, and a list's other entries keep only a key's fields
+    m.guests.setAppKeys('Ctrl+Shift+P')
+    expect(key(g, sent, { code: 'KeyW', key: 'w', shift: false })).toEqual({ pageSees: true, handed: [] })
+    m.guests.setAppKeys([null, 'Ctrl+W', { ...palette, ctrl: 'yes' }, { code: 7 }, { ...close, extra: 'x' }])
+    expect(key(g, sent)).toEqual({ pageSees: true, handed: [] })
+    expect(key(g, sent, { code: 'KeyW', key: 'w', shift: false })).toEqual({ pageSees: false, handed: [close] })
+  })
+
+  it('takes nothing from a guest with no prepared page behind it', async () => {
+    const m = make([row()])
+    const sent: unknown[] = []
+    m.guests.keysTo((c) => void sent.push(c))
+    m.guests.setAppKeys([palette])
+    await m.guests.prepare('hello-panel', 'main', null)
+    const g = guestAt(54, 'plugin-hello-panel')
+    expect(m.guests.attached(g as never)).toBe(true)
+    expect(key(g, sent)).toEqual({ pageSees: true, handed: [] })
+  })
+})

@@ -18,6 +18,7 @@ import {
 import { contributionKey, pluginSchemeHost } from '../../core/plugins/manifest'
 import { unusablePlugin, type PanelRefusalCode, type PluginRow } from '../../core/plugins/pluginRows'
 import type { PluginAudit } from '../../core/plugins/pluginAudit'
+import type { Chord } from '../../core/keys/binding'
 
 type SessionLike = {
   protocol: { handle: (scheme: string, handler: (req: { url: string }) => Promise<Response>) => void }
@@ -36,12 +37,28 @@ type GuestLike = {
   setWindowOpenHandler: (fn: () => { action: 'deny' }) => void
   setWebRTCIPHandlingPolicy?: (policy: 'disable_non_proxied_udp') => void
   on: ((event: 'will-navigate' | 'will-redirect', fn: (e: { preventDefault: () => void; url?: string }, url?: string) => void) => void) &
-    ((event: 'select-bluetooth-device', fn: (e: { preventDefault: () => void }, devices: unknown, callback?: (id: string) => void) => void) => void)
+    ((event: 'select-bluetooth-device', fn: (e: { preventDefault: () => void }, devices: unknown, callback?: (id: string) => void) => void) => void) &
+    ((event: 'before-input-event', fn: (e: { preventDefault: () => void }, input: KeyInput) => void) => void)
   once: (event: 'destroyed', fn: () => void) => void
   forcefullyCrashRenderer?: () => void
   close?: () => void
 }
 export type GuestIdentity = { pluginId: string; host: string }
+/** The fields of Electron's before-input-event payload the app's keys are read from. */
+type KeyInput = { type: string; code: string; control: boolean; shift: boolean; alt: boolean; meta: boolean; isAutoRepeat?: boolean }
+
+/** The keys the renderer sent, each kept to a key's fields; anything else in the list is dropped. */
+function readChords(list: unknown): Chord[] {
+  if (!Array.isArray(list)) return []
+  const chords: Chord[] = []
+  for (const c of list as unknown[]) {
+    const k = c as Partial<Record<keyof Chord, unknown>> | null
+    if (typeof k !== 'object' || k === null || typeof k.code !== 'string') continue
+    if (typeof k.ctrl !== 'boolean' || typeof k.shift !== 'boolean' || typeof k.alt !== 'boolean' || typeof k.meta !== 'boolean') continue
+    chords.push({ ctrl: k.ctrl, shift: k.shift, alt: k.alt, meta: k.meta, code: k.code })
+  }
+  return chords
+}
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -122,6 +139,9 @@ export function createPanelGuests(d: {
   const known = new Map<string, { pluginId: string; installId?: string }>()
   /** A wipe under way, which a prepare in the same partition waits for (final review M7). */
   const wiping = new Map<string, Promise<void>>()
+  /** The keys the app takes from a panel right now, as the renderer last sent them, and where a press of one goes. */
+  let appKeys: Chord[] = []
+  let sendKey: (chord: Chord) => void = () => {}
 
   const refusedHere = (status: number): Response => new Response(null, { status })
 
@@ -334,8 +354,32 @@ export function createPanelGuests(d: {
       }
       guest.on('will-navigate', hold)
       guest.on('will-redirect', hold)
+      // A key pressed in the page never reaches the app's document (test matrix T17, finding A1). Electron hands main the
+      // guest's real key presses before the page sees them (a page's own synthetic events never come here), so a press of
+      // one of the app's keys is kept from the page and handed to the app, which runs it as it would from a text field.
+      // A held key stays the app's without running again, as in the window's own listener.
+      guest.on('before-input-event', (e, input) => {
+        if (input.type !== 'keyDown') return
+        const chord = appKeys.find(
+          (c) => c.code === input.code && c.ctrl === input.control && c.shift === input.shift && c.alt === input.alt && c.meta === input.meta
+        )
+        if (!chord) return
+        e.preventDefault()
+        if (!input.isAutoRepeat) sendKey(chord)
+      })
       guest.once('destroyed', () => guests.delete(guest.id))
       return true
+    },
+
+    /** The keys the app takes from a panel right now (plugins.panelKeys, from the renderer): what it would run or keep with
+     *  the focus in a text field. Every other key stays the page's. */
+    setAppKeys(list: unknown): void {
+      appKeys = readChords(list)
+    },
+
+    /** Where a press of one of the app's keys in a panel goes (ipc.ts, to the renderer). */
+    keysTo(fn: (chord: Chord) => void): void {
+      sendKey = fn
     },
 
     /** Answers a bridge call from a live guest with what it was prepared as, or throws why not. */

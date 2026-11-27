@@ -116,7 +116,7 @@ import { toolbarState, upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type ActionId, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import { createActionRegistry, type ActionHandler } from './lib/actionRegistry'
-import { keyDecision, keyFocusOf } from './lib/keyRouting'
+import { PANEL_FOCUS, keyDecision, keyFocusOf, panelChords, panelKeyAction } from './lib/keyRouting'
 import { paneKeyTarget } from './lib/paneKeys'
 import {
   MIN_CHECKING_MS,
@@ -1701,6 +1701,31 @@ export default function App(): React.JSX.Element {
     window.addEventListener('keydown', onKey, true) // capture
     return () => window.removeEventListener('keydown', onKey, true)
   }, [actionRegistry])
+
+  // A key pressed in a plugin panel never reaches this document: the panel's page is another renderer (test matrix T17,
+  // finding A1). Main sees its real key presses first and keeps from the page the keys this says are the app's right now,
+  // the ones the listener above would run or keep with the focus in a text field; told again after each render, when
+  // they differ, so a key the app would pass on stays the page's. A press of one comes back here and runs as from a field.
+  const panelKeysSent = useRef('')
+  useEffect(() => {
+    const chords =
+      modalOpenRef.current || isConfirmOpen()
+        ? []
+        : panelChords(bindingsRef.current, ACTIONS, (id) => actionRegistry.state(id).ok)
+    const text = JSON.stringify(chords)
+    if (text === panelKeysSent.current) return
+    panelKeysSent.current = text
+    window.api.plugins.panelKeys(chords)
+  })
+  useEffect(
+    () =>
+      window.api.on('plugins:panelKey', (chord) => {
+        if (modalOpenRef.current || isConfirmOpen()) return
+        const spec = panelKeyAction(bindingsRef.current, chord, ACTIONS)
+        if (spec && keyDecision(spec, PANEL_FOCUS, actionRegistry.state(spec.id).ok) === 'run') actionRegistry.run(spec.id)
+      }),
+    [actionRegistry]
+  )
 
   // One delegate per action under the 'core' owner, registered once. Each reads this render's handler from
   // actionImplRef, so it acts on the latest state without registering again.

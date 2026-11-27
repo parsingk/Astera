@@ -44,6 +44,7 @@ const EVENT_CHANNELS = [
   'files:changedBatch',
   'problems:changed',
   'plugins:changed',
+  'plugins:panelKey',
   'tests:changed',
   'lsp:state',
   'files:opProgress',
@@ -459,6 +460,7 @@ const api = {
   plugins: {
     list: invoke('plugins.list'),
     preparePanel: invoke('plugins.preparePanel'),
+    panelKeys: fire('plugins.panelKeys'),
     inspect: invoke('plugins.inspect'),
     install: invoke('plugins.install'),
     setEnabled: invoke('plugins.setEnabled'),

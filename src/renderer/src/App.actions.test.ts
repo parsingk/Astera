@@ -22,6 +22,16 @@ describe('App.tsx runs shortcuts through the action registry', () => {
     expect(src).not.toMatch(/action === '[a-zA-Z]+\.[a-zA-Z]+'/)
   })
 
+  // Test matrix T17, finding A1: a key pressed in a plugin panel reaches the app only through main, which takes the keys
+  // this says are the app's right now and hands each press back; it then runs as from a text field
+  it('tells main after each render which keys it takes from a plugin panel, and runs a key handed back as from a field', () => {
+    expect(listener).toMatch(/modalOpenRef\.current \|\| isConfirmOpen\(\)\s*\? \[\]\s*: panelChords\(bindingsRef\.current, ACTIONS, \(id\) => actionRegistry\.state\(id\)\.ok\)/)
+    expect(listener).toContain('window.api.plugins.panelKeys(chords)')
+    expect(listener).toMatch(/window\.api\.on\('plugins:panelKey', \(chord\) => \{\s*if \(modalOpenRef\.current \|\| isConfirmOpen\(\)\) return/)
+    expect(listener).toContain('const spec = panelKeyAction(bindingsRef.current, chord, ACTIONS)')
+    expect(listener).toContain("if (spec && keyDecision(spec, PANEL_FOCUS, actionRegistry.state(spec.id).ok) === 'run') actionRegistry.run(spec.id)")
+  })
+
   it('registers a delegate for every action in ACTIONS under the core owner', () => {
     expect(src).toMatch(/ACTIONS\.map\(\(a\) =>\s*actionRegistry\.register\('core', a\.id,/)
     expect(src).toMatch(/const actionImplRef = useRef<Record<ActionId, ActionHandler> \| null>\(null\)/)

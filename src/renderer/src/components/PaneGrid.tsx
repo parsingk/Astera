@@ -645,6 +645,7 @@ export function PaneGrid({
                 projectRoot={info.projectRoot}
                 title={info.title}
                 nonce={pluginNonces[tabId] ?? 0}
+                active={visible && pane.id === activePaneId}
                 onFocus={() => onFocusPane(pane.id)}
               />
             )}

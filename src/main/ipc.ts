@@ -5311,6 +5311,10 @@ export function registerIpc(
       : { ok: false, code: 'invalid', reason: 'plugins.preparePanel needs a plugin id and a panel id' }
   )
   ipcMain.handleGuest('plugin-ui.call', (e, _guest, method: unknown, payload: unknown) => panelGuests.call(e.sender.id, method, payload))
+  // The app's keys in a panel (test matrix T17, finding A1): the renderer says which keys are the app's right now, main
+  // keeps a press of one from the panel's page and hands it back here
+  ipcMain.on('plugins.panelKeys', (_e, list: unknown) => panelGuests.setAppKeys(list))
+  panelGuests.keysTo((chord) => send('plugins:panelKey', chord))
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   // Turning a plugin off, removing or replacing it closes its panels first (ADR-008 §6, plugin panels review I2)
   ipcMain.handle('plugins.install', (_e, a: unknown) => {

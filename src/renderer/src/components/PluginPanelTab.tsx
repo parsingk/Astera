@@ -3,6 +3,7 @@ import type { WebviewTag } from 'electron'
 import type { MessageKey } from '../../../core/i18n'
 import type { PanelRefusalCode } from '../../../core/plugins/pluginRows'
 import { useI18n } from '../i18n/I18nProvider'
+import { activationFocusHeld } from '../lib/focusHold'
 
 /** How many times in a row a tab asks main again, by itself, for a guest main ended without a page loading between:
  *  enough for a reinstall, never a loop. */
@@ -31,6 +32,7 @@ export function PluginPanelTab({
   projectRoot,
   title,
   nonce,
+  active = false,
   onFocus
 }: {
   pluginId: string
@@ -41,6 +43,8 @@ export function PluginPanelTab({
   title: string
   /** Bumped each time the plugin's command runs for this tab: a tab not showing its page asks main again. */
   nonce: number
+  /** Its pane's shown tab in the active pane: its page takes the focus, as a terminal does (test matrix T17, A1). */
+  active?: boolean
   /** The person moved into the guest: its pane becomes the active one, as a click elsewhere in the slot makes it. */
   onFocus: () => void
 }): React.JSX.Element {
@@ -109,6 +113,8 @@ export function PluginPanelTab({
     <PluginPanelView
       state={state}
       title={title}
+      active={active}
+      nonce={nonce}
       onReopen={() => {
         auto.current = false
         setAttempt((n) => n + 1)
@@ -137,6 +143,8 @@ export function PluginPanelTab({
 export function PluginPanelView({
   state,
   title,
+  active = false,
+  nonce = 0,
   onReopen,
   onGone,
   onEnded = onGone,
@@ -145,6 +153,8 @@ export function PluginPanelView({
 }: {
   state: PanelState
   title: string
+  active?: boolean
+  nonce?: number
   onReopen: () => void
   /** The page crashed. */
   onGone: () => void
@@ -157,7 +167,7 @@ export function PluginPanelView({
   const { t } = useI18n()
   if (state.phase === 'shown')
     return (
-      <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} onGone={onGone} onEnded={onEnded} onLoaded={onLoaded} onFocus={onFocus} />
+      <PluginGuest key={state.url} url={state.url} partition={state.partition} title={title} active={active} nonce={nonce} onGone={onGone} onEnded={onEnded} onLoaded={onLoaded} onFocus={onFocus} />
     )
   if (state.phase === 'preparing') return <div className="plugin-panel-note">{t('plugin.panel.preparing')}</div>
   const note: MessageKey = state.phase === 'gone' ? 'plugin.panel.gone' : `plugin.panel.refused.${state.code}`
@@ -177,6 +187,8 @@ function PluginGuest({
   url,
   partition,
   title,
+  active,
+  nonce,
   onGone,
   onEnded,
   onLoaded,
@@ -185,20 +197,36 @@ function PluginGuest({
   url: string
   partition: string
   title: string
+  active: boolean
+  nonce: number
   onGone: () => void
   onEnded: () => void
   onLoaded: () => void
   onFocus: () => void
 }): React.JSX.Element {
   const viewRef = useRef<WebviewTag>(null)
-  const latest = useRef({ onGone, onEnded, onLoaded, onFocus })
-  latest.current = { onGone, onEnded, onLoaded, onFocus }
+  const latest = useRef({ active, onGone, onEnded, onLoaded, onFocus })
+  latest.current = { active, onGone, onEnded, onLoaded, onFocus }
+  /** Its page has been ready once: a guest still attaching takes no focus. */
+  const ready = useRef(false)
+  // The page takes the focus as a terminal and the editor do when their tab activates (test matrix T17, finding A1):
+  // when the tab becomes its pane's shown tab in the active pane, when the plugin's command asks for it again, and once
+  // its page is first ready if it is active then; a later load in the page takes none. Not while a closing tab holds it.
+  useEffect(() => {
+    if (active && ready.current && !activationFocusHeld()) viewRef.current?.focus()
+  }, [active, nonce])
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     const gone = (): void => latest.current.onGone()
     const ended = (): void => latest.current.onEnded()
-    const loaded = (): void => latest.current.onLoaded()
+    const loaded = (): void => {
+      if (!ready.current) {
+        ready.current = true
+        if (latest.current.active && !activationFocusHeld()) view.focus()
+      }
+      latest.current.onLoaded()
+    }
     const focus = (): void => latest.current.onFocus()
     // Main ending the guest (its plugin turned off, removed or installed again), or refusing its attach, reaches the
     // element as `destroyed`; a page that crashes while its guest stays as `render-process-gone` (measured in the app)

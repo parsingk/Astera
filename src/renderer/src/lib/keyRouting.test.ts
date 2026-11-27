@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { ActionId } from '../../../core/keys/binding'
-import { focusKeepsKey, keyDecision, keyFocusOf, type KeyFocus } from './keyRouting'
+import { formatChord, makeActions, resolveBindings, type ActionId } from '../../../core/keys/binding'
+import { PANEL_FOCUS, focusKeepsKey, keyDecision, keyFocusOf, panelChords, panelKeyAction, type KeyFocus } from './keyRouting'
 
 const none: KeyFocus = { inXterm: false, inConversation: false, editable: false, inEditor: false }
 const terminal: KeyFocus = { ...none, inXterm: true }
@@ -85,5 +85,59 @@ describe('keyDecision', () => {
     expect(keyDecision(spec('sidebar.jobs'), terminal, true)).toBe('run')
     expect(keyDecision(spec('explorer.closeFileTab', false, true), terminal, true)).toBe('pass')
     expect(keyDecision(spec('explorer.toggleMode'), field, true)).toBe('pass')
+  })
+})
+
+// Test matrix T17, finding A1: main takes the app's keys from a plugin panel's page before the page sees them, and the
+// renderer says which. The page is another renderer the app cannot look into, so its focus counts as a text field.
+describe('panelChords', () => {
+  const actions = makeActions('win32')
+  const all = (): boolean => true
+  const keys = (overrides: Record<string, string[]>, runnable: (id: ActionId) => boolean = all) =>
+    panelChords(resolveBindings(overrides, actions), actions, runnable).map(formatChord)
+
+  it('hands the app the keys it takes from a text field, and leaves the page the ones a field keeps', () => {
+    const k = keys({})
+    expect(k).toContain('Ctrl+Shift+P')
+    expect(k).toContain('Ctrl+W')
+    expect(k).toContain('Ctrl+Shift+A')
+    // A field keeps the explorer toggle, tab cycling and pane focus (Ctrl+Shift+arrow selects by word there)
+    expect(k).not.toContain('Ctrl+Shift+E')
+    expect(k).not.toContain('Ctrl+Tab')
+    expect(k).not.toContain('Ctrl+PageDown')
+    expect(k).not.toContain(formatChord(resolveBindings({}, actions)['pane.focusLeft'][0]))
+  })
+
+  it('leaves the page the key of an action with nothing to do, unless the action keeps its key anyway', () => {
+    const k = keys({}, (id) => id !== 'explorer.cyclePreview' && id !== 'run.run')
+    // Ctrl+Shift+V is the page's paste without formatting while no preview can cycle
+    expect(k).not.toContain('Ctrl+Shift+V')
+    // Shift+F10 is kept with nothing to run, as everywhere else in the app
+    expect(k).toContain('Shift+F10')
+  })
+
+  it('follows a key the person rebound and an action they turned off', () => {
+    const k = keys({ 'palette.open': ['Ctrl+Alt+K'], 'explorer.closeFileTab': [] })
+    expect(k).toContain('Ctrl+Alt+K')
+    expect(k).not.toContain('Ctrl+Shift+P')
+    expect(k).not.toContain('Ctrl+W')
+  })
+})
+
+describe('panelKeyAction', () => {
+  const actions = makeActions('win32')
+  const bindings = resolveBindings({ 'palette.open': ['Ctrl+Alt+K'] }, actions)
+  const chord = (ctrl: boolean, shift: boolean, alt: boolean, code: string) => ({ ctrl, shift, alt, meta: false, code })
+
+  it('finds the action a key handed over from a panel is bound to, and runs it as from a text field', () => {
+    const spec = panelKeyAction(bindings, chord(true, false, true, 'KeyK'), actions)
+    expect(spec?.id).toBe('palette.open')
+    expect(keyDecision(spec!, PANEL_FOCUS, true)).toBe('run')
+    expect(panelKeyAction(bindings, chord(true, false, false, 'KeyW'), actions)?.id).toBe('explorer.closeFileTab')
+  })
+
+  it('finds nothing for a key no action is bound to now', () => {
+    expect(panelKeyAction(bindings, chord(true, true, false, 'KeyP'), actions)).toBeNull()
+    expect(panelKeyAction(bindings, { ...chord(true, false, true, 'KeyK'), meta: true }, actions)).toBeNull()
   })
 })

@@ -29,6 +29,18 @@ describe('plugin panel guests wiring', () => {
     expect(ipc).toContain("{ ok: false, code: 'invalid', reason: 'plugins.preparePanel needs a plugin id and a panel id' }")
   })
 
+  // Test matrix T17, finding A1: the renderer says which keys are the app's, main takes them from a panel's page and hands
+  // each press back on an event; nothing of it is open to a guest (the guard answers the app's window only)
+  it('takes the app’s keys from a panel as the renderer sends them, and hands a press back to the renderer', () => {
+    const ipc = read('ipc.ts')
+    expect(ipc).toContain("ipcMain.on('plugins.panelKeys', (_e, list: unknown) => panelGuests.setAppKeys(list))")
+    expect(ipc).toContain("panelGuests.keysTo((chord) => send('plugins:panelKey', chord))")
+    const preload = read('../preload/index.ts')
+    expect(preload).toContain("panelKeys: fire('plugins.panelKeys'),")
+    expect(preload).toContain("'plugins:panelKey',")
+    expect(read('../preload/pluginBridge.ts')).not.toContain('panelKey')
+  })
+
   it('builds the bridge preload as its own entry, exposing only astera.context on the one channel', () => {
     const config = readFileSync(path.resolve(__dirname, '../../electron.vite.config.ts'), 'utf8')
     expect(config).toMatch(/input: \{ index: 'src\/preload\/index\.ts', pluginBridge: 'src\/preload\/pluginBridge\.ts' \}/)
