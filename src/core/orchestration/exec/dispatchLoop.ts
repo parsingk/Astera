@@ -1059,7 +1059,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         return refuse(`task ${taskId} has failed ${task.consecutiveFailures} times in a row (circuit break)`)
       // The lifecycle Task has no account by design: the loop starts it (G3a final review M6)
       if (task.kind === 'lifecycle') return refuse('Astera carries this Task through GitHub itself; it has no worker')
-      if ((task.accountIds?.length ?? 0) === 0)
+      // An external agent works a Task with none (Phase 5 A1, final review I4)
+      if ((task.accountIds?.length ?? 0) === 0 && task.externalAgentId === undefined)
         return refuse(`task ${taskId} names no account to run on; give it one with tasks add --account`)
       if (s.dispatches.some((d) => d.taskId === taskId && !d.outcome && !d.endedAt))
         return refuse(`task ${taskId} already has a worker`)
@@ -1086,7 +1087,11 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         )
       )
       if (!c.mayStart()) return refuse('this process stopped placing Jobs while the task was being placed')
-      const slot: Slot = { runId: task.runId, taskId, accountIds: task.accountIds as string[] }
+      // Built as slotsToFill builds it
+      const slot: Slot =
+        task.externalAgentId !== undefined
+          ? { runId: task.runId, taskId, accountIds: [], externalAgentId: task.externalAgentId }
+          : { runId: task.runId, taskId, accountIds: task.accountIds as string[] }
       const end = await placeSlot(slot, accounts, loggedIn)
       if (end.kind === 'started') {
         log(`scheduler: task=${taskId} placed on request`)

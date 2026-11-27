@@ -4021,6 +4021,16 @@ export async function handleCommand(
       // or without accounts (drivesRun); one it names itself is asked like any agent's, and so is an outside driver.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
+      // Only Astera's own placing starts an external agent (final review I3): a Job its coordinator drives places its own
+      // Tasks with worker-start, which an external agent's Task refuses, so such a Task would never start there
+      if (externalAgentArg !== null && ownerJob) {
+        const ownerRun = s.runs.find((r) => r.id === runId)
+        const coordinated = ownerRun
+          ? ownerRun.coordinatorSessionId !== undefined || (ownerJob.coordinatorAccountId !== undefined && !placedByApp(ownerJob, ownerRun))
+          : ownerJob.coordinatorAccountId !== undefined && ownerJob.autoDispatch !== true
+        if (coordinated)
+          return conflict('a coordinator places this Job’s tasks, and only Astera itself starts an external agent: put the Task in a Job without a coordinator')
+      }
       // Nor does a sandboxed Job's work go to one (final review C2)
       if (externalAgentArg !== null && ownerJob?.sandboxed === true)
         return conflict('this Job runs its work in a sandbox, and an external agent cannot be sandboxed: give the Task an account')
@@ -4367,6 +4377,9 @@ export async function handleCommand(
       if (!task) return notFound(`unknown task: ${taskId}`)
       // Its repairs are Astera's (G3c), through the repair path, never this command (G3a final review)
       if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
+      // An external agent works it, and only Astera starts one (final review I3): an account worker would override the choice
+      if (task.externalAgentId !== undefined)
+        return conflict(`task ${taskId} is worked by the external agent ${task.externalAgentId}, which Astera starts itself; it takes no worker-start`)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
       // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
       // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·

@@ -1906,6 +1906,16 @@ describe('a Task an external agent works', () => {
     expect(h.startWorker).not.toHaveBeenCalled()
   })
 
+  // Final review I4: `tasks dispatch` places it the way the loop does
+  it('is placed on request through external-work-start too', async () => {
+    const h = rig()
+    external(h, 'tsk_1')
+    const r = await h.loop.dispatchOne('tsk_1')
+    expect(r.status).toBe(200)
+    expect(h.handled()).toContain('external-work-start')
+    expect(h.startWorker).not.toHaveBeenCalled()
+  })
+
   it('puts a Task whose work must run in a sandbox to a person instead of starting the agent', async () => {
     const h = rig()
     external(h, 'tsk_1')

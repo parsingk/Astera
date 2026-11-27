@@ -11468,6 +11468,25 @@ describe('external-work-start', () => {
     expect(started).toEqual([])
   })
 
+  // Final review I3: only Astera starts an external agent, so a coordinator's worker-start does not override the choice
+  it('worker-start refuses a Task an external agent works', async () => {
+    const { deps, taskId } = await setup()
+    const r = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'a1' }, APP_CALLER)
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/external agent/)
+  })
+
+  it('task-create refuses an external agent in a Job its coordinator drives', async () => {
+    const deps = Object.assign(makeDeps(), { startExternalWork: () => {} })
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)
+    const runId = (run.body as { id: string }).id
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, jobs: s0.jobs.map((j) => ({ ...j, coordinatorAccountId: 'a1', autoDispatch: undefined })) })
+    const r = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' }, APP_CALLER)
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/coordinator/)
+  })
+
   it('a stopped Run ends the Dispatch without asking for a worker session to be released', async () => {
     const { deps, taskId, released, runId } = await setup()
     await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
