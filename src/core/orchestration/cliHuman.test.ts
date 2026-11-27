@@ -1384,3 +1384,14 @@ describe('humanFor and the catalog', () => {
     expect(humanFor('plugins-registry-keygen', { keyId: 'main', publicKey: 'PUB', privateKeyFile: '/k/main.pem' })).toBe('key main\npublic key PUB\nprivate key /k/main.pem (keep it private)')
   })
 })
+
+// Phase 4 screen check: the catalog's changes as a person reads them, not as JSON
+describe('humanFor the catalog changes', () => {
+  it('plugins catalog-install reads as an install, and catalog-configure says what is set', () => {
+    expect(humanFor('plugins-catalog-install', { id: 'astera-dusk-theme', version: '0.1.0', status: 'ready', permissions: ['themes.register'] })).toBe(
+      humanFor('plugins-install', { id: 'astera-dusk-theme', version: '0.1.0', status: 'ready', permissions: ['themes.register'] })
+    )
+    expect(humanFor('plugins-catalog-configure', { configured: true, url: '/r/index.json', keys: ['main', 'next'], changed: true })).toBe('catalog set: /r/index.json, checked with keys main, next')
+    expect(humanFor('plugins-catalog-configure', { configured: false, changed: true })).toBe('catalog forgotten')
+  })
+})

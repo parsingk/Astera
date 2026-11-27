@@ -58,8 +58,8 @@ export function PluginCatalogView({
       <div className="plugin-catalog">
         <p className="settings-hint">{t('settings.plugins.catalog.none')}</p>
         <div className="settings-row plugin-catalog-source">
-          <input className="settings-input" placeholder={t('settings.plugins.catalog.urlPlaceholder')} aria-label={t('settings.plugins.catalog.url')} value={url} onChange={(e) => setUrl(e.target.value)} />
-          <input className="settings-input" placeholder={t('settings.plugins.catalog.keysPlaceholder')} aria-label={t('settings.plugins.catalog.keys')} value={keys} onChange={(e) => setKeys(e.target.value)} />
+          <input className="settings-gen-input" placeholder={t('settings.plugins.catalog.urlPlaceholder')} aria-label={t('settings.plugins.catalog.url')} value={url} onChange={(e) => setUrl(e.target.value)} />
+          <input className="settings-gen-input" placeholder={t('settings.plugins.catalog.keysPlaceholder')} aria-label={t('settings.plugins.catalog.keys')} value={keys} onChange={(e) => setKeys(e.target.value)} />
           <button className="settings-gen-refresh" disabled={url.trim() === '' || keys.trim() === ''} onClick={() => onConfigure(url.trim(), keys.trim())}>
             {t('settings.plugins.catalog.save')}
           </button>
@@ -88,7 +88,7 @@ export function PluginCatalogView({
       {expired && <p className="settings-hint is-warning">{t('settings.plugins.catalog.expired')}</p>}
       {typeof catalog.problem === 'string' && <p className="settings-hint is-warning">{t('settings.plugins.catalog.problem', { problem: catalog.problem })}</p>}
       <div className="settings-row plugin-catalog-filter">
-        <input className="settings-input" placeholder={t('settings.plugins.catalog.search')} aria-label={t('settings.plugins.catalog.search')} value={query} onChange={(e) => onQuery(e.target.value)} />
+        <input className="settings-gen-input" placeholder={t('settings.plugins.catalog.search')} aria-label={t('settings.plugins.catalog.search')} value={query} onChange={(e) => onQuery(e.target.value)} />
         <Select
           ariaLabel={t('settings.plugins.catalog.category')}
           value={category}

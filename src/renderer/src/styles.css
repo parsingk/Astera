@@ -4024,7 +4024,7 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .plugin-catalog { display: flex; flex-direction: column; gap: 8px; }
 .plugin-catalog-head, .plugin-catalog-filter, .plugin-catalog-source { gap: 8px; flex-wrap: wrap; }
 .plugin-catalog-from { flex: 1; min-width: 0; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
-.plugin-catalog-filter .settings-input, .plugin-catalog-source .settings-input { flex: 1; min-width: 160px; }
+.plugin-catalog-filter .settings-gen-input, .plugin-catalog-source .settings-gen-input { flex: 1; min-width: 160px; }
 .plugin-catalog-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--elevated); font-size: 12px; }
 .plugin-catalog-card > button { align-self: flex-start; margin-top: 4px; }
 .plugin-catalog-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

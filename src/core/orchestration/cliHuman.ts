@@ -934,6 +934,7 @@ export function humanFor(
     case 'agent-profiles-restore':
     case 'agent-profiles-delete':
     case 'plugins-install':
+    case 'plugins-catalog-install':
     case 'plugins-enable':
     case 'plugins-disable':
     case 'plugins-remove':
@@ -971,6 +972,8 @@ export function humanFor(
         ...(rows.length > 0 ? [columns(rows)] : ['the index lists no plugin'])
       ].join('\n')
     }
+    case 'plugins-catalog-configure':
+      return data.configured === true ? `catalog set: ${str(data.url)}, checked with keys ${(Array.isArray(data.keys) ? data.keys : []).map(str).join(', ')}` : 'catalog forgotten'
     case 'plugins-safe-mode':
       return `${data.safeMode === true ? 'Safe Mode is on: no plugin runs' : 'Safe Mode is off: enabled plugins run'}${data.offline === true ? ' (set in the profile; no Host was running)' : ''}`
     case 'plugins-publish':
