@@ -237,6 +237,16 @@ through a flow, and read console and network errors. This browser is restricted 
 - **Jobs:** enable **Agent orchestration**, then use **Jobs → New job** for an objective with
   workers, dependencies, and completion checks. See the [Job lifecycle](jobs.md) for worktrees,
   repair attempts, manual merging, and the differences between normal and scheduled Jobs.
+- **Agent review:** in a Run's changed files, pick a Task to see its whole range or one attempt's own (first try,
+  retry or repair), with the commits it was read over named. Each file says who changed it from the ranges the Host
+  recorded, never the git author or a file time: an agent (with the attempts and their evidence, confirmed by the
+  observe audit when it saw the writes), mixed (another worker was in the same folder at the same time), or unknown
+  (no recorded range holds it, the range was rebased, or uncommitted edits in the project folder). Commits a person
+  made in the same folder are not told apart. Opening a file shows the Task's review findings under the line they
+  were made on; once the Task moves to another revision they are listed above the file as found on another revision,
+  and the Problems row says the revision changed, with the finding's state unchanged. Each shows its state and history,
+  and **Fix with an agent** sends it as the Task's repair request, after asking. Settings › General ›
+  **Agent review** turns it off. See the [Job lifecycle](jobs.md) for the details.
 - **How It Works:** enable **Work unit tracking**, choose an **Explanation account**, and use
   `/astera-task` in a new session. See the [How It Works guide](how-it-works.md) for reading records,
   flow diagrams, decision sources, and verification results.

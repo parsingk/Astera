@@ -207,13 +207,16 @@ what to check when an explanation is missing.
 - **Language server diagnostics:** TypeScript, JavaScript and Python files open in the editor are checked by language
   servers you install in Settings › Language servers after approving their exact packages; their problems appear in the
   Problems tab with line and column. Completion, rename, formatting and other editor features are not provided
+- **Agent review:** a Run's changed files say which agent attempt changed each file, from the ranges the Host recorded
+  (never the git author), and can show one attempt's own range; a Task's review findings show on the diff line they
+  were made on, with their state and history, and an agent can fix one through the Task's repair request
 - **Layout:** the window comes back as you left it: splits, tabs, the sidebar and the bottom panel. A session
   comes back only while it still runs, and a preview or a cluster object tab waits for a click before it loads.
   From the command palette, **Layout: Coding**, **Layout: Agent Review**, **Layout: Multi-agent** and
   **Layout: DevOps** arrange the open tabs, **Layout: Reset to Default** goes back to the start, and
   **Layout: Saved Presets** keeps your own under a name
 - **Turning them off:** in Settings › General, **Remember the layout**, **Problems tab**, **Send to an agent**,
-  **Tests tab** and **Language server diagnostics** each turn their feature off. The command palette, go to file and find in files are one box opened only
+  **Tests tab**, **Language server diagnostics** and **Agent review** each turn their feature off. The command palette, go to file and find in files are one box opened only
   by their keys: in Settings › Shortcuts, **Remove key** on all three turns it off, and **Default** brings a key back
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
