@@ -198,6 +198,9 @@ describe('devEventLine', () => {
     expect(devEventLine({ event: 'needsApproval', asks: { permissions: ['jobs.read'], capabilities: [], trust: 'trusted' } })).toBe(
       'not installed: it now asks for jobs.read as trusted code; stop dev and run it again to approve that'
     )
+    expect(devEventLine({ event: 'needsApproval', asks: { permissions: ['themes.register'], capabilities: [], trust: 'declarative' } })).toBe(
+      'not installed: it now asks for themes.register as themes only; stop dev and run it again to approve that'
+    )
     expect(devEventLine({ event: 'failed', message: 'no Host' })).toBe('not installed: no Host')
   })
 })

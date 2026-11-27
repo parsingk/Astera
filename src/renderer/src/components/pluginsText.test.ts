@@ -265,6 +265,7 @@ describe('the trust level in Settings', () => {
     expect(statusLabel('ready', en)).toBe('Ready')
     expect(trustLabel('trusted', en)).toBe('Trusted code')
     expect(trustLabel('restricted-ui', en)).toBe('Restricted UI')
+    expect(trustLabel('declarative', en)).toBe('Themes only')
     // An answer from a Host without the field: the plugin is a trusted one, as every API 1 plugin is
     expect(trustLabel(undefined, en)).toBe('Trusted code')
   })
@@ -276,16 +277,24 @@ describe('the trust level in Settings', () => {
     const both = installPrompt({ ...INSPECTION, trust: 'trusted' }, 'D:/work/both', en)
     expect(both.footer).toContain(en('settings.plugins.install.trust'))
   })
+
+  it('ends a themes-only plugin’s install prompt with the declarative notice', () => {
+    const themes = installPrompt({ ...INSPECTION, trust: 'declarative', permissions: ['themes.register'] }, 'D:/work/dusk', en)
+    expect(themes.footer).toContain(en('settings.plugins.install.declarative'))
+    expect(themes.footer).not.toContain(en('settings.plugins.install.trust'))
+    expect(themes.footer).not.toContain(en('settings.plugins.install.restrictedUi'))
+  })
 })
 
 // Screen check: the tab's opening sentence said every plugin is a program running as trusted code
 describe('the Plugins tab hint', () => {
-  it('names both trust levels in every language', () => {
+  it('names every trust level in every language', () => {
     for (const lang of ['ko', 'en', 'ja', 'es'] as const) {
       // A label inside a sentence may start lower case (es: "El código de confianza")
       const tr = (key: MessageKey): string => translate(lang, key).toLowerCase()
       expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.trusted'))
       expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.restrictedUi'))
+      expect(tr('settings.plugins.hint'), lang).toContain(tr('settings.plugins.trust.declarative'))
     }
   })
 })

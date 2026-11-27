@@ -114,6 +114,14 @@ describe('saved layout', () => {
     expect(readSaved(stored(leaf(['session:s1']), { panels: { sidebar: { open: 'yes', view: 'jobs' }, bottom: { open: false, tab: 'run' } } }))).toBeNull()
   })
 
+  // Phase 2 remaining: a plugin's sidebar view is remembered by its key; whether the plugin still offers it is the app's
+  it('keeps a plugin sidebar view by its key, and reads a malformed one as the session list', () => {
+    const at = (view: string): unknown => readSaved(stored(leaf(['session:s1']), { panels: { sidebar: { open: true, view }, bottom: { open: false, tab: 'run' } } }))!.panels.sidebar.view
+    expect(at('plugin:hello-panel:side')).toBe('plugin:hello-panel:side')
+    expect(at('plugin:')).toBe('sessions')
+    expect(at('plugin:nokey')).toBe('sessions')
+  })
+
   it("gives restored groups ids that never meet createGroup's", () => {
     const tree: SavedNode = { kind: 'split', dir: 'row', ratio: 0.5, a: leaf(['session:s1']), b: leaf(['session:s2']) }
     const back = restoreTree(tree, 0, keepAll)!

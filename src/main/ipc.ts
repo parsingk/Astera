@@ -3,6 +3,7 @@ import { dialog, app, shell, session, webContents, clipboard, type BrowserWindow
 import { ipcMain, trustPluginGuest, untrustPluginGuest } from './ipcGuard'
 import { randomBytes } from 'node:crypto'
 import { createPanelGuests, type PanelGuests } from './plugins/panelGuests'
+import { createPluginListWatch } from './plugins/pluginListWatch'
 import { pluginRowsOf } from '../core/plugins/pluginRows'
 import { killProcessTree } from '../core/run/kill'
 import { cachedByStamp } from '../core/stampCache'
@@ -298,7 +299,7 @@ import {
 } from '../core/worktrees/git'
 import { readPushState } from '../core/worktrees/push'
 import { t, isLang, type MessageKey } from '../core/i18n'
-import { isThemeId } from '../core/theme/themes'
+import { isStoredThemeId } from '../core/plugins/pluginThemes'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
@@ -5263,10 +5264,22 @@ export function registerIpc(
     // A Host that cannot answer is not a Host saying the plugin is gone (plugin panels review M3)
     return r.ok ? pluginRowsOf(r.body) : null
   })
-  // A plugin turned off or removed outside this app (the CLI) is caught here while anything of it is served or open
-  setInterval(() => {
-    if (panelGuests.active()) void panelGuests.refresh()
-  }, PANEL_WATCH_MS).unref()
+  // The plugin list, read on a timer and at once after a change made here, since the Host's list has no change event
+  // (Phase 2 remaining). A difference tells the renderer, whose sidebar views, status items and themes follow it, and
+  // refreshes the panel guests while anything is served or open: a plugin turned off or removed outside this app (the
+  // CLI) is caught here. One timed read for both (final review M14).
+  const pluginListWatch = createPluginListWatch({
+    list: async () => {
+      const r = await plugins.list()
+      return r.ok ? pluginRowsOf(r.body) : null
+    },
+    send: () => {
+      send('plugins:changed', null)
+      if (panelGuests.active()) void panelGuests.refresh()
+    }
+  })
+  setInterval(() => void pluginListWatch.check(), PANEL_WATCH_MS).unref()
+  const afterChange = <T,>(answer: Promise<T>): Promise<T> => answer.finally(() => void pluginListWatch.check())
   ipcMain.handle('plugins.preparePanel', (_e, pluginId: unknown, panelId: unknown, projectRoot: unknown) =>
     typeof pluginId === 'string' && typeof panelId === 'string'
       ? panelGuests.prepare(pluginId, panelId, typeof projectRoot === 'string' && path.isAbsolute(projectRoot) ? projectRoot : null)
@@ -5279,24 +5292,27 @@ export function registerIpc(
     const replaces = (a as { expect?: { name?: unknown } } | null)?.expect?.name
     if (typeof replaces === 'string') {
       panelGuests.forget(replaces)
-      return panelGuests.hold(replaces, plugins.install(a as Parameters<typeof plugins.install>[0]))
+      return afterChange(panelGuests.hold(replaces, plugins.install(a as Parameters<typeof plugins.install>[0])))
     }
-    return plugins.install(a as Parameters<typeof plugins.install>[0])
+    return afterChange(plugins.install(a as Parameters<typeof plugins.install>[0]))
   })
   ipcMain.handle('plugins.setEnabled', (_e, id: unknown, enabled: unknown) => {
     if (typeof id !== 'string') return plugins.setEnabled(id as string, enabled === true)
     if (enabled !== true) panelGuests.forget(id)
-    return panelGuests.hold(id, plugins.setEnabled(id as string, enabled === true))
+    return afterChange(panelGuests.hold(id, plugins.setEnabled(id as string, enabled === true)))
   })
   ipcMain.handle('plugins.remove', async (_e, id: unknown) => {
     if (typeof id !== 'string') return plugins.remove(id as string)
     panelGuests.forget(id)
-    const answer = await panelGuests.hold(id, plugins.remove(id))
+    const answer = await afterChange(panelGuests.hold(id, plugins.remove(id)))
     // Removed: its panel storage goes too, so the plugin installed again starts with nothing (Phase 2 gate)
     if (answer.ok) panelGuests.forget(id, { wipe: true })
     return answer
   })
   ipcMain.handle('plugins.logs', (_e, id: unknown, lines: unknown) => plugins.logs(id as string, lines as number))
+  ipcMain.handle('plugins.get', (_e, id: unknown) => plugins.get(id as string))
+  ipcMain.handle('plugins.doctor', (_e, id: unknown) => plugins.doctor(id as string))
+  ipcMain.handle('plugins.audit', (_e, id: unknown, lines: unknown) => plugins.audit(id as string, lines as number))
   ipcMain.handle('plugins.settings', (_e, id: unknown) => plugins.settings(id as string))
   ipcMain.handle('plugins.configure', (_e, id: unknown, set: unknown, unset: unknown) =>
     plugins.configure(id as string, set as Record<string, string | boolean>, unset as string[])
@@ -6820,7 +6836,7 @@ export function registerIpc(
   ipcMain.handle('settings.getTheme', () => core.appSettings.getTheme())
   ipcMain.handle('settings.setTheme', async (_e, id: unknown) => {
     // 신뢰 경계는 스토어가 다시 본다. 여기서 먼저 걸러 잘못된 값이 디스크까지 가지 않게 한다.
-    if (!isThemeId(id)) return core.appSettings.getTheme()
+    if (!isStoredThemeId(id)) return core.appSettings.getTheme()
     await core.appSettings.setTheme(id)
     return core.appSettings.getTheme()
   })

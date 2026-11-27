@@ -10,6 +10,7 @@ import { pluginsRoot, readRegistry, writeRegistry } from './registry'
 import { pluginSecrets } from './pluginData'
 import { NpmMissing, type NpmRun } from './npm'
 import { NpmUnavailable } from './ownNpm'
+import type { PluginCallCounts } from '../../core/plugins/pluginCalls'
 import { tgzOf } from './tarballFixture'
 
 /** A Host from before plugin Phase 5, which serves every capability but completion-check: what an unserved one does. */
@@ -418,6 +419,23 @@ describe('get, enable, disable, remove', () => {
     expect(await manager.setEnabled('', true)).toEqual({ status: 400, body: { error: 'plugins-enable needs --id' } })
     expect(await manager.setEnabled(3, false)).toEqual({ status: 400, body: { error: 'plugins-disable needs --id' } })
     expect(await manager.remove(undefined)).toEqual({ status: 400, body: { error: 'plugins-remove needs --id' } })
+  })
+})
+
+// Phase 2 remaining (Plugin Inspector): a plugin's calls ride on plugins-get only, so the list main watches does not
+// change with every call
+describe('plugins-get calls', () => {
+  it('answers the call counts with one plugin, never in the list', async () => {
+    const forgotten: string[] = []
+    const calls = { of: (id: string): PluginCallCounts => (id === '@acme/astera-jira' ? { 'jobs-list': { ok: 3, refused: 1 } } : {}), forget: (id: string) => void forgotten.push(id) }
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', now: () => clock, calls })
+    await m.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    expect((await m.get('@acme/astera-jira')).body).toMatchObject({ calls: { 'jobs-list': { ok: 3, refused: 1 } } })
+    const list = (await m.list()).body as { plugins: Record<string, unknown>[] }
+    expect(list.plugins[0]).not.toHaveProperty('calls')
+    // A plugin removed takes its counts along: one installed again starts from none
+    await m.remove('@acme/astera-jira')
+    expect(forgotten).toEqual(['@acme/astera-jira'])
   })
 })
 
@@ -1344,6 +1362,29 @@ describe('a UI-only plugin: final review fixes', () => {
     expect(body(r).error).toBe('the folder changed after it was shown: it now holds hello-panel@1.0.0 as trusted code; run the install again')
     // An expect without a trust level, from an older caller, is checked as before
     expect((await manager.install({ path: at, grant: ['commands.register', 'panels.register'], expect: { name: 'hello-panel', version: '1.0.0' } })).status).toBe(200)
+  })
+
+  // Phase 2 remaining: a themes-only plugin is shown, and installed, as declarative
+  it('installs a themes-only plugin shown as declarative, and refuses an unknown trust level', async () => {
+    const at = path.join(dir, 'dusk')
+    await fs.mkdir(at, { recursive: true })
+    await fs.writeFile(
+      path.join(at, 'package.json'),
+      JSON.stringify({
+        name: 'dusk-theme',
+        version: '1.0.0',
+        astera: { apiVersion: '2', permissions: ['themes.register'], contributes: { themes: [{ id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } }] } }
+      })
+    )
+    // Final review M3: a folder shown as restricted UI that turned themes only is named for what it is now
+    const shownAsUi = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'restricted-ui' } })
+    expect(body(shownAsUi).error).toBe('the folder changed after it was shown: it now holds dusk-theme@1.0.0 as themes only; run the install again')
+    const bad = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'sandboxed' } })
+    expect(bad.status).toBe(400)
+    expect(body(bad).error).toBe('expect.trust must be trusted, restricted-ui or declarative')
+    const r = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'declarative' } })
+    expect(r.status).toBe(200)
+    expect(body(r)).toMatchObject({ id: 'dusk-theme', trust: 'declarative', status: 'ready' })
   })
 
   // M9: Review Focus 4, a grant a contribution needs that the record lacks

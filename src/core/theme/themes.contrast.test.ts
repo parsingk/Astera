@@ -2,21 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { THEMES } from './themes'
 import { contrastRatio } from './contrast'
 import { flatten } from './color'
+import { BRIGHTEST_SURFACE as SHARED_SURFACE, THEME_CONTRAST_CHECKS } from './contrastChecks'
 
-/** 스펙 §5. --text 는 본문을 읽는 표면(--bg)에서 AAA, 잠깐 머무는 표면에서 AA 다. 7:1 을 모든 표면에
- *  요구하면 실제로 쓰이는 IntelliJ 팔레트가 선택 행에서 6.9:1 이라 탈락한다. */
-const CHECKS: { label: string; fg: keyof (typeof THEMES)[0]['colors']; bg: keyof (typeof THEMES)[0]['colors']; min: number }[] = [
-  { label: 'text on bg', fg: 'text', bg: 'bg', min: 7 },
-  { label: 'text on panel', fg: 'text', bg: 'panel', min: 4.5 },
-  { label: 'text on elevated', fg: 'text', bg: 'elevated', min: 4.5 },
-  { label: 'text-dim on elevated', fg: 'textDim', bg: 'elevated', min: 4.5 },
-  { label: 'text-faint on elevated', fg: 'textFaint', bg: 'elevated', min: 3 },
-  { label: 'rail-icon on rail', fg: 'railIcon', bg: 'rail', min: 4.5 },
-  { label: 'accent on bg', fg: 'accent', bg: 'bg', min: 3 },
-  { label: 'accent-ink on accent', fg: 'accentInk', bg: 'accent', min: 4.5 },
-  { label: 'status-ink on status-bg', fg: 'statusInk', bg: 'statusBg', min: 4.5 },
-  { label: 'md-link on bg', fg: 'mdLink', bg: 'bg', min: 4.5 }
-]
+const CHECKS = [...THEME_CONTRAST_CHECKS]
 
 describe.each(THEMES.map((t) => [t.id, t] as const))('%s 대비', (_id, theme) => {
   it.each(CHECKS)('$label ≥ $min', ({ fg, bg, min }) => {
@@ -29,7 +17,7 @@ describe.each(THEMES.map((t) => [t.id, t] as const))('%s 대비', (_id, theme) =
 
 /** 공유 시맨틱은 테마별로 정의하지 않으므로, 일곱 테마 중 가장 밝은 표면 하나로 검사하면 전부 통과한다.
  *  가장 밝은 표면은 Orion 의 --elevated (#303236) 다. */
-const BRIGHTEST_SURFACE = '#303236'
+const BRIGHTEST_SURFACE = SHARED_SURFACE
 
 const SHARED: Record<string, string> = {
   '--fi-blue': '#5b9fe0', '--fi-cyan': '#4fb6c4', '--fi-green': '#7fbf6a', '--fi-yellow': '#d7b45a',

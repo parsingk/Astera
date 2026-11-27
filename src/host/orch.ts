@@ -35,6 +35,7 @@ import { controllerRefusal } from '../core/host/controllerGate'
 import type { ControlPlaneReport } from '../core/controlPlane/report'
 import { PLUGIN_COMMAND_PERMISSIONS, PLUGIN_SENSITIVE_COMMANDS, pluginRefusal } from '../core/host/pluginGate'
 import type { PluginAudit } from '../core/plugins/pluginAudit'
+import type { PluginCalls } from '../core/plugins/pluginCalls'
 import { sanitizeForController } from '../core/remote/sanitize'
 import { t } from '../core/i18n'
 import type { GatewayState } from '../core/remote/gatewayState'
@@ -625,6 +626,8 @@ export function createHostOrch(a: {
   /** The plugin audit log (Workspace & Plugin Platform V2 spec E3): a plugin's refused calls and the calls it makes that
    *  change something, and the plugin changes the app and the CLI make. Absent: nothing is recorded. */
   pluginAudit?: PluginAudit
+  /** Each plugin's admitted calls and refusals by command (Phase 2 remaining, Plugin Inspector). */
+  pluginCalls?: Pick<PluginCalls, 'count'>
   /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
    *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
   extensions?: Pick<HostExtensions, 'command'>
@@ -1867,8 +1870,10 @@ export function createHostOrch(a: {
             // A command no plugin may send is one kind, whatever name the plugin chose (final review M3)
             const kind = Object.hasOwn(PLUGIN_COMMAND_PERMISSIONS, cmd) ? cmd : 'unlisted'
             if (from.plugin) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call-refused', detail: refused.body.error }, `${from.plugin.id} call-refused ${kind}`)
+            if (from.plugin) a.pluginCalls?.count(from.plugin.id, kind, false)
             return refused
           }
+          if (from.plugin) a.pluginCalls?.count(from.plugin.id, cmd, true)
           if (from.plugin && PLUGIN_SENSITIVE_COMMANDS.has(cmd)) a.pluginAudit?.record({ plugin: from.plugin.id, event: 'call', detail: cmd }, `${from.plugin.id} call ${cmd}`)
         }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt

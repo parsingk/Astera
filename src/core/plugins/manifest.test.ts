@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   PLUGIN_API_VERSIONS,
+  PLUGIN_DECLARATIVE_NOTICE,
   PLUGIN_PERMISSIONS,
   PLUGIN_RESTRICTED_UI_NOTICE,
   PLUGIN_TRUST_WARNING,
@@ -266,7 +267,7 @@ describe('Plugin API 2', () => {
 
   it('speaks API 1 and 2, and keeps the UI permissions apart from the Host command ones', () => {
     expect([...PLUGIN_API_VERSIONS]).toEqual(['1', '2'])
-    expect([...PLUGIN_UI_PERMISSIONS]).toEqual(['commands.register', 'panels.register', 'workspace.read'])
+    expect([...PLUGIN_UI_PERMISSIONS]).toEqual(['commands.register', 'panels.register', 'workspace.read', 'themes.register'])
     for (const p of PLUGIN_UI_PERMISSIONS) expect((PLUGIN_PERMISSIONS as readonly string[]).includes(p)).toBe(false)
   })
 
@@ -286,7 +287,7 @@ describe('Plugin API 2', () => {
 
   it('needs an entry, a UI or both', () => {
     expect(problemsOf(v2({ ui: undefined, contributes: undefined, permissions: [] }))).toContain(
-      'astera needs an entry, a ui or both: the Node file Astera starts, the page its panels show'
+      'astera needs an entry, a ui, themes or a mix: the Node file Astera starts, the page its panels show, the themes it adds'
     )
   })
 
@@ -382,7 +383,7 @@ describe('Plugin API 2: final review fixes', () => {
   // I2: a restricted UI plugin asks for the UI permissions only
   it('refuses a Host command permission on a plugin with no host entry', () => {
     expect(problemsOf(v2({ permissions: ['jobs.run'] }))).toContain(
-      'astera.permissions: jobs.run needs astera.entry; a restricted UI plugin asks only for commands.register, panels.register, workspace.read'
+      'astera.permissions: jobs.run needs astera.entry; a plugin with no host entry asks only for commands.register, panels.register, workspace.read, themes.register'
     )
   })
 
@@ -441,5 +442,100 @@ describe('Plugin API 2: a ui page written with a leading ./', () => {
     expect(manifestOf(pkg('./dist/ui/index.html')).ui).toBe('./dist/ui/index.html')
     expect(problemsOf(pkg('./../x.html')).some((p) => p.startsWith('astera.ui ./../x.html'))).toBe(true)
     expect(problemsOf(pkg('dist/./ui.html')).some((p) => p.startsWith('astera.ui dist/./ui.html'))).toBe(true)
+  })
+})
+
+// Phase 2 remaining: sidebar views, status bar items and themes (design 2026-11-27)
+describe('Plugin API 2: sidebar, status bar and themes', () => {
+  const base = (astera: Record<string, unknown> = {}, contributes: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'hello-panel',
+    version: '0.1.0',
+    astera: {
+      apiVersion: '2',
+      ui: 'dist/ui/index.html',
+      permissions: ['commands.register', 'panels.register'],
+      contributes: {
+        commands: [{ id: 'open', title: 'Open Hello', panel: 'main' }],
+        panels: [{ id: 'main', title: 'Hello' }],
+        ...contributes
+      },
+      ...astera
+    }
+  })
+  const dusk = { id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } }
+
+  it('leaves the new lists off a manifest that declares none', () => {
+    expect(Object.keys(manifestOf(base()).contributes).sort()).toEqual(['commands', 'panels'])
+  })
+
+  it('reads a sidebar view that shows a contributed panel', () => {
+    expect(manifestOf(base({}, { sidebar: [{ id: 'side', title: 'Hello side', panel: 'main' }] })).contributes.sidebar).toEqual([
+      { id: 'side', title: 'Hello side', panel: 'main' }
+    ])
+  })
+
+  it('refuses a sidebar view whose panel is not contributed, and more than 2', () => {
+    expect(problemsOf(base({}, { sidebar: [{ id: 'side', title: 'S', panel: 'nope' }] }))).toContain(
+      'astera.contributes.sidebar: side shows nope, which is not a contributed panel'
+    )
+    const three = [1, 2, 3].map((n) => ({ id: `s${n}`, title: `S${n}`, panel: 'main' }))
+    expect(problemsOf(base({}, { sidebar: three }))).toContain('astera.contributes.sidebar lists 3; at most 2')
+  })
+
+  it('reads a status item that runs a contributed command', () => {
+    expect(manifestOf(base({}, { statusBar: [{ id: 'hi', text: 'Hello', command: 'open' }] })).contributes.statusBar).toEqual([
+      { id: 'hi', text: 'Hello', command: 'open' }
+    ])
+  })
+
+  it('refuses a status item with no command of the plugin’s, a text over 24 characters or holding a control or invisible character', () => {
+    expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'Hello', command: 'gone' }] }))).toContain(
+      'astera.contributes.statusBar: hi runs gone, which is not a contributed command'
+    )
+    expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'x'.repeat(25), command: 'open' }] }))).toContain(
+      'astera.contributes.statusBar: hi needs a text of 1 to 24 characters'
+    )
+    expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'a\nb', command: 'open' }] }))).toContain('astera.contributes.statusBar: hi’s text holds a control character')
+    expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'a‮b', command: 'open' }] }))).toContain(
+      'astera.contributes.statusBar: hi’s text holds an invisible or direction-changing character'
+    )
+    const three = [1, 2, 3].map((n) => ({ id: `s${n}`, text: `S${n}`, command: 'open' }))
+    expect(problemsOf(base({}, { statusBar: three }))).toContain('astera.contributes.statusBar lists 3; at most 2')
+  })
+
+  it('reads a themes-only plugin as declarative: no entry, no page, only themes.register', () => {
+    const m = manifestOf({ name: 'dusk-theme', version: '1.0.0', astera: { apiVersion: '2', permissions: ['themes.register'], contributes: { themes: [dusk] } } })
+    expect(m.trust).toBe('declarative')
+    expect(m.entry).toBeUndefined()
+    expect(m.ui).toBeUndefined()
+    expect(m.contributes).toEqual({ commands: [], panels: [], themes: [dusk] })
+  })
+
+  it('needs themes.register for themes, and a page for every other contribution', () => {
+    expect(problemsOf({ name: 'dusk-theme', version: '1.0.0', astera: { apiVersion: '2', permissions: [], contributes: { themes: [dusk] } } })).toContain(
+      'contributing themes needs the themes.register permission'
+    )
+    expect(
+      problemsOf({ name: 'dusk-theme', version: '1.0.0', astera: { apiVersion: '2', permissions: ['themes.register', 'panels.register'], contributes: { themes: [dusk], panels: [{ id: 'main', title: 'M' }] } } })
+    ).toContain('astera.contributes needs astera.ui: a panel is a page of the plugin’s UI')
+  })
+
+  it('still needs an entry, a page or a contribution: an empty API 2 plugin is refused', () => {
+    expect(problemsOf({ name: 'empty', version: '1.0.0', astera: { apiVersion: '2', permissions: [] } })).toContain(
+      'astera needs an entry, a ui, themes or a mix: the Node file Astera starts, the page its panels show, the themes it adds'
+    )
+  })
+
+  it('refuses a theme the theme rules refuse, naming it, and more than 4', () => {
+    expect(problemsOf(base({ permissions: ['commands.register', 'panels.register', 'themes.register'] }, { themes: [{ ...dusk, colors: { accent: 'url(x)' } }] }))).toContain(
+      'astera.contributes.themes: dusk: colors.accent "url(x)" is not a #rrggbb colour'
+    )
+    const five = [1, 2, 3, 4, 5].map((n) => ({ ...dusk, id: `d${n}` }))
+    expect(problemsOf(base({ permissions: ['commands.register', 'panels.register', 'themes.register'] }, { themes: five }))).toContain('astera.contributes.themes lists 5; at most 4')
+  })
+
+  it('has a notice for a declarative plugin that says it runs no code and shows no page', () => {
+    expect(PLUGIN_DECLARATIVE_NOTICE).not.toContain(PLUGIN_TRUST_WARNING)
+    expect(PLUGIN_DECLARATIVE_NOTICE).toMatch(/theme/i)
   })
 })

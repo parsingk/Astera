@@ -25,24 +25,8 @@ export const AUDIT_COALESCE_MS = 60_000
 /** The longest a field of a record may be; longer ones are cut, ending in an ellipsis. */
 export const AUDIT_DETAIL_MAX = 300
 
-export const AUDIT_EVENTS = [
-  'installed',
-  'updated',
-  'enabled',
-  'disabled',
-  'removed',
-  'configured',
-  'change-refused',
-  'started',
-  'exited',
-  'stopped',
-  'failed',
-  'call',
-  'call-refused',
-  'panel-opened',
-  'bridge-refused',
-  'attach-refused'
-] as const
+export { AUDIT_EVENTS } from './auditEvents'
+import { AUDIT_EVENTS } from './auditEvents'
 export type PluginAuditEvent = (typeof AUDIT_EVENTS)[number]
 
 export interface PluginAuditEntry {

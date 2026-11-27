@@ -142,14 +142,16 @@ describe('humanFor', () => {
         plugins: [
           { id: '@acme/astera-jira', version: '1.0.0', status: 'stopped', trust: 'trusted', permissions: ['jobs.read', 'jobs.create'], capabilities: ['completion-check'] },
           { id: 'astera-hello', version: '0.1.0', status: 'incompatible', permissions: [], capabilities: ['event', 'job-source'], reason: 'this Astera does not run event plugins yet' },
-          { id: 'hello-panel', version: '0.1.0', status: 'ready', trust: 'restricted-ui', permissions: ['panels.register'] }
+          { id: 'hello-panel', version: '0.1.0', status: 'ready', trust: 'restricted-ui', permissions: ['panels.register'] },
+          { id: 'dusk-theme', version: '1.0.0', status: 'ready', trust: 'declarative', permissions: ['themes.register'] }
         ]
       })
     ).toBe(
       [
         'STOPPED       @acme/astera-jira  1.0.0  trusted        jobs.read,jobs.create  completion-check',
         `INCOMPATIBLE  astera-hello       0.1.0  trusted        -${' '.repeat(22)}event,job-source  this Astera does not run event plugins yet`,
-        `READY         hello-panel        0.1.0  restricted-ui  panels.register${' '.repeat(8)}-`
+        `READY         hello-panel        0.1.0  restricted-ui  panels.register${' '.repeat(8)}-`,
+        `READY         dusk-theme         1.0.0  declarative    themes.register${' '.repeat(8)}-`
       ].join('\n')
     )
   })
@@ -237,6 +239,7 @@ describe('humanFor', () => {
 
   // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted
   it('plugins validate names the plugin, its version and trust when nothing is wrong', () => {
+    expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'dusk', name: 'dusk', version: '1.0.0', trust: 'declarative' }, problems: [] })).toBe('dusk 1.0.0, themes only: no problem found')
     expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'hello', name: 'hello', version: '0.1.0', trust: 'restricted-ui' }, problems: [] })).toBe(
       'hello 0.1.0, restricted UI: no problem found'
     )

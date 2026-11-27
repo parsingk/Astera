@@ -47,7 +47,7 @@ describe('layout memory off (Phase 1 gate)', () => {
 
   it('saves only while it is on, and saves the screen as it is when it is turned on', () => {
     expect(app).toMatch(/if \(!layoutRestoredRef\.current \|\| workspaceFeaturesRef\.current\?\.layoutMemory !== true\) return\s*const timer = setTimeout\(\(\) => \{\s*if \(workspaceFeaturesRef\.current\?\.layoutMemory === true\) writeLayout\(layoutRecordRef\.current\(\)\)\s*\}, 300\)/)
-    expect(app).toMatch(/\}, \[workspaceFeatures\?\.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs\]\)/)
+    expect(app).toMatch(/\}, \[workspaceFeatures\?\.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, pluginSidebar, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs\]\)/)
     expect(app).toMatch(/const flush = \(\): void => \{\s*if \(layoutRestoredRef\.current && workspaceFeaturesRef\.current\?\.layoutMemory === true\) writeLayout\(layoutRecordRef\.current\(\)\)/)
   })
 
@@ -109,5 +109,18 @@ describe('sending to an agent off (Phase 1 gate)', () => {
 
   it('blocks the selection command as turned off, so the palette leaves it out', () => {
     expect(app).toMatch(/'context\.attachSelection': \{\s*blockedBy: \(\) =>\s*workspaceFeaturesRef\.current\?\.contextBridge !== true \? 'action\.blocked\.featureOff'/)
+  })
+})
+
+// Phase 2 remaining, final review I1, M1: the plugin sidebar view is one of the panels a layout sets and saves
+describe('the plugin sidebar view in layouts', () => {
+  it('is set with the other views whenever a layout is applied', () => {
+    expect(app).toMatch(/const applyPanels = \(p: SavedPanels\): void => \{\s*const s = sidebarStateOf\(p\.sidebar\.open, p\.sidebar\.view\)\s*setSidebarOpen\(s\.open\)\s*setExplorerOpen\(s\.explorer\)\s*setJobsOpen\(s\.jobs\)\s*setHiwOpen\(s\.understanding\)\s*setPluginSidebar\(s\.plugin \?\? null\)/)
+  })
+  it('saves the layout when only the plugin view changes', () => {
+    expect(app).toMatch(/\}, \[workspaceFeatures\?\.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, pluginSidebar, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs\]\)/)
+  })
+  it('tells the sidebar rule whether the chosen plugin view is offered now', () => {
+    expect(app).toMatch(/plugin: pluginSidebarRef\.current,\s*pluginOffered: pluginOfferedRef\.current/)
   })
 })

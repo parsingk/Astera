@@ -139,7 +139,7 @@ import { announceSettingsRecovery } from './lib/settingsRecoveryNotice'
 import { confirmModal, confirmModalWithChoices, confirmModalWithInput, isConfirmOpen } from './lib/confirm'
 import { offerCopyInstall } from './lib/copyInstallOffer'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
-import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
+import { pluginKeyOf, pluginSidebarView, sidebarStateOf, toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { isCancelled as isWorktreeCancelled } from './lib/worktreeErrors'
@@ -168,7 +168,10 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parsePluginTab, parseTab, pluginTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { panelCommands, pluginRowsOf, type PanelCommand } from '../../core/plugins/pluginRows'
+import { panelCommands, pluginRowsOf, pluginThemesOf, sidebarViewsOf, statusItemsOf, type PanelCommand } from '../../core/plugins/pluginRows'
+import { PluginPanelTab } from './components/PluginPanelTab'
+import { usePluginRows } from './lib/pluginRows'
+import { useTheme } from './lib/theme'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placePluginTab, placeTab } from '../../core/panes/place'
@@ -225,7 +228,7 @@ import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { onFileChanges } from './lib/fileChanges'
 import type { FileChange } from '../../core/files/changeBatch'
 import { HostRuntimeNotice } from './components/HostRuntimeNotice'
-import { House, PanelLeft, Settings, X } from 'lucide-react'
+import { House, PanelLeft, Puzzle, Settings, X } from 'lucide-react'
 import { deleteKey, isMac as isMacPlatform, modKey } from './lib/platformKeys'
 import { backdropProps } from './lib/backdrop'
 import { createTouched } from './lib/touched'
@@ -926,6 +929,12 @@ export default function App(): React.JSX.Element {
   const [hiwOpen, setHiwOpen] = useState(() => savedAtStart?.panels.sidebar.view === 'understanding')
   const hiwOpenRef = useRef(hiwOpen) // see jobsOpenRef
   hiwOpenRef.current = hiwOpen
+  /** The plugin sidebar view chosen, by its contribution key (Phase 2 remaining); shown only while its plugin offers it. */
+  const [pluginSidebar, setPluginSidebar] = useState<string | null>(() => pluginKeyOf(savedAtStart?.panels.sidebar.view ?? ''))
+  const pluginSidebarRef = useRef(pluginSidebar) // see jobsOpenRef
+  pluginSidebarRef.current = pluginSidebar
+  /** Whether the chosen plugin view's plugin offers it now: set where the plugin list is read below (final review M2). */
+  const pluginOfferedRef = useRef(false)
   // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
   // here — that effect depends on currentProject, declared much later, and a dependency array is
   // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
@@ -1704,6 +1713,13 @@ export default function App(): React.JSX.Element {
     )
     return () => disposers.forEach((dispose) => dispose())
   }, [actionRegistry])
+
+  // The Host's plugin list, kept current (Phase 2 remaining): the themes, sidebar views and status items plugins offer
+  const pluginRows = usePluginRows()
+  const { setPluginThemes } = useTheme()
+  useEffect(() => {
+    setPluginThemes(pluginRows === null ? null : pluginThemesOf(pluginRows))
+  }, [pluginRows, setPluginThemes])
 
   /** Puts the plugin commands the Host listed in the registry, under their plugin as owner and their contribution key as
    *  id (ADR-007, ADR-008), in place of the last list's: a plugin turned off or removed loses its commands. Registered
@@ -2573,7 +2589,9 @@ export default function App(): React.JSX.Element {
         open: sidebarOpenRef.current,
         explorer: explorerOpenRef.current,
         jobs: jobsOpenRef.current,
-        understanding: hiwOpenRef.current
+        understanding: hiwOpenRef.current,
+        plugin: pluginSidebarRef.current,
+        pluginOffered: pluginOfferedRef.current
       },
       view
     )
@@ -2581,6 +2599,7 @@ export default function App(): React.JSX.Element {
     setExplorerOpen(next.explorer)
     setJobsOpen(next.jobs)
     setHiwOpen(next.understanding)
+    setPluginSidebar(next.plugin ?? null)
   }
   /** Shows the explorer whatever the sidebar showed: a folder link's reveal needs it open, never toggled shut. */
   const showExplorer = (): void => {
@@ -2588,6 +2607,7 @@ export default function App(): React.JSX.Element {
     setExplorerOpen(true)
     setJobsOpen(false)
     setHiwOpen(false)
+    setPluginSidebar(null)
   }
   /** Shows the Jobs view whatever the sidebar showed: a finding's Job or Run opens there, never toggled shut. */
   const showJobs = (): void => {
@@ -2595,6 +2615,7 @@ export default function App(): React.JSX.Element {
     setExplorerOpen(false)
     setJobsOpen(true)
     setHiwOpen(false)
+    setPluginSidebar(null)
   }
   const toggleSessions = (): void => toggleSidebar('sessions')
   const toggleExplorer = (): void => toggleSidebar('explorer')
@@ -2857,7 +2878,10 @@ export default function App(): React.JSX.Element {
       layoutRef.current,
       activePaneIdRef.current,
       {
-        sidebar: { open: sidebarOpen, view: explorerOpen ? 'explorer' : jobsOpen ? 'jobs' : hiwOpen ? 'understanding' : 'sessions' },
+        sidebar: {
+          open: sidebarOpen,
+          view: explorerOpen ? 'explorer' : jobsOpen ? 'jobs' : hiwOpen ? 'understanding' : pluginSidebar !== null ? pluginSidebarView(pluginSidebar) : 'sessions'
+        },
         bottom: { open: runPanelOpen, tab: asBottomTab(bottomTab) }
       },
       {
@@ -2879,7 +2903,7 @@ export default function App(): React.JSX.Element {
       if (workspaceFeaturesRef.current?.layoutMemory === true) writeLayout(layoutRecordRef.current())
     }, 300)
     return () => clearTimeout(timer)
-  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs])
+  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, pluginSidebar, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs])
   // ...and at once when the window goes, so a change in the last 300 ms is not lost
   useEffect(() => {
     const flush = (): void => {
@@ -4057,13 +4081,22 @@ export default function App(): React.JSX.Element {
   // 있다 — 효과의 의존성 배열은 렌더 중에 평가되므로 선언이 그보다 아래면 TDZ 로 터진다.
   // 세 자리에 `explorerOpen || jobsOpen || hiwOpen` 을 각각 쓰면 사이드바가 실제로 보여주는 것과
   // 어긋날 수 있다.
-  const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'sessions' = explorerOpen
+  // A plugin's view shows only while its plugin offers it (Phase 2 remaining): one turned off or removed falls back to the
+  // session list, its choice kept for when it is back
+  const sidebarViews = useMemo(() => (pluginRows === null ? [] : sidebarViewsOf(pluginRows)), [pluginRows])
+  // A plugin's status items (Phase 2 remaining): text that runs one of its commands, at most six in all
+  const statusItems = useMemo(() => (pluginRows === null ? [] : statusItemsOf(pluginRows)), [pluginRows])
+  const shownPluginView = pluginSidebar === null ? undefined : sidebarViews.find((v) => v.key === pluginSidebar)
+  pluginOfferedRef.current = shownPluginView !== undefined
+  const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'plugin' | 'sessions' = explorerOpen
     ? 'explorer'
     : jobsOpen
       ? 'jobs'
       : hiwOpen
         ? 'understanding'
-        : 'sessions'
+        : shownPluginView
+          ? 'plugin'
+          : 'sessions'
   /** 아래쪽 패널이 쓰는 경로. 프로젝트가 없으면 홈으로 떨어진다 — 셸을 직접 띄웠을 때와 같은 곳이고,
    *  그래야 탭이 하나도 없을 때도 터미널을 열 수 있다. 홈에서는 Run 탭이 없다(runAvailable):
    *  실행 구성은 프로젝트 단위이고, 홈의 파일 목록으로 시드를 감지하면 남의 홈 package.json 스크립트를
@@ -5051,10 +5084,12 @@ export default function App(): React.JSX.Element {
   /** Shows the panels a layout asks for (spec W3): one sidebar view, as the rail shows one, and the bottom panel on its
    *  tab (shownBottomTab falls back while that tab is not available). */
   const applyPanels = (p: SavedPanels): void => {
-    setSidebarOpen(p.sidebar.open)
-    setExplorerOpen(p.sidebar.view === 'explorer')
-    setJobsOpen(p.sidebar.view === 'jobs')
-    setHiwOpen(p.sidebar.view === 'understanding')
+    const s = sidebarStateOf(p.sidebar.open, p.sidebar.view)
+    setSidebarOpen(s.open)
+    setExplorerOpen(s.explorer)
+    setJobsOpen(s.jobs)
+    setHiwOpen(s.understanding)
+    setPluginSidebar(s.plugin ?? null)
     setRunPanelOpen(p.bottom.open)
     setBottomTab(p.bottom.tab)
     // A preset that shows the cluster view is the person asking for it
@@ -5636,6 +5671,19 @@ export default function App(): React.JSX.Element {
               </g>
             </svg>
           </button>
+          {/* A plugin's sidebar views (Phase 2 remaining): one generic icon each, never the plugin's own art, named by the
+              view and its plugin */}
+          {sidebarViews.map((v) => (
+            <button
+              key={v.key}
+              className={sidebarOpen && sidebarPane === 'plugin' && pluginSidebar === v.key ? 'rail-btn on' : 'rail-btn'}
+              aria-label={t('plugin.sidebar.rail', { title: v.title, plugin: v.pluginName })}
+              title={t('plugin.sidebar.rail', { title: v.title, plugin: v.pluginName })}
+              onClick={() => toggleSidebar(pluginSidebarView(v.key))}
+            >
+              <Puzzle size={16} />
+            </button>
+          ))}
           {/* 아래쪽 패널을 여는 입구. 페인을 가리지 않는다 — 프로젝트가 없으면 홈에서 열리므로 어느
               화면에서든 셸을 하나 띄울 수 있다. 예전에는 explorerOpen 이었고 주석도 "파일·에디터 모드
               전용"이라고 적혀 있었는데, 이 패널이 탐색기의 것이 아니게 된 뒤로는 둘 다 거짓이 됐다.
@@ -5857,6 +5905,22 @@ export default function App(): React.JSX.Element {
                 onCompleteTask={(id) => currentProject && completeOpenTask(currentProject, id)}
                 onCancelTask={(id) => currentProject && cancelOpenTask(currentProject, id)}
               />
+            ) : sidebarPane === 'plugin' && shownPluginView ? (
+              // The same guest a panel tab draws: main decides what it may show (ADR-008)
+              <div className="sidebar-plugin">
+                <div className="sidebar-plugin-head" title={shownPluginView.pluginName}>
+                  {shownPluginView.title}
+                </div>
+                <PluginPanelTab
+                  key={`${shownPluginView.key}|${currentProject ?? ''}`}
+                  pluginId={shownPluginView.pluginId}
+                  panelId={shownPluginView.panelId}
+                  projectRoot={currentProject ?? ''}
+                  title={shownPluginView.title}
+                  nonce={0}
+                  onFocus={() => {}}
+                />
+              </div>
             ) : (
               <>
                 <AccountPanel accounts={accounts} />
@@ -6269,6 +6333,19 @@ export default function App(): React.JSX.Element {
             <span className="sp">{t('session.statusbar.accountCount', { count: accounts.length })}</span>
           </>
         )}
+        {/* Plugins' status items (Phase 2 remaining): beyond the session count, before the Host's notices. Text only;
+            clicking runs the plugin's command, which opens its panel as the palette does */}
+        {statusItems.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className="status-plugin"
+            title={t('plugin.status.title', { command: item.command.title, plugin: item.pluginName })}
+            onClick={() => openPluginPanelRef.current(item.command)}
+          >
+            {item.text}
+          </button>
+        ))}
         {/* The Host outlived an update and still runs the previous build. It replaces itself the first
             moment it holds nothing (host-replacement design §4), which for someone who keeps sessions
             open never comes — and until then 대화 sessions cannot be started at all, because the old

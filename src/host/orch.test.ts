@@ -148,6 +148,21 @@ describe('createHostOrch', () => {
         [{ plugin: 'astera-hello', event: 'call', detail: 'jobs-run' }, 'astera-hello call jobs-run']
       ])
     })
+    // Phase 2 remaining (Plugin Inspector): every admitted call and every refusal counted, by command
+    it('counts its admitted calls and its refusals by command, a command no plugin may send as unlisted', async () => {
+      await seed()
+      const counted: [string, string, boolean][] = []
+      const orch = orchOver({ pluginCalls: { count: (p, m, ok) => void counted.push([p, m, ok]) } })
+      await orch.ready()
+      await orch.call({ cmd: 'projects-list', args: {}, sessionId: '', from: pluginCaller(['projects.read']) })
+      await orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: pluginCaller(['jobs.read']) })
+      await orch.call({ cmd: 'made-up', args: {}, sessionId: '', from: pluginCaller([]) })
+      expect(counted).toEqual([
+        ['astera-hello', 'projects-list', true],
+        ['astera-hello', 'jobs-create', false],
+        ['astera-hello', 'unlisted', false]
+      ])
+    })
     // Final review M3: a plugin that varies the name of a command no plugin may send is still one burst
     it('groups its refused calls to commands no plugin may send under one key', async () => {
       await seed()

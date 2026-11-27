@@ -43,6 +43,7 @@ const EVENT_CHANNELS = [
   'files:changed',
   'files:changedBatch',
   'problems:changed',
+  'plugins:changed',
   'tests:changed',
   'lsp:state',
   'files:opProgress',
@@ -463,6 +464,9 @@ const api = {
     setEnabled: invoke('plugins.setEnabled'),
     remove: invoke('plugins.remove'),
     logs: invoke('plugins.logs'),
+    get: invoke('plugins.get'),
+    doctor: invoke('plugins.doctor'),
+    audit: invoke('plugins.audit'),
     settings: invoke('plugins.settings'),
     configure: invoke('plugins.configure')
   },

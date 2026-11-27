@@ -2,7 +2,7 @@
 // first; without `--yes` or `--grant` nothing is installed and the person is shown what the plugin is and asks for.
 // The install then carries what was shown (`expect`), so the Host refuses a folder that changed in between.
 import path from 'node:path'
-import { PLUGIN_RESTRICTED_UI_NOTICE, PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
+import { PLUGIN_DECLARATIVE_NOTICE, PLUGIN_RESTRICTED_UI_NOTICE, PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
 
 /** What one Host call came back as: an answer, or none (`callHost`). */
 export type PluginCall = { status: number; body: unknown } | { unreachable: string } | { stuck: string }
@@ -21,8 +21,10 @@ export function approvalMessage(inspection: Record<string, unknown>, o: { agent?
   const how = o.agent
     ? ' Installing it is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set): ask them to run astera plugins install with --yes.'
     : ' Approve with --yes, or name what to grant with --grant <list>.'
-  // ADR-008: a plugin with a UI and no host entry is restricted UI; anything else, or a Host that does not say, is trusted code
-  const trust = inspection.trust === 'restricted-ui' ? PLUGIN_RESTRICTED_UI_NOTICE : PLUGIN_TRUST_WARNING
+  // ADR-008: a plugin with a UI and no host entry is restricted UI; one with neither only adds themes (Phase 2 remaining);
+  // anything else, or a Host that does not say, is trusted code
+  const trust =
+    inspection.trust === 'restricted-ui' ? PLUGIN_RESTRICTED_UI_NOTICE : inspection.trust === 'declarative' ? PLUGIN_DECLARATIVE_NOTICE : PLUGIN_TRUST_WARNING
   return (
     `${String(inspection.displayName)} ${String(inspection.version)} (${String(inspection.id)}) asks for: ${asks}.${from}${replaces} ` +
     `${trust}${wontRun}${how}`

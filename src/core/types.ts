@@ -1074,6 +1074,8 @@ export interface CoreEvents {
   'understanding:changed': string
   /** The project's problems may differ: ask problems.list again (main/problems.ts createProblemsPing). */
   'problems:changed': null
+  /** The Host's plugin list differs from the last one main read (Phase 2 remaining): ask plugins.list again. */
+  'plugins:changed': null
   /** A project's test results changed (Phase 3 Part 2): the project path */
   'tests:changed': string
   /** Every language server's state, whole (Phase 3 Part 3) */
@@ -1691,8 +1693,9 @@ export interface CoreApi {
     setTerminalFont(font: TerminalFont): Promise<void>
     // The chosen theme id. isThemeId is the trust boundary on the main-process side, so whatever comes
     // back here is always one of the six known ids.
-    getTheme(): Promise<ThemeId>
-    setTheme(id: ThemeId): Promise<void>
+    /** A built-in theme id, or a plugin theme's `plugin:<id>:<theme>` (Phase 2 remaining). */
+    getTheme(): Promise<string>
+    setTheme(id: string): Promise<void>
     /** Whether the one first-run question has already been put to this person. False only on a
      *  machine with no settings file at all — an installation that predates the question has a file
      *  without the key, and reading that as "already asked" is what keeps a long-standing user from
@@ -2223,6 +2226,10 @@ export interface PluginsApi {
   setEnabled(id: string, enabled: boolean): Promise<PluginsCallAnswer>
   remove(id: string): Promise<PluginsCallAnswer>
   logs(id: string, lines: number): Promise<PluginsCallAnswer>
+  /** The Plugin Inspector (Phase 2 remaining): one plugin with its call counts, its checks, its recent records. */
+  get(id: string): Promise<PluginsCallAnswer>
+  doctor(id: string): Promise<PluginsCallAnswer>
+  audit(id: string, lines: number): Promise<PluginsCallAnswer>
   settings(id: string): Promise<PluginsCallAnswer>
   configure(id: string, set: Record<string, string | boolean>, unset: string[]): Promise<PluginsCallAnswer>
 }

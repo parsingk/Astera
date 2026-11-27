@@ -20,7 +20,8 @@ Approve it with `--yes`, or in the app under Settings, Plugins, Install from a f
 
 Open the command palette (Ctrl+Shift+P, Cmd+Shift+P on macOS) and run **Open Hello panel**. The panel opens as a tab in
 the workbench, beside your sessions and files; running the command again brings the same tab forward. The tab comes
-back after a restart, loaded when you select it.
+back after a restart, loaded when you select it. **Hello** in the status bar runs the same command, and the puzzle
+button on the left rail shows the same panel in the sidebar.
 
 ## Change it
 

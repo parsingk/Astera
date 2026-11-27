@@ -3,6 +3,8 @@
 // whether this Astera runs it is `incompatibility` (spec §29).
 
 import { parseSettingsSchema, type SettingField } from './settings'
+import { pluginThemeProblem, type PluginThemeDecl } from './pluginThemes'
+import type { ThemeColors, ThemeId } from '../theme/themes'
 
 /** The Plugin API versions this Astera speaks (spec §28): versioned apart from the Host protocol. API 2 (Workspace &
  *  Plugin Platform V2, spec E2) adds a UI page, contributed commands and panels, and an engines range, and makes the host
@@ -39,7 +41,9 @@ export type PluginPermission = (typeof PLUGIN_PERMISSIONS)[number]
 
 /** What a plugin's UI may do (API 2 only), kept apart from the Host command permissions above, which each open SDK methods
  *  (core/host/pluginGate.ts): contribute commands, contribute panels, and read which project is open. */
-export const PLUGIN_UI_PERMISSIONS = ['commands.register', 'panels.register', 'workspace.read'] as const
+export const PLUGIN_UI_PERMISSIONS = ['commands.register', 'panels.register', 'workspace.read', 'themes.register'] as const
+/** The UI permission that needs no page (Phase 2 remaining): a theme is colours, which the app applies itself. */
+const PAGELESS_UI_PERMISSIONS: readonly string[] = ['themes.register']
 export type PluginUiPermission = (typeof PLUGIN_UI_PERMISSIONS)[number]
 
 /** The permission a capability cannot work without (plugin Phase 3 N4): `event` and `notification` hand the plugin
@@ -69,6 +73,8 @@ export const pluginSchemeHost = (id: string): string => id.replace(/^@/, '').rep
 export function contributionPermissionProblem(c: PluginContributions, permissions: readonly string[]): string | null {
   if (c.commands.length > 0 && !permissions.includes('commands.register')) return 'contributing commands needs the commands.register permission'
   if (c.panels.length > 0 && !permissions.includes('panels.register')) return 'contributing panels needs the panels.register permission'
+  if ((c.statusBar?.length ?? 0) > 0 && !permissions.includes('commands.register')) return 'contributing status bar items needs the commands.register permission'
+  if ((c.themes?.length ?? 0) > 0 && !permissions.includes('themes.register')) return 'contributing themes needs the themes.register permission'
   return null
 }
 
@@ -80,13 +86,27 @@ export const PLUGIN_TRUST_WARNING =
 export const PLUGIN_RESTRICTED_UI_NOTICE =
   'This plugin only shows pages in Astera panels: it starts no program on this machine, and it reaches Astera only through the permissions it asks for.'
 
-/** Derived, never declared (ADR-008): a host entry is native code with the person's rights; a UI alone is restricted. */
-export type PluginTrust = 'trusted' | 'restricted-ui'
+/** Shown instead, before a person approves a plugin with neither a host entry nor a UI (Phase 2 remaining): themes only. */
+export const PLUGIN_DECLARATIVE_NOTICE =
+  'This plugin only adds themes: it runs no code and shows no page, and Astera applies its colours itself.'
+
+/** A trust level in the CLI's and the Host's words (final review M3): an unknown one as trusted code. */
+export const trustWords = (trust: unknown): string => (trust === 'restricted-ui' ? 'restricted UI' : trust === 'declarative' ? 'themes only' : 'trusted code')
+
+/** Derived, never declared (ADR-008): a host entry is native code with the person's rights; a UI alone is restricted;
+ *  neither is declarative, colours the app applies itself (Phase 2 remaining). */
+export type PluginTrust = 'trusted' | 'restricted-ui' | 'declarative'
 
 export interface PluginContributions {
   /** Phase 2: a command opens its panel. */
   commands: { id: string; title: string; panel: string }[]
   panels: { id: string; title: string }[]
+  /** Phase 2 remaining, each present only when declared: a panel shown in the sidebar from a rail button. */
+  sidebar?: { id: string; title: string; panel: string }[]
+  /** A short text in the status bar that runs one of the plugin's commands. */
+  statusBar?: { id: string; text: string; command: string }[]
+  /** Colour themes over a built-in base (pluginThemes.ts). */
+  themes?: PluginThemeDecl[]
 }
 
 export interface PluginManifest {
@@ -177,6 +197,12 @@ const CONTRIBUTION_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const TITLE_MAX = 64
 const MAX_COMMANDS = 50
 const MAX_PANELS = 20
+/** The Phase 2 remaining contributions' limits, as docs/plugins.md states them. */
+export const PLUGIN_CONTRIBUTION_LIMITS = { sidebar: 2, statusBar: 2, statusText: 24, themes: 4 } as const
+const MAX_SIDEBAR = PLUGIN_CONTRIBUTION_LIMITS.sidebar
+const MAX_STATUS_ITEMS = PLUGIN_CONTRIBUTION_LIMITS.statusBar
+const STATUS_TEXT_MAX = PLUGIN_CONTRIBUTION_LIMITS.statusText
+const MAX_THEMES = PLUGIN_CONTRIBUTION_LIMITS.themes
 
 /** `astera.contributes` (API 2), with each problem named by its field. */
 function contributionsOf(v: unknown, problems: string[]): PluginContributions {
@@ -186,7 +212,12 @@ function contributionsOf(v: unknown, problems: string[]): PluginContributions {
     problems.push('astera.contributes is not an object')
     return out
   }
-  const items = (kind: 'commands' | 'panels', max: number): Record<string, unknown>[] => {
+  const items = (
+    kind: 'commands' | 'panels' | 'sidebar' | 'statusBar' | 'themes',
+    max: number,
+    textField: 'title' | 'text' = 'title',
+    textMax = TITLE_MAX
+  ): Record<string, unknown>[] => {
     const field = `astera.contributes.${kind}`
     const list = v[kind]
     if (list === undefined) return []
@@ -215,20 +246,21 @@ function contributionsOf(v: unknown, problems: string[]): PluginContributions {
         continue
       }
       seen.add(id)
-      const title = typeof item.title === 'string' ? item.title.trim() : ''
-      if (title === '' || title.length > TITLE_MAX) {
-        problems.push(`${field}: ${id} needs a title of 1 to ${TITLE_MAX} characters`)
+      const raw = item[textField]
+      const title = typeof raw === 'string' ? raw.trim() : ''
+      if (title === '' || title.length > textMax) {
+        problems.push(`${field}: ${id} needs a ${textField} of 1 to ${textMax} characters`)
         continue
       }
       if (CONTROL.test(title)) {
-        problems.push(`${field}: ${id}’s title holds a control character`)
+        problems.push(`${field}: ${id}’s ${textField} holds a control character`)
         continue
       }
       if (INVISIBLE.test(title)) {
-        problems.push(`${field}: ${id}’s title holds an invisible or direction-changing character`)
+        problems.push(`${field}: ${id}’s ${textField} holds an invisible or direction-changing character`)
         continue
       }
-      kept.push({ ...item, id, title })
+      kept.push({ ...item, id, [textField]: title })
     }
     return kept
   }
@@ -246,6 +278,37 @@ function contributionsOf(v: unknown, problems: string[]): PluginContributions {
     }
     out.commands.push({ id: c.id as string, title: c.title as string, panel })
   }
+  const sidebar: NonNullable<PluginContributions['sidebar']> = []
+  for (const sv of items('sidebar', MAX_SIDEBAR)) {
+    const panel = sv.panel
+    if (typeof panel !== 'string' || !panelIds.has(panel)) {
+      problems.push(`astera.contributes.sidebar: ${String(sv.id)} shows ${String(panel)}, which is not a contributed panel`)
+      continue
+    }
+    sidebar.push({ id: sv.id as string, title: sv.title as string, panel })
+  }
+  if (sidebar.length > 0) out.sidebar = sidebar
+  const commandIds = new Set(out.commands.map((c) => c.id))
+  const statusBar: NonNullable<PluginContributions['statusBar']> = []
+  for (const si of items('statusBar', MAX_STATUS_ITEMS, 'text', STATUS_TEXT_MAX)) {
+    const command = si.command
+    if (typeof command !== 'string' || !commandIds.has(command)) {
+      problems.push(`astera.contributes.statusBar: ${String(si.id)} runs ${String(command)}, which is not a contributed command`)
+      continue
+    }
+    statusBar.push({ id: si.id as string, text: si.text as string, command })
+  }
+  if (statusBar.length > 0) out.statusBar = statusBar
+  const themes: PluginThemeDecl[] = []
+  for (const th of items('themes', MAX_THEMES)) {
+    const problem = pluginThemeProblem(th)
+    if (problem !== null) {
+      problems.push(`astera.contributes.themes: ${String(th.id)}: ${problem}`)
+      continue
+    }
+    themes.push({ id: th.id as string, title: th.title as string, base: th.base as ThemeId, colors: { ...(th.colors as Partial<ThemeColors>) } })
+  }
+  if (themes.length > 0) out.themes = themes
   return out
 }
 
@@ -324,7 +387,10 @@ export function parseManifest(pkg: unknown): { ok: true; manifest: PluginManifes
     const ui = uiProblem(astera.ui)
     if (ui !== null) problems.push(ui)
   }
-  if (v2 && !hasEntry && !hasUi) problems.push('astera needs an entry, a ui or both: the Node file Astera starts, the page its panels show')
+  // A themes-only plugin is declarative: colours the app applies itself (Phase 2 remaining)
+  const declaresThemes = v2 && isObject(astera.contributes) && Array.isArray(astera.contributes.themes) && astera.contributes.themes.length > 0
+  if (v2 && !hasEntry && !hasUi && !declaresThemes)
+    problems.push('astera needs an entry, a ui, themes or a mix: the Node file Astera starts, the page its panels show, the themes it adds')
   const capabilities = namesOf('astera.capabilities', astera.capabilities, PLUGIN_CAPABILITIES, 'capability', problems)
   let asked: unknown = astera.permissions
   if (!v2 && Array.isArray(asked)) {
@@ -348,14 +414,16 @@ export function parseManifest(pkg: unknown): { ok: true; manifest: PluginManifes
     if (astera.settingsSchema !== undefined) problems.push('astera.settingsSchema needs astera.entry: settings reach a plugin’s host program')
     for (const p of permissions)
       if ((PLUGIN_PERMISSIONS as readonly string[]).includes(p))
-        problems.push(`astera.permissions: ${p} needs astera.entry; a restricted UI plugin asks only for ${PLUGIN_UI_PERMISSIONS.join(', ')}`)
+        problems.push(`astera.permissions: ${p} needs astera.entry; a plugin with no host entry asks only for ${PLUGIN_UI_PERMISSIONS.join(', ')}`)
   }
   if (v2 && !hasUi) {
     // A UI permission means nothing to a plugin with no page (final review M8)
-    for (const p of permissions) if ((PLUGIN_UI_PERMISSIONS as readonly string[]).includes(p)) problems.push(`astera.permissions: ${p} needs astera.ui`)
+    for (const p of permissions)
+      if ((PLUGIN_UI_PERMISSIONS as readonly string[]).includes(p) && !PAGELESS_UI_PERMISSIONS.includes(p)) problems.push(`astera.permissions: ${p} needs astera.ui`)
   }
   const contributes = v2 ? contributionsOf(astera.contributes, problems) : { commands: [], panels: [] }
-  const contributed = contributes.commands.length > 0 || contributes.panels.length > 0
+  const contributed =
+    contributes.commands.length > 0 || contributes.panels.length > 0 || (contributes.sidebar?.length ?? 0) > 0 || (contributes.statusBar?.length ?? 0) > 0
   if (contributed && !hasUi) problems.push('astera.contributes needs astera.ui: a panel is a page of the plugin’s UI')
   const contributionNeeds = contributionPermissionProblem(contributes, permissions)
   if (contributionNeeds !== null) problems.push(contributionNeeds)
@@ -387,7 +455,7 @@ export function parseManifest(pkg: unknown): { ok: true; manifest: PluginManifes
       ...(typeof range === 'string' ? { engines: range.trim() } : {}),
       settings: schema.ok ? schema.fields : [],
       contributes,
-      trust: hasEntry ? 'trusted' : 'restricted-ui'
+      trust: hasEntry ? 'trusted' : hasUi ? 'restricted-ui' : 'declarative'
     }
   }
 }

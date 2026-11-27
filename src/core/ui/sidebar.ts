@@ -20,7 +20,19 @@
  *  so getting back to the accounts list took two: the view's own button to turn it off, then the
  *  collapse button to unfold onto the empty state. A list you can leave but not return to is not a
  *  view the rail offers — so it is one now, under the same rule as the rest. */
-export type SidebarView = 'explorer' | 'jobs' | 'understanding' | 'sessions'
+export type SidebarView = 'explorer' | 'jobs' | 'understanding' | 'sessions' | PluginSidebarView
+/** A plugin's sidebar view (Phase 2 remaining): `plugin:` and its contribution key, `<pluginId>:<viewId>`. */
+export type PluginSidebarView = `plugin:${string}`
+
+export const pluginSidebarView = (key: string): PluginSidebarView => `plugin:${key}`
+
+/** The contribution key a plugin view names, or null for any other view or a malformed one. */
+export function pluginKeyOf(view: string): string | null {
+  if (!view.startsWith('plugin:')) return null
+  const key = view.slice('plugin:'.length)
+  const colon = key.lastIndexOf(':')
+  return colon > 0 && colon < key.length - 1 ? key : null
+}
 /** The three that are flags on the state. `'sessions'` is not one — it is the absence of all three. */
 type FlagView = 'explorer' | 'jobs' | 'understanding'
 
@@ -30,6 +42,17 @@ export interface SidebarState {
   explorer: boolean
   jobs: boolean
   understanding: boolean
+  /** The plugin view chosen, by its contribution key; absent or null when none is. */
+  plugin?: string | null
+  /** Whether the chosen plugin view's plugin offers it now; absent counts as offered. While it does not, the session list
+   *  is what shows (final review M2). */
+  pluginOffered?: boolean
+}
+
+/** The state a layout's sidebar names (a preset, a saved layout, the layout memory reset): one view on, the rest off
+ *  (final review I1: the plugin view was left as it was). */
+export function sidebarStateOf(open: boolean, view: SidebarView): Required<Pick<SidebarState, 'open' | 'explorer' | 'jobs' | 'understanding' | 'plugin'>> {
+  return { open, explorer: view === 'explorer', jobs: view === 'jobs', understanding: view === 'understanding', plugin: pluginKeyOf(view) }
 }
 
 const VIEWS: FlagView[] = ['explorer', 'jobs', 'understanding']
@@ -52,9 +75,21 @@ export function toggleSidebarView(s: SidebarState, view: SidebarView): SidebarSt
   // `'sessions'` is showing when the sidebar is open and nothing else is chosen. Everything after
   // this reads the same for it as for the other three: pressing what you see collapses, pressing
   // what you do not see shows it.
-  const showing = view === 'sessions' ? s.open && VIEWS.every((v) => !s[v]) : s.open && s[view]
-  if (showing) return view === 'sessions' ? { ...s, open: false } : { ...s, open: false, [view]: false }
+  const plugin = s.plugin ?? null
+  const offered = s.pluginOffered !== false
+  const key = pluginKeyOf(view)
+  // What shows is judged by what is drawn: a plugin view its plugin does not offer now leaves the session list showing
+  const showing =
+    view === 'sessions'
+      ? s.open && VIEWS.every((v) => !s[v]) && (plugin === null || !offered)
+      : key !== null
+        ? s.open && plugin === key && offered && VIEWS.every((v) => !s[v])
+        : s.open && s[view as FlagView]
+  if (showing)
+    return view === 'sessions' ? { ...s, open: false } : key !== null ? { ...s, open: false, plugin: null } : { ...s, open: false, [view]: false }
   const next: SidebarState = { ...s, open: true }
+  // A state that never held a plugin view keeps its shape
+  if (key !== null || s.plugin !== undefined) next.plugin = key
   for (const v of VIEWS) next[v] = v === view
   return next
 }
