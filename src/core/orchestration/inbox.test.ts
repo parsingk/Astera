@@ -255,3 +255,11 @@ describe('unreadUpwardMail', () => {
     ])
   })
 })
+
+// Phase 5 A1: an external agent's permission request is the person's to answer, never the loop's
+describe('unattendedQuestions and an external agent', () => {
+  it('leaves a question on an external agent work Dispatch for the person', () => {
+    const s = state({ dispatches: [dispatch({ accountId: '', sessionId: 'acp:work-0a0b0c0d', externalAgent: { id: 'ext_1', name: 'O' } })] })
+    expect(unattendedQuestions(s, noneAlive)).toEqual([])
+  })
+})

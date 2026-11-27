@@ -611,7 +611,95 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     return null
   }
 
+  /** The Run worktree, made here lazily (placeSlot's comments say why here and why the state is read again after it):
+   *  null once the Run has one, else the Gate. A Task an external agent works needs it as much as one an account works. */
+  const ensureRunWorktree = async (slot: Slot): Promise<SlotEnd | null> => {
+    let state = c.getState()
+
+    // **Run 워크트리를 여기서 만든다 — 게으르게.** Run 을 만들 때가 아닌 이유가 둘이다:
+    // 예약 템플릿은 한 번도 돌지 않으므로 워크트리가 필요 없고, pendingStart Run 은
+    // 사람이 '실행' 을 누르기 전까지 디스크에 아무것도 남기지 않아야 한다. 이 자리는
+    // 둘 다 이미 지난 곳이다(slotsToFill 이 그 둘을 슬롯으로 내지 않는다).
+    //
+    // 병합 블록보다 앞에 두는 이유: 통합 병합의 대상이 Run 뿌리이므로(아래
+    // integrateWorktrees) 그때 이미 있어야 한다. 동시 실행 2 이상인 Run 은 첫 Task 들이
+    // 자기 워크트리로 가므로 Run 워크트리를 아무도 만들지 않는데, 그 Run 의 통합 Task 는
+    // Run 워크트리에서 돌아야 한다.
+    let run = state.runs.find((r) => r.id === slot.runId)!
+    if (run.worktree === undefined) {
+      try {
+        // c.forkRunWorktree(앱과 Host 모두 integrateGit.ts 의 forkWorktree)가 프로젝트가 **서 있는
+        // 브랜치**에서 갈라 준다. raw createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이
+        // 엉뚱한 조상을 끌고 온다 — 그 판단은 한 곳에만 있어야 한다.
+        const runJob = jobOf(state, run)
+        const created = await c.forkRunWorktree({
+          repoPath: runJob?.cwd ?? '',
+          name: nameForRun({ id: run.jobId, objective: runJob?.objective ?? '' })
+        })
+        const set = await c.handle('run-worktree-set', { run: run.id, worktree: created })
+        if (set.status >= 400)
+          return {
+            kind: 'gate',
+            reason: `Run 워크트리를 기록하지 못했습니다: ${JSON.stringify(set.body)}`,
+            why: `the run worktree could not be recorded: ${JSON.stringify(set.body)}`
+          }
+        log(`scheduler: run=${run.id} works in ${created}`)
+        // **상태를 다시 읽는다 — run 만이 아니라 state 도.** run 은 아래 runRoot 와 limit
+        // 이 그것에서 나오기 때문이다: 방금 기록한 워크트리가 없는 run 을 들고 가면 배치와
+        // 통합 병합의 대상이 프로젝트 폴더가 되어, 이 블록이 막으려던 바로 그 결과가 된다.
+        //
+        // state 는 병합 판정(pendingMerges·workingInRunRoot) 때문이다. 이 자리에서 낡은
+        // 스냅숏은 병합을 **덜** 센다 — 그 스냅숏의 뿌리는 프로젝트 폴더이므로 프로젝트
+        // 폴더에서 돈 Dispatch 를 "뿌리에서 돌았다"고 보아 건너뛴다. 중간에 워크트리를
+        // 갖게 된 Run 은 그런 Dispatch 를 그대로 들고 있고(이 배선 전에 뜬 워커들이다),
+        // 그것들은 이제 합쳐야 하는 재료다. 낡은 스냅숏으로 물으면 그 일이 조용히 빠진다.
+        state = c.getState()
+        run = state.runs.find((r) => r.id === slot.runId)!
+      } catch (e) {
+        // 프로젝트 폴더가 답하지 않으면(끊긴 공유) `REPO_UNREACHABLE:` 이고 git 은 뜨지 않는다.
+        // 저장소에 닿을 수 없으면 `NO_REPO:`, HEAD 가 분리됐으면 `NO_BASE:` 다 —
+        // workerBaseFailure 가 그 문장을 만들고 forkWorktree 가 던진다. **저장소가 아닌
+        // 폴더도 `NO_REPO:` 다** — forkWorktree 의 `rev-parse --git-dir` 탐침이 먼저
+        // 실패하므로 createWorktree 까지 가지 않는다. 그쪽의 `NOT_GIT_REPO:`
+        // (create.ts 의 createWorktree, repoRoot 가 null)는 git 은 돌지만 작업 트리가 없는
+        // 저장소 — bare 저장소 — 만 남는다. 셋 다
+        // 읽을 수 있는 접두사가 붙어 오므로 그대로 Gate 에 싣는다. 다음 상태 변경에 다시
+        // 시도한다(사람이 저장소를 고치는 것 자체가 상태 변경은 아니지만, 그 Gate 를 푸는
+        // 것이 상태 변경이다).
+        return {
+          kind: 'gate',
+          reason: `Run 워크트리를 만들지 못했습니다: ${String(e)}`,
+          why: `the run worktree could not be made: ${String(e)}`
+        }
+      }
+    }
+    return null
+  }
+
+  /** A Task an external agent works (Phase 5 A1): no account to pick, and it works in the Run root itself, never in a
+   *  worktree of its own, so it shares that folder with nobody (the rule the integration Task keeps, below). The Task's
+   *  dependencies that ran in their own worktrees are merged in first, as for any Task; a conflict's integration Task has
+   *  no account of this Task's to run on, so it names none and the person is asked for one. */
+  const placeExternal = async (slot: Slot): Promise<SlotEnd> => {
+    const unmade = await ensureRunWorktree(slot)
+    if (unmade) return unmade
+    const state = c.getState()
+    const run = state.runs.find((r) => r.id === slot.runId)!
+    const task = state.tasks.find((t) => t.id === slot.taskId)!
+    const runRoot = runRootOf(run, jobOf(state, run))
+    const waiting = await integrateBefore(slot, state, task, runRoot, [])
+    if (waiting) return waiting
+    if (workingInRunRoot(c.getState(), slot.runId)) {
+      log(`scheduler: task=${slot.taskId} waits — a worker is still working in ${runRoot}`)
+      return { kind: 'wait', why: `an external agent works in ${runRoot} itself, and a worker is still working there` }
+    }
+    const reply = await c.handle('external-work-start', { task: slot.taskId })
+    if (reply.status === 409 && typeof (reply.body as { retry?: unknown })?.retry === 'string') return { kind: 'leaving', reply }
+    return reply.status >= 400 ? { kind: 'refused', reply } : { kind: 'started', reply }
+  }
+
   const placeSlot = async (slot: Slot, accounts: Account[], loggedIn: Set<string>): Promise<SlotEnd> => {
+    if (slot.externalAgentId !== undefined) return placeExternal(slot)
     // 사람이 이 Task 에 계정을 지정했으면 그 목록의 첫 계정, 아니면 그 provider 의 기본
     // 계정. 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
     // **갈아탈 순서(체인)는 여기서 넘기지 않는다** — worker-start 를 거쳐 가므로 그 체인은
@@ -674,65 +762,10 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     // 있는 Task 만 후보로 냈으므로 — schedule.ts). **이 루프의 동시성 논증은 모두 이
     // 전제(스냅숏이 아니라 슬롯마다 새로 읽는다) 위에 서 있다** — 여기를 "같은 스냅숏"
     // 이라고 잘못 적으면 다음에 이 루프의 레이스를 따지는 사람이 틀린 전제에서 시작한다.
-    let state = c.getState()
-
-    // **Run 워크트리를 여기서 만든다 — 게으르게.** Run 을 만들 때가 아닌 이유가 둘이다:
-    // 예약 템플릿은 한 번도 돌지 않으므로 워크트리가 필요 없고, pendingStart Run 은
-    // 사람이 '실행' 을 누르기 전까지 디스크에 아무것도 남기지 않아야 한다. 이 자리는
-    // 둘 다 이미 지난 곳이다(slotsToFill 이 그 둘을 슬롯으로 내지 않는다).
-    //
-    // 병합 블록보다 앞에 두는 이유: 통합 병합의 대상이 Run 뿌리이므로(아래
-    // integrateWorktrees) 그때 이미 있어야 한다. 동시 실행 2 이상인 Run 은 첫 Task 들이
-    // 자기 워크트리로 가므로 Run 워크트리를 아무도 만들지 않는데, 그 Run 의 통합 Task 는
-    // Run 워크트리에서 돌아야 한다.
-    let run = state.runs.find((r) => r.id === slot.runId)!
-    if (run.worktree === undefined) {
-      try {
-        // c.forkRunWorktree(앱과 Host 모두 integrateGit.ts 의 forkWorktree)가 프로젝트가 **서 있는
-        // 브랜치**에서 갈라 준다. raw createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이
-        // 엉뚱한 조상을 끌고 온다 — 그 판단은 한 곳에만 있어야 한다.
-        const runJob = jobOf(state, run)
-        const created = await c.forkRunWorktree({
-          repoPath: runJob?.cwd ?? '',
-          name: nameForRun({ id: run.jobId, objective: runJob?.objective ?? '' })
-        })
-        const set = await c.handle('run-worktree-set', { run: run.id, worktree: created })
-        if (set.status >= 400)
-          return {
-            kind: 'gate',
-            reason: `Run 워크트리를 기록하지 못했습니다: ${JSON.stringify(set.body)}`,
-            why: `the run worktree could not be recorded: ${JSON.stringify(set.body)}`
-          }
-        log(`scheduler: run=${run.id} works in ${created}`)
-        // **상태를 다시 읽는다 — run 만이 아니라 state 도.** run 은 아래 runRoot 와 limit
-        // 이 그것에서 나오기 때문이다: 방금 기록한 워크트리가 없는 run 을 들고 가면 배치와
-        // 통합 병합의 대상이 프로젝트 폴더가 되어, 이 블록이 막으려던 바로 그 결과가 된다.
-        //
-        // state 는 병합 판정(pendingMerges·workingInRunRoot) 때문이다. 이 자리에서 낡은
-        // 스냅숏은 병합을 **덜** 센다 — 그 스냅숏의 뿌리는 프로젝트 폴더이므로 프로젝트
-        // 폴더에서 돈 Dispatch 를 "뿌리에서 돌았다"고 보아 건너뛴다. 중간에 워크트리를
-        // 갖게 된 Run 은 그런 Dispatch 를 그대로 들고 있고(이 배선 전에 뜬 워커들이다),
-        // 그것들은 이제 합쳐야 하는 재료다. 낡은 스냅숏으로 물으면 그 일이 조용히 빠진다.
-        state = c.getState()
-        run = state.runs.find((r) => r.id === slot.runId)!
-      } catch (e) {
-        // 프로젝트 폴더가 답하지 않으면(끊긴 공유) `REPO_UNREACHABLE:` 이고 git 은 뜨지 않는다.
-        // 저장소에 닿을 수 없으면 `NO_REPO:`, HEAD 가 분리됐으면 `NO_BASE:` 다 —
-        // workerBaseFailure 가 그 문장을 만들고 forkWorktree 가 던진다. **저장소가 아닌
-        // 폴더도 `NO_REPO:` 다** — forkWorktree 의 `rev-parse --git-dir` 탐침이 먼저
-        // 실패하므로 createWorktree 까지 가지 않는다. 그쪽의 `NOT_GIT_REPO:`
-        // (create.ts 의 createWorktree, repoRoot 가 null)는 git 은 돌지만 작업 트리가 없는
-        // 저장소 — bare 저장소 — 만 남는다. 셋 다
-        // 읽을 수 있는 접두사가 붙어 오므로 그대로 Gate 에 싣는다. 다음 상태 변경에 다시
-        // 시도한다(사람이 저장소를 고치는 것 자체가 상태 변경은 아니지만, 그 Gate 를 푸는
-        // 것이 상태 변경이다).
-        return {
-          kind: 'gate',
-          reason: `Run 워크트리를 만들지 못했습니다: ${String(e)}`,
-          why: `the run worktree could not be made: ${String(e)}`
-        }
-      }
-    }
+    const unmade = await ensureRunWorktree(slot)
+    if (unmade) return unmade
+    const state = c.getState()
+    const run = state.runs.find((r) => r.id === slot.runId)!
     // Task 는 **워크트리 확보 블록 뒤에** 읽는다. 반드시 있는 것은 run 과 같은 이유이고
     // (slotsToFill 이 상태에서 골라낸 id 다), 여기까지 내려온 것은 이 루프의 "슬롯마다
     // 새로 읽는다" 전제를 그대로 지키기 위해서다 — 위 블록이 run-worktree-set 으로 쓰기를

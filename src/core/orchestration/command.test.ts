@@ -11436,6 +11436,18 @@ describe('external-work-start', () => {
     expect(deps.getState().dispatches.find((d) => d.id === dispatchId)?.limitResetsAt).toBeUndefined()
   })
 
+  it('its permission question is answered by a person, never by an agent session such as the coordinator', async () => {
+    const { deps, taskId } = await setup()
+    const r = await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    const dispatchId = (r.body as { dispatchId: string }).dispatchId
+    const asked = call(deps, 'ask', { taskId, dispatchId, question: 'Edit a?', options: 'Yes,No', timeoutMs: 2_000 }, HOST_CALLER)
+    await vi.waitFor(() => expect(deps.getState().messages.some((m) => m.type === 'question')).toBe(true))
+    const q = deps.getState().messages.find((m) => m.type === 'question')!
+    expect((await call(deps, 'reply', { id: q.id, body: 'Yes' }, 'coord-session')).status).toBe(403)
+    expect((await call(deps, 'reply', { id: q.id, body: 'Yes' }, APP_CALLER)).status).toBe(200)
+    expect((await asked).body).toMatchObject({ answered: true, answer: 'Yes' })
+  })
+
   it('a stopped Run ends the Dispatch without asking for a worker session to be released', async () => {
     const { deps, taskId, released, runId } = await setup()
     await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)

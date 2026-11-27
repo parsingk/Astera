@@ -4991,6 +4991,12 @@ export async function handleCommand(
       const body = str(args.body)
       if (!id) return bad('--id is required')
       if (body === null) return bad('--body is required')
+      // An external agent's permission request (Phase 5 A1) is the person's: the app, or `astera reply` from their shell.
+      // An agent session (a coordinator, a worker) does not answer it for them.
+      const asked = s.messages.find((m) => m.id === id)
+      const askedOn = asked?.dispatchId === undefined ? undefined : s.dispatches.find((d) => d.id === asked.dispatchId)
+      if (askedOn?.externalAgent && caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+        return denied('a person answers an external agent’s permission request, in the app or with astera reply from their own shell')
       return commit(applyReply(s, { messageId: id, body }, now))
     }
     case 'check': {

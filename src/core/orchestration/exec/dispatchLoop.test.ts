@@ -215,6 +215,7 @@ function rig(o: RigOpts = {}) {
     startCoordinator,
     stopCoordinator,
     releaseWorker,
+    startExternalWork: () => {},
     listAccounts: async () => [{ id: 'accA', label: 'accA', provider: 'claude' as const }],
     log: () => {},
     runningSessions: () => 0,
@@ -1886,5 +1887,39 @@ describe('the lifecycle Task is started by the loop', () => {
     await h.settle()
     expect(h.handled()).toContain('gate-create')
     expect(h.state().gates.find((g) => g.taskId === 'tsk_l')?.question).toContain('GitHub')
+  })
+})
+
+// Phase 5 A1: a Task an external agent works is placed by the same loop, through its own door
+describe('a Task an external agent works', () => {
+  const external = (h: ReturnType<typeof rig>, id: string): void =>
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === id ? { ...t, accountIds: undefined, externalAgentId: 'ext_0a1b2c3d' } : t)) })
+
+  it('is started through external-work-start in the Run worktree, made first, with no account picked', async () => {
+    const h = rig({ runWithoutWorktree: true })
+    external(h, 'tsk_1')
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled().slice(0, 2)).toEqual(['run-worktree-set', 'external-work-start'])
+    expect(h.state().dispatches.find((x) => x.taskId === 'tsk_1')).toMatchObject({ cwd: '/wt-forked', accountId: '', externalAgent: { id: 'ext_0a1b2c3d' } })
+    expect(h.state().gates).toEqual([])
+    expect(h.startWorker).not.toHaveBeenCalled()
+  })
+
+  it('waits while another worker works in the Run root it would work in', async () => {
+    const h = rig({ concurrency: 2 })
+    external(h, 'tsk_1')
+    const s = h.state()
+    h.setState({
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === 'tsk_2' ? { ...t, status: 'dispatched' as const } : t)),
+      dispatches: [
+        { id: 'dsp_2', taskId: 'tsk_2', provider: 'claude', accountId: 'accA', sessionId: 's-x', cwd: '/wt1', specPath: 'x', startedAt: NOW, workerState: 'ready', retained: false }
+      ]
+    })
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled()).not.toContain('external-work-start')
+    expect(h.state().gates).toEqual([])
   })
 })
