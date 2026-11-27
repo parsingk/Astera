@@ -156,7 +156,11 @@ const SESSION = {
     summary: 'the files a run, or one of its tasks, changed, from git',
     detail:
       '`git.files` lists each file the run changed since it began, from git on the machine it runs on: `id` (what `runs-diff` takes), `path`, `oldPath` for a rename, `status` (added, modified, deleted or renamed), and `additions` and `deletions`, or `binary`. While the run is still at work it includes uncommitted edits to tracked files. `reported` is what its workers said they changed. `git` is null with `unavailable` when there is no git list: not-recorded for a run from before this was kept, git-failed when git could not read it.',
-    flags: [{ name: 'id', value: '<runId>', required: true, about: 'the run' }, { name: 'task', value: '<taskId>', about: 'only what this task changed' }]
+    flags: [
+      { name: 'id', value: '<runId>', required: true, about: 'the run' },
+      { name: 'task', value: '<taskId>', about: 'only what this task changed' },
+      { name: 'dispatch', value: '<dispatchId>', about: "one attempt's own range, from its base to its head" }
+    ]
   },
   'runs-diff': {
     summary: 'the diff of one changed file, as git diff prints it',
@@ -164,7 +168,8 @@ const SESSION = {
     flags: [
       { name: 'id', value: '<runId>', required: true, about: 'the run' },
       { name: 'file', value: '<fileId>', required: true, about: 'the id from runs-changed-files' },
-      { name: 'task', value: '<taskId>', about: 'the task the list was read for' }
+      { name: 'task', value: '<taskId>', about: 'the task the list was read for' },
+      { name: 'dispatch', value: '<dispatchId>', about: 'the attempt the list was read for' }
     ]
   },
   'runs-git-record': {

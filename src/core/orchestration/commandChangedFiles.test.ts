@@ -64,7 +64,7 @@ describe('runs-changed-files', () => {
     const { deps, runId, asked } = await seeded({ answers: { 'D:/p bbbbbbb..ccccccc': [FILE] } })
     const r = await call(deps, 'runs-changed-files', { runId })
     expect(r.status).toBe(200)
-    expect(r.body).toEqual({ runId, reported: [], git: { files: [FILE], live: false, total: 1 } })
+    expect(r.body).toEqual({ runId, reported: [], git: { files: [FILE], live: false, total: 1 }, ranges: [{ base: 'bbbbbbb', head: 'ccccccc' }] })
     expect(asked).toEqual(['D:/p bbbbbbb..ccccccc'])
   })
   it('a parallel Run’s list holds what its Tasks did in their own worktrees, one row per path', async () => {
@@ -129,5 +129,98 @@ describe('runs-diff', () => {
     const { deps, runId } = await seeded({ answers: { 'D:/p bbbbbbb..ccccccc': [FILE] } })
     expect((await call(deps, 'runs-diff', { runId, fileId: 'src/한글 a.ts' })).status).toBe(404)
     expect((await call(deps, 'runs-diff', { runId })).status).toBe(400)
+  })
+})
+
+// Phase 3 Part 4: one attempt's own range, the ranges read, and who changed each file
+describe('agent-aware review', () => {
+  const T = (m: number): string => `2026-11-27T10:${String(m).padStart(2, '0')}:00.000Z`
+  const reviewState = (): OrchState =>
+    ({
+      ...emptyState(),
+      jobs: [{ id: 'job1', cwd: 'P' }],
+      runs: [{ id: 'run1', jobId: 'job1', git: { base: 'aaaaaaa', head: 'ccccccc' } }],
+      tasks: [
+        { id: 't1', runId: 'run1', filesModified: ['src/a.ts'] },
+        { id: 't2', runId: 'run1' }
+      ],
+      dispatches: [
+        { id: 'd1', taskId: 't1', provider: 'claude', accountId: 'acc', sessionId: 's1', cwd: 'P', startedAt: T(0), endedAt: T(10), git: { base: 'aaaaaaa', head: 'bbbbbbb' } },
+        { id: 'd2', taskId: 't1', provider: 'codex', accountId: 'acc2', sessionId: 's2', cwd: 'P', startedAt: T(20), endedAt: T(30), repair: 'review-failure', git: { base: 'bbbbbbb', head: 'ccccccc' } },
+        { id: 'r1', taskId: 't1', provider: 'claude', accountId: 'acc', sessionId: 'sr', cwd: 'P', startedAt: T(12), endedAt: T(15), review: true, git: { base: 'bbbbbbb', head: 'bbbbbbb' } }
+      ]
+    }) as unknown as OrchState
+  const A = file('fa', 'src/a.ts')
+  const B = file('fb', 'src/b.ts')
+  const answers = {
+    'P aaaaaaa..ccccccc': [A, B],
+    'P aaaaaaa..bbbbbbb': [A],
+    'P bbbbbbb..ccccccc': [A, B]
+  }
+  const withReview = (o: { ancestry?: boolean; audit?: ReadonlySet<string> | null } = {}) => {
+    const m = makeDeps({ state: reviewState(), answers })
+    const audits: unknown[] = []
+    const deps = m.deps as unknown as Record<string, unknown> & { changes: Record<string, unknown> }
+    if (o.ancestry !== false) deps.changes.isAncestor = async () => true
+    deps.auditWrites = async (a: unknown) => {
+      audits.push(a)
+      return o.audit ?? null
+    }
+    return { ...m, audits }
+  }
+
+  it('reads one attempt’s own range when it is named, and echoes it', async () => {
+    const { deps, asked } = withReview()
+    const r = await call(deps, 'runs-changed-files', { runId: 'run1', dispatchId: 'd2' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId: 'run1', taskId: 't1', dispatchId: 'd2' })
+    expect((r.body as { git: { files: ChangedFile[] } }).git.files.map((f) => f.path)).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(asked).toEqual(['P bbbbbbb..ccccccc'])
+  })
+
+  it('refuses an attempt of another Run, a review attempt, or one that is not the named Task’s', async () => {
+    const { deps } = withReview()
+    expect((await call(deps, 'runs-changed-files', { runId: 'run1', dispatchId: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'runs-changed-files', { runId: 'run1', dispatchId: 'r1' })).status).toBe(404)
+    expect((await call(deps, 'runs-changed-files', { runId: 'run1', taskId: 't2', dispatchId: 'd1' })).status).toBe(400)
+  })
+
+  it('names the range each part was read over', async () => {
+    const { deps } = withReview()
+    const body = (await call(deps, 'runs-changed-files', { runId: 'run1' })).body as { ranges: unknown }
+    expect(body.ranges).toEqual([{ base: 'aaaaaaa', head: 'ccccccc' }])
+  })
+
+  it('attributes each file when asked, and reads nothing more when not', async () => {
+    const plain = withReview()
+    const body = (await call(plain.deps, 'runs-changed-files', { runId: 'run1', taskId: 't1' })).body as Record<string, unknown>
+    expect(body.attribution).toBeUndefined()
+    expect(plain.asked).toEqual(['P aaaaaaa..ccccccc'])
+    const asked = withReview({ audit: new Set(['src/a.ts']) })
+    const got = (await call(asked.deps, 'runs-changed-files', { runId: 'run1', taskId: 't1', attribution: true })).body as {
+      attribution: Record<string, { kind: string; level?: string; evidence: Array<{ dispatchId: string }> }>
+    }
+    // A Task's list names its files with the Task, as it always did
+    expect(got.attribution['fa~t1']).toMatchObject({ kind: 'agent', level: 'observe-audit' })
+    expect(got.attribution['fa~t1'].evidence.map((e) => e.dispatchId)).toEqual(['d1', 'd2'])
+    expect(got.attribution['fb~t1']).toMatchObject({ kind: 'agent', level: 'recorded-range' })
+    expect(got.attribution['fb~t1'].evidence.map((e) => e.dispatchId)).toEqual(['d2'])
+    expect(asked.audits).toEqual([
+      { taskId: 't1', since: T(0), until: T(10) },
+      { taskId: 't1', since: T(20), until: T(30) }
+    ])
+  })
+
+  it('answers no attribution where git ancestry cannot be asked', async () => {
+    const { deps } = withReview({ ancestry: false })
+    const body = (await call(deps, 'runs-changed-files', { runId: 'run1', taskId: 't1', attribution: true })).body as Record<string, unknown>
+    expect(body.attribution).toBeUndefined()
+  })
+
+  it('reads a file’s diff in the attempt’s own range when runs-diff names the attempt', async () => {
+    const { deps, diffs } = withReview()
+    const r = await call(deps, 'runs-diff', { runId: 'run1', dispatchId: 'd2', fileId: 'fb~t1' })
+    expect(r.status).toBe(200)
+    expect(diffs).toEqual(['P bbbbbbb..ccccccc src/b.ts'])
   })
 })

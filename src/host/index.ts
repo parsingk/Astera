@@ -133,6 +133,8 @@ import { readAnnotations, readJobLog } from '../core/github/evidence'
 import { rerunFailed } from '../core/github/checks'
 import { normalizeBaseForGh } from '../core/worktrees/push'
 import { readChanges, readFileDiff } from '../core/git/changes'
+import { isAncestorOf } from '../core/workUnit/gitProbe'
+import { auditWriteTargets } from '../core/review/auditWrites'
 import { createMcpHttpSupervisor } from './mcpHttp'
 import { createGatewaySupervisor } from './gatewaySupervisor'
 import { attachGatewayLink } from './gatewayLink'
@@ -1220,8 +1222,15 @@ async function main(): Promise<void> {
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.
     readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
-    // A Run's changed files and diffs (remote runtime design Phase 10), from this machine's git.
-    changes: { read: (repo, base, head) => readChanges(repo, base, head), diff: (repo, base, head, f) => readFileDiff(repo, base, head, f) },
+    // A Run's changed files and diffs (remote runtime design Phase 10), from this machine's git, and whether a range is a
+    // fast-forward (Phase 3 Part 4: one that is not is attributed to no one).
+    changes: {
+      read: (repo, base, head) => readChanges(repo, base, head),
+      diff: (repo, base, head, f) => readFileDiff(repo, base, head, f),
+      isAncestor: (repo, base, head) => isAncestorOf(repo, base, head)
+    },
+    // The files this profile's observe audit saw a Task write (Phase 3 Part 4): "confirmed by observe audit".
+    auditWrites: (a) => auditWriteTargets(profileDir, a),
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,

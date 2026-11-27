@@ -12,6 +12,9 @@
 //
 // A Task that worked in its Run's shared folder alongside others gets that folder's range over its own attempts, so
 // work committed there meanwhile by another Task shows too: git cannot tell them apart without a worktree each.
+//
+// - One attempt (Phase 3 Part 4): that attempt's own range, its base..head as the Host recorded them, in its folder and
+//   then in the project.
 import { isSamePath } from '../files/tree'
 import { runRootOf } from './integrate'
 import type { OrchState } from './state'
@@ -59,6 +62,44 @@ function taskRanges(attempts: Dispatch[], project: string): GitReadRange[] {
   return ranges
 }
 
+/** At most this many attempts are read for attribution (Phase 3 Part 4), the newest: one git read each. */
+export const ATTRIBUTION_ATTEMPTS_MAX = 30
+
+const attemptsOfTask = (s: OrchState, taskId: string): Dispatch[] =>
+  s.dispatches.filter((d) => d.taskId === taskId && !d.review).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+
+/** One attempt's own range (Phase 3 Part 4): null for an unknown attempt, a review attempt, or one whose Task is not the
+ *  Run's; no part when its base was never recorded. */
+export function attemptRanges(s: OrchState, runId: string, dispatchId: string): { parts: ChangesPart[]; reported: string[]; dispatch: Dispatch } | null {
+  const d = s.dispatches.find((x) => x.id === dispatchId)
+  if (!d || d.review) return null
+  const task = s.tasks.find((t) => t.id === d.taskId && t.runId === runId)
+  if (!task) return null
+  const run = s.runs.find((r) => r.id === runId)
+  const project = s.jobs.find((j) => j.id === run?.jobId)?.cwd ?? ''
+  const base = d.git?.base
+  const ranges: GitReadRange[] = []
+  if (base !== undefined) {
+    if (d.endedAt === undefined || d.git?.head === undefined) ranges.push({ repo: d.cwd, base, head: null })
+    else {
+      ranges.push({ repo: d.cwd, base, head: d.git.head })
+      if (project && !isSamePath(project, d.cwd)) ranges.push({ repo: project, base, head: d.git.head })
+    }
+  }
+  return { parts: ranges.length > 0 ? [{ taskId: task.id, ranges }] : [], reported: task.filesModified ?? [], dispatch: d }
+}
+
+/** The attempts a list's attribution reads (Phase 3 Part 4): one attempt, a Task's, or every Task's of the Run; review
+ *  attempts left out, oldest first, the newest ATTRIBUTION_ATTEMPTS_MAX. */
+export function scopeAttempts(s: OrchState, runId: string, taskId?: string, dispatchId?: string): Dispatch[] {
+  const taskIds = new Set(s.tasks.filter((t) => t.runId === runId && (taskId === undefined || t.id === taskId)).map((t) => t.id))
+  const all = [...taskIds]
+    .flatMap((id) => attemptsOfTask(s, id))
+    .filter((d) => dispatchId === undefined || d.id === dispatchId)
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  return all.slice(-ATTRIBUTION_ATTEMPTS_MAX)
+}
+
 /** Null for an unknown Run, or a Task that is not the Run's. `parts` is empty when nothing was recorded (the work
  *  predates Phase 10, or its base could not be read); `reported` is what the workers said they changed. */
 export function rangesFor(s: OrchState, runId: string, taskId?: string): { parts: ChangesPart[]; reported: string[] } | null {
@@ -66,8 +107,7 @@ export function rangesFor(s: OrchState, runId: string, taskId?: string): { parts
   if (!run) return null
   const job = s.jobs.find((j) => j.id === run.jobId)
   const project = job?.cwd ?? ''
-  const attemptsOf = (id: string): Dispatch[] =>
-    s.dispatches.filter((d) => d.taskId === id && !d.review).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  const attemptsOf = (id: string): Dispatch[] => attemptsOfTask(s, id)
   if (taskId !== undefined) {
     const task = s.tasks.find((t) => t.id === taskId && t.runId === runId)
     if (!task) return null
@@ -102,12 +142,13 @@ type Read = (repo: string, base: string, head: string | null) => Promise<Changed
 /** Each part read from the first of its ranges git answers, joined into one list: the root's files first, then each
  *  Task part's files whose path the list does not have yet (a Task worktree folded into the root is already there). A
  *  Task part's file gets an id of its own, so its diff is read in its own range. `read` is false when no part could be
- *  read at all. */
+ *  read at all; `used` is the range each part that answered was read over (Phase 3 Part 4 names it). */
 export async function collectChanges(
   parts: ChangesPart[],
   read: Read
-): Promise<{ read: boolean; files: Array<{ file: ChangedFile; range: GitReadRange }>; live: boolean; total: number }> {
+): Promise<{ read: boolean; files: Array<{ file: ChangedFile; range: GitReadRange }>; live: boolean; total: number; used: Array<{ taskId?: string; range: GitReadRange }> }> {
   const files: Array<{ file: ChangedFile; range: GitReadRange }> = []
+  const used: Array<{ taskId?: string; range: GitReadRange }> = []
   const paths = new Set<string>()
   let any = false
   let live = false
@@ -117,6 +158,7 @@ export async function collectChanges(
       const got = await read(range.repo, range.base, range.head)
       if (!got) continue
       any = true
+      used.push({ ...(part.taskId !== undefined ? { taskId: part.taskId } : {}), range })
       if (range.head === null) live = true
       const listed = (got as ChangedFile[] & { total?: number }).total ?? got.length
       let added = 0
@@ -132,5 +174,5 @@ export async function collectChanges(
       break
     }
   }
-  return { read: any, files, live, total }
+  return { read: any, files, live, total, used }
 }

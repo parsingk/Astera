@@ -454,6 +454,7 @@ const NOT_FORWARDED = [
   'readAgentProfiles',
   'appWideYolo',
   'changes',
+  'auditWrites',
   'jobSources',
   'completionChecks',
   'spentTokens'
@@ -604,6 +605,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED as well (remote runtime design Phase 10): git reads on this Host's machine, never the app's. It
   // runs `git diff` and leaves nothing outside the call.
   changes: false,
+  // NOT_FORWARDED as well (Phase 3 Part 4): a read of this Host's observe audit, never the app's. It leaves nothing
+  // outside the call.
+  auditWrites: false,
   // NOT_FORWARDED as well (plugin Phase 4 J10): this Host's job-source plugins, asked for their items, never the app's.
   // A question to a plugin leaves nothing outside the call; the Job a person makes from an item is a commit.
   jobSources: false,
@@ -739,6 +743,8 @@ export function hostOrchDeps(a: {
   appWideYolo?: OrchServerDeps['appWideYolo']
   /** A Run's changed files and diffs from this Host's git (Phase 10). Absent: the two commands answer 409. */
   changes?: OrchServerDeps['changes']
+  /** The files this Host's observe audit saw a Task write (Phase 3 Part 4). Absent: no attribution is confirmed by it. */
+  auditWrites?: OrchServerDeps['auditWrites']
   /** This Host's job-source plugins (plugin Phase 4 J10). Absent: the sources are GitHub's alone. */
   jobSources?: OrchServerDeps['jobSources']
   completionChecks?: OrchServerDeps['completionChecks']
@@ -1335,6 +1341,7 @@ export function hostOrchDeps(a: {
     ...(a.readAgentProfiles ? { readAgentProfiles: a.readAgentProfiles } : {}),
     ...(a.appWideYolo ? { appWideYolo: a.appWideYolo } : {}),
     ...(a.changes ? { changes: a.changes } : {}),
+    ...(a.auditWrites ? { auditWrites: a.auditWrites } : {}),
     ...(a.jobSources ? { jobSources: a.jobSources } : {}),
     ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),
     ...(a.spentTokens ? { spentTokens: a.spentTokens } : {}),

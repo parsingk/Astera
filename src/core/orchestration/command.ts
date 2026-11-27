@@ -64,7 +64,8 @@ import {
   type Res
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
-import { collectChanges, rangesFor } from './changedFiles'
+import { attemptRanges, collectChanges, rangesFor, type ChangesPart } from './changedFiles'
+import { attributeChangedFiles } from '../review/changesAttribution'
 import type { ChangedFile } from '../git/changes'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
@@ -702,7 +703,13 @@ export interface OrchServerDeps {
   changes?: {
     read(repo: string, base: string, head: string | null): Promise<ChangedFile[] | null>
     diff(repo: string, base: string, head: string | null, f: ChangedFile): Promise<{ diff: string; truncated: boolean } | null>
+    /** Whether base is an ancestor of head (Phase 3 Part 4: a range that is not a fast-forward is attributed to no one);
+     *  null when git cannot tell. Absent, `runs-changed-files` answers no attribution. */
+    isAncestor?(repo: string, base: string, head: string): Promise<boolean | null>
   }
+  /** The paths the observe audit saw a Task write in a window (Phase 3 Part 4, core/review/auditWrites.ts), or null with
+   *  no records. What raises an attribution to "confirmed by observe audit". */
+  auditWrites?(a: { taskId: string; since: string; until: string }): Promise<ReadonlySet<string> | null>
   github?: {
     run: GhRunner
     worktreeOf?(path: string): WorktreeInfo | null
@@ -1935,6 +1942,27 @@ const checkNamesOf = (v: unknown): string[] | null => {
   return names.some((x) => x === '') ? null : [...new Set(names)]
 }
 
+/** The range a changed-files list or a diff is read over: a Run's, a Task's (`taskId`), or one attempt's own
+ *  (`dispatchId`, Phase 3 Part 4), which must be the named Task's when both are given. An answer to send when the scope is
+ *  unknown or contradicts itself. */
+function changesScope(
+  s: OrchState,
+  runId: string,
+  args: Record<string, unknown>
+): { found: { parts: ChangesPart[]; reported: string[] }; taskId?: string; dispatchId?: string } | Reply {
+  const taskArg = str(args.taskId) ?? str(args.task) ?? undefined
+  const dispatchId = str(args.dispatchId) ?? str(args.dispatch) ?? undefined
+  if (dispatchId !== undefined) {
+    const one = attemptRanges(s, runId, dispatchId)
+    if (!one) return notFound(`unknown attempt ${dispatchId} in run ${runId}`)
+    if (taskArg !== undefined && taskArg !== one.dispatch.taskId) return bad(`attempt ${dispatchId} is not task ${taskArg}'s`)
+    return { found: one, taskId: one.dispatch.taskId, dispatchId }
+  }
+  const found = rangesFor(s, runId, taskArg)
+  if (!found) return notFound(taskArg ? `unknown task ${taskArg} in run ${runId}` : `unknown run: ${runId}`)
+  return { found, ...(taskArg !== undefined ? { taskId: taskArg } : {}) }
+}
+
 export async function handleCommand(
   deps: OrchServerDeps,
   /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
@@ -3094,20 +3122,33 @@ export async function handleCommand(
     // **A Run's changed files from git, beside what its workers said** (remote runtime design Phase 10, D10.1): the
     // first of `rangesFor`'s ranges git answers. `unavailable` says why there is no git list: no range was recorded
     // (the work predates Phase 10), or git could not read any of them (the folder and the commits are gone).
+    // Phase 3 Part 4: `dispatchId` reads one attempt's own range and is echoed, so a caller can tell a Host that did not
+    // know it; `ranges` names the range each part was read over; `attribution: true` adds who changed each file.
     case 'runs-changed-files': {
       const asked = str(args.runId) ?? str(args.id)
       if (!asked) return bad('--id is required: the run whose changed files to read')
       // A Job id reads its latest Run, as runs-completion does: the Run detail names a Run by its Job.
       const runId = resolveRunId(s, asked) ?? asked
-      const taskId = str(args.taskId) ?? str(args.task) ?? undefined
-      const found = rangesFor(s, runId, taskId)
-      if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
+      const scoped = changesScope(s, runId, args)
+      if ('status' in scoped) return scoped
+      const { found, taskId, dispatchId } = scoped
       if (!deps.changes) return conflict('changed files are read where the run lives, and this caller cannot read git there')
-      const head = { runId, ...(taskId ? { taskId } : {}), reported: found.reported }
+      const head = { runId, ...(taskId ? { taskId } : {}), ...(dispatchId ? { dispatchId } : {}), reported: found.reported }
       if (found.parts.length === 0) return okBody({ ...head, git: null, unavailable: 'not-recorded' })
       const got = await collectChanges(found.parts, deps.changes.read)
       if (!got.read) return okBody({ ...head, git: null, unavailable: 'git-failed' })
-      return okBody({ ...head, git: { files: got.files.map((f) => f.file), live: got.live, total: got.total } })
+      const files = got.files.map((f) => f.file)
+      const ranges = got.used.map((u) => ({ ...(u.taskId !== undefined && dispatchId === undefined && taskId === undefined ? { taskId: u.taskId } : {}), base: u.range.base, head: u.range.head }))
+      const isAncestor = deps.changes.isAncestor
+      const attribution =
+        args.attribution === true && isAncestor
+          ? await attributeChangedFiles(s, { runId, ...(taskId ? { taskId } : {}), ...(dispatchId ? { dispatchId } : {}), files, now }, {
+              read: deps.changes.read,
+              isAncestor,
+              ...(deps.auditWrites ? { auditWrites: deps.auditWrites } : {})
+            })
+          : undefined
+      return okBody({ ...head, git: { files, live: got.live, total: got.total }, ranges, ...(attribution ? { attribution } : {}) })
     }
     // **One file's diff, by the id `runs-changed-files` gave it, never a path** (§4.8): the same list is read again and
     // the id looked up in it, so a caller can only ever see a file that range changed, read in the range it came from.
@@ -3117,9 +3158,9 @@ export async function handleCommand(
       const runId = resolveRunId(s, asked) ?? asked
       const fileId = str(args.fileId) ?? str(args.file)
       if (!fileId) return bad('--file is required: a file id from runs-changed-files')
-      const taskId = str(args.taskId) ?? str(args.task) ?? undefined
-      const found = rangesFor(s, runId, taskId)
-      if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
+      const scoped = changesScope(s, runId, args)
+      if ('status' in scoped) return scoped
+      const { found } = scoped
       if (!deps.changes) return conflict('diffs are read where the run lives, and this caller cannot read git there')
       if (found.parts.length === 0) return notFound(`run ${runId} has no recorded git range`)
       const got = await collectChanges(found.parts, deps.changes.read)
