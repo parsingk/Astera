@@ -103,6 +103,9 @@ interface CreateTaskFields {
   /** The agent profile it runs as, an id or a name. Without `accountIds` the Task runs on the profile's accounts. A Task
    *  names none to run as its Job's profile. */
   readonly agentProfileId?: string
+  /** An external agent a person registered in Astera's Settings, Agents (`ext_` and 8 hex), that works the Task in the Run
+   *  folder instead of accounts. Give it or `accountIds` and `agentProfileId`, not both. */
+  readonly externalAgentId?: string
 }
 
 /** Whose Task: a Job's definition (`jobId`) or a Run's (`runId`), exactly one. */
@@ -343,9 +346,10 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
       if (input.deps !== undefined && (!Array.isArray(input.deps) || input.deps.some((d) => typeof d !== 'string' || d.length === 0)))
         throw invalid('deps is a list of Task ids, none empty')
       const profile = input.agentProfileId !== undefined ? need('agentProfileId', input.agentProfileId) : undefined
+      const external = input.externalAgentId !== undefined ? need('externalAgentId', input.externalAgentId) : undefined
       let account = input.accountIds !== undefined ? idList('accountIds', input.accountIds) : undefined
-      // A profile named here gives the Task its accounts, so the Host needs no account
-      if (account === undefined && profile === undefined) {
+      // A profile named here gives the Task its accounts, so the Host needs no account; an external agent needs none
+      if (account === undefined && profile === undefined && external === undefined) {
         // MCP's default (create_task): the Job's profile, which the Host reads itself, else the Job's coordinator
         // account. The Host takes a Run id for jobs-get too.
         const job = await body<JobWithRun>('jobs-get', { id: input.jobId ?? input.runId }, readOptions(o))
@@ -364,7 +368,8 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
         ...(account !== undefined ? { account } : {}),
         ...(validate !== undefined ? { validate } : {}),
         ...(input.review === true ? { review: true } : {}),
-        ...(profile !== undefined ? { agentProfile: profile } : {})
+        ...(profile !== undefined ? { agentProfile: profile } : {}),
+        ...(external !== undefined ? { externalAgent: external } : {})
       }
       return body<Task>('tasks-add', args, callOptions(o))
     }

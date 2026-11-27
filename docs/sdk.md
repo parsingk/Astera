@@ -300,7 +300,11 @@ the order the checks run), `review` and `agentProfileId` (an agent profile's id 
 servers and permission prompts; without it the Task runs as its Job's profile, if the Job has one). Without
 `accountIds` it runs on its profile's accounts, copied when it is made; with no profile, on the Job's coordinator
 account, and it is refused when the Job has none. A `plugin:<id>` whose plugin is not installed, does not offer completion checks, or is disabled is
-refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-check-plugins)). `tasks.list({ runId, status, ready, brief })` and
+refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-check-plugins)). `externalAgentId` names an
+external agent a person registered in Settings, Agents (an ACP agent such as OpenCode, `ext_` and 8 hex) to work the Task
+in the Run folder instead of accounts; give it or `accountIds` and `agentProfileId`, not both. Such a Task carries
+`externalAgentId`, and its attempts in `tasks.get` carry `externalAgent` (`id`, `name`), their `provider` and `accountId`
+then placeholders (the Jobs guide's section on external agent workers says how they run). `tasks.list({ runId, status, ready, brief })` and
 `tasks.get` read them. A Task with `kind: 'lifecycle'` is the one Astera adds once every other Task of a GitHub
 lifecycle Run is completed, to carry the Run through GitHub: it has no worker, and `tasks.create` on that Run is
 refused while it is open.
@@ -626,6 +630,26 @@ the Host lacks refuses with `VERSION_MISMATCH` before it sends anything. Updatin
 ```ts
 if (!astera.hasFeature('events')) console.log(`Astera ${astera.host.version} keeps no event log: update the app`)
 ```
+
+## Versions and migration
+
+`@astera-app/client` and `@astera-app/plugin-sdk` are versioned apart from the app, with [semantic versions](https://semver.org).
+Each release is in its package's CHANGELOG, with the Astera it needs.
+
+- **Before 1.0** (now): a minor version (0.5 to 0.6) may change or remove something, and its CHANGELOG entry says what and
+  how to move. A patch version (0.5.0 to 0.5.1) only fixes. Pin a minor version (`~0.5.0`) when a script must not change.
+- **From 1.0 on**: a major version is the only one that removes or renames a method, a field or an error code, or changes
+  what one means. A minor version adds: a method, an optional input, a field, an event type, an error code. A patch
+  version fixes. A field a newer Host adds reaches an older client as it is, and a client never refuses a field it does
+  not know, so a minor Host update breaks no script.
+- **The Host is the other side.** What a Host can do beyond its protocol is in `host.features`; a method that needs a
+  feature a Host lacks refuses with `VERSION_MISMATCH` before it sends anything, so a newer client against an older
+  Astera fails clearly instead of quietly doing less.
+- **Deprecation**: something to be removed in the next major version is marked deprecated in the types and in the
+  CHANGELOG at least one minor version before, with what replaces it.
+
+To move to a new version, read its CHANGELOG entry from the version you have up. An entry that changes or removes
+something has a **Migration** line saying what to change in a script; an entry without one needs nothing.
 
 ## Examples
 

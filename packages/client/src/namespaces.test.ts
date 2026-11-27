@@ -309,6 +309,13 @@ describe('astera.agentProfiles, and the profile a Job or Task runs as', () => {
     ])
   })
 
+  // Phase 5 A1: an external agent works the Task instead of accounts, so no account is defaulted for it
+  it('creates a Task an external agent works, reading no coordinator account', async () => {
+    const { host, astera } = await setup(answers)
+    await astera.tasks.create({ runId: 'run_1', spec: 'x', externalAgentId: 'ext_0a1b2c3d' })
+    expect(sent(host)).toEqual([['tasks-add', { run: 'run_1', spec: 'x', externalAgent: 'ext_0a1b2c3d' }, undefined]])
+  })
+
   it('a Task of a Job that runs as a profile takes its accounts from that profile, not the coordinator', async () => {
     const { host, astera } = await setup(answers)
     await astera.tasks.create({ jobId: 'job_prof', spec: 'x' })
