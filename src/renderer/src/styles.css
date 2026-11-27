@@ -2479,6 +2479,14 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 }
 .statusbar .status-host-outdated:hover { background: var(--warn-bg); }
 .statusbar .status-host-outdated:disabled { cursor: default; opacity: 0.6; }
+/* A plugin's status item (Phase 2 remaining): plain text in the bar's own ink, a button only by its hover */
+.statusbar .status-plugin {
+  flex: none; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 6px; font: inherit; line-height: 1.4; color: inherit; background: none; border: 0;
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.statusbar .status-plugin:hover { background: rgba(255, 255, 255, 0.08); }
+.statusbar .status-plugin:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 /* The Host runtime being put in place (stage 3 task 2). Plain text and the shared spinner while it
    works — nothing is wrong, it is only slow — and the same amber outline as the notices above if it
    failed, because that is the same kind of fact: worth a look, not broken. */

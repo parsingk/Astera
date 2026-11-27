@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { panelCommands, panelInfo, pluginRowsOf, pluginThemesOf, sidebarViewsOf, unusablePlugin, type PluginRow } from './pluginRows'
+import { panelCommands, panelInfo, pluginRowsOf, pluginThemesOf, sidebarViewsOf, statusItemsOf, unusablePlugin, type PluginRow } from './pluginRows'
 
 const row = (over: Partial<PluginRow> = {}): PluginRow => ({
   id: 'hello-panel',
@@ -129,5 +129,29 @@ describe('sidebarViewsOf', () => {
 
   it('leaves out a plugin not granted panels.register', () => {
     expect(sidebarViewsOf([withSide({ permissions: [] })])).toEqual([])
+  })
+})
+
+// Phase 2 remaining: the status bar's plugin items
+describe('statusItemsOf', () => {
+  const withItem = (over: Partial<PluginRow> = {}, items = [{ id: 'hi', text: 'Hello', command: 'open' }]): PluginRow =>
+    row({ contributes: { commands: [{ id: 'open', title: 'Open Hello panel', panel: 'hello' }], panels: [{ id: 'hello', title: 'Hello' }], statusBar: items }, ...over })
+
+  it('gives each item its text and the command it runs, keyed by plugin and item', () => {
+    const [item] = statusItemsOf([withItem()])
+    expect(item).toMatchObject({ key: 'hello-panel:hi', text: 'Hello', pluginName: 'Hello' })
+    expect(item.command).toMatchObject({ key: 'hello-panel:open', pluginId: 'hello-panel', panelId: 'hello', title: 'Open Hello panel', panelTitle: 'Hello' })
+  })
+
+  it('leaves out a plugin that cannot show its panel now, one not granted commands.register, and an item whose command is not contributed', () => {
+    expect(statusItemsOf([withItem({ enabled: false })])).toEqual([])
+    expect(statusItemsOf([withItem({ status: 'incompatible' })])).toEqual([])
+    expect(statusItemsOf([withItem({ permissions: ['panels.register'] })])).toEqual([])
+    expect(statusItemsOf([withItem({}, [{ id: 'hi', text: 'Hello', command: 'gone' }])])).toEqual([])
+  })
+
+  it('shows at most 6 in all, in plugin id order', () => {
+    const rows = ['f', 'e', 'd', 'c', 'b', 'a'].map((id) => withItem({ id, displayName: id }, [{ id: 'one', text: `${id}1`, command: 'open' }, { id: 'two', text: `${id}2`, command: 'open' }]))
+    expect(statusItemsOf(rows).map((i) => i.text)).toEqual(['a1', 'a2', 'b1', 'b2', 'c1', 'c2'])
   })
 })

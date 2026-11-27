@@ -1503,6 +1503,7 @@ export const ko = {
   'layout.held.load': '불러오기',
   'plugin.panel.preparing': '패널을 여는 중입니다…',
   'plugin.sidebar.rail': '{title} ({plugin} 플러그인)',
+  'plugin.status.title': '{command} ({plugin} 플러그인)',
   'plugin.panel.gone': '패널 페이지가 멈췄습니다. 플러그인이 꺼졌거나, 지워졌거나, 새 버전으로 바뀌었을 수 있습니다.',
   'plugin.panel.reopen': '다시 열기',
   'plugin.panel.refused.host': 'Host 에서 플러그인 목록을 읽지 못해 패널을 열 수 없습니다.',

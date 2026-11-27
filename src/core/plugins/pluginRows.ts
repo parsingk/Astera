@@ -134,3 +134,30 @@ export function sidebarViewsOf(rows: readonly PluginRow[]): SidebarViewEntry[] {
       .map((v) => ({ key: contributionKey(p.id, v.id), pluginId: p.id, viewId: v.id, panelId: v.panel, title: v.title, pluginName: shownName(p) }))
   })
 }
+
+/** At most this many plugin items share the status bar, so plugins never crowd out Astera's own. */
+export const STATUS_ITEMS_MAX = 6
+
+/** A plugin's status item (Phase 2 remaining): its text, and the command clicking it runs. */
+export interface StatusItemEntry {
+  key: ContributionKey
+  text: string
+  pluginName: string
+  command: PanelCommand
+}
+
+/** The status items of the plugins that can run their commands now and were granted commands.register, in plugin id
+ *  order, at most STATUS_ITEMS_MAX; an item whose command the palette would not list is left out. */
+export function statusItemsOf(rows: readonly PluginRow[]): StatusItemEntry[] {
+  const commands = new Map(panelCommands(rows).map((c) => [c.key, c]))
+  return [...rows]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .flatMap((p) => {
+      if (!p.permissions.includes('commands.register')) return []
+      return (p.contributes?.statusBar ?? []).flatMap((item) => {
+        const command = commands.get(contributionKey(p.id, item.command))
+        return command ? [{ key: contributionKey(p.id, item.id), text: item.text, pluginName: shownName(p), command }] : []
+      })
+    })
+    .slice(0, STATUS_ITEMS_MAX)
+}

@@ -168,7 +168,7 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parsePluginTab, parseTab, pluginTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { panelCommands, pluginRowsOf, pluginThemesOf, sidebarViewsOf, type PanelCommand } from '../../core/plugins/pluginRows'
+import { panelCommands, pluginRowsOf, pluginThemesOf, sidebarViewsOf, statusItemsOf, type PanelCommand } from '../../core/plugins/pluginRows'
 import { PluginPanelTab } from './components/PluginPanelTab'
 import { usePluginRows } from './lib/pluginRows'
 import { useTheme } from './lib/theme'
@@ -4081,6 +4081,8 @@ export default function App(): React.JSX.Element {
   // A plugin's view shows only while its plugin offers it (Phase 2 remaining): one turned off or removed falls back to the
   // session list, its choice kept for when it is back
   const sidebarViews = useMemo(() => (pluginRows === null ? [] : sidebarViewsOf(pluginRows)), [pluginRows])
+  // A plugin's status items (Phase 2 remaining): text that runs one of its commands, at most six in all
+  const statusItems = useMemo(() => (pluginRows === null ? [] : statusItemsOf(pluginRows)), [pluginRows])
   const shownPluginView = pluginSidebar === null ? undefined : sidebarViews.find((v) => v.key === pluginSidebar)
   const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'plugin' | 'sessions' = explorerOpen
     ? 'explorer'
@@ -6336,6 +6338,19 @@ export default function App(): React.JSX.Element {
         {/* The Host's own runtime being put in place after an update (stage 3 task 2): the copy used to
             freeze the window with nothing on screen. Beside the other Host notices, for the same reason
             they are outside the session branches. */}
+        {/* Plugins' status items (Phase 2 remaining): beyond the session count, before the Host's notices. Text only;
+            clicking runs the plugin's command, which opens its panel as the palette does */}
+        {statusItems.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className="status-plugin"
+            title={t('plugin.status.title', { command: item.command.title, plugin: item.pluginName })}
+            onClick={() => openPluginPanelRef.current(item.command)}
+          >
+            {item.text}
+          </button>
+        ))}
         <HostRuntimeNotice state={hostRuntime} nowMs={hostRuntimeNow} />
         {hostStatus?.connected && hostStatus.outdated && (
           <button
