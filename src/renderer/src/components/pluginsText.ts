@@ -25,7 +25,8 @@ const PERMISSIONS: Record<string, MessageKey> = {
   // Plugin API 2's UI permissions (core/plugins/manifest.ts PLUGIN_UI_PERMISSIONS)
   'commands.register': 'settings.plugins.perm.commands.register',
   'panels.register': 'settings.plugins.perm.panels.register',
-  'workspace.read': 'settings.plugins.perm.workspace.read'
+  'workspace.read': 'settings.plugins.perm.workspace.read',
+  'themes.register': 'settings.plugins.perm.themes.register'
 }
 
 const STATUSES: Record<string, MessageKey> = {

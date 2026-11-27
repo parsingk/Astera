@@ -8,6 +8,7 @@ import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { pluginsRoot } from './plugins/registry'
 import { AUDIT_FILE, createPluginAudit } from '../core/plugins/pluginAudit'
+import { createPluginCalls } from '../core/plugins/pluginCalls'
 import { createHostExtensions } from './extensions/commands'
 import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
 import { createHostPolicies } from './audit/policyCommands'
@@ -915,6 +916,8 @@ async function main(): Promise<void> {
   // plugin, which is created just below and asked only once a plugin runs.
   // The plugin audit log (Workspace & Plugin Platform V2 spec E3): what happened to each plugin, kept apart from its own
   // log, which goes with it. The app writes its panels and their bridge to a file of its own beside this one.
+  // Each plugin's calls and refusals since this Host started, for the Plugin Inspector (Phase 2 remaining)
+  const pluginCalls = createPluginCalls()
   const pluginAudit = createPluginAudit({ file: path.join(pluginsRoot(profileDir), AUDIT_FILE), onError: (m) => log.write(`plugins audit: ${m}`) })
   const pluginRuntime = createPluginRuntime({
     profileDir,
@@ -943,7 +946,7 @@ async function main(): Promise<void> {
       orch: { ready: () => orch.ready(), state: () => orch.state() }
     })
   })
-  const plugins = createPluginManager({ profileDir, hostVersion, runtime: pluginRuntime, log: (m) => log.write(m) })
+  const plugins = createPluginManager({ profileDir, hostVersion, runtime: pluginRuntime, log: (m) => log.write(m), calls: pluginCalls })
   // The shared extensions (Agent Control Plane release 1 design §4.3, §4.6): the registry this Host owns
   const extensions = createHostExtensions({
     profileDir,
@@ -1120,6 +1123,7 @@ async function main(): Promise<void> {
     controllers,
     plugins,
     pluginAudit,
+    pluginCalls,
     extensions,
     lsp: { installer: lspInstaller, manager: lspManager },
     agentProfiles,

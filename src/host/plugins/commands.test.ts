@@ -293,8 +293,11 @@ describe('index.ts gives the Host a plugin manager', () => {
     const path = await import('node:path')
     const { fileURLToPath } = await import('node:url')
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts'), 'utf8')
-    expect(src).toMatch(/const plugins = createPluginManager\(\{ profileDir, hostVersion, runtime: pluginRuntime, log: \(m\) => log\.write\(m\) \}\)/)
+    expect(src).toMatch(/const plugins = createPluginManager\(\{ profileDir, hostVersion, runtime: pluginRuntime, log: \(m\) => log\.write\(m\), calls: pluginCalls \}\)/)
     expect(src).toMatch(/createHostOrch\(\{[\s\S]*?\n    plugins,\n/)
+    // Phase 2 remaining (Plugin Inspector): the one counter the orch counts on and the manager answers from
+    expect(src).toMatch(/const pluginCalls = createPluginCalls\(\)/)
+    expect(src).toMatch(/createHostOrch\(\{[\s\S]*?\n    pluginCalls,\n/)
   })
   // Phase 2 gate, spec E3 "audit": one log in the plugins folder, for the runtime and the orch, written out on the way out
   it('gives the plugin runtime and the orch one audit log in the plugins folder, flushed when the Host leaves', async () => {

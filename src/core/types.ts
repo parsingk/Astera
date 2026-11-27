@@ -2226,6 +2226,10 @@ export interface PluginsApi {
   setEnabled(id: string, enabled: boolean): Promise<PluginsCallAnswer>
   remove(id: string): Promise<PluginsCallAnswer>
   logs(id: string, lines: number): Promise<PluginsCallAnswer>
+  /** The Plugin Inspector (Phase 2 remaining): one plugin with its call counts, its checks, its recent records. */
+  get(id: string): Promise<PluginsCallAnswer>
+  doctor(id: string): Promise<PluginsCallAnswer>
+  audit(id: string, lines: number): Promise<PluginsCallAnswer>
   settings(id: string): Promise<PluginsCallAnswer>
   configure(id: string, set: Record<string, string | boolean>, unset: string[]): Promise<PluginsCallAnswer>
 }

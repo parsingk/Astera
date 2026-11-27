@@ -5,6 +5,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
 import { Select } from './Select'
+import { PluginInspector } from './PluginInspector'
 import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel, trustClass, trustLabel } from './pluginsText'
 import { createPluginsPoller, installBlocked, installHolds, keepOnly } from './pluginsList'
 
@@ -48,7 +49,9 @@ export function PluginsSettings(): React.JSX.Element {
   const [installingFrom, setInstallingFrom] = useState<'folder' | 'npm'>('folder')
   /** Plugins with a change in flight. */
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
-  const [open, setOpen] = useState<Record<string, 'settings' | 'logs'>>({})
+  const [open, setOpen] = useState<Record<string, 'settings' | 'logs' | 'inspect'>>({})
+  /** Bumped each time a plugin's Inspector opens, so it reads the plugin afresh (Phase 2 remaining). */
+  const [inspectNonce, setInspectNonce] = useState(0)
   const [shown, setShown] = useState<Record<string, Shown>>({})
   /** What the person typed, by plugin: kept across the list's refreshes until it is saved (review focus 5). */
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
@@ -205,9 +208,10 @@ export function PluginsSettings(): React.JSX.Element {
     if (!r.ok) return void toast.error(failureLine(r, t, { read: true }))
     setLogs((l) => ({ ...l, [id]: list(r.body.lines) }))
   }
-  const toggleOpen = (id: string, what: 'settings' | 'logs'): void => {
+  const toggleOpen = (id: string, what: 'settings' | 'logs' | 'inspect'): void => {
     if (open[id] === what) return setOpen((o) => without(o, id))
     setOpen((o) => ({ ...o, [id]: what }))
+    if (what === 'inspect') return setInspectNonce((n) => n + 1)
     void (what === 'settings' ? readShown(id) : readLogs(id))
   }
 
@@ -287,6 +291,7 @@ export function PluginsSettings(): React.JSX.Element {
               onStartAgain={() => void change(id, () => window.api.plugins.setEnabled(id, true))}
               onRemove={() => void remove(p)}
               onLogs={() => toggleOpen(id, 'logs')}
+              onInspect={() => toggleOpen(id, 'inspect')}
             />
             {open[id] === 'settings' && view && (
               <PluginSettingsForm
@@ -310,6 +315,7 @@ export function PluginsSettings(): React.JSX.Element {
               />
             )}
             {open[id] === 'logs' && <PluginLogs lines={logs[id] ?? null} onRefresh={() => void readLogs(id)} />}
+            {open[id] === 'inspect' && <PluginInspector id={id} nonce={inspectNonce} />}
           </div>
         )
       })}
@@ -325,7 +331,8 @@ export function PluginCard({
   onToggle,
   onStartAgain,
   onRemove,
-  onLogs
+  onLogs,
+  onInspect
 }: {
   plugin: Record<string, unknown>
   /** A change to it, or an install, is in flight: its buttons wait, Logs too, since a read would wait behind it. */
@@ -336,6 +343,8 @@ export function PluginCard({
   onStartAgain: () => void
   onRemove: () => void
   onLogs: () => void
+  /** Opens the Plugin Inspector (Phase 2 remaining); absent: no button. */
+  onInspect?: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const id = str(plugin.id)
@@ -390,6 +399,11 @@ export function PluginCard({
         <button className="settings-gen-refresh" disabled={busy} onClick={onLogs}>
           {t('settings.plugins.logs')}
         </button>
+        {onInspect && (
+          <button className="settings-gen-refresh" disabled={busy} onClick={onInspect}>
+            {t('settings.plugins.inspect')}
+          </button>
+        )}
         <button className="ghost danger" disabled={busy} onClick={onRemove}>
           {t('settings.plugins.remove')}
         </button>

@@ -5309,6 +5309,9 @@ export function registerIpc(
     return answer
   })
   ipcMain.handle('plugins.logs', (_e, id: unknown, lines: unknown) => plugins.logs(id as string, lines as number))
+  ipcMain.handle('plugins.get', (_e, id: unknown) => plugins.get(id as string))
+  ipcMain.handle('plugins.doctor', (_e, id: unknown) => plugins.doctor(id as string))
+  ipcMain.handle('plugins.audit', (_e, id: unknown, lines: unknown) => plugins.audit(id as string, lines as number))
   ipcMain.handle('plugins.settings', (_e, id: unknown) => plugins.settings(id as string))
   ipcMain.handle('plugins.configure', (_e, id: unknown, set: unknown, unset: unknown) =>
     plugins.configure(id as string, set as Record<string, string | boolean>, unset as string[])

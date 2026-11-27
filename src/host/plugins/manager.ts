@@ -7,6 +7,7 @@ import path from 'node:path'
 import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
 import { readPackage } from './packageFile'
+import type { PluginCalls } from '../../core/plugins/pluginCalls'
 import { parseNpmSpec } from '../../core/plugins/npmSpec'
 import { NpmFailed, NpmMissing, createNpm, installDependencies, packAndExtract, type NpmRun, type NpmRunner } from './npm'
 import { NpmUnavailable } from './ownNpm'
@@ -144,6 +145,8 @@ export function createPluginManager(d: {
   runtime?: Pick<PluginRuntime, 'start' | 'restart' | 'stop' | 'status' | 'forget'>
   /** The Host's log: what no caller is there to hear, such as plugins that could not be started at the Host's start. */
   log?: (m: string) => void
+  /** A plugin's Host command calls and refusals since the Host started (Phase 2 remaining, Plugin Inspector). */
+  calls?: Pick<PluginCalls, 'of' | 'forget'>
 }): PluginManager {
   const root = pluginsRoot(d.profileDir)
   // The copies live one level down, so no plugin name can be plugins.json or one of the folders the Host keeps for
@@ -855,6 +858,7 @@ export function createPluginManager(d: {
     // Its log goes with it, the rotated generation too: nothing can read it once the plugin is gone. Let go of first, so
     // a line still buffered cannot write it again.
     await d.runtime?.forget(r.folder)
+    d.calls?.forget(r.id)
     const log = pluginLogFile(d.profileDir, r.folder)
     await Promise.all([fs.rm(log, { force: true }), fs.rm(`${log}.1`, { force: true })]).catch(() => {})
     // And its settings and secrets (spec §23: a plugin's secrets are its own, and go with it). What cannot be deleted is
@@ -891,7 +895,9 @@ export function createPluginManager(d: {
     get: (id) =>
       serial(async () => {
         const want = idOf('plugins-get', id)
-        return { status: 200, body: await view(find(await readRegistry(root), want)) }
+        const r = find(await readRegistry(root), want)
+        // The counts ride on one plugin's answer only: the list main watches would otherwise change with every call
+        return { status: 200, body: { ...(await view(r)), ...(d.calls ? { calls: d.calls.of(r.id) } : {}) } }
       }),
     setEnabled: (id, enabled) => serial(() => setEnabled(id, enabled)),
     remove: (id) => serial(() => remove(id)),

@@ -4006,3 +4006,15 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .kube-forward-actions { text-align: right; white-space: nowrap; }
 .kube-forward-actions .icon-btn { display: inline-grid; width: 22px; height: 22px; }
 .kube-forward-slot { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
+
+/* The Plugin Inspector (Phase 2 remaining): facts in two columns, then short lists */
+.plugin-inspector { padding: 8px 12px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.plugin-inspector h4 { margin: 6px 0 0; font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: none; }
+.plugin-inspector ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+.plugin-inspector-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+.plugin-inspector-facts dt { color: var(--text-dim); }
+.plugin-inspector-facts dd { margin: 0; overflow-wrap: anywhere; }
+.plugin-inspector-dim { color: var(--text-faint); }
+.plugin-inspector .is-refused { color: var(--danger); }
+.plugin-inspector .is-warn { color: var(--warn); }
+.plugin-inspector-audit { max-height: 200px; overflow-y: auto; }

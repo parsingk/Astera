@@ -48,7 +48,20 @@ describe('the plugins route (plugin runtime design P5, slice 2d)', () => {
 
   // 2d final review M8: only the commands the tab uses (design P5), nothing a renderer could reach beyond them.
   it('offers exactly the commands Settings › Plugins uses', () => {
-    expect(Object.keys(host().route).sort()).toEqual(['configure', 'inspect', 'install', 'list', 'logs', 'remove', 'setEnabled', 'settings'])
+    expect(Object.keys(host().route).sort()).toEqual(['audit', 'configure', 'doctor', 'get', 'inspect', 'install', 'list', 'logs', 'remove', 'setEnabled', 'settings'])
+  })
+
+  // Phase 2 remaining: the Plugin Inspector reads one plugin, its checks and its recent records, as reads
+  it('sends the Inspector’s reads as the Host’s get, doctor and audit, with no change deadline', async () => {
+    const { route, sent } = host()
+    await route.get('hello-panel')
+    await route.doctor('hello-panel')
+    await route.audit('hello-panel', 50)
+    expect(sent.map((m) => [m.cmd, m.args, m.timeoutMs])).toEqual([
+      ['plugins-get', { id: 'hello-panel' }, undefined],
+      ['plugins-doctor', { id: 'hello-panel' }, undefined],
+      ['plugins-audit', { id: 'hello-panel', lines: 50 }, undefined]
+    ])
   })
 
   // Plugins 2e: a package on npm is a source beside a folder, and its inspect downloads, so it waits as a change does.

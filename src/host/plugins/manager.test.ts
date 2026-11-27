@@ -10,6 +10,7 @@ import { pluginsRoot, readRegistry, writeRegistry } from './registry'
 import { pluginSecrets } from './pluginData'
 import { NpmMissing, type NpmRun } from './npm'
 import { NpmUnavailable } from './ownNpm'
+import type { PluginCallCounts } from '../../core/plugins/pluginCalls'
 import { tgzOf } from './tarballFixture'
 
 /** A Host from before plugin Phase 5, which serves every capability but completion-check: what an unserved one does. */
@@ -418,6 +419,23 @@ describe('get, enable, disable, remove', () => {
     expect(await manager.setEnabled('', true)).toEqual({ status: 400, body: { error: 'plugins-enable needs --id' } })
     expect(await manager.setEnabled(3, false)).toEqual({ status: 400, body: { error: 'plugins-disable needs --id' } })
     expect(await manager.remove(undefined)).toEqual({ status: 400, body: { error: 'plugins-remove needs --id' } })
+  })
+})
+
+// Phase 2 remaining (Plugin Inspector): a plugin's calls ride on plugins-get only, so the list main watches does not
+// change with every call
+describe('plugins-get calls', () => {
+  it('answers the call counts with one plugin, never in the list', async () => {
+    const forgotten: string[] = []
+    const calls = { of: (id: string): PluginCallCounts => (id === '@acme/astera-jira' ? { 'jobs-list': { ok: 3, refused: 1 } } : {}), forget: (id: string) => void forgotten.push(id) }
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', now: () => clock, calls })
+    await m.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    expect((await m.get('@acme/astera-jira')).body).toMatchObject({ calls: { 'jobs-list': { ok: 3, refused: 1 } } })
+    const list = (await m.list()).body as { plugins: Record<string, unknown>[] }
+    expect(list.plugins[0]).not.toHaveProperty('calls')
+    // A plugin removed takes its counts along: one installed again starts from none
+    await m.remove('@acme/astera-jira')
+    expect(forgotten).toEqual(['@acme/astera-jira'])
   })
 })
 

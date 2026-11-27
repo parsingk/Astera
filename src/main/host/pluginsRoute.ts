@@ -56,6 +56,9 @@ export function createPluginsRoute(d: { call: Call }): PluginsApi {
     setEnabled: (id, enabled) => send(enabled ? 'plugins-enable' : 'plugins-disable', { id }, true),
     remove: (id) => send('plugins-remove', { id }, true),
     logs: (id, lines) => send('plugins-logs', { id, lines }),
+    get: (id) => send('plugins-get', { id }),
+    doctor: (id) => send('plugins-doctor', { id }),
+    audit: (id, lines) => send('plugins-audit', { id, lines }),
     settings: (id) => send('plugins-settings', { id }),
     configure: (id, set, unset) => send('plugins-configure', { id, set, unset }, true)
   }
