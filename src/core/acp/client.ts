@@ -28,7 +28,10 @@ export class AcpFailure extends Error {
 
 export interface AcpTurn {
   stopReason: string
+  /** Everything the agent said in the turn, for a transcript and a reviewer's verdict. */
   text: string
+  /** Its last message: what it said after its last tool call (Phase 5 A1). What came before is narration. */
+  finalText: string
 }
 
 /** A permission request as a worker's caller decides it (Phase 5 A1). */
@@ -90,16 +93,23 @@ export async function openAcpSession(a: {
   let ended = false
   let sessionId = ''
   /** The message being collected, or null while no prompt is in flight; `size` is the characters held in `parts`. */
-  let turnText: { parts: string[]; size: number } | null = null
+  let turnText: { parts: string[]; size: number; last: string[]; lastSize: number } | null = null
   /** Adds a chunk; past twice the cap the parts are joined and cut to the cap's tail, so an agent that never stops talking
    *  costs at most that much (final fix wave D2). */
-  const collect = (t: { parts: string[]; size: number }, chunk: string): void => {
+  const collect = (t: { parts: string[]; size: number; last: string[]; lastSize: number }, chunk: string): void => {
     t.parts.push(chunk)
     t.size += chunk.length
     if (t.size > 2 * TURN_TEXT_MAX) {
       const kept = t.parts.join('').slice(-TURN_TEXT_MAX)
       t.parts = [kept]
       t.size = kept.length
+    }
+    t.last.push(chunk)
+    t.lastSize += chunk.length
+    if (t.lastSize > 2 * TURN_TEXT_MAX) {
+      const kept = t.last.join('').slice(-TURN_TEXT_MAX)
+      t.last = [kept]
+      t.lastSize = kept.length
     }
   }
   const calls = new Map<string, { kind?: string; title?: string }>()
@@ -153,7 +163,14 @@ export async function openAcpSession(a: {
     if (kind === 'agent_message_chunk') {
       const c = obj(u.content)
       if (turnText && c?.type === 'text' && typeof c.text === 'string') collect(turnText, c.text)
-    } else if (kind === 'tool_call' || kind === 'tool_call_update') onToolCall(u)
+    } else if (kind === 'tool_call' || kind === 'tool_call_update') {
+      // What the agent said before a tool call is its narration: the last message starts after its last tool call
+      if (turnText && turnText.lastSize > 0) {
+        turnText.last = []
+        turnText.lastSize = 0
+      }
+      onToolCall(u)
+    }
     else log(`session/update ${(kind ?? 'unknown').slice(0, 60)}`)
   })
 
@@ -221,11 +238,15 @@ export async function openAcpSession(a: {
       agent,
       capabilities,
       async prompt(text) {
-        const collected = { parts: [] as string[], size: 0 }
+        const collected = { parts: [] as string[], size: 0, last: [] as string[], lastSize: 0 }
         turnText = collected
         try {
           const r = obj(await call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }))
-          return { stopReason: str(r?.stopReason) ?? 'unknown', text: collected.parts.join('').slice(-TURN_TEXT_MAX) }
+          return {
+            stopReason: str(r?.stopReason) ?? 'unknown',
+            text: collected.parts.join('').slice(-TURN_TEXT_MAX),
+            finalText: collected.last.join('').slice(-TURN_TEXT_MAX)
+          }
         } catch (e) {
           if (e instanceof AcpFailure) throw e
           throw new AcpFailure('protocol', e instanceof Error ? e.message : String(e))

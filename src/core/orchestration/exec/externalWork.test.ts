@@ -175,6 +175,22 @@ describe('external agent work', () => {
     expect(r.dispatch(id).outcome).toBe('failed')
   })
 
+  it('reads the report from the agent’s last message, not from what it said before its tool calls', async () => {
+    const r = rig({ mode: 'narrates-then-fails' })
+    const id = await r.start()
+    await until(() => r.task().status === 'failed', 'the Task to fail')
+    const done = r.state().messages.find((m) => m.type === 'worker_done' && m.dispatchId === id)!
+    expect(done.subject).toBe('FAILED: a.txt is missing')
+    expect(done.body).not.toContain('I will look')
+    expect(r.transcript.some((l) => l.includes('I will look at the files first.'))).toBe(true)
+  })
+
+  it('a first line that only starts like a failure is no failure: the mark is FAILED: as the brief writes it', async () => {
+    const r = rig({ mode: 'approve', agentArgs: ['--message', 'Failed: 0, passed: 12'] })
+    await r.start()
+    await until(() => r.task().status === 'completed', 'the Task to complete')
+  })
+
   it('a crash ends the Dispatch unproven and puts the Task to a person, who answers to have it worked again', async () => {
     const r = rig({ mode: 'exit-mid-turn' })
     const id = await r.start()

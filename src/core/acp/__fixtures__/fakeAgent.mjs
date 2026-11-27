@@ -106,6 +106,13 @@ async function runPrompt(id) {
       return reply(id, { stopReason })
     case 'no-verdict-twice':
       return finish(id, message ?? 'no verdict yet')
+    case 'narrates-then-fails':
+      // As a real agent: it says what it does before a tool call, then ends with its own report (Phase 5 A1 final review C1)
+      chunk('I will look at the files first.')
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'read', status: 'pending', title: 'Read a.txt' })
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' })
+      chunk('FAILED: a.txt is missing')
+      return finish(id, ['', 'Nothing was changed.'].join(String.fromCharCode(10)))
     case 'works': {
       // A worker (Phase 5 A1): asks before it writes work.txt in its folder, writes it only when allowed
       update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'edit', status: 'pending', title: 'Edit work.txt' })

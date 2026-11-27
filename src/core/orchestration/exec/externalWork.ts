@@ -31,7 +31,7 @@ const AGENT_TEXT_IN_REASON = 300
 /** The report's subject is the first line of the agent's message, cut here. */
 const SUBJECT_MAX = 120
 /** The first line of a message that says the agent could not finish (the brief asks for it). */
-const FAILED_MARK = /^\s*FAILED:/i
+const FAILED_MARK = /^\s*FAILED:/
 
 export interface ExternalWorkDeps extends ExternalReviewDeps {
   /** The app-wide `agentPermissionMode`, read at each permission request: `yolo` allows, `manual` asks the person. */
@@ -355,7 +355,8 @@ export function createExternalWorks(c: {
       // The turn is the work: the process has nothing more to do and is ended before the report
       stop()
       if (dropped()) return
-      const text = turn.text.trim()
+      // The report is the agent's last message, after its last tool call: what it said before is narration (C1)
+      const text = turn.finalText.trim()
       const first = text.split(/\r?\n/, 1)[0] ?? ''
       const failed = FAILED_MARK.test(first)
       let reply: { status: number; body: unknown }
