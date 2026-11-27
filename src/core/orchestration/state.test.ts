@@ -4630,6 +4630,16 @@ describe('closeOrphanedExternalReviews and external work', () => {
     expect(r.closed).toEqual(['b'])
   })
 
+  it('a Run started from a Job copies the external agent of each planned Task', () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const planned = createTask(job.state, { jobId: job.value.id, title: 'T', spec: 's', deps: [], externalAgentId: 'ext_0a1b2c3d' } as never, NOW)
+    if (!planned.ok) throw new Error(planned.error)
+    const run = startJobRun(planned.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    expect(run.state.tasks.find((t) => t.runId === run.value.id)?.externalAgentId).toBe('ext_0a1b2c3d')
+  })
+
   it('puts the Task of a closed external work to a person, who answers to have it worked again', () => {
     const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
     if (!job.ok) throw new Error(job.error)

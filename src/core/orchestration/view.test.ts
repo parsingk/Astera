@@ -1315,4 +1315,17 @@ describe('snapshotFor: an external agent working a Task (Phase 5 A1)', () => {
     expect(t.provider).toBe('claude')
     expect(t.externalAgent).toEqual({ id: 'ext_0a1b2c3d', name: 'OpenCode' })
   })
+
+  it('carries the permission request the agent waits on for the person, and drops it once answered', () => {
+    const base: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [{ ...task('t1', 'r1', 'dispatched'), externalAgentId: 'ext_0a1b2c3d' }]),
+      dispatches: [{ ...dispatch('d1', 't1', 'acp:work-0a0b0c0d', '2026-08-18T01:00:00.000Z'), accountId: '', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } }]
+    }
+    const q = { id: 'msg_q1', runId: 'r1', type: 'question' as const, taskId: 't1', dispatchId: 'd1', subject: 'Edit a', body: 'Edit a (edit)', options: ['Yes', 'No'], answered: false, createdAt: '2026-08-18T01:00:01.000Z' }
+    const asked = snapshotFor({ ...base, messages: [q] }, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+    expect(asked.externalAgentId).toBe('ext_0a1b2c3d')
+    expect(asked.permissionAsk).toEqual({ id: 'msg_q1', question: 'Edit a (edit)', options: ['Yes', 'No'] })
+    const answered = snapshotFor({ ...base, messages: [{ ...q, answered: true, answerBody: 'Yes' }] }, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+    expect('permissionAsk' in answered).toBe(false)
+  })
 })

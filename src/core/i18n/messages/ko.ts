@@ -3061,6 +3061,10 @@ export const ko = {
   // 읽혔다 — 실제로 하는 일은 Task 를 blocked 로 내려 시작을 막고 그것을 되돌리는 것이고,
   // 화면에서 만든 Run 에는 그 글을 읽는 코디네이터가 아예 없다. 코디네이터가 있는 Run 에서는
   // 여전히 질문으로 읽히므로 잃는 것이 없다(가이드: a decision block for deciding the task DAG)
+  'jobs.permissionAsk.meta': '{agent} 권한 요청을 기다림',
+  'jobs.permissionAsk.title': '권한 요청',
+  'jobs.permissionAsk.who': '{agent} 에이전트가 {task} 작업 중에 허락을 기다립니다. 고른 답이 에이전트에게 그대로 갑니다.',
+  'jobs.permissionAsk.failed': '답을 보내지 못했습니다',
   'jobs.node.gateQuestion': '왜 세워 두는지',
   'jobs.node.failed': '이 동작을 하지 못했습니다',
   'jobs.node.stopFailed': '워커를 멈추지 못했습니다: {detail}',

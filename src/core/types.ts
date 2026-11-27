@@ -608,6 +608,11 @@ export interface JobTask {
   /** The open Dispatch is an external agent working this Task (Phase 5 A1): its `provider` is a placeholder, so a surface
    *  that draws the provider draws this name instead (its id until the run reads the registry). */
   externalAgent?: { id: string; name: string }
+  /** The external agent this Task names to work it (Phase 5 A1), set whether or not it runs now. */
+  externalAgentId?: string
+  /** The permission request the external agent working this Task waits on (Phase 5 A1), for the person to answer with
+   *  one of its options (`reply`). Only while it is unanswered and its Dispatch open. */
+  permissionAsk?: { id: string; question: string; options?: string[] }
   /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
   startedAt?: string
   /** 지금 멈춰 있으면 그 계정과 정지 사유, 그리고 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에

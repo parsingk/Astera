@@ -108,6 +108,8 @@ export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
     case 'external-reviewer':
     case 'external-agent':
       return reviewerChipName(m.name)
+    case 'permission-ask':
+      return t('jobs.permissionAsk.meta', { agent: reviewerChipName(m.name) })
     case 'none':
       return undefined
     default: {

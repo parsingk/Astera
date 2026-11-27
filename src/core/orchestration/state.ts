@@ -395,6 +395,8 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.agentProfileId !== undefined ? { agentProfileId: t.agentProfileId } : {}),
+    // Phase 5 A1: the external agent a planned Task names works every Run's copy of it
+    ...(t.externalAgentId !== undefined ? { externalAgentId: t.externalAgentId } : {}),
     ...(t.sandboxed ? { sandboxed: true as const } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
