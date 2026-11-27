@@ -11,7 +11,7 @@ import type { Dispatch } from '../../../core/orchestration/types'
 import type { DiffFinding } from '../../../core/review/types'
 import type { OrchDoor } from '../lib/orchDoor'
 import { changesView, type ChangesView } from '../lib/changesView'
-import { attemptLabel, attributionBadge, attributionTitle, rangeLabel } from '../lib/agentReview'
+import { attemptLabel, attributionBadge, attributionTitle, partRangeLabel } from '../lib/agentReview'
 import { useI18n } from '../i18n/I18nProvider'
 import { DiffView } from './DiffView'
 import { Select } from './Select'
@@ -28,6 +28,7 @@ export function ChangedFilesBlock({
   runId,
   taskId,
   reviewOn,
+  taskTitleOf,
   onDraftRepair,
   onFixFinding
 }: {
@@ -36,10 +37,13 @@ export function ChangedFilesBlock({
   taskId?: string
   /** The agent-aware review's switch (workspaceFeatures.agentReview): the attempt selector and the badges. */
   reviewOn: boolean
+  /** A Task's title, to name a Run's Task part's range (final review M11). */
+  taskTitleOf?: (taskId: string) => string | undefined
   /** A hunk of a shown diff to a repair Job draft (spec W4): the file's path, its diff, and the hunk's row. */
   onDraftRepair?: (file: string, diff: string, rowIndex: number) => void
-  /** A review finding's fix button (Phase 3 Part 4): Part 1's repair request on its Task. Absent: no buttons. */
-  onFixFinding?: (f: DiffFinding) => void
+  /** A review finding's fix button (Phase 3 Part 4): Part 1's repair request on its Task, with the diff's path for the
+   *  draft offered when the Task cannot take one. Absent: no buttons. */
+  onFixFinding?: (f: DiffFinding, path: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -54,7 +58,7 @@ export function ChangedFilesBlock({
   const doorRef = useRef(door)
   doorRef.current = door
   /** Which Run, Task and attempt the block shows now: a diff that answers after another was chosen is dropped (review). */
-  const scope = `${runId} ${taskId ?? ''} ${attempt ?? ''}`
+  const scope = `${runId} ${taskId ?? ''} ${attempt ?? ''} ${reviewOn}`
   const scopeRef = useRef(scope)
   scopeRef.current = scope
 
@@ -66,6 +70,11 @@ export function ChangedFilesBlock({
     setAttempts(null)
     setAttempt(null)
   }, [runId, taskId])
+
+  // The switch turned: an open diff asked with or without findings is dropped (final review M9)
+  useEffect(() => {
+    setDiff(null)
+  }, [reviewOn])
 
   // The Task's attempts, for the selector, read when it opens with the review on
   useEffect(() => {
@@ -167,10 +176,12 @@ export function ChangedFilesBlock({
           {reviewOn && (reply.ranges ?? []).length > 0 && (
             <p className="modal-hint changed-files-ranges">
               {reply.ranges!.map((r, i) => (
-                <span key={i}>{rangeLabel(t, r)}</span>
+                <span key={i}>{partRangeLabel(t, r, r.taskId !== undefined ? taskTitleOf?.(r.taskId) : undefined)}</span>
               ))}
             </p>
           )}
+          {/* The limit the person decided to state (2026-11-27), on screen and not only in each badge's title (final review M7) */}
+          {reviewOn && reply.attribution !== undefined && <p className="modal-hint changed-files-limit">{t('agentReview.limit')}</p>}
           {reply.git === null ? (
             <p className="modal-hint">{t(reply.unavailable === 'not-recorded' ? 'jobs.changes.notRecorded' : 'jobs.changes.gitFailed')}</p>
           ) : files!.length === 0 ? (
@@ -216,7 +227,7 @@ export function ChangedFilesBlock({
                             binary={f.binary === true}
                             onDraftRepair={onDraftRepair ? (i) => onDraftRepair(f.path, diff.diff, i) : undefined}
                             findings={diff.findings}
-                            onFixFinding={onFixFinding}
+                            onFixFinding={onFixFinding ? (x) => onFixFinding(x, f.path) : undefined}
                           />
                         )}
                       </div>

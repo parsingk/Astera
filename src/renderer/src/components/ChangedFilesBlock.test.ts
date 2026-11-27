@@ -22,9 +22,16 @@ describe('ChangedFilesBlock and the agent-aware review (Phase 3 Part 4)', () => 
   })
 
   it('names the ranges read and badges each file with who changed it', () => {
-    expect(src).toMatch(/rangeLabel\(t, r\)/)
     expect(src).toMatch(/className=\{`changed-file-attr is-\$\{badge\.tone\}`\}/)
     expect(src).toMatch(/title=\{attributionTitle\(t, a\)\}/)
+  })
+
+  // Final review M7, M9, M11: the limit on screen, the switch turned off drops an open diff's findings, Task parts named
+  it('says the limit under the ranges, drops an open diff when the switch turns, and names each Task part’s range', () => {
+    expect(src).toMatch(/<p className="modal-hint changed-files-limit">\{t\('agentReview\.limit'\)\}<\/p>/)
+    expect(src).toMatch(/const scope = `\$\{runId\} \$\{taskId \?\? ''\} \$\{attempt \?\? ''\} \$\{reviewOn\}`/)
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*setDiff\(null\)\s*\}, \[reviewOn\]\)/)
+    expect(src).toMatch(/partRangeLabel\(t, r, r\.taskId !== undefined \? taskTitleOf\?\.\(r\.taskId\) : undefined\)/)
   })
 
   it('falls back to the Task’s list when a runtime does not echo the attempt', () => {

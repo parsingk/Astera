@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { t as translate, type MessageKey, type MessageParams } from '../../../core/i18n'
 import type { Dispatch } from '../../../core/orchestration/types'
 import type { FileAttribution } from '../../../core/review/types'
-import { attemptLabel, attributionBadge, attributionTitle, findingsByLine, rangeLabel, shortSha } from './agentReview'
+import { attemptLabel, attributionBadge, attributionTitle, findingRow, findingsByLine, partRangeLabel, rangeLabel, shortSha } from './agentReview'
 import type { DiffFinding } from '../../../core/review/types'
 
 // Phase 3 Part 4: the words of the changed-files block's attempt selector, named range and attribution badges
@@ -60,5 +60,28 @@ describe('findingsByLine', () => {
     ])
     expect(got.otherRevision.map((x) => x.ref)).toEqual(['b'])
     expect(got.file.map((x) => x.ref)).toEqual(['d'])
+  })
+})
+
+// Final review M4, M11, M14, M8: the words added by the fix pass
+describe('agentReview words after the final review', () => {
+  it('says why a file is unknown when some attempt was not read', () => {
+    expect(attributionTitle(en, { kind: 'unknown', why: 'unread', evidence: [] })).toContain(en('agentReview.why.unread'))
+  })
+
+  it('names a Task part’s range with its Task, and a range of no part plainly', () => {
+    const r = { base: 'aaaaaaa1111', head: 'bbbbbbb2222' }
+    expect(partRangeLabel(en, { ...r, taskId: 't2' }, 'second task')).toBe(en('agentReview.range.task', { task: 'second task', range: rangeLabel(en, r) }))
+    expect(partRangeLabel(en, r)).toBe(rangeLabel(en, r))
+  })
+
+  it('says in its limit that changes merged into a range are not told apart either', () => {
+    expect(en('agentReview.limit')).toMatch(/merged/)
+  })
+
+  it('makes a diff finding a Problems row for a new Job draft, in the project', () => {
+    const f = { ref: 'review:t1:x', taskId: 't1', title: 'b is wrong', text: 'error src/a.ts:2 Review: b is wrong', severity: 'high' as const, line: 2, state: 'open' as const, history: [], placement: 'file' as const }
+    expect(findingRow(f, 'F:\\proj', 'src/a.ts')).toMatchObject({ source: { kind: 'review' }, severity: 'error', message: 'b is wrong', path: 'F:\\proj/src/a.ts', root: 'F:\\proj', line: 2 })
+    expect(findingRow({ ...f, severity: 'low' }, 'F:\\proj', 'src/a.ts').severity).toBe('info')
   })
 })

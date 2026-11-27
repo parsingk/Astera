@@ -76,6 +76,8 @@ export function DiffView({
   const rows = useMemo(() => diffLines(diff), [diff])
   const grouped = useMemo(() => findingsByLine(findings ?? []), [findings])
   const [shown, setShown] = useState(DIFF_ROWS_STEP)
+  /** Findings under rows not shown yet (final review M10). */
+  const below = rows.slice(shown).reduce((n, r) => n + (r.kind !== 'del' && r.newNo !== undefined ? (grouped.inline.get(r.newNo)?.length ?? 0) : 0), 0)
   return (
     <div className="diff-view">
       {binary && <p className="modal-hint">{t('jobs.changes.binaryDiff')}</p>}
@@ -122,6 +124,7 @@ export function DiffView({
           })}
         </tbody>
       </table>
+      {below > 0 && <p className="modal-hint">{t('agentReview.finding.below', { count: below })}</p>}
       {rows.length > shown && (
         <button type="button" className="detail-completion-head diff-more" onClick={() => setShown((n) => n + DIFF_ROWS_STEP)}>
           {t('jobs.changes.moreRows', { count: Math.min(DIFF_ROWS_STEP, rows.length - shown), left: rows.length - shown })}

@@ -262,7 +262,7 @@ export function RunDetail({
   reviewOn: boolean
   /** A review finding's fix button on the diff (Phase 3 Part 4), with the Job and Task named for the confirmation. This
    *  computer's Runs only, with sending to an agent on. */
-  onFixFinding?: (f: DiffFinding, names: { job: string; task: string }) => void
+  onFixFinding?: (f: DiffFinding, path: string, names: { job: string; task: string }) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   /** Why the controls are off: a read-only pairing (Phase 7). They are drawn disabled with it as their title, and it
@@ -1250,7 +1250,7 @@ export function RunDetail({
                 )}
                 {/* What the Task, or with none chosen the whole Run, changed (Phase 10): from git where the Run lives,
                     beside what its workers reported. */}
-                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} reviewOn={reviewOn} onDraftRepair={onDraftRepair} onFixFinding={onFixFinding ? (f) => onFixFinding(f, { job: run ? jobName(run) : runId, task: selectedTask?.title ?? f.taskId }) : undefined} />
+                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} reviewOn={reviewOn} onDraftRepair={onDraftRepair} taskTitleOf={(id) => tasks.find((tk) => tk.id === id)?.title} onFixFinding={onFixFinding ? (f, path) => onFixFinding(f, path, { job: run ? jobName(run) : runId, task: tasks.find((tk) => tk.id === f.taskId)?.title ?? f.taskId }) : undefined} />
                 <JournalBusy journal={detail?.journal} />
                 <div className="detail-list">
                   {/* 목록은 오래된 것이 위다 — 더 오래된 저널 줄을 부르는 자리도 맨 위다 */}

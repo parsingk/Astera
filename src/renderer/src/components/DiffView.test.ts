@@ -28,6 +28,11 @@ describe('review findings on the diff (Phase 3 Part 4)', () => {
     expect(src).toMatch(/c\.revision !== undefined && <span className="diff-finding-revision">\{t\('agentReview\.finding\.revision', \{ sha: shortSha\(c\.revision\) \}\)\}<\/span>/)
   })
 
+  // Final review M10: findings under rows not shown yet are said
+  it('says how many findings lie below the rows shown', () => {
+    expect(src).toMatch(/t\('agentReview\.finding\.below', \{ count: below \}\)/)
+  })
+
   it('lists findings of another revision and of the file above the rows', () => {
     expect(src).toMatch(/t\('agentReview\.finding\.otherRevision', \{ head: shortSha\(f\.head \?\? null\) \}\)/)
     expect(src).toMatch(/t\('agentReview\.finding\.file'\)/)
@@ -36,10 +41,14 @@ describe('review findings on the diff (Phase 3 Part 4)', () => {
   it('asks the diff for findings with the switch on, and hands a fix up through the Run detail to App', () => {
     expect(block).toMatch(/\.\.\.\(reviewOn \? \{ findings: true \} : \{\}\)/)
     expect(block).toMatch(/findings=\{diff\.findings\}/)
-    expect(block).toMatch(/onFixFinding=\{onFixFinding\}/)
-    expect(runDetail).toMatch(/onFixFinding=\{onFixFinding \? \(f\) => onFixFinding\(f, \{ job: run \? jobName\(run\) : runId, task: selectedTask\?\.title \?\? f\.taskId \}\) : undefined\}/)
+    expect(block).toMatch(/onFixFinding=\{onFixFinding \? \(x\) => onFixFinding\(x, f\.path\) : undefined\}/)
+    // Final review M8: the Task named by its own title in a Run's scope too
+    expect(runDetail).toMatch(/onFixFinding=\{onFixFinding \? \(f, path\) => onFixFinding\(f, path, \{ job: run \? jobName\(run\) : runId, task: tasks\.find\(\(tk\) => tk\.id === f\.taskId\)\?\.title \?\? f\.taskId \}\) : undefined\}/)
+    expect(runDetail).toMatch(/taskTitleOf=\{\(id\) => tasks\.find\(\(tk\) => tk\.id === id\)\?\.title\}/)
     // Only with sending to an agent on as well (Part 1's switch): it is a repair request, this computer's Runs only
-    expect(app).toMatch(/\.\.\.\(contextOn && workspaceFeatures\?\.agentReview === true\s*\? \{\s*onFixFinding: \(f: DiffFinding, names: \{ job: string; task: string \}\) =>/)
+    expect(app).toMatch(/\.\.\.\(contextOn && workspaceFeatures\?\.agentReview === true\s*\? \{\s*onFixFinding: \(f: DiffFinding, path: string, names: \{ job: string; task: string \}\) =>/)
+    // Final review M8: a refusal offers a new Job draft, as Part 1's flow does
+    expect(app).toMatch(/problemsObjective\(\[findingRow\(f, openRun\.projectPath, path\)\], openRun\.projectPath\)/)
     expect(app).toMatch(/requestRepair\(\s*openRun\.projectPath,\s*\{ task: f\.taskId, finding: \[f\.ref\], texts: \{ \[f\.ref\]: f\.text \} \}/)
   })
 })

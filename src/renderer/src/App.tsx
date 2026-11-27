@@ -38,6 +38,7 @@ import { logContext, problemsContext, selectionContext } from './lib/contextSour
 import { problemsObjective } from './lib/problemsDraft'
 import { repairAnswer, repairRequestOf, type RepairRequest } from './lib/problemsRepair'
 import type { DiffFinding } from '../../core/review/types'
+import { findingRow } from './lib/agentReview'
 import { dismissGroups } from './lib/findingStates'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
@@ -7124,15 +7125,20 @@ export default function App(): React.JSX.Element {
                     }
                   : {}),
                 // A review finding on the diff fixed through its Task's repair request (Phase 3 Part 4), with sending to an
-                // agent on as well; a refusal is said in its own words
+                // agent on as well; a refusal says why and offers a new Job draft, as Part 1's flow does (final review M8)
                 ...(contextOn && workspaceFeatures?.agentReview === true
                   ? {
-                      onFixFinding: (f: DiffFinding, names: { job: string; task: string }) =>
+                      onFixFinding: (f: DiffFinding, path: string, names: { job: string; task: string }) =>
                         void requestRepair(
                           openRun.projectPath,
                           { task: f.taskId, finding: [f.ref], texts: { [f.ref]: f.text } },
                           { ...names, count: 1 },
-                          async (key) => void toast.error(t(key))
+                          async (key) => {
+                            const ok = await confirmModal({ title: t('problems.fix.cannotTitle'), body: `${t(key)} ${t('problems.fix.offerDraft')}`, confirmLabel: t('problems.fix.draft') })
+                            if (!ok) return
+                            setNewRunDraft(problemsObjective([findingRow(f, openRun.projectPath, path)], openRun.projectPath))
+                            setNewRunOpen(true)
+                          }
                         )
                     }
                   : {})
