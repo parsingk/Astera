@@ -757,6 +757,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [{ name: 'account', value: '<id|label|email>', required: true, about: 'the account to switch to' }]
   },
 
+  'agents-capabilities': {
+    summary: 'what each kind of worker can do: claude, codex, and an external agent over ACP',
+    detail:
+      "One row per kind of worker, with resume (continued after a restart), toolApproval (interactive: in the agent's own terminal; astera: Astera answers by the permission mode, or puts it to the person), structuredStream, limits (usage limits detected), usageMeter, accountRolling, cancel, models and sandbox. A capability a worker lacks is missing, never emulated. An external agent is any agent registered in Settings, Agents, such as OpenCode; it works a Task given --external-agent on tasks add. It needs no Host and no app."
+  },
   'ext-list': {
     summary: 'the extensions shared with every account, and where Astera put their copies',
     detail:

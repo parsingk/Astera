@@ -50,3 +50,12 @@ const FLAGS = ['resume', 'structuredStream', 'limits', 'usageMeter', 'accountRol
 
 /** The capabilities `c` lacks, in a fixed order. */
 export const capabilityGaps = (c: ProviderCapabilities): (typeof FLAGS)[number][] => FLAGS.filter((f) => !c[f])
+
+/** The contract as `astera agents capabilities` prints it: one row per kind of worker. */
+export function capabilityTable(): ({ worker: 'claude' | 'codex' | 'external-agent' } & ProviderCapabilities)[] {
+  return [
+    { worker: 'claude', ...PROVIDER_CAPABILITIES.claude },
+    { worker: 'codex', ...PROVIDER_CAPABILITIES.codex },
+    { worker: 'external-agent', ...EXTERNAL_AGENT_CAPABILITIES }
+  ]
+}

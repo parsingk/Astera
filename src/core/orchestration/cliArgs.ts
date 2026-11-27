@@ -139,6 +139,9 @@ export const NOUNS = {
   // **Answered in the CLI process** (Agent Control Plane release 1 design §4.6): reads the profile's shared extension
   // registry and puts its skills, commands and agents into every account itself (cli/extensions.ts), no Host.
   ext: ['list', 'sync'],
+  // **Answered in the CLI process** (Phase 5 A1): what each kind of worker can do, from the provider contract
+  // (core/providers/capabilities.ts), no Host.
+  agents: ['capabilities'],
   // **Answered by the Host** (Agent Profiles design §6), like `sessions`: its `agent-profiles-*` commands, which the CLI
   // reaches through cli/agentProfiles.ts (a name resolved to the id first, MCP server names to their ids). Changes are
   // refused to an agent's shell, as `ext sync` and the extension changes are. `audit` is the findings (lifecycle design

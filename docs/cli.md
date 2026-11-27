@@ -857,6 +857,7 @@ astera higgsfield use --account <id|label|email>
 
 astera ext     list
 astera ext     sync
+astera agents  capabilities
 
 astera agent-profiles list
 astera agent-profiles show    --id <profileId|name>

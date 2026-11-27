@@ -23,6 +23,7 @@ import { hostStderr } from '../core/host/spawn'
 import { privateIPv4s } from '../core/remote/addresses'
 import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError, workloadTokenFor } from './host'
 import { higgsfieldCommand } from './higgsfield'
+import { capabilityTable } from '../core/providers/capabilities'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
 import { pluginDevCommand } from './pluginDev'
@@ -1461,6 +1462,17 @@ export async function main(): Promise<void> {
     const done = await higgsfieldCommand({ cmd: parsed.cmd, args, profileDir })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, publicFor(parsed.cmd, done.body), mode))
+    process.exit(0)
+  }
+
+  // agents capabilities is answered here too (Phase 5 A1), from the provider contract, no Host and no profile read.
+  if (parsed.cmd === 'agents-capabilities') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    out(renderOk(parsed.cmd, capabilityTable(), mode))
     process.exit(0)
   }
 
