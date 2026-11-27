@@ -300,6 +300,8 @@ export interface Task {
   readonly result?: string
   readonly filesModified?: readonly string[]
   readonly accountIds?: readonly string[]
+  /** The external agent that works this Task instead of accounts (an `ext_` id from Settings, Agents). */
+  readonly externalAgentId?: string
   readonly validateConfigId?: string
   readonly validateConfigIds?: readonly string[]
   readonly checks?: readonly CheckResult[]
