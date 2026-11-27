@@ -348,3 +348,16 @@ describe('tasksMissingAccounts', () => {
     expect(tasksMissingAccounts(s)).toEqual([])
   })
 })
+
+// Phase 5 A1: a Task an external agent works has no account, and is still a slot to fill
+describe('slotsToFill and tasksMissingAccounts with an external agent', () => {
+  it('fills a slot for a Task an external agent works, with no account', () => {
+    const s = state({ tasks: [task('t1', { accountIds: undefined, externalAgentId: 'ext_0a1b2c3d' })] })
+    expect(slotsToFill(s)).toEqual([{ runId: 'run_1', taskId: 't1', accountIds: [], externalAgentId: 'ext_0a1b2c3d' }])
+  })
+
+  it('does not ask for an account for it', () => {
+    const s = state({ tasks: [task('t1', { accountIds: undefined, externalAgentId: 'ext_0a1b2c3d' })] })
+    expect(tasksMissingAccounts(s)).toEqual([])
+  })
+})

@@ -75,6 +75,9 @@ export const CONTROLLER_CONTROL_COMMANDS = [
   'gate-create',
   'gate-resolve',
   'questions-answer',
+  // Phase 5 A1: an external agent's permission request, answered by a person on the paired computer (the command layer
+  // refuses an agent's answer to one)
+  'reply',
   'sessions-create',
   'sessions-send',
   // Phase 9a: raw input, a resize that yields to a local viewer, stop, and a chat card's answer (remoteSessions.ts).

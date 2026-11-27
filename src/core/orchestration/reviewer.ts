@@ -15,7 +15,8 @@ import type { Account, Provider } from '../types'
  *  provider 를 PROVIDERS 순서로 훑는다. 지금 둘뿐이라 순서가 곧 우선순위이고, 그 우선순위를
  *  정교하게 만드는 것은 4단계(Account Pool)의 일이다 — quota 와 성공률로 고르게 된다. */
 export function pickReviewer(a: {
-  implProvider: Provider
+  /** The implementer's provider, avoided; null when there is none of ours to avoid (an external agent's work) */
+  implProvider: Provider | null
   accounts: readonly Account[]
   loggedInIds: ReadonlySet<string>
 }): { provider: Provider; accountId: string } | null {

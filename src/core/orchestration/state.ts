@@ -395,6 +395,8 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.agentProfileId !== undefined ? { agentProfileId: t.agentProfileId } : {}),
+    // Phase 5 A1: the external agent a planned Task names works every Run's copy of it
+    ...(t.externalAgentId !== undefined ? { externalAgentId: t.externalAgentId } : {}),
     ...(t.sandboxed ? { sandboxed: true as const } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
@@ -660,6 +662,8 @@ export function createTask(
      *  core 는 계정 목록을 못 보므로 "하나 이상" 만 확인해도 그 하나가 실재하는지는 알 수 없고,
      *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
+    /** Phase 5 A1: an external agent works it instead of accounts. */
+    externalAgentId?: string
     /** The agent profile's real id (Agent Profiles design §6); the caller (task-create) has resolved it. */
     agentProfileId?: string
     /** Added by a sandboxed session (Task.sandboxed); the caller (task-create) asked. */
@@ -695,6 +699,7 @@ export function createTask(
     // 빈 배열은 **지정 없음**이다 — 그것도 실으면 Task 를 값으로 비교하는 자리에서 지정이 없는
     // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
     ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
+    ...(a.externalAgentId ? { externalAgentId: a.externalAgentId } : {}),
     ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
     ...(a.sandboxed ? { sandboxed: true as const } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
@@ -1310,7 +1315,16 @@ function routeFailure(
   if (!a.repair)
     return gateOnFailure(
       s,
-      { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.repairFailed', reason: 'no repair target was supplied', lang: a.lang },
+      {
+        task: a.task,
+        kind: 'convergence-blocked',
+        key: 'jobs.convergence.gate.repairFailed',
+        // An external agent's work has no account worker to repair it (Phase 5 A1 final review I5)
+        reason: latestImplDispatch(s, a.task.id)?.externalAgent
+          ? 'an external agent worked this Task, and an automatic repair needs an account worker: fix it by hand, or make a Task that runs on an account'
+          : 'no repair target was supplied',
+        lang: a.lang
+      },
       now
     )
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
@@ -1881,7 +1895,9 @@ export const endedUnproven = (d: Dispatch, now: string): Dispatch => ({
 
 /** Closes (endedUnproven) every open review Dispatch with `externalReviewer` whose id is not in `owned` and, when
  *  `startedBefore` is given, whose `startedAt` is before it. An external review lives in whichever process holds
- *  its ACP child, so a Dispatch nobody owns after a restart can never be answered. Tasks are not touched. */
+ *  its ACP child, so a Dispatch nobody owns after a restart can never be answered. Its Task is not touched: the
+ *  resume sweep starts the review again. An external agent's work (Phase 5 A1) is closed the same way, and its Task,
+ *  which nothing else would move on, is put to a person (a Gate): answered, it is ready and the agent works it again. */
 export function closeOrphanedExternalReviews(
   s: OrchState,
   a: { owned: ReadonlySet<string>; startedBefore?: number },
@@ -1889,12 +1905,44 @@ export function closeOrphanedExternalReviews(
 ): { state: OrchState; closed: string[] } {
   const closed: string[] = []
   const dispatches = s.dispatches.map((d) => {
-    if (!d.externalReviewer || d.outcome || d.endedAt || a.owned.has(d.id)) return d
+    // An external agent's work (Phase 5 A1) too: neither resumes after the process that ran it is gone
+    if (!(d.externalReviewer || d.externalAgent) || d.outcome || d.endedAt || a.owned.has(d.id)) return d
     if (a.startedBefore !== undefined && !(Date.parse(d.startedAt) < a.startedBefore)) return d
     closed.push(d.id)
     return endedUnproven(d, now)
   })
-  return closed.length === 0 ? { state: s, closed } : { state: { ...s, dispatches }, closed }
+  if (closed.length === 0) return { state: s, closed }
+  return { state: gateCutOffExternalWork({ ...s, dispatches }, closed, now), closed }
+}
+
+/** The Tasks of the external agents' work in `closedIds` (Phase 5 A1), each still `dispatched` under a Dispatch just closed
+ *  because the process that ran its agent is gone, put to a person: nothing else would move them on, since a recovery pass
+ *  does not restart an external agent (core/recovery/candidates.ts). Answered, the Task is ready and the agent works it
+ *  again. Two callers: the orphan close above, and the restart cleanup of `OrchestrationStore.load`. */
+export function gateCutOffExternalWork(s: OrchState, closedIds: readonly string[], now: string): OrchState {
+  let state = s
+  for (const d of s.dispatches) {
+    if (!d.externalAgent || !closedIds.includes(d.id)) continue
+    if (state.tasks.find((t) => t.id === d.taskId)?.status !== 'dispatched') continue
+    state = gateOrFail(
+      state,
+      d.taskId,
+      `외부 에이전트 ${d.externalAgent.name || d.externalAgent.id}의 작업이 끊겼습니다: 그 에이전트를 돌리던 Astera 가 다시 시작되어 결과를 받을 수 없습니다.\n이 질문에 답하면 Task 가 다시 준비 상태가 되고 같은 에이전트가 다시 맡습니다. 끝난 일을 그대로 닫으려면 task-update --status completed 를 쓰세요.`,
+      now
+    )
+  }
+  return state
+}
+
+/** Puts a Task whose external agent's work ended to a person (Phase 5 A1). When the Gate cannot be opened, the Task is
+ *  marked failed with the question as its result instead (final review M7), as performRepair does: nothing else would
+ *  move it on, since a recovery pass does not restart an external agent. */
+export function gateOrFail(s: OrchState, taskId: string, question: string, now: string): OrchState {
+  const gated = createGate(s, { taskId, question }, now)
+  if (gated.ok) return gated.state
+  const task = s.tasks.find((t) => t.id === taskId)
+  if (!task || !canTransition(task.status, 'failed')) return s
+  return { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed', result: question, updatedAt: now } : t)) }
 }
 
 /** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.

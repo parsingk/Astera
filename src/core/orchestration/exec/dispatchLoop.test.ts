@@ -215,6 +215,7 @@ function rig(o: RigOpts = {}) {
     startCoordinator,
     stopCoordinator,
     releaseWorker,
+    startExternalWork: () => {},
     listAccounts: async () => [{ id: 'accA', label: 'accA', provider: 'claude' as const }],
     log: () => {},
     runningSessions: () => 0,
@@ -1886,5 +1887,101 @@ describe('the lifecycle Task is started by the loop', () => {
     await h.settle()
     expect(h.handled()).toContain('gate-create')
     expect(h.state().gates.find((g) => g.taskId === 'tsk_l')?.question).toContain('GitHub')
+  })
+})
+
+// Phase 5 A1: a Task an external agent works is placed by the same loop, through its own door
+describe('a Task an external agent works', () => {
+  const external = (h: ReturnType<typeof rig>, id: string): void =>
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === id ? { ...t, accountIds: undefined, externalAgentId: 'ext_0a1b2c3d' } : t)) })
+
+  it('is started through external-work-start in the Run worktree, made first, with no account picked', async () => {
+    const h = rig({ runWithoutWorktree: true })
+    external(h, 'tsk_1')
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled().slice(0, 2)).toEqual(['run-worktree-set', 'external-work-start'])
+    expect(h.state().dispatches.find((x) => x.taskId === 'tsk_1')).toMatchObject({ cwd: '/wt-forked', accountId: '', externalAgent: { id: 'ext_0a1b2c3d' } })
+    expect(h.state().gates).toEqual([])
+    expect(h.startWorker).not.toHaveBeenCalled()
+  })
+
+  // Final review I4: `tasks dispatch` places it the way the loop does
+  it('is placed on request through external-work-start too', async () => {
+    const h = rig()
+    external(h, 'tsk_1')
+    const r = await h.loop.dispatchOne('tsk_1')
+    expect(r.status).toBe(200)
+    expect(h.handled()).toContain('external-work-start')
+    expect(h.startWorker).not.toHaveBeenCalled()
+  })
+
+  it('puts a Task whose work must run in a sandbox to a person instead of starting the agent', async () => {
+    const h = rig()
+    external(h, 'tsk_1')
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === 'tsk_1' ? { ...t, sandboxed: true } : t)) })
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled()).not.toContain('external-work-start')
+    expect(h.state().gates.find((g) => g.taskId === 'tsk_1')?.question).toMatch(/sandbox/)
+  })
+
+  it('waits while another worker works in the Run root it would work in', async () => {
+    const h = rig({ concurrency: 2 })
+    external(h, 'tsk_1')
+    const s = h.state()
+    h.setState({
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === 'tsk_2' ? { ...t, status: 'dispatched' as const } : t)),
+      dispatches: [
+        { id: 'dsp_2', taskId: 'tsk_2', provider: 'claude', accountId: 'accA', sessionId: 's-x', cwd: '/wt1', specPath: 'x', startedAt: NOW, workerState: 'ready', retained: false }
+      ]
+    })
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled()).not.toContain('external-work-start')
+    expect(h.state().gates).toEqual([])
+  })
+})
+
+// Phase 5 A1 final review M12: a merge conflict ahead of a Task an external agent works
+describe('a conflict ahead of a Task an external agent works', () => {
+  const conflicted = (depOnAccount: boolean): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_x', objective: 'o', cwd: '/p', createdAt: NOW, autoDispatch: true }],
+    runs: [{ id: 'run_x', jobId: 'job_x', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+    tasks: [
+      task({ id: 'tsk_a', runId: 'run_x', jobId: undefined, status: 'completed', updatedAt: NOW, ...(depOnAccount ? {} : { accountIds: undefined, externalAgentId: 'ext_0a1b2c3d' }) }),
+      task({ id: 'tsk_x', runId: 'run_x', jobId: undefined, deps: ['tsk_a'], accountIds: undefined, externalAgentId: 'ext_0a1b2c3d' })
+    ],
+    dispatches: [
+      {
+        id: 'dsp_a', taskId: 'tsk_a', provider: 'claude', accountId: depOnAccount ? 'accA' : '', sessionId: 's-a', cwd: '/wt-a', specPath: 'x',
+        startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'stopped', retained: false,
+        ...(depOnAccount ? {} : { externalAgent: { id: 'ext_0a1b2c3d', name: 'O' } })
+      } as Dispatch
+    ]
+  })
+
+  it('makes the integration Task on the accounts of the Task it folds in', async () => {
+    const h = rig()
+    h.setState(conflicted(true))
+    h.ctx.integrate = async () => ({ kind: 'agent', reason: 'conflict in a.ts', worktrees: [{ path: '/wt-a', branch: 'a' }] }) as never
+    await h.loop.run()
+    await h.settle()
+    expect(h.state().tasks.find((t) => t.parentId === 'tsk_x')).toMatchObject({ accountIds: ['accA'], deps: ['tsk_a'] })
+    expect(h.handled()).not.toContain('external-work-start')
+  })
+
+  it('puts the conflict to a person, saying why, when no Task it folds in ran on an account', async () => {
+    const h = rig()
+    h.setState(conflicted(false))
+    h.ctx.integrate = async () => ({ kind: 'agent', reason: 'conflict in a.ts', worktrees: [{ path: '/wt-a', branch: 'a' }] }) as never
+    await h.loop.run()
+    await h.settle()
+    expect(h.state().tasks.some((t) => t.parentId === 'tsk_x')).toBe(false)
+    const q = h.state().gates.find((g) => g.taskId === 'tsk_x')?.question ?? ''
+    expect(q).toContain('conflict in a.ts')
+    expect(q).toContain('계정이 없습니다')
   })
 })

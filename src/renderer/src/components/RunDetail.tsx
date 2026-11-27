@@ -29,6 +29,7 @@ import { confirmModal } from '../lib/confirm'
 import { ChangedFilesBlock } from './ChangedFilesBlock'
 import { CompletionBlock } from './CompletionBlock'
 import { GateAnswer } from './GateAnswer'
+import { PermissionAsk } from './PermissionAsk'
 import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, taskTitleOf, eventTitleOf, type GlyphKind } from './checkText'
 import { toast } from '../lib/toast'
 import { RunReportCard } from './RunReportCard'
@@ -50,7 +51,7 @@ import { backdropProps } from '../lib/backdrop'
 import { SourceChip } from './SourceChip'
 import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
-import { reviewerChipName } from '../lib/reviewerSettingsView'
+import { externalNameOf, reviewerChipName } from '../lib/reviewerSettingsView'
 import {
   afterObserveRead,
   observeReadDue,
@@ -1245,6 +1246,13 @@ export function RunDetail({
                 {run?.github && (
                   <GitHubBlock github={run.github} noLocalCheck={run.githubNoLocalCheck === true} onOpen={(url) => void window.api.system.openExternal(url)} />
                 )}
+                {/* An external agent's permission request (Phase 5 A1), answered here by the person: every Task of the Run
+                    that waits on one, so it is seen without choosing the Task first */}
+                {tasks
+                  .filter((tk) => tk.permissionAsk !== undefined)
+                  .map((tk) => (
+                    <PermissionAsk key={tk.permissionAsk!.id} task={tk} door={door} />
+                  ))}
                 {selectedTask && (
                   <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} runtimeId={runtimeId} />
                 )}
@@ -1299,9 +1307,9 @@ export function RunDetail({
                                   ? t(MSG_LABEL[e.messageType ?? 'status'])
                                   : t(KIND_LABEL[e.kind])}
                               </b>
-                              {e.externalReviewer ? (
-                                <span className="detail-chip" title={e.externalReviewer.name}>
-                                  {reviewerChipName(e.externalReviewer.name)}
+                              {externalNameOf(e) !== undefined ? (
+                                <span className="detail-chip" title={externalNameOf(e)}>
+                                  {reviewerChipName(externalNameOf(e) ?? '')}
                                 </span>
                               ) : (
                                 e.provider && <span className="detail-chip provider">{e.provider}</span>

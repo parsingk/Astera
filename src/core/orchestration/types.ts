@@ -497,6 +497,9 @@ export interface Task {
    *  그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중 못 쓰는 것만 순서를 지키며
    *  제자리에서 빠진다. */
   accountIds?: string[]
+  /** Phase 5 A1: the external agent (an ACP agent registered in Settings, Agents, `ext_<8 hex>`) that works this Task
+   *  instead of accounts. A Task names one or the other; it is placed by the dispatch loop like any Task. */
+  externalAgentId?: string
   /** The agent profile this Task's workers run as (Agent Profiles design §6), its real id. When the Task was made from
    *  it alone, `accountIds` were copied from it then and stay fixed; the profile decides MCP and permission at each
    *  spawn, and one deleted since falls back to implicit there. */
@@ -701,6 +704,9 @@ export interface Dispatch {
    *  is `acp:<8 hex>`, `provider` is the implementer's and `accountId` is `''`, and nothing shows them. Absent for
    *  every other Dispatch. */
   externalReviewer?: { id: string; name: string }
+  /** Phase 5 A1: the external agent working this Dispatch's Task over ACP (its session id starts `acp:`, its account is
+   *  empty, its provider a placeholder). Its name is filled when the run reads the registry. */
+  externalAgent?: { id: string; name: string }
   /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
    *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
   repair?: RepairReason

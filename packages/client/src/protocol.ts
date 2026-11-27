@@ -48,6 +48,10 @@ export const HOST_FEATURE_ORCH = 'orch'
  *  before it answers the command 501; @astera-app/client checks for this first and says what to update. */
 export const HOST_FEATURE_EVENTS = 'events'
 
+/** External agent workers (Phase 5 A1): the Host's `task-create` takes an external agent. A Host from before it ignores the
+ *  argument and runs the Task on accounts, so @astera-app/client checks for this first. */
+export const HOST_FEATURE_EXTERNAL_AGENTS = 'external-agents'
+
 /** `app` is a version string: the app (`main/host/client.ts`) sends its version, the CLI (through
  *  connect.ts) its own, and @astera-app/client `sdk-<version>`. The first two can be the identical
  *  string, so it cannot say *what* is connecting. `role` does.

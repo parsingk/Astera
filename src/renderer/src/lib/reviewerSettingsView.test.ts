@@ -6,6 +6,7 @@ import {
   lineOfArgs,
   probeText,
   reviewerChipName,
+  externalNameOf,
   withReviewerAdded,
   withReviewerEdited,
   withReviewerRemoved,
@@ -161,6 +162,15 @@ describe('reviewerChipName', () => {
   it('leaves 20 characters alone and cuts longer with an ellipsis', () => {
     expect(reviewerChipName('a'.repeat(20))).toBe('a'.repeat(20))
     expect(reviewerChipName('a'.repeat(21))).toBe('a'.repeat(20) + '…')
+  })
+})
+
+describe('externalNameOf', () => {
+  it('names an external reviewer, an external agent (its id until its name is read), and nothing else', () => {
+    expect(externalNameOf({ externalReviewer: { id: 'ext_1', name: 'Gemini CLI' } })).toBe('Gemini CLI')
+    expect(externalNameOf({ externalAgent: { id: 'ext_2', name: 'OpenCode' } })).toBe('OpenCode')
+    expect(externalNameOf({ externalAgent: { id: 'ext_2', name: '' } })).toBe('ext_2')
+    expect(externalNameOf({})).toBeUndefined()
   })
 })
 

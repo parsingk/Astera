@@ -40,7 +40,9 @@ export function candidates(state: OrchState): LostAttemptSeed[] {
     // starting workers: it holds to the same standard.
     if (runGatedForTask(state, task)) continue
     const lost = lostAttemptOf(state, task.id)
-    if (!lost) continue
+    // An external agent's work (Phase 5 A1) never resumes: the orphan close ends it and puts its Task to a person
+    // (closeOrphanedExternalReviews), and a re-dispatch here would start an account worker on an empty account
+    if (!lost || lost.externalAgent) continue
     out.push({ runId: runIdOf(task), taskId: task.id, dispatch: lost })
   }
   return out

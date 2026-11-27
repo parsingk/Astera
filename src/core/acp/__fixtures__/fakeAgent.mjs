@@ -5,7 +5,7 @@
 // `--echo-env <NAME>` also appends `env <NAME>=<value>` there, once, when the first prompt arrives.
 // `--error-message <text>` replaces the error text of 'auth-required' and 'new-session-error'; `--title <text>` the tool
 // call's title in 'edits-without-asking'; `--stop-reason <text>` the stop reason of 'stop-reason'.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const argv = process.argv.slice(2)
@@ -106,6 +106,31 @@ async function runPrompt(id) {
       return reply(id, { stopReason })
     case 'no-verdict-twice':
       return finish(id, message ?? 'no verdict yet')
+    case 'asks-twice': {
+      // Two permission requests at once, as parallel tool calls make them (Phase 5 A1 final review I6)
+      const [first, second] = await Promise.all([permission('edit', 'Edit a.txt'), permission('edit', 'Edit b.txt')])
+      return finish(id, `outcomes:${outcomeOf(first)},${outcomeOf(second)}`)
+    }
+    case 'narrates-then-fails':
+      // As a real agent: it says what it does before a tool call, then ends with its own report (Phase 5 A1 final review C1)
+      chunk('I will look at the files first.')
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'read', status: 'pending', title: 'Read a.txt' })
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' })
+      chunk('FAILED: a.txt is missing')
+      return finish(id, ['', 'Nothing was changed.'].join(String.fromCharCode(10)))
+    case 'works': {
+      // A worker (Phase 5 A1): asks before it writes work.txt in its folder, writes it only when allowed
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'edit', status: 'pending', title: 'Edit work.txt' })
+      const r = await permission('edit', 'Edit work.txt')
+      if (outcomeOf(r) !== 'allow-once') {
+        update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' })
+        return finish(id, `FAILED: the edit was not allowed (${outcomeOf(r)})`)
+      }
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'in_progress' })
+      writeFileSync('work.txt', 'worked')
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' })
+      return finish(id, message ?? ['Wrote work.txt', 'It holds the word worked. Nothing is left.'].join(String.fromCharCode(10)))
+    }
     default:
       return fail(id, -32603, `unknown mode ${mode}`)
   }

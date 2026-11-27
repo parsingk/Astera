@@ -16,6 +16,7 @@ import {
   detachCoordinator,
   emptyState,
   endedUnproven,
+  gateCutOffExternalWork,
   interruptStalledTask,
   runGatedForTask,
   type OrchState
@@ -355,7 +356,9 @@ export class OrchestrationStore {
     // Tasks are counted into `stuckInterruptions` and the wiring logs the number.
     let staleValidations = 0
     let staleReviews = 0
-    let withGates: OrchState = { ...st, dispatches }
+    // An external agent's work (Phase 5 A1) that was closed above is put to a person: its agent was this app's child
+    const cutOff = dispatches.filter((d, i) => d.externalAgent && d !== st.dispatches[i]).map((d) => d.id)
+    let withGates: OrchState = gateCutOffExternalWork({ ...st, dispatches }, cutOff, now)
     // convergence Run 의 validating·reviewing Task 들. **판정은 이 파일 밖이 아니라 이 파일 안의
     // 한 함수에 있다**(interruptedResumes, 위) — 앱도 같은 판정을 해야 하기 때문이고, 왜 그런지는
     // 그 함수의 주석에 있다. load() 는 여전히 아무것도 시작하지 않는다: 목록을 그대로 돌려주면,

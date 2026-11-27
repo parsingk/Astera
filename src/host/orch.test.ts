@@ -3565,7 +3565,7 @@ describe('Host-local spawn (S2)', () => {
   })
   /** The six HOST_DRIVES names as no-ops, and the rest of HostChecks beside them so the type holds. */
   const noChecks = (): HostChecks => ({
-    startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
+    startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(), startExternalWork: vi.fn(),
     repairTargetFor: vi.fn(() => null), repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'en' as const),
     stopValidation: vi.fn(() => false), stopForeignValidations: vi.fn(async () => 0), closeOrphanedExternalReviews: vi.fn(async () => {}), dispose: vi.fn(), checking: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'en' as const),
     accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false), settleHandedOff: vi.fn(async () => {})

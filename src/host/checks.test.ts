@@ -248,6 +248,17 @@ async function rig(o: RigOpts = {}) {
         ]
       }
     },
+    /** Adds an open external agent work Dispatch for the rig's Task (Phase 5 A1), as external-work-start opens it. */
+    addExternalWork: (id: string) => {
+      state = {
+        ...state,
+        tasks: state.tasks.map((x) => (x.id === taskId ? { ...x, status: 'dispatched' as const, externalAgentId: 'ext_0123abcd' } : x)),
+        dispatches: [
+          ...state.dispatches,
+          { id, taskId, provider: 'claude', accountId: '', sessionId: `acp:work-${id.slice(-8)}`, cwd, specPath: '', startedAt: NOW, workerState: 'ready', retained: false, externalAgent: { id: 'ext_0123abcd', name: '' } }
+        ]
+      }
+    },
     dispatches: () => state.dispatches,
     startWorker: (deps as unknown as { startWorker: ReturnType<typeof vi.fn> }).startWorker,
     task: () => state.tasks.find((x) => x.id === taskId)!,
@@ -631,6 +642,34 @@ describe('createHostChecks, external reviews', () => {
       h.addForeignExternalReview('dsp_foreign02')
       await h.checks.closeOrphanedExternalReviews({ startedBefore: Date.parse(NOW) })
       expect(byId('dsp_foreign02').endedAt).toBeUndefined()
+    } finally {
+      h.checks.dispose()
+      await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 20_000, interval: 50 }).catch(() => {
+        if (alive(pid)) process.kill(pid)
+      })
+    }
+  }, 40_000)
+
+  // Phase 5 A1: the Host runs an external agent's work beside its reviews
+  it('startExternalWork runs the registered agent on its Dispatch and reports its turn through the Host door', async () => {
+    const h = await rig({ externalReviewer: { args: ['approve', '--message', 'Done here.'] } })
+    h.addExternalWork('dsp_work0001')
+    h.checks.startExternalWork({ dispatchId: 'dsp_work0001' })
+    await vi.waitFor(() => expect(h.handled).toHaveLength(1), WAIT)
+    expect(h.handled[0]).toMatchObject({ cmd: 'send', args: { type: 'worker_done', dispatchId: 'dsp_work0001', outcome: 'succeeded', subject: 'Done here.' } })
+    expect(h.dispatches().find((x) => x.id === 'dsp_work0001')!.externalAgent).toEqual({ id: 'ext_0123abcd', name: 'Fake' })
+    await vi.waitFor(() => expect(alive(pidOf(h))).toBe(false), { timeout: 20_000, interval: 50 })
+  }, 30_000)
+
+  it('closeOrphanedExternalReviews leaves the external work the Host runs open', async () => {
+    const h = await rig({ externalReviewer: { args: ['hang-prompt'] } })
+    h.addExternalWork('dsp_work0002')
+    h.checks.startExternalWork({ dispatchId: 'dsp_work0002' })
+    await vi.waitFor(() => expect(fs.existsSync(path.join(h.dir, 'agent.pid'))).toBe(true), WAIT)
+    const pid = pidOf(h)
+    try {
+      await h.checks.closeOrphanedExternalReviews()
+      expect(h.dispatches().find((x) => x.id === 'dsp_work0002')!.endedAt).toBeUndefined()
     } finally {
       h.checks.dispose()
       await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 20_000, interval: 50 }).catch(() => {

@@ -183,9 +183,11 @@ export function createReviewStarter(c: ReviewContext): ReviewStarter {
         accounts.map(async (a) => ((await c.loginStatus(a.id)) ? a.id : null))
       )
       const loggedIn = new Set(loggedInIds.filter((id): id is string => id !== null))
-      const picked = pickReviewer({ implProvider: impl.provider, accounts, loggedInIds: loggedIn })
+      // An external agent's provider is a placeholder (Phase 5 A1 final review I5): there is no provider of ours to avoid
+      const avoid = impl.externalAgent ? null : impl.provider
+      const picked = pickReviewer({ implProvider: avoid, accounts, loggedInIds: loggedIn })
       if (!picked)
-        return void (await gate(`no logged-in account on a provider other than ${impl.provider}`))
+        return void (await gate(avoid === null ? 'no logged-in account to review with' : `no logged-in account on a provider other than ${avoid}`))
       // PTY 를 띄울 경로는 가드를 통과해야 한다 — validator.start 와 같은 이유(Dispatch.cwd 는
       // 오케스트레이션 소켓에서 온 값이고 정규화는 검증이 아니다, ADR-003).
       await c.assertAllowedPath(cwd)

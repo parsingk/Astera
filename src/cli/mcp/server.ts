@@ -299,8 +299,9 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   if (refused !== null) return errorResult('INVALID_ARGUMENTS', refused)
   // create_task without an accountId runs on the Job's coordinator account, the default the
   // coordinator's own planning brief uses. jobs-get takes a Job id or a Run id. An agent profile, the Task's own or
-  // its Job's, gives the accounts instead, and the Host copies them (Agent Profiles design §6).
-  if (t.name === 'create_task' && input.accountId === undefined && input.agentProfileId === undefined) {
+  // its Job's, gives the accounts instead, and the Host copies them (Agent Profiles design §6). An external agent (Phase 5
+  // A1) works the Task instead of accounts, so none is defaulted.
+  if (t.name === 'create_task' && input.accountId === undefined && input.agentProfileId === undefined && input.externalAgentId === undefined) {
     const job = await link.call('jobs-get', { id: input.jobId ?? input.runId })
     if ('code' in job) return errorResult(job.code, job.message, 'jobs-get')
     if (job.status !== 200)

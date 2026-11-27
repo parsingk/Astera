@@ -130,3 +130,10 @@ describe('taskDetailOf: an external review attempt', () => {
     expect('externalReviewer' in taskDetailOf(stateWith([task('t1')], [dispatch('d1', 't1')]), 't1')!.attempts[0]).toBe(false)
   })
 })
+
+describe('taskDetailOf: an external agent working a Task (Phase 5 A1)', () => {
+  it('adds the agent to its attempt', () => {
+    const s = stateWith([task('t1')], [dispatch('d1', 't1', { accountId: '', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } })])
+    expect(taskDetailOf(s, 't1')!.attempts[0]).toMatchObject({ accountId: '', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } })
+  })
+})

@@ -118,6 +118,23 @@ describe('OrchestrationStore', () => {
 
   // Once the Host owns the terminals, a worker outlives the app. Closing its Dispatch as
   // outcome_unknown would make P1's reconciler start a second agent on the same Task.
+  // Phase 5 A1: an external agent ran as the app's own child, so its work died with it, and nothing else moves its Task on
+  it('puts the Task of an external agent work it closes to a person', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const st = withOpenDispatch()
+    const external: OrchState = {
+      ...st,
+      tasks: st.tasks.map((t) => ({ ...t, externalAgentId: 'ext_0a1b2c3d' })),
+      dispatches: st.dispatches.map((d) => ({ ...d, accountId: '', sessionId: 'acp:work-0a0b0c0d', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } }))
+    }
+    await fs.writeFile(file, JSON.stringify(external), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load({ aliveSessionIds: new Set() })
+    expect(store.get().dispatches[0].endedAt).toBeTruthy()
+    expect(store.get().tasks[0].status).toBe('blocked')
+    expect(store.get().gates[0]).toMatchObject({ taskId: 'tsk_1', status: 'open' })
+  })
+
   it('leaves a Dispatch open when its session is still alive in the Host', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')

@@ -170,6 +170,10 @@ export const HOST_FEATURE_PLUGINS = 'plugins'
  *  open files, pushes `lsp-diagnostics` and `lsp-state`, and answers the `lsp-*` commands to this machine's app and CLI.
  *  Announced by every Host, like `plugins`. An app sends no `lsp-sync` to a Host without it. */
 export const HOST_FEATURE_LSP = 'lsp'
+/** External agent workers (Phase 5 A1): this Host's `task-create` takes `externalAgent`, and an external agent works such
+ *  a Task. Announced by every Host, like `lsp`. A client checks for it first: an older Host ignores the argument and
+ *  runs the Task on accounts (final review M10). */
+export const HOST_FEATURE_EXTERNAL_AGENTS = 'external-agents'
 /** Host-owned recovery (remote runtime design §2.6, DC-3): this Host decides and carries out the recovery of lost
  *  workers itself, while it drives, writes the Job Journal and no attached app keeps HOST_YIELD_RECOVERY. An app in
  *  front of a Host that announces it runs no reconciler of its own. Announced with `spawn`: recovery starts workers. */

@@ -3,6 +3,18 @@
 `@astera-app/client` is versioned apart from the Astera app. [docs/sdk.md](https://github.com/parsingk/Astera/blob/main/docs/sdk.md)
 is the guide.
 
+## 0.6.0
+
+- External agent workers (the Astera that ships them or later, which announces the `external-agents` feature; against
+  an older one `tasks.create` with an `externalAgentId` refuses with `VERSION_MISMATCH` before sending anything, since
+  that Host would ignore it): `tasks.create` takes `externalAgentId`, an external agent registered in Astera's
+  Settings, Agents (`ext_` and 8 hex), that works the Task in the Run folder instead of accounts. Give it or
+  `accountIds` and `agentProfileId`, not both; with it no coordinator account is read.
+- `Task.externalAgentId`: the external agent a Task names. A worker attempt it made (`TaskAttempt.externalAgent`, on
+  `tasks.get`) carries the agent's `id` and `name`; its `provider` and `accountId` are then placeholders.
+
+Migration: nothing to change. Every addition is optional.
+
 ## 0.5.0
 
 - Agent profiles (the Astera that ships agent profiles or later; an older one answers these with `VERSION_MISMATCH`):

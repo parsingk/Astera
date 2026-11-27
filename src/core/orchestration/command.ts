@@ -76,7 +76,7 @@ import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
 import { taskDetailOf } from './taskDetail'
 import { checkOutputSlice, tailWindow } from './taskOutput'
-import { TAIL_UNTRACKED, TAIL_EMPTY, EXTERNAL_REVIEW_NO_OUTPUT } from './exec/tail'
+import { TAIL_UNTRACKED, TAIL_EMPTY, EXTERNAL_REVIEW_NO_OUTPUT, EXTERNAL_WORK_NO_OUTPUT } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -111,9 +111,10 @@ import {
   type MessageType,
   type Project,
   type Task,
-  type TaskStatus
+  type TaskStatus,
+  EXTERNAL_REVIEW_SESSION_PREFIX
 } from './types'
-import { runWorktrees } from './integrate'
+import { runRootOf, runWorktrees } from './integrate'
 import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
 import { taskFindings, taskFoldersOf, taskRowRefs } from '../problems/completionProblems'
 import { cleanNote, findingRevision, findingSourceOf, moveFinding } from '../problems/findingStates'
@@ -600,6 +601,9 @@ export interface OrchServerDeps {
    *  대상을 답한 뒤 이 훅 전에 떠나면, 운전이 그 사이 Host 로 넘어와 Host 가 띄운다. **두 칸을
    *  다른 묶음이나 다른 술어로 나누는 날 이 문장은 거짓이 된다.** */
   startRepair?(a: { dispatchId: string }): void
+  /** Phase 5 A1: starts the run of an external agent on a Dispatch `external-work-start` opened (exec/externalWork.ts).
+   *  Absent: the caller has no such driver, and the command refuses. */
+  startExternalWork?(a: { dispatchId: string }): void
   /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
    *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다.
    *  **비동기다 — gate-resolve 가 그 반환을 기다린다.** repairOnce 자신은 Dispatch 를 열어 커밋한
@@ -881,7 +885,7 @@ const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => 
 /** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
  *  is a start that died: no pty was ever opened for it, so there is nothing to release. An external review
  *  never had a session (its `acp:` id names no pty), so there is nothing to release either. */
-const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId) && !d.externalReviewer
+const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId) && !d.externalReviewer && !d.externalAgent
 
 /** The Job's latest Run **while it still runs**, else undefined. `jobs run` refuses on it, and a fire
  *  skips on it (`run-spawn --unless-running`; the user's ruling of 2026-09-25 on U1): the same test in
@@ -3613,6 +3617,35 @@ export async function handleCommand(
       await deps.setState(r.state)
       return okBody({ runId: id, taskId: r.value.id })
     }
+    case 'external-work-start': {
+      // Phase 5 A1: the dispatch loop's door for a Task an external agent works, as worker-start is for an account's. It
+      // opens the Dispatch here and hands it to the external work driver after the commit, as worker-start opens before
+      // the session starts. The agent runs in the Run's folder (its worktree, when it has one).
+      if (caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+        return denied('external-work-start is the dispatch loop’s own step')
+      if (!deps.startExternalWork) return conflict('an external agent is run by the Astera Host or the app, and this caller runs none')
+      const id = str(args.task)
+      if (!id) return bad('--task is required')
+      const latest = deps.getState()
+      const task = latest.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      if (task.externalAgentId === undefined) return conflict(`task ${id} is not worked by an external agent`)
+      if (task.status !== 'ready') return conflict(`task ${id} is ${task.status}, not ready`)
+      // Work that must run in a sandbox never reaches an agent that runs outside it (final review C2)
+      if (workSandboxed(latest, task)) return conflict(`task ${id} must run in a sandbox, and an external agent cannot be sandboxed`)
+      if (latest.dispatches.some((d) => d.taskId === id && !d.outcome && !d.endedAt)) return conflict(`task ${id} already has an open Dispatch`)
+      const run = latest.runs.find((r) => r.id === task.runId)
+      if (!run) return conflict(`task ${id} is not in a run`)
+      const cwd = runRootOf(run, latest.jobs.find((j) => j.id === run.jobId))
+      const sessionId = `${EXTERNAL_REVIEW_SESSION_PREFIX}work-${randomBytes(4).toString('hex')}`
+      const opened = openDispatch(latest, { taskId: id, provider: 'claude', accountId: '', sessionId, cwd, specPath: '' }, now)
+      if (!opened.ok) return refused(opened)
+      const dispatchId = opened.value.id
+      const externalAgent = { id: task.externalAgentId, name: '' }
+      await deps.setState({ ...opened.state, dispatches: opened.state.dispatches.map((d) => (d.id === dispatchId ? { ...d, externalAgent } : d)) })
+      deps.startExternalWork({ dispatchId })
+      return okBody({ dispatchId, cwd })
+    }
     case 'lifecycle-start': {
       // The dispatch loop's own step (GitHub lifecycle §3.3), after it folded every Task worktree into the Run root: a
       // caller that skipped the folding would check, push and review a branch missing some Task's work.
@@ -3969,6 +4002,16 @@ export async function handleCommand(
       // 받는다. `ask --options` 가 이미 CSV 이므로 그 관례를 쓴다 — 계정 하나만 주는 기존 호출은
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
+      // Phase 5 A1: an external agent (an ACP agent registered in Settings, Agents) works the Task instead of accounts.
+      // Its id is checked here by shape; whether it is still registered is the run's to find out when it starts.
+      const externalAgentArg = str(args.externalAgent)
+      if (externalAgentArg !== null) {
+        if (accountArg !== null || str(args.agentProfileId) !== null) return bad('--external-agent works the Task instead of accounts: give one or the other')
+        if (!/^ext_[0-9a-f]{8}$/.test(externalAgentArg)) return bad('--external-agent must be an external agent id (ext_ and 8 hex, from Settings, Agents)')
+        // The agent runs outside any sandbox with the person's rights (final review C2): a sandboxed session does not
+        // hand work to it
+        if (callerBoxed) return denied('a sandboxed session cannot hand a Task to an external agent: the agent runs outside any sandbox')
+      }
       // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
       // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
       // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
@@ -3978,11 +4021,24 @@ export async function handleCommand(
       // or without accounts (drivesRun); one it names itself is asked like any agent's, and so is an outside driver.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
-      let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
-      if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
+      // Only Astera's own placing starts an external agent (final review I3): a Job its coordinator drives places its own
+      // Tasks with worker-start, which an external agent's Task refuses, so such a Task would never start there
+      if (externalAgentArg !== null && ownerJob) {
+        const ownerRun = s.runs.find((r) => r.id === runId)
+        const coordinated = ownerRun
+          ? ownerRun.coordinatorSessionId !== undefined || (ownerJob.coordinatorAccountId !== undefined && !placedByApp(ownerJob, ownerRun))
+          : ownerJob.coordinatorAccountId !== undefined && ownerJob.autoDispatch !== true
+        if (coordinated)
+          return conflict('a coordinator places this Job’s tasks, and only Astera itself starts an external agent: put the Task in a Job without a coordinator')
+      }
+      // Nor does a sandboxed Job's work go to one (final review C2)
+      if (externalAgentArg !== null && ownerJob?.sandboxed === true)
+        return conflict('this Job runs its work in a sandbox, and an external agent cannot be sandboxed: give the Task an account')
+      let agentProfileId = profileArg === null && externalAgentArg === null ? ownerJob?.agentProfileId : undefined
+      if (externalAgentArg === null && accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
       const inheritsForItsCoordinator = profileArg === null && drivesRun(s, caller, runId)
       let profile: AgentProfile | undefined
-      if (profileArg !== null || accountArg === null) {
+      if (externalAgentArg === null && (profileArg !== null || accountArg === null)) {
         const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, { held: profileArg === null, bypassOk: inheritsForItsCoordinator })
         if (!found.ok) return found.reply
         profile = found.profile
@@ -3992,8 +4048,9 @@ export async function handleCommand(
         if (refused) return refused
       }
       const known = await deps.listAccounts()
-      let accountIds: string[]
-      if (accountArg !== null) {
+      let accountIds: string[] | undefined
+      if (externalAgentArg !== null) accountIds = undefined
+      else if (accountArg !== null) {
         // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
         // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
         const parsedAccounts = parseAccountList(accountArg, known, '--account')
@@ -4039,6 +4096,7 @@ export async function handleCommand(
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
             ...(accountIds ? { accountIds } : {}),
+            ...(externalAgentArg !== null ? { externalAgentId: externalAgentArg } : {}),
             ...(agentProfileId !== undefined ? { agentProfileId } : {}),
             // Added by a sandboxed session: its workers start in the sandbox, in whichever Job (final fix pass, C3)
             ...(callerBoxed ? { sandboxed: true } : {}),
@@ -4101,7 +4159,7 @@ export async function handleCommand(
         )
       if (task.consecutiveFailures >= FAILURE_LIMIT)
         return conflict(`task ${id} has failed ${task.consecutiveFailures} times in a row (circuit break); reset it with task-update first`)
-      if ((task.accountIds?.length ?? 0) === 0)
+      if ((task.accountIds?.length ?? 0) === 0 && task.externalAgentId === undefined)
         return conflict(`task ${id} names no account to run on`)
       const limit = job?.concurrency ?? DEFAULT_CONCURRENCY
       const mine = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
@@ -4319,6 +4377,9 @@ export async function handleCommand(
       if (!task) return notFound(`unknown task: ${taskId}`)
       // Its repairs are Astera's (G3c), through the repair path, never this command (G3a final review)
       if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
+      // An external agent works it, and only Astera starts one (final review I3): an account worker would override the choice
+      if (task.externalAgentId !== undefined)
+        return conflict(`task ${taskId} is worked by the external agent ${task.externalAgentId}, which Astera starts itself; it takes no worker-start`)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
       // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
       // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·
@@ -4570,7 +4631,10 @@ export async function handleCommand(
       // An external review has no pty and no tail. Answered here, before the dep, so the app and the Host say the
       // same thing whether or not an app is attached (the Host would forward the read): an answer of the untracked
       // kind, saying where its transcript is instead (final fix wave E4).
-      if (s.dispatches.find((x) => x.id === id)?.externalReviewer) return okBody({ output: EXTERNAL_REVIEW_NO_OUTPUT })
+      // An external agent's work (Phase 5 A1) the same
+      const ext = s.dispatches.find((x) => x.id === id)
+      if (ext?.externalReviewer) return okBody({ output: EXTERNAL_REVIEW_NO_OUTPUT })
+      if (ext?.externalAgent) return okBody({ output: EXTERNAL_WORK_NO_OUTPUT })
       return okBody({
         output: await deps.readWorker({
           dispatchId: id,
@@ -4715,7 +4779,8 @@ export async function handleCommand(
         // 회로 차단에 한 걸음 다가가면서, 그 계정이 언제 풀리는지는 아무도 알지 못한다. 위 주석이
         // 말하는 "이 경로로만 닫히는 세션"은 검토자에게도 똑같이 있다.
         let limitResetsAt: number | null = null
-        if (outcome === 'failed' && deps.probeLimit && reporting) {
+        // An external agent (Phase 5 A1) runs on no account, so it has no limit to find
+        if (outcome === 'failed' && deps.probeLimit && reporting && !reporting.externalAgent) {
           // The probe reads files — a failure there must not block handling the worker's report.
           try {
             limitResetsAt = await deps.probeLimit(reporting)
@@ -4947,6 +5012,16 @@ export async function handleCommand(
       const body = str(args.body)
       if (!id) return bad('--id is required')
       if (body === null) return bad('--body is required')
+      // An external agent's permission request (Phase 5 A1) is the person's: the app, or `astera reply` from their shell.
+      // An agent session (a coordinator, a worker) does not answer it for them.
+      const asked = s.messages.find((m) => m.id === id)
+      const askedOn = asked?.dispatchId === undefined ? undefined : s.dispatches.find((d) => d.id === asked.dispatchId)
+      // A person: the app, the Host's own door, a shell with no session, or a paired computer's person (final review M9)
+      const person =
+        !agentCaller(caller) &&
+        (caller.sessionId === '' || caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER || caller.role === 'controller')
+      if (askedOn?.externalAgent && !person)
+        return denied('a person answers an external agent’s permission request, in the app or with astera reply from their own shell')
       return commit(applyReply(s, { messageId: id, body }, now))
     }
     case 'check': {

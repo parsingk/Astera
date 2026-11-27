@@ -20,6 +20,10 @@ export type NodeMeta =
   | { kind: 'provider'; provider: Provider }
   /** A review by an external reviewer is open: its name stands where the provider would */
   | { kind: 'external-reviewer'; name: string }
+  /** An external agent works the Task (Phase 5 A1): its name, or its id until the run reads it */
+  | { kind: 'external-agent'; name: string }
+  /** That agent waits on the person's answer to its permission request (Phase 5 A1) */
+  | { kind: 'permission-ask'; name: string }
   | { kind: 'none' }
 
 /** 마지막 라운드에서 첫 실패(failed·timed-out)한 검사. 첫 실패 뒤는 not-run 이라(validator) 막힌 것은 하나다. A check
@@ -81,6 +85,8 @@ export function nodeMetaOf(task: JobTask): NodeMeta {
   if (task.status === 'failed' && blocked !== null)
     return { kind: 'failed', name: blocked.name, ...(blocked.status === 'error' ? { unavailable: true as const } : {}) }
   if (task.provider && task.externalReviewer) return { kind: 'external-reviewer', name: task.externalReviewer.name }
+  if (task.provider && task.externalAgent && task.permissionAsk) return { kind: 'permission-ask', name: task.externalAgent.name || task.externalAgent.id }
+  if (task.provider && task.externalAgent) return { kind: 'external-agent', name: task.externalAgent.name || task.externalAgent.id }
   if (task.provider) return { kind: 'provider', provider: task.provider }
   return { kind: 'none' }
 }

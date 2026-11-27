@@ -13,6 +13,12 @@ describe('pickReviewer', () => {
       .toEqual({ provider: 'codex', accountId: 'b1' })
   })
 
+  // Phase 5 A1 final review I5: an external agent's work has no provider of ours to avoid
+  it('picks any provider when there is none to avoid', () => {
+    const accounts = [acc('a1', 'claude', '2026-01-01T00:00:00.000Z')]
+    expect(pickReviewer({ implProvider: null, accounts, loggedInIds: new Set(['a1']) })).toEqual({ provider: 'claude', accountId: 'a1' })
+  })
+
   it('구현자와 같은 provider 만 있으면 null 이다', () => {
     const accounts = [acc('a1', 'claude', '2026-01-01T00:00:00.000Z')]
     expect(pickReviewer({ implProvider: 'claude', accounts, loggedInIds: new Set(['a1']) })).toBeNull()

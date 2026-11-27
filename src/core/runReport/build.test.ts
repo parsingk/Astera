@@ -196,6 +196,18 @@ describe('buildRunReport', () => {
     expect(p.forced).toEqual([{ task: 'Task t1', by: 'person' }])
   })
 
+  // Phase 5 A1: only a person answers an external agent's permission request, so each answer is a person's
+  it('counts a person’s answer to an external agent’s permission request', () => {
+    const ext = dispatch('d1', 't1', { accountId: '', sessionId: 'acp:work-0a0b0c0d', externalAgent: { id: 'ext_1', name: 'O' } })
+    const q = (id: string, answerBody: string) => ({ id, runId: 'run_1', type: 'question' as const, taskId: 't1', dispatchId: 'd1', subject: 'Edit a', body: 'Edit a', answered: true, answerBody, createdAt: T0 })
+    const s = { ...world({ dispatches: [ext] }), messages: [q('m1', 'Yes'), q('m2', '')] }
+    const r = report(s).interventions
+    expect(r.answers.person).toBe(1)
+    expect(r.noPersonSteppedIn).toBe(false)
+    // A worker's question an account worker asked is a coordinator's or Astera's to answer, and is not counted here
+    expect(report({ ...world({ dispatches: [dispatch('d1', 't1')] }), messages: [q('m1', 'Yes')] }).interventions.answers.person).toBe(0)
+  })
+
   it("counts the workers' waits and switches", () => {
     const s = world({
       dispatches: [

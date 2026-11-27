@@ -838,7 +838,7 @@ astera runs    checks --id <runId>
 astera runs    reconverge --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
-astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> [--account <id,…>] [--agent-profile <id|name>] [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
+astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> [--account <id,…>] [--agent-profile <id|name>] [--external-agent <ext_id>] [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
 astera tasks   dispatch --id <taskId>
 astera tasks   repair --task <taskId> [--finding <ref>] [--dry-run]
 astera tasks   findings --task <taskId>
@@ -857,6 +857,7 @@ astera higgsfield use --account <id|label|email>
 
 astera ext     list
 astera ext     sync
+astera agents  capabilities
 
 astera agent-profiles list
 astera agent-profiles show    --id <profileId|name>

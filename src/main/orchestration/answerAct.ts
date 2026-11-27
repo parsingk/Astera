@@ -25,7 +25,7 @@ export function orchActionOf(
 }
 
 /** The S5 starts an app that yields dispatch does not run for the Host (the m6 ruling). */
-const YIELDED_STARTS: ReadonlySet<string> = new Set(['startValidation', 'startReview', 'startRepair'])
+const YIELDED_STARTS: ReadonlySet<string> = new Set(['startValidation', 'startReview', 'startRepair', 'startExternalWork'])
 
 /**
  * Runs one action and shapes the reply the `orch-acted` message carries.

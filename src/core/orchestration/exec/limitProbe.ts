@@ -160,7 +160,8 @@ export function makeLimitProbe(deps: LimitProbeDeps): (d: Dispatch) => Promise<n
     // probe itself absorbs every failure as null.
     // An external review ran in a third party's process: no transcript or rollout of ours to read, and its
     // placeholder provider and account must not be probed or logged about.
-    if (d.externalReviewer) return null
+    // An external agent's work (Phase 5 A1) the same
+    if (d.externalReviewer || d.externalAgent) return null
     try {
       return d.provider === 'claude' ? await probeClaudeLimit(d, deps) : await probeCodexLimit(d, deps)
     } catch (err) {

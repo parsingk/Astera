@@ -63,8 +63,9 @@ export function unattendedQuestions(s: OrchState, isAlive: (sessionId: string) =
       )
       .map((r) => r.id)
   )
+  // An external agent's permission request (Phase 5 A1) waits for the person, so it is never answered for them
   const openDispatchIds = new Set(
-    s.dispatches.filter((d) => !d.outcome && !d.endedAt).map((d) => d.id)
+    s.dispatches.filter((d) => !d.outcome && !d.endedAt && !d.externalAgent).map((d) => d.id)
   )
   return s.messages
     .filter(

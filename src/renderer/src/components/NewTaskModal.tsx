@@ -1,5 +1,5 @@
 import { taskTitleOf } from './checkText'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Account, JobTask } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
@@ -73,6 +73,26 @@ export function NewTaskModal({
    *  권한은 프로필이 정한다. 짝 지은 Runtime 의 Task 에는 칸이 없다: 이 컴퓨터의 프로필은 그쪽에 없다. */
   const [agentProfileId, setAgentProfileId] = useState('')
   const profiles = useAgentProfiles()
+  /** Phase 5 A1: an external agent registered in Settings, Agents, that works the Task instead of accounts. '' is none.
+   *  This computer's list, so a paired Runtime's Task has no such field. */
+  const [externalAgentId, setExternalAgentId] = useState('')
+  const [externalAgents, setExternalAgents] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    if (door.runtimeId) return
+    let alive = true
+    window.api.settings
+      .getReviewerSettings()
+      .then((s) => {
+        if (alive) setExternalAgents(s.reviewers.map((r) => ({ id: r.id, name: r.name })))
+      })
+      .catch(() => {
+        // Unreadable settings: no external agent to offer, and the form works on accounts as before
+      })
+    return () => {
+      alive = false
+    }
+  }, [door.runtimeId])
+  const external = externalAgentId !== ''
   /** 완료 검사 — 고른 RunConfig id, **이 순서가 실행 순서다**(Plan 1 설계 D9: 첫 실패에서 멈춘다). 그래서 Set 이
    *  아니라 배열이고, 순서를 바꾸는 손잡이(↑↓)가 있다. */
   const [checks, setChecks] = useState<string[]>([])
@@ -139,7 +159,7 @@ export function NewTaskModal({
     // busy 로 다시 걸러 이중 클릭이 Task 를 두 개 만들지 못하게 한다 — NewRunModal.create 와 같은
     // 이유다: 버튼의 disabled 는 같은 프레임에 반영되지 않을 수 있다.
     // 계정도 함께 본다 — 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석).
-    if (!trimmedSpec || accountIds.length === 0 || busy || locked) return
+    if (!trimmedSpec || (accountIds.length === 0 && !external) || busy || locked) return
     setBusy(true)
     setError(null)
     try {
@@ -152,12 +172,13 @@ export function NewTaskModal({
         deps,
         // 쉼표로 보낸다 — task-create 의 문법이다(server.ts). **언제나 보낸다** — 아래 버튼이
         // 빈 목록으로는 눌리지 않으므로 이 자리에 빈 값이 오지 않는다.
-        account: accountIds.join(','),
+        // An external agent works it instead of accounts (Phase 5 A1): task-create takes one or the other
+        ...(external ? { externalAgent: externalAgentId } : { account: accountIds.join(',') }),
         // 쉼표 목록 — task-create 의 문법이다(server.ts, `--account` 와 같은 규약). 고른 순서가 실행 순서다.
         // 하나도 안 골랐으면 키를 보내지 않는다: 빈 문자열은 서버가 400 으로 거절한다.
         ...(checks.length > 0 ? { validate: checks.join(',') } : {}),
         ...(review ? { review: true } : {}),
-        ...(agentProfileId !== '' ? { agentProfileId } : {})
+        ...(agentProfileId !== '' && !external ? { agentProfileId } : {})
         // parent 는 보내지 않는다 — parentId 는 통합(integration) Task 의 표식이라, 이 폼에서 보내면
         // 스케줄러가 이 Task 를 병합 단계 없이 프로젝트 폴더에서 돌리는 통합 Task 로 취급하게 된다.
       })
@@ -241,8 +262,23 @@ export function NewTaskModal({
             <p className="modal-hint">{t('jobs.task.depsHint')}</p>
           </div>
         )}
-        {/* 에이전트 프로필(Agent Profiles design §6): 계정 칸 위에 둔다. 고르면 그 계정 칸을 채운다 */}
-        {accounts !== null && door.runtimeId === undefined && (
+        {/* Phase 5 A1: an agent registered in Settings, Agents can work the Task instead of accounts. Shown only when one
+            is registered: an empty choice would be a control with nothing to pick. */}
+        {externalAgents.length > 0 && (
+          <div className="field">
+            <label>{t('jobs.task.externalAgent')}</label>
+            <Select
+              items={[{ value: '', label: t('jobs.task.externalAgentNone') }, ...externalAgents.map((a) => ({ value: a.id, label: a.name }))]}
+              value={externalAgentId}
+              onChange={setExternalAgentId}
+              ariaLabel={t('jobs.task.externalAgent')}
+            />
+            <p className="modal-hint">{t('jobs.task.externalAgentHint')}</p>
+          </div>
+        )}
+        {/* 에이전트 프로필(Agent Profiles design §6): 계정 칸 위에 둔다. 고르면 그 계정 칸을 채운다. An external agent works the Task
+            instead of accounts and a profile (Phase 5 A1), so neither field shows once one is picked */}
+        {accounts !== null && door.runtimeId === undefined && !external && (
           <AgentProfileField
             profiles={profiles}
             accounts={accounts}
@@ -260,7 +296,7 @@ export function NewTaskModal({
             등록되면 지정 없는 Task 는 새 계정으로 조용히 넘어가고 못박은 Task 는 Gate 를 연다.
             (2) 칸이 없는 이유를 화면이 말하지 않아, 계정이 하나인 사람은 기능이 빠진 줄 안다.
             null 은 아직 안 온 것이라 같이 접힌다 */}
-        {accounts !== null && (
+        {accounts !== null && !external && (
           <div className="field">
             <label>{t('jobs.task.account')}</label>
             {/* 슬롯 하나씩. 첫 칸은 '지정 안 함'(빈 값)을 가질 수 있고, 뒤 칸은 고른 것만 남는다 —
@@ -376,7 +412,7 @@ export function NewTaskModal({
         {/* 계정이 없으면 만들 수 없다 — provider 를 알 방법이 없다(accountIds 의 주석) */}
         <button
           className="primary"
-          disabled={locked || busy || !spec.trim() || accountIds.length === 0}
+          disabled={locked || busy || !spec.trim() || (accountIds.length === 0 && !external)}
           onClick={() => void create()}
         >
           {t('jobs.task.create')}

@@ -386,6 +386,8 @@ describe('makeLimitProbe — external review', () => {
     for (const provider of ['claude', 'codex'] as const) {
       const d = baseDispatch({ provider, accountId: '', sessionId: 'acp:1a2b3c4d', externalReviewer: { id: 'ext_1', name: 'G' } })
       expect(await probe(d)).toBeNull()
+      // An external agent's work (Phase 5 A1) runs on no account either
+      expect(await probe(baseDispatch({ provider, accountId: '', sessionId: 'acp:work-1a2b3c4d', externalAgent: { id: 'ext_1', name: 'O' } }))).toBeNull()
     }
     expect(reads).toBe(0)
     expect(deps.logs).toEqual([])

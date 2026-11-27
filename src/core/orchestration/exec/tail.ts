@@ -40,6 +40,9 @@ export const TAIL_UNTRACKED =
  *  transcript, a file of its own. */
 export const EXTERNAL_REVIEW_NO_OUTPUT =
   'an external reviewer has no terminal output; its transcript is in the review-logs folder of the profile'
+/** The same for an external agent working a Task (Phase 5 A1): its transcript is kept beside the reviews'. */
+export const EXTERNAL_WORK_NO_OUTPUT =
+  'an external agent has no terminal output; its transcript is in the review-logs folder of the profile'
 /** Tracked, and nothing has arrived yet. Returning an empty string reads to the LLM on the other
  *  end as "the worker printed nothing" and leads it to decide to kill a live worker (this
  *  necessarily holds in the window right after worker-start, before the first PTY chunk arrives). */

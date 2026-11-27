@@ -28,11 +28,23 @@ export class AcpFailure extends Error {
 
 export interface AcpTurn {
   stopReason: string
+  /** Everything the agent said in the turn, for a transcript and a reviewer's verdict. */
   text: string
+  /** Its last message: what it said after its last tool call (Phase 5 A1). What came before is narration. */
+  finalText: string
+}
+
+/** A permission request as a worker's caller decides it (Phase 5 A1). */
+export interface AcpPermissionRequest {
+  kind?: string
+  title?: string
+  options: { optionId: string; kind: string; name?: string }[]
 }
 
 export interface AcpSession {
   agent: { name?: string; title?: string; version?: string }
+  /** What the agent said it can do in `initialize` (Phase 5 A1): `loadSession` is resuming a session. */
+  capabilities: { loadSession: boolean }
   prompt(text: string): Promise<AcpTurn>
   /** Marks the end intentional, then kills the process tree. Idempotent. After it, nothing rejects with 'exited'. */
   close(): void
@@ -69,6 +81,9 @@ export async function openAcpSession(a: {
   /** The transcript sink: one line per call, no payloads of unknown notifications. */
   log(line: string): void
   timeouts?: { initializeMs?: number; newSessionMs?: number; setModeMs?: number }
+  /** A worker (Phase 5 A1): the caller answers each permission request with the option id it picks (null cancels), and a
+   *  write is the agent doing its work, not a violation. Absent: the reviewer's policy (reads only, a write ends it). */
+  worker?: { decide(req: AcpPermissionRequest): Promise<string | null> }
 }): Promise<AcpSession> {
   const { proc, log } = a
   const peer = createJsonRpcPeer({ write: (l) => proc.write(l), onLine: (cb) => void proc.onLine(cb) }, { log })
@@ -78,16 +93,23 @@ export async function openAcpSession(a: {
   let ended = false
   let sessionId = ''
   /** The message being collected, or null while no prompt is in flight; `size` is the characters held in `parts`. */
-  let turnText: { parts: string[]; size: number } | null = null
+  let turnText: { parts: string[]; size: number; last: string[]; lastSize: number } | null = null
   /** Adds a chunk; past twice the cap the parts are joined and cut to the cap's tail, so an agent that never stops talking
    *  costs at most that much (final fix wave D2). */
-  const collect = (t: { parts: string[]; size: number }, chunk: string): void => {
+  const collect = (t: { parts: string[]; size: number; last: string[]; lastSize: number }, chunk: string): void => {
     t.parts.push(chunk)
     t.size += chunk.length
     if (t.size > 2 * TURN_TEXT_MAX) {
       const kept = t.parts.join('').slice(-TURN_TEXT_MAX)
       t.parts = [kept]
       t.size = kept.length
+    }
+    t.last.push(chunk)
+    t.lastSize += chunk.length
+    if (t.lastSize > 2 * TURN_TEXT_MAX) {
+      const kept = t.last.join('').slice(-TURN_TEXT_MAX)
+      t.last = [kept]
+      t.lastSize = kept.length
     }
   }
   const calls = new Map<string, { kind?: string; title?: string }>()
@@ -126,7 +148,7 @@ export async function openAcpSession(a: {
     if (id !== undefined) calls.set(id, { kind, title })
     const status = str(u.status)
     log(`${kind ?? 'unknown'} ${status ?? 'unknown'} ${title ?? ''}`.trimEnd())
-    if (kind !== undefined && WRITE_KINDS.includes(kind) && (status === 'in_progress' || status === 'completed')) {
+    if (!a.worker && kind !== undefined && WRITE_KINDS.includes(kind) && (status === 'in_progress' || status === 'completed')) {
       end(new AcpFailure('violation', title || kind), true)
     }
   }
@@ -141,12 +163,33 @@ export async function openAcpSession(a: {
     if (kind === 'agent_message_chunk') {
       const c = obj(u.content)
       if (turnText && c?.type === 'text' && typeof c.text === 'string') collect(turnText, c.text)
-    } else if (kind === 'tool_call' || kind === 'tool_call_update') onToolCall(u)
+    } else if (kind === 'tool_call' || kind === 'tool_call_update') {
+      // What the agent said before a tool call is its narration: the last message starts after its last tool call
+      if (turnText && turnText.lastSize > 0) {
+        turnText.last = []
+        turnText.lastSize = 0
+      }
+      onToolCall(u)
+    }
     else log(`session/update ${(kind ?? 'unknown').slice(0, 60)}`)
   })
 
-  peer.onRequest((method, params) => {
+  peer.onRequest(async (method, params) => {
     if (method !== 'session/request_permission') throw new JsonRpcError(METHOD_NOT_FOUND, `method not found: ${method}`)
+    if (a.worker) {
+      const p = obj(params)
+      const tc = obj(p?.toolCall)
+      const options = (Array.isArray(p?.options) ? p.options : [])
+        .map((o) => obj(o))
+        .filter((o): o is Record<string, unknown> => o !== undefined && typeof o.optionId === 'string' && typeof o.kind === 'string')
+        .map((o) => ({ optionId: o.optionId as string, kind: o.kind as string, ...(typeof o.name === 'string' ? { name: o.name } : {}) }))
+      const req: AcpPermissionRequest = { ...(str(tc?.kind) ? { kind: str(tc?.kind) } : {}), ...(str(tc?.title) ? { title: str(tc?.title) } : {}), options }
+      // Only an option the agent offered is ever sent back
+      const picked = p?.sessionId === sessionId ? await a.worker.decide(req) : null
+      const chosen = picked !== null && options.some((o) => o.optionId === picked) ? picked : null
+      log(`permission ${req.kind ?? 'unknown'} ${req.title ?? ''}: ${chosen ?? 'cancelled'}`)
+      return { outcome: chosen !== null ? { outcome: 'selected', optionId: chosen } : { outcome: 'cancelled' } }
+    }
     const decision = decidePermission(sessionId, params)
     const tc = obj(obj(params)?.toolCall)
     log(`permission ${str(tc?.kind) ?? 'unknown'} ${str(tc?.title) ?? ''}: ${decision.allowed ? 'allowed' : 'refused'}`)
@@ -166,6 +209,7 @@ export async function openAcpSession(a: {
     }
     const info = obj(init.agentInfo)
     const agent = { name: str(info?.name), title: str(info?.title), version: str(info?.version) }
+    const capabilities = { loadSession: obj(init.agentCapabilities)?.loadSession === true }
 
     let created: Record<string, unknown> | undefined
     try {
@@ -192,12 +236,17 @@ export async function openAcpSession(a: {
 
     return {
       agent,
+      capabilities,
       async prompt(text) {
-        const collected = { parts: [] as string[], size: 0 }
+        const collected = { parts: [] as string[], size: 0, last: [] as string[], lastSize: 0 }
         turnText = collected
         try {
           const r = obj(await call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }))
-          return { stopReason: str(r?.stopReason) ?? 'unknown', text: collected.parts.join('').slice(-TURN_TEXT_MAX) }
+          return {
+            stopReason: str(r?.stopReason) ?? 'unknown',
+            text: collected.parts.join('').slice(-TURN_TEXT_MAX),
+            finalText: collected.last.join('').slice(-TURN_TEXT_MAX)
+          }
         } catch (e) {
           if (e instanceof AcpFailure) throw e
           throw new AcpFailure('protocol', e instanceof Error ? e.message : String(e))

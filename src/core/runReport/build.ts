@@ -145,6 +145,12 @@ export function buildRunReport(s: OrchState, runId: string, o: { spent?: readonl
   const answers: Record<ActorGroup, number> = { person: 0, coordinator: 0, astera: 0, unknown: 0 }
   for (const g of s.gates)
     if (g.runId === runId && g.status === 'resolved' && g.resolution !== 'superseded') answers[g.resolvedBy ?? 'unknown']++
+  // An external agent's permission request is answered by a person and nobody else (Phase 5 A1, the reply command): each
+  // real answer is one. A settled question (an empty answer) is not.
+  const externalWork = new Set(all.filter((d) => d.externalAgent).map((d) => d.id))
+  if (externalWork.size > 0)
+    for (const m of s.messages)
+      if (m.type === 'question' && m.dispatchId !== undefined && externalWork.has(m.dispatchId) && (m.answerBody ?? '') !== '') answers.person++
   const forced = tasks
     .filter((t) => t.completionOverride)
     .map((t) => ({ task: t.title, by: t.completionOverrideBy ?? ('unknown' as ActorGroup) }))
@@ -174,8 +180,8 @@ export function buildRunReport(s: OrchState, runId: string, o: { spent?: readonl
     if (id !== undefined && !accountIds.includes(id)) accountIds.push(id)
   }
   for (const d of [...all].sort((a, b) => a.startedAt.localeCompare(b.startedAt))) {
-    // An external review's account id is the empty placeholder
-    if (d.externalReviewer) continue
+    // An external review's account id is the empty placeholder, and an external agent's work's (Phase 5 A1)
+    if (d.externalReviewer || d.externalAgent) continue
     see(d.accountId)
     for (const r of d.resumes ?? []) see(r.toAccountId)
   }

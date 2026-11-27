@@ -2857,6 +2857,21 @@ describe('task-create --account', () => {
     expect(deps.getState().tasks).toHaveLength(0)
   })
 
+  // Phase 5 A1: an external agent works a Task instead of accounts
+  it('takes --external-agent in place of --account, and refuses both, or an id that is not one', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks[0]).toMatchObject({ externalAgentId: 'ext_0a1b2c3d' })
+    expect(deps.getState().tasks[0].accountIds).toBeUndefined()
+    const both = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d', account: 'a1' })
+    expect(both).toMatchObject({ status: 400, body: { error: '--external-agent works the Task instead of accounts: give one or the other' } })
+    const bad = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'gemini' })
+    expect(bad).toMatchObject({ status: 400, body: { error: '--external-agent must be an external agent id (ext_ and 8 hex, from Settings, Agents)' } })
+  })
+
   // 섞이면 첫 계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로 갈아타려 한다 — 그것은
   // 갈아타기가 아니라 다른 프로그램을 띄우는 일이다
   it('서로 다른 provider 가 섞인 목록을 거절한다', async () => {
@@ -11367,5 +11382,121 @@ describe('handleCommand — an external review Dispatch', () => {
     })
     expect(r.body).not.toEqual({ output: TAIL_UNTRACKED })
     expect(asked).toBe(0)
+  })
+})
+
+// Phase 5 A1: the dispatch loop's door for a Task an external agent works
+describe('external-work-start', () => {
+  const setup = async (over: Record<string, unknown> = {}) => {
+    const started: string[] = []
+    const released: string[] = []
+    const deps = Object.assign(makeDeps(), {
+      startExternalWork: (a: { dispatchId: string }) => void started.push(a.dispatchId),
+      releaseWorker: async (sessionId: string) => void released.push(sessionId)
+    })
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)
+    const runId = (run.body as { id: string }).id
+    const t = await call(deps, 'task-create', { runId, spec: 'do it', externalAgent: 'ext_0a1b2c3d', ...over }, APP_CALLER)
+    return { deps, taskId: (t.body as { id: string }).id, started, released, runId }
+  }
+
+  it('opens a Dispatch for the external agent in the Run folder and starts its run after the commit', async () => {
+    const { deps, taskId, started } = await setup()
+    const r = await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    expect(r.status).toBe(200)
+    const dispatchId = (r.body as { dispatchId: string }).dispatchId
+    const d = deps.getState().dispatches.find((x) => x.id === dispatchId)!
+    expect(d).toMatchObject({ taskId, accountId: '', cwd: 'D:/p', externalAgent: { id: 'ext_0a1b2c3d', name: '' } })
+    expect(d.sessionId).toMatch(/^acp:work-[0-9a-f]{8}$/)
+    expect(deps.getState().tasks.find((x) => x.id === taskId)?.status).toBe('dispatched')
+    expect(started).toEqual([dispatchId])
+  })
+
+  it('is the loop’s alone, and only for a ready Task an external agent works', async () => {
+    const { deps, taskId } = await setup()
+    expect((await call(deps, 'external-work-start', { task: taskId }, 'coordinator')).status).toBe(403)
+    const other = await call(deps, 'task-create', { runId: deps.getState().runs[0].id, spec: 's', externalAgent: 'ext_0a1b2c3d' }, APP_CALLER)
+    const otherId = (other.body as { id: string }).id
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, tasks: s0.tasks.map((t) => (t.id === otherId ? { ...t, externalAgentId: undefined, accountIds: ['a1'] } : t)) })
+    expect((await call(deps, 'external-work-start', { task: otherId }, HOST_CALLER)).status).toBe(409)
+    await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    expect((await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)).status).toBe(409)
+  })
+
+  it('a failed report of the external agent does not probe an account’s usage limit: it has none', async () => {
+    const { deps, taskId } = await setup()
+    const probed: string[] = []
+    Object.assign(deps, { probeLimit: async (d: { id: string }) => (probed.push(d.id), 1_700_000_000_000) })
+    const r = await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    const dispatchId = (r.body as { dispatchId: string }).dispatchId
+    const done = await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'failed', subject: 'FAILED: no', body: 'b' }, HOST_CALLER)
+    expect(done.status).toBe(200)
+    expect(probed).toEqual([])
+    expect(deps.getState().dispatches.find((d) => d.id === dispatchId)?.limitResetsAt).toBeUndefined()
+  })
+
+  it('its permission question is answered by a person, never by an agent session such as the coordinator', async () => {
+    const { deps, taskId } = await setup()
+    const r = await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    const dispatchId = (r.body as { dispatchId: string }).dispatchId
+    const asked = call(deps, 'ask', { taskId, dispatchId, question: 'Edit a?', options: 'Yes,No', timeoutMs: 2_000 }, HOST_CALLER)
+    await vi.waitFor(() => expect(deps.getState().messages.some((m) => m.type === 'question')).toBe(true))
+    const q = deps.getState().messages.find((m) => m.type === 'question')!
+    expect((await call(deps, 'reply', { id: q.id, body: 'Yes' }, 'coord-session')).status).toBe(403)
+    // An MCP client and a controller that is an agent are agents too (final review M9)
+    expect((await handleCommand(deps, { sessionId: '', role: 'mcp' }, 'reply', { id: q.id, body: 'Yes' })).status).toBe(403)
+    const controller = (kind: 'agent' | 'person') => ({ sessionId: '', role: 'controller' as const, principal: { clientId: 'c', name: 'n', permission: 'full-control' as const, kind } })
+    expect((await handleCommand(deps, controller('agent'), 'reply', { id: q.id, body: 'Yes' })).status).toBe(403)
+    // A person on a paired computer answers it as a person here does
+    expect((await handleCommand(deps, controller('person'), 'reply', { id: q.id, body: 'Yes' })).status).toBe(200)
+    expect((await asked).body).toMatchObject({ answered: true, answer: 'Yes' })
+  })
+
+  // Final review C2: an external agent runs outside any sandbox, so sandboxed work never reaches one
+  it('a sandboxed session cannot hand a Task to an external agent, nor can a sandboxed Job have one', async () => {
+    const deps = Object.assign(makeDeps(), { sessionSandboxed: (id: string) => id === 'boxed', startExternalWork: () => {} })
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)
+    const runId = (run.body as { id: string }).id
+    const boxed = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' }, 'boxed')
+    expect(boxed.status).toBe(403)
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, jobs: s0.jobs.map((j) => ({ ...j, sandboxed: true })) })
+    expect((await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' }, APP_CALLER)).status).toBe(409)
+  })
+
+  it('external-work-start refuses a Task whose work must run in a sandbox', async () => {
+    const { deps, taskId, started } = await setup()
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, tasks: s0.tasks.map((t) => (t.id === taskId ? { ...t, sandboxed: true } : t)) })
+    expect((await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)).status).toBe(409)
+    expect(started).toEqual([])
+  })
+
+  // Final review I3: only Astera starts an external agent, so a coordinator's worker-start does not override the choice
+  it('worker-start refuses a Task an external agent works', async () => {
+    const { deps, taskId } = await setup()
+    const r = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'a1' }, APP_CALLER)
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/external agent/)
+  })
+
+  it('task-create refuses an external agent in a Job its coordinator drives', async () => {
+    const deps = Object.assign(makeDeps(), { startExternalWork: () => {} })
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)
+    const runId = (run.body as { id: string }).id
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, jobs: s0.jobs.map((j) => ({ ...j, coordinatorAccountId: 'a1', autoDispatch: undefined })) })
+    const r = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' }, APP_CALLER)
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/coordinator/)
+  })
+
+  it('a stopped Run ends the Dispatch without asking for a worker session to be released', async () => {
+    const { deps, taskId, released, runId } = await setup()
+    await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    await call(deps, 'runs-stop', { id: runId }, APP_CALLER)
+    expect(released).toEqual([])
+    expect(deps.getState().dispatches.every((d) => d.endedAt !== undefined)).toBe(true)
   })
 })

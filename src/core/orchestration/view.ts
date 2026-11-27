@@ -20,7 +20,7 @@ import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy, withoutSupersededL
 import { checkConfigIdsOf, policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
 import { githubLifecycleOf } from '../github/view'
 import { isLifecycleTask, lifecycleFactsIn } from './lifecycleTask'
-import type { Dispatch, Gate, Job, JobRun, Task } from './types'
+import type { Dispatch, Gate, Job, JobRun, Message, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
  *
@@ -203,6 +203,17 @@ function jobTaskOf(
     openGates: open.length,
     ...(running ? { provider: running.provider, startedAt: running.startedAt } : {}),
     ...(running?.externalReviewer ? { externalReviewer: running.externalReviewer } : {}),
+    ...(running?.externalAgent ? { externalAgent: running.externalAgent } : {}),
+    ...(task.externalAgentId !== undefined ? { externalAgentId: task.externalAgentId } : {}),
+    ...(running && ix.permissionAskByDispatch.has(running.id)
+      ? {
+          permissionAsk: {
+            id: ix.permissionAskByDispatch.get(running.id)!.id,
+            question: ix.permissionAskByDispatch.get(running.id)!.body,
+            ...(ix.permissionAskByDispatch.get(running.id)!.options ? { options: ix.permissionAskByDispatch.get(running.id)!.options } : {})
+          }
+        }
+      : {}),
     ...(openEntry
       ? {
           waiting: {
@@ -269,6 +280,8 @@ interface FoldIndex {
   /** runWorktrees' Dispatches: those of every Task with that Run id */
   dispatchesByRun: Map<string, Dispatch[]>
   openGatesByTask: Map<string, Gate[]>
+  /** The unanswered question on each open external agent work Dispatch (Phase 5 A1): its permission request */
+  permissionAskByDispatch: Map<string, Message>
   runsByJob: Map<string, JobRun[]>
   /** jobOf: the first Job under that id */
   jobById: Map<string, Job>
@@ -308,6 +321,11 @@ function foldIndex(state: OrchState): FoldIndex {
   }
   const openGatesByTask = new Map<string, Gate[]>()
   for (const g of state.gates) if (g.status === 'open') push(openGatesByTask, g.taskId, g)
+  const askingDispatches = new Set(state.dispatches.filter((d) => d.externalAgent && !d.outcome && !d.endedAt).map((d) => d.id))
+  const permissionAskByDispatch = new Map<string, Message>()
+  if (askingDispatches.size > 0)
+    for (const m of state.messages)
+      if (m.type === 'question' && !m.answered && m.dispatchId !== undefined && askingDispatches.has(m.dispatchId)) permissionAskByDispatch.set(m.dispatchId, m)
   const runsByJob = new Map<string, JobRun[]>()
   const runById = new Map<string, JobRun>()
   for (const r of state.runs) {
@@ -323,6 +341,7 @@ function foldIndex(state: OrchState): FoldIndex {
     dispatchesByTask,
     dispatchesByRun,
     openGatesByTask,
+    permissionAskByDispatch,
     runsByJob,
     jobById,
     jobOfRun: (runId) => {

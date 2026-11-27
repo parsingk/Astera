@@ -16,7 +16,7 @@ import { ArrowUpRight, ChevronDown, ChevronRight } from 'lucide-react'
 import { SourceChip } from './SourceChip'
 import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
-import { reviewerChipName } from '../lib/reviewerSettingsView'
+import { externalNameOf, reviewerChipName } from '../lib/reviewerSettingsView'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
  *
@@ -302,13 +302,13 @@ function RunCardImpl({
                 className={`jobs-task jobs-task--${task.status}${sessionId ? '' : ' no-session'}`}
                 onClick={sessionId ? () => onOpenSession(sessionId) : undefined}
               >
-                <span className="jobs-av">{task.externalReviewer ? Array.from(task.externalReviewer.name)[0]?.toUpperCase() : PROVIDER_ABBR[task.provider]}</span>
+                <span className="jobs-av">{externalNameOf(task) !== undefined ? Array.from(externalNameOf(task) ?? '')[0]?.toUpperCase() : PROVIDER_ABBR[task.provider]}</span>
                 <span className="jobs-task-body">
                   <span className="jobs-task-title" title={taskTitleOf(task, t as never)}>
                     {taskTitleOf(task, t as never)}
                   </span>
-                  <span className="jobs-task-meta" title={`${task.externalReviewer ? task.externalReviewer.name : task.provider} · ${taskMeta(task, nowMs, t)}`}>
-                    {task.externalReviewer ? reviewerChipName(task.externalReviewer.name) : task.provider} · {taskMeta(task, nowMs, t)}
+                  <span className="jobs-task-meta" title={`${externalNameOf(task) ?? task.provider} · ${taskMeta(task, nowMs, t)}`}>
+                    {externalNameOf(task) !== undefined ? reviewerChipName(externalNameOf(task) ?? '') : task.provider} · {taskMeta(task, nowMs, t)}
                   </span>
                 </span>
                 {chip && <ConvergenceChipView chip={chip} t={t} />}

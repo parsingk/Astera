@@ -232,3 +232,15 @@ describe('nodeMetaOf: an external review', () => {
     expect(nodeMetaOf(task({ provider: 'claude' }))).toEqual({ kind: 'provider', provider: 'claude' })
   })
 })
+
+describe('nodeMetaOf: an external agent working a Task (Phase 5 A1)', () => {
+  it('names the agent in place of the provider, and its id until the run reads its name', () => {
+    expect(nodeMetaOf(task({ provider: 'claude', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } }))).toEqual({ kind: 'external-agent', name: 'OpenCode' })
+    expect(nodeMetaOf(task({ provider: 'claude', externalAgent: { id: 'ext_0a1b2c3d', name: '' } }))).toEqual({ kind: 'external-agent', name: 'ext_0a1b2c3d' })
+  })
+  it('says the agent waits on the person while its permission request is open', () => {
+    expect(
+      nodeMetaOf(task({ provider: 'claude', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' }, permissionAsk: { id: 'msg_1', question: 'Edit a', options: ['Yes', 'No'] } }))
+    ).toEqual({ kind: 'permission-ask', name: 'OpenCode' })
+  })
+})

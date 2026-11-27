@@ -154,7 +154,7 @@ describe('openAcpSession over a scripted process', () => {
     const s = await bounded(openAcpSession({ proc, cwd: '.', clientVersion: '1', log: (l) => logs.push(l), timeouts: { setModeMs: 100 } }))
     expect(logs.some((l) => l.includes('session/set_mode') && l.includes('did not answer'))).toBe(true)
     expect(killed()).toBe(0)
-    await expect(s.prompt('go')).resolves.toEqual({ stopReason: 'end_turn', text: '' })
+    await expect(s.prompt('go')).resolves.toEqual({ stopReason: 'end_turn', text: '', finalText: '' })
     expect(written.at(-1)).toMatchObject({ method: 'session/prompt' })
     s.close()
   })
@@ -203,7 +203,7 @@ describe('openAcpSession over a scripted process', () => {
   it('sends the prompt as a text block', async () => {
     const { proc, written } = scripted((m) => (m.method === 'initialize' ? INIT : m.method === 'session/new' ? { sessionId: 's9' } : { stopReason: 'end_turn' }))
     const s = await openAcpSession({ proc, cwd: '.', clientVersion: '1', log: () => {} })
-    await expect(s.prompt('hello')).resolves.toEqual({ stopReason: 'end_turn', text: '' })
+    await expect(s.prompt('hello')).resolves.toEqual({ stopReason: 'end_turn', text: '', finalText: '' })
     expect(written[2]).toMatchObject({ method: 'session/prompt', params: { sessionId: 's9', prompt: [{ type: 'text', text: 'hello' }] } })
     s.close()
   })
@@ -213,7 +213,7 @@ describe('openAcpSession over the fake agent', () => {
   it('runs a turn: agent info from initialize, the chunks joined, the stop reason', async () => {
     const { s } = await open('approve')
     expect(s.agent).toEqual({ name: 'fake-agent', title: 'Fake Agent', version: '0.0.1' })
-    await expect(bounded(s.prompt('review this'))).resolves.toEqual({ stopReason: 'end_turn', text: 'APPROVE' })
+    await expect(bounded(s.prompt('review this'))).resolves.toEqual({ stopReason: 'end_turn', text: 'APPROVE', finalText: 'APPROVE' })
   })
 
   it('prints the --message text as the final message', async () => {
@@ -326,5 +326,53 @@ describe('openAcpSession over the fake agent', () => {
     }
     const f = await failureOf(openAcpSession({ proc, cwd: '.', clientVersion: '1', log: () => {}, timeouts: { newSessionMs: 200 } }))
     expect(f.kind).toBe('timeout')
+  })
+})
+
+// Phase 5 A1: the same client works a Task when the caller says how permissions are answered, and writes are allowed
+describe('openAcpSession as a worker', () => {
+  const openWorker = async (mode: string, decide: (req: { kind?: string; title?: string; options: { optionId: string; kind: string; name?: string }[] }) => Promise<string | null>): Promise<{ s: AcpSession; logs: string[] }> => {
+    const proc = launch(mode)
+    const logs: string[] = []
+    const s = await bounded(openAcpSession({ proc, cwd: process.cwd(), clientVersion: '9.9.9', log: (l) => logs.push(l), worker: { decide } }))
+    sessions.push(s)
+    return { s, logs }
+  }
+
+  it('answers a permission request with the option the caller picks, asynchronously', async () => {
+    const asked: string[] = []
+    const { s, logs } = await openWorker('asks-edit', async (req) => {
+      asked.push(`${req.kind} ${req.title}`)
+      await new Promise((r) => setTimeout(r, 20))
+      return req.options.find((o) => o.kind === 'allow_once')?.optionId ?? null
+    })
+    await expect(bounded(s.prompt('x'))).resolves.toMatchObject({ stopReason: 'end_turn', text: 'outcome:allow-once' })
+    expect(asked).toEqual(['edit Edit a.txt'])
+    expect(logs).toContain('permission edit Edit a.txt: allow-once')
+  })
+
+  it('cancels the request when the caller picks nothing', async () => {
+    const { s } = await openWorker('asks-edit', async () => null)
+    await expect(bounded(s.prompt('x'))).resolves.toMatchObject({ text: 'outcome:cancelled' })
+  })
+
+  it('lets a worker write without ending the session', async () => {
+    const { s } = await openWorker('edits-without-asking', async () => null)
+    const turn = s.prompt('x')
+    const raced = await Promise.race([turn.then(() => 'ended', () => 'failed'), new Promise((r) => setTimeout(() => r('still working'), 500))])
+    expect(raced).toBe('still working')
+  })
+
+  it('keeps the last message apart from what the agent said before its last tool call', async () => {
+    const { s } = await openWorker('narrates-then-fails', async () => null)
+    const turn = await bounded(s.prompt('x'))
+    expect(turn.text.startsWith('I will look at the files first.')).toBe(true)
+    expect(turn.finalText.startsWith('FAILED: a.txt is missing')).toBe(true)
+    expect(turn.finalText).not.toContain('I will look')
+  })
+
+  it('says whether the agent can resume a session (loadSession)', async () => {
+    const { s } = await openWorker('approve', async () => null)
+    expect(s.capabilities).toEqual({ loadSession: false })
   })
 })

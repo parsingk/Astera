@@ -450,6 +450,11 @@ const LISTED_TOOLS: ToolDef[] = [
         .describe('Run configuration ids from list_run_configs, or plugin:<pluginId> for a completion check plugin a person installed, that must pass.'),
       review: z.boolean().optional().describe('Have the result reviewed before the Task counts as done.'),
       agentProfileId,
+      externalAgentId: id
+        .optional()
+        .describe(
+          "An external agent a person registered in Astera's Settings, Agents (ext_ and 8 hex), that works the Task in the Run folder instead of accounts. Give it or accountId and agentProfileId, not both."
+        ),
       requestId
     },
     // The CLI parser's shapes, which tasks-add reads: `--deps` a JSON array (cliArgs.ts JSON_ARRAY),
@@ -463,6 +468,7 @@ const LISTED_TOOLS: ToolDef[] = [
       ...(i.accountId !== undefined ? { account: i.accountId } : {}),
       ...(Array.isArray(i.validate) ? { validate: i.validate.join(',') } : {}),
       ...(i.review === true ? { review: true } : {}),
+      ...(i.externalAgentId !== undefined ? { externalAgent: i.externalAgentId } : {}),
       ...profileArg(i)
     })
   },

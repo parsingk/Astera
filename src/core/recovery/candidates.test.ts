@@ -39,3 +39,9 @@ describe('candidates (core)', () => {
     expect(isLost(dispatch({ endedAt: undefined }))).toBe(false)
   })
 })
+
+describe('candidates and an external agent (Phase 5 A1)', () => {
+  it('never names a lost external agent attempt: the orphan close puts it to a person instead', () => {
+    expect(candidates(state([dispatch({ accountId: '', sessionId: 'acp:work-0a0b0c0d', externalAgent: { id: 'ext_1', name: 'O' } })]))).toEqual([])
+  })
+})

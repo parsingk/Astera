@@ -300,6 +300,8 @@ export interface Task {
   readonly result?: string
   readonly filesModified?: readonly string[]
   readonly accountIds?: readonly string[]
+  /** The external agent that works this Task instead of accounts (an `ext_` id from Settings, Agents). */
+  readonly externalAgentId?: string
   readonly validateConfigId?: string
   readonly validateConfigIds?: readonly string[]
   readonly checks?: readonly CheckResult[]
@@ -361,6 +363,8 @@ export interface TaskAttempt {
   /** A review attempt made by an external reviewer: its id and name. `provider` and `accountId` are then the
    *  implementer's provider and an empty string, not the reviewer's. */
   readonly externalReviewer?: { readonly id: string; readonly name: string }
+  /** The external agent that worked this attempt (Phase 5 A1); `provider` and `accountId` are then placeholders. */
+  readonly externalAgent?: { readonly id: string; readonly name: string }
   readonly outcome?: Outcome
   readonly startedAt: string
   readonly endedAt?: string

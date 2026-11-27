@@ -142,6 +142,7 @@ const NOT_SWITCHED = [
   'higgsfield-use',
   'ext-list',
   'ext-sync',
+  'agents-capabilities',
   'plugins-validate',
   'plugins-init',
   'plugins-pack',

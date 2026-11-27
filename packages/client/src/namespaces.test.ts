@@ -27,9 +27,10 @@ const RUN = { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T', outcome: 
 const ENDING = { runId: 'run_1', jobId: 'job_1', progress: { done: 1, total: 1 }, state: 'completed' }
 
 /** A Host that answers each command from `answers` (404 for an unknown id) and records every call. */
-const setup = async (answers: Record<string, (args: Record<string, unknown>) => FakeReply>): Promise<{ host: FakeHost; astera: AsteraClient }> => {
+const setup = async (answers: Record<string, (args: Record<string, unknown>) => FakeReply>, features?: string[]): Promise<{ host: FakeHost; astera: AsteraClient }> => {
   const host = await startHost({
     key: profile.key,
+    ...(features ? { features } : {}),
     onCall: (m, reply) => reply(answers[m.cmd]?.(m.args) ?? { status: 501, body: { error: `unknown command ${m.cmd}` } })
   })
   opened.push(host)
@@ -307,6 +308,21 @@ describe('astera.agentProfiles, and the profile a Job or Task runs as', () => {
       ['tasks-add', { run: 'run_1', spec: 'x', agentProfile: 'Reviewer' }, undefined],
       ['tasks-add', { run: 'run_1', spec: 'x', account: 'acc_2', agentProfile: 'Reviewer' }, undefined]
     ])
+  })
+
+  // Phase 5 A1: an external agent works the Task instead of accounts, so no account is defaulted for it
+  it('creates a Task an external agent works, reading no coordinator account', async () => {
+    const { host, astera } = await setup(answers, ['orch', 'requests', 'external-agents'])
+    await astera.tasks.create({ runId: 'run_1', spec: 'x', externalAgentId: 'ext_0a1b2c3d' })
+    expect(sent(host)).toEqual([['tasks-add', { run: 'run_1', spec: 'x', externalAgent: 'ext_0a1b2c3d' }, undefined]])
+  })
+
+  // Final review M10: an older Host would ignore the unknown argument and run the Task on accounts
+  it('refuses an external agent with VERSION_MISMATCH on a Host without the feature, sending nothing', async () => {
+    const { host, astera } = await setup(answers)
+    const e = await rejection(astera.tasks.create({ runId: 'run_1', spec: 'x', externalAgentId: 'ext_0a1b2c3d' }))
+    expect(e.code).toBe('VERSION_MISMATCH')
+    expect(sent(host)).toEqual([])
   })
 
   it('a Task of a Job that runs as a profile takes its accounts from that profile, not the coordinator', async () => {

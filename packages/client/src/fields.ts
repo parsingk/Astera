@@ -75,6 +75,8 @@ export const TASK_FIELDS = Object.freeze([
   'kind',
   // The agent profile the Task runs as, by its id (Agent Profiles design §6)
   'agentProfileId',
+  // The external agent that works it instead of accounts, by its id (Phase 5 A1)
+  'externalAgentId',
   // Its last review ran with Claude Code's file-tool protection only (no sandbox on Windows)
   'reviewFileToolsOnly',
   'createdAt',

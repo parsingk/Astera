@@ -39,6 +39,8 @@ import { createTaskValidation } from '../core/orchestration/exec/validation'
 import { unavailable } from '../core/orchestration/pluginChecks'
 import type { TaskValidator } from '../core/orchestration/exec/validator'
 import { readAccountEntries } from '../core/accounts/accountsFile'
+import { createExternalWorks } from '../core/orchestration/exec/externalWork'
+import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { isLoggedIn } from '../core/accounts/loginCheck'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { hostPathGuard } from '../core/run/hostPathGuard'
@@ -59,6 +61,8 @@ export interface HostChecks {
   startValidation(a: { taskId: string; cwd: string }): void
   startReview(a: { taskId: string }): void
   startRepair(a: { dispatchId: string }): void
+  /** Phase 5 A1: runs the external agent on a Dispatch `external-work-start` opened (exec/externalWork.ts). */
+  startExternalWork(a: { dispatchId: string }): void
   repairTargetFor(taskId: string): RepairTarget | null
   repairOnce(a: { taskId: string; from?: OrchState }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Reads app-settings.json now, and refreshes langNow's value (R13). */
@@ -283,6 +287,28 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
         }
       : {})
   })
+  // Phase 5 A1: an external agent working a Task runs as this process's own child too, beside the external reviews, with
+  // the same door, environment and transcripts; its permission requests follow the app-wide permission mode, read each time
+  const externalWorks = d.handle
+    ? createExternalWorks({
+        getState: () => d.deps().getState(),
+        setState: (n) => d.deps().setState(n),
+        now: d.now,
+        log,
+        specsDir: d.specsDir,
+        external: {
+          settings: () => readReviewerSettings(settingsPath),
+          handle: d.handle,
+          spawn: nodeProcFactory,
+          env: (cwd: string) => (d.checkEnv ? d.checkEnv(hostWorkerBaseEnv(d.env), cwd).env : hostWorkerBaseEnv(d.env)),
+          platform: process.platform,
+          clientVersion: 'host',
+          ...externalReviewIo(log),
+          treeState: trackedTreeState,
+          permissionMode: () => readAgentPermissionMode(settingsPath)
+        }
+      })
+    : undefined
   /** The review starts in flight, by Task (`checking`). Both callers, the validator's `onSettled` and
    *  the driver's doors, go through this, so a Task is held from the call until the start has opened
    *  its Dispatch or its Gate. */
@@ -479,6 +505,10 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     startRepair: (a) => {
       void startRepairOnce(a).catch((e) => log(`repair failed dispatch=${a.dispatchId}: ${String(e)}`))
     },
+    startExternalWork: (a) => {
+      if (!externalWorks) return void log(`external work dispatch=${a.dispatchId} not started: this Host has no command door to report through`)
+      externalWorks.start(a)
+    },
     repairTargetFor: (taskId) => repairTargetFor(d.deps().getState(), taskId, isAlive),
     repairOnce: (a) => repairOnce(repairDeps, a),
     lang,
@@ -499,11 +529,16 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     closeOrphanedExternalReviews: async (o) => {
       const deps = d.deps()
       // The read and the commit are one step: nothing awaited between them
-      const r = closeOrphans(deps.getState(), { owned: reviewStarter.externalInFlight(), ...(o?.startedBefore !== undefined ? { startedBefore: o.startedBefore } : {}) }, d.now())
+      // What this Host runs now, reviews and external agents' work alike, is not an orphan
+      const owned = new Set([...reviewStarter.externalInFlight(), ...(externalWorks?.inFlight() ?? [])])
+      const r = closeOrphans(deps.getState(), { owned, ...(o?.startedBefore !== undefined ? { startedBefore: o.startedBefore } : {}) }, d.now())
       if (r.closed.length === 0) return
       await deps.setState(r.state)
       log(`closed the external reviews nobody owns now: ${r.closed.join(', ')}`)
     },
-    dispose: () => reviewStarter.disposeExternal()
+    dispose: () => {
+      reviewStarter.disposeExternal()
+      externalWorks?.dispose()
+    }
   }
 }

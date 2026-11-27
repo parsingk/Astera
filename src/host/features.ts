@@ -5,6 +5,7 @@ import {
   HOST_FEATURE_DISPATCH,
   HOST_FEATURE_DRIVER,
   HOST_FEATURE_EVENTS,
+  HOST_FEATURE_EXTERNAL_AGENTS,
   HOST_FEATURE_JOURNAL,
   HOST_FEATURE_LSP,
   HOST_FEATURE_MCP_HTTP,
@@ -55,6 +56,8 @@ export function hostFeatures(a: { spawns: boolean; slack?: boolean; workspace?: 
     HOST_FEATURE_REMOTE,
     HOST_FEATURE_PLUGINS,
     HOST_FEATURE_LSP,
+    // Every Host's command layer takes an external agent (Phase 5 A1), like the language servers every Host runs
+    HOST_FEATURE_EXTERNAL_AGENTS,
     ...(a.workspace === true ? [HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKSPACE_SIZE] : [])
   ]
 }
