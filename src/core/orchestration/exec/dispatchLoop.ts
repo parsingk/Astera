@@ -528,6 +528,15 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         // 통합 Task 를 만들지 않기로 했으므로 사람에게 간다. 조용히 넘기면 사용자에게
         // 남는 것은 '완료된 통합 Task 와 이유 없이 서 있는 Task' 뿐이어서 문제가 보이지
         // 않는다(실패한 통합 Task 는 그래프에서 스스로 보이므로 그쪽은 Gate 가 아니다).
+        // No account to run the integration Task on, and no agent profile to give one (Phase 5 A1 final review M12): the
+        // Tasks it folds in ran on none either, so a person merges by hand
+        const owner = state.runs.find((r) => r.id === at.runId)
+        if (!existing && accounts.length === 0 && (owner ? jobOf(state, owner) : undefined)?.agentProfileId === undefined)
+          return {
+            kind: 'gate',
+            reason: `워크트리를 합치다 충돌이 나서 통합 Task 가 필요한데, 그것을 돌릴 계정이 없습니다(합칠 Task 들이 계정 없이 돌았습니다). ${runRoot} 에서 손으로 합친 뒤 이 질문에 답하세요: ${integration.reason}`,
+            why: `the worktrees it depends on conflict, and no account is there to run the integration task on: ${integration.reason}`
+          }
         if (existing) {
           return {
             kind: 'gate',
@@ -678,8 +687,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
 
   /** A Task an external agent works (Phase 5 A1): no account to pick, and it works in the Run root itself, never in a
    *  worktree of its own, so it shares that folder with nobody (the rule the integration Task keeps, below). The Task's
-   *  dependencies that ran in their own worktrees are merged in first, as for any Task; a conflict's integration Task has
-   *  no account of this Task's to run on, so it names none and the person is asked for one. */
+   *  dependencies that ran in their own worktrees are merged in first, as for any Task; a conflict's integration Task runs on
+   *  the accounts of the latest completed dependency that had any, and with none the conflict is put to a person. */
   const placeExternal = async (slot: Slot): Promise<SlotEnd> => {
     const unmade = await ensureRunWorktree(slot)
     if (unmade) return unmade
@@ -694,7 +703,14 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         why: `task ${slot.taskId} must run in a sandbox, and an external agent cannot be sandboxed`
       }
     const runRoot = runRootOf(run, jobOf(state, run))
-    const waiting = await integrateBefore(slot, state, task, runRoot, [])
+    // A conflict's integration Task runs on the accounts of the latest completed Task it folds in, as the lifecycle
+    // Task's does (startLifecycle); with none, integrateBefore puts the conflict to a person (final review M12)
+    const latestDone = task.deps
+      .map((id) => state.tasks.find((t) => t.id === id))
+      .filter((t): t is Task => t !== undefined && t.status === 'completed' && (t.accountIds?.length ?? 0) > 0)
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .at(-1)
+    const waiting = await integrateBefore(slot, state, task, runRoot, latestDone?.accountIds ?? [])
     if (waiting) return waiting
     if (workingInRunRoot(c.getState(), slot.runId)) {
       log(`scheduler: task=${slot.taskId} waits — a worker is still working in ${runRoot}`)
