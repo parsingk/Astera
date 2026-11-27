@@ -11448,6 +11448,26 @@ describe('external-work-start', () => {
     expect((await asked).body).toMatchObject({ answered: true, answer: 'Yes' })
   })
 
+  // Final review C2: an external agent runs outside any sandbox, so sandboxed work never reaches one
+  it('a sandboxed session cannot hand a Task to an external agent, nor can a sandboxed Job have one', async () => {
+    const deps = Object.assign(makeDeps(), { sessionSandboxed: (id: string) => id === 'boxed', startExternalWork: () => {} })
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)
+    const runId = (run.body as { id: string }).id
+    const boxed = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' }, 'boxed')
+    expect(boxed.status).toBe(403)
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, jobs: s0.jobs.map((j) => ({ ...j, sandboxed: true })) })
+    expect((await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' }, APP_CALLER)).status).toBe(409)
+  })
+
+  it('external-work-start refuses a Task whose work must run in a sandbox', async () => {
+    const { deps, taskId, started } = await setup()
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, tasks: s0.tasks.map((t) => (t.id === taskId ? { ...t, sandboxed: true } : t)) })
+    expect((await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)).status).toBe(409)
+    expect(started).toEqual([])
+  })
+
   it('a stopped Run ends the Dispatch without asking for a worker session to be released', async () => {
     const { deps, taskId, released, runId } = await setup()
     await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)

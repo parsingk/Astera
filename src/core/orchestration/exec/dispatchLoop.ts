@@ -37,7 +37,7 @@ import {
 import { reapableChildRuns } from '../reap'
 import { lostAttemptOf } from '../../recovery/candidates'
 import { lifecycleToStart, slotsToFill, tasksMissingAccounts, type Slot } from '../schedule'
-import { coordinatorStarting, jobOf, type OrchState } from '../state'
+import { coordinatorStarting, jobOf, workSandboxed, type OrchState } from '../state'
 import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun, type Task } from '../types'
 import { tasksOwnedBy } from '../running'
 import { outcomeOf } from '../view'
@@ -686,6 +686,13 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     const state = c.getState()
     const run = state.runs.find((r) => r.id === slot.runId)!
     const task = state.tasks.find((t) => t.id === slot.taskId)!
+    // An external agent runs outside any sandbox (final review C2): a sandboxed Task's work is put to a person instead
+    if (workSandboxed(state, task))
+      return {
+        kind: 'gate',
+        reason: '이 Task 는 sandbox 안에서 돌아야 하는데, 외부 에이전트는 sandbox 안에서 돌 수 없습니다. 계정을 쓰는 Task 를 새로 만들거나 이 Task 를 실패로 닫으세요.',
+        why: `task ${slot.taskId} must run in a sandbox, and an external agent cannot be sandboxed`
+      }
     const runRoot = runRootOf(run, jobOf(state, run))
     const waiting = await integrateBefore(slot, state, task, runRoot, [])
     if (waiting) return waiting

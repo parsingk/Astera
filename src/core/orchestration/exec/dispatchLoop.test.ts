@@ -1906,6 +1906,16 @@ describe('a Task an external agent works', () => {
     expect(h.startWorker).not.toHaveBeenCalled()
   })
 
+  it('puts a Task whose work must run in a sandbox to a person instead of starting the agent', async () => {
+    const h = rig()
+    external(h, 'tsk_1')
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === 'tsk_1' ? { ...t, sandboxed: true } : t)) })
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled()).not.toContain('external-work-start')
+    expect(h.state().gates.find((g) => g.taskId === 'tsk_1')?.question).toMatch(/sandbox/)
+  })
+
   it('waits while another worker works in the Run root it would work in', async () => {
     const h = rig({ concurrency: 2 })
     external(h, 'tsk_1')

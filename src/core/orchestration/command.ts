@@ -3631,6 +3631,8 @@ export async function handleCommand(
       if (!task) return notFound(`unknown task: ${id}`)
       if (task.externalAgentId === undefined) return conflict(`task ${id} is not worked by an external agent`)
       if (task.status !== 'ready') return conflict(`task ${id} is ${task.status}, not ready`)
+      // Work that must run in a sandbox never reaches an agent that runs outside it (final review C2)
+      if (workSandboxed(latest, task)) return conflict(`task ${id} must run in a sandbox, and an external agent cannot be sandboxed`)
       if (latest.dispatches.some((d) => d.taskId === id && !d.outcome && !d.endedAt)) return conflict(`task ${id} already has an open Dispatch`)
       const run = latest.runs.find((r) => r.id === task.runId)
       if (!run) return conflict(`task ${id} is not in a run`)
@@ -4006,6 +4008,9 @@ export async function handleCommand(
       if (externalAgentArg !== null) {
         if (accountArg !== null || str(args.agentProfileId) !== null) return bad('--external-agent works the Task instead of accounts: give one or the other')
         if (!/^ext_[0-9a-f]{8}$/.test(externalAgentArg)) return bad('--external-agent must be an external agent id (ext_ and 8 hex, from Settings, Agents)')
+        // The agent runs outside any sandbox with the person's rights (final review C2): a sandboxed session does not
+        // hand work to it
+        if (callerBoxed) return denied('a sandboxed session cannot hand a Task to an external agent: the agent runs outside any sandbox')
       }
       // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
       // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
@@ -4016,6 +4021,9 @@ export async function handleCommand(
       // or without accounts (drivesRun); one it names itself is asked like any agent's, and so is an outside driver.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
+      // Nor does a sandboxed Job's work go to one (final review C2)
+      if (externalAgentArg !== null && ownerJob?.sandboxed === true)
+        return conflict('this Job runs its work in a sandbox, and an external agent cannot be sandboxed: give the Task an account')
       let agentProfileId = profileArg === null && externalAgentArg === null ? ownerJob?.agentProfileId : undefined
       if (externalAgentArg === null && accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
       const inheritsForItsCoordinator = profileArg === null && drivesRun(s, caller, runId)
