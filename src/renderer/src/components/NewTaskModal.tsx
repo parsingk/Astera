@@ -262,8 +262,23 @@ export function NewTaskModal({
             <p className="modal-hint">{t('jobs.task.depsHint')}</p>
           </div>
         )}
-        {/* 에이전트 프로필(Agent Profiles design §6): 계정 칸 위에 둔다. 고르면 그 계정 칸을 채운다 */}
-        {accounts !== null && door.runtimeId === undefined && (
+        {/* Phase 5 A1: an agent registered in Settings, Agents can work the Task instead of accounts. Shown only when one
+            is registered: an empty choice would be a control with nothing to pick. */}
+        {externalAgents.length > 0 && (
+          <div className="field">
+            <label>{t('jobs.task.externalAgent')}</label>
+            <Select
+              items={[{ value: '', label: t('jobs.task.externalAgentNone') }, ...externalAgents.map((a) => ({ value: a.id, label: a.name }))]}
+              value={externalAgentId}
+              onChange={setExternalAgentId}
+              ariaLabel={t('jobs.task.externalAgent')}
+            />
+            <p className="modal-hint">{t('jobs.task.externalAgentHint')}</p>
+          </div>
+        )}
+        {/* 에이전트 프로필(Agent Profiles design §6): 계정 칸 위에 둔다. 고르면 그 계정 칸을 채운다. An external agent works the Task
+            instead of accounts and a profile (Phase 5 A1), so neither field shows once one is picked */}
+        {accounts !== null && door.runtimeId === undefined && !external && (
           <AgentProfileField
             profiles={profiles}
             accounts={accounts}
@@ -281,20 +296,6 @@ export function NewTaskModal({
             등록되면 지정 없는 Task 는 새 계정으로 조용히 넘어가고 못박은 Task 는 Gate 를 연다.
             (2) 칸이 없는 이유를 화면이 말하지 않아, 계정이 하나인 사람은 기능이 빠진 줄 안다.
             null 은 아직 안 온 것이라 같이 접힌다 */}
-        {/* Phase 5 A1: an agent registered in Settings, Agents can work the Task instead of accounts. Shown only when one
-            is registered: an empty choice would be a control with nothing to pick. */}
-        {externalAgents.length > 0 && (
-          <div className="field">
-            <label>{t('jobs.task.externalAgent')}</label>
-            <Select
-              items={[{ value: '', label: t('jobs.task.externalAgentNone') }, ...externalAgents.map((a) => ({ value: a.id, label: a.name }))]}
-              value={externalAgentId}
-              onChange={setExternalAgentId}
-              ariaLabel={t('jobs.task.externalAgent')}
-            />
-            <p className="modal-hint">{t('jobs.task.externalAgentHint')}</p>
-          </div>
-        )}
         {accounts !== null && !external && (
           <div className="field">
             <label>{t('jobs.task.account')}</label>

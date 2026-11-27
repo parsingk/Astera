@@ -318,7 +318,8 @@ export function createExternalWorks(c: {
       }
       if (dropped()) return
       const agent = settings.reviewers.find((r) => r.id === agentId)
-      if (!agent) return await fail(`the external agent ${agentId} is not registered in Settings, Agents any more. Register it again, or give the Task an account.`)
+      if (!agent)
+        return await fail(`the external agent ${agentId} is not registered in Settings, Agents any more. Register it again, or mark this Task failed and make a new one.`)
       name = agent.name
       command = agent.command
 

@@ -230,6 +230,9 @@ describe('external agent work', () => {
     await until(() => r.task().status === 'blocked', 'the Gate')
     expect(r.spawned).toHaveLength(0)
     expect(r.state().gates[0].question).toContain('is not registered in Settings, Agents any more')
+    // Nothing changes an existing Task's accounts, so the Gate does not ask for that (final review M8)
+    expect(r.state().gates[0].question).toContain('mark this Task failed and make a new one')
+    expect(r.state().gates[0].question).not.toContain('give the Task an account')
   })
 
   it('a turn that ends with anything but end_turn is a Gate', async () => {
