@@ -92,7 +92,8 @@ export function completionProducer(deps: {
         for (const c of candidates) {
           const st = await statOnce(c.abs)
           if (!st) continue
-          return { ...rest, path: c.abs, root: c.f, ...(changedAfter(st, rest.producedAt) ? { stale: 'changed' as const } : {}) }
+          // A missing file first, then a review finding's revision, then the file's own time (Phase 3 Part 4, final review I4)
+          return { ...rest, path: c.abs, root: c.f, ...(rest.stale === undefined && changedAfter(st, rest.producedAt) ? { stale: 'changed' as const } : {}) }
         }
         const last = candidates[candidates.length - 1]
         return { ...rest, path: last.abs, root: last.f, stale: 'missing' }
