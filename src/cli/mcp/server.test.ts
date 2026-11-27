@@ -576,6 +576,14 @@ describe('the MCP server', () => {
   })
 
   // Plugin Phase 5 C6, C7: the id goes as it is, and a missing plugin is a refusal a client can branch on
+  // Phase 5 A1
+  it('create_task passes an external agent as tasks add takes it', async () => {
+    const { link, calls } = answering({ 'tasks-add': { status: 200, body: { id: 'tsk_1' } } })
+    await (await connected(link)).callTool({ name: 'create_task', arguments: { runId: 'run_1', spec: 'Fix', externalAgentId: 'ext_0a1b2c3d' } })
+    expect(calls.some((c) => c.cmd === 'jobs-get')).toBe(false)
+    expect(calls.find((c) => c.cmd === 'tasks-add')).toMatchObject({ args: { run: 'run_1', externalAgent: 'ext_0a1b2c3d' } })
+  })
+
   it('create_task passes a plugin check’s id as it is, and a missing plugin comes back as PLUGIN_CAPABILITY_MISSING with its step', async () => {
     const { link, calls } = answering({
       'tasks-add': { status: 409, body: { error: 'no plugin astera-x is installed', code: 'PLUGIN_CAPABILITY_MISSING' } }

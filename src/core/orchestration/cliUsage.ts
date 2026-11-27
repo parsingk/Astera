@@ -631,6 +631,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
         value: '<id|name>',
         about: "the agent profile it runs as (from `agent-profiles list`); default: its Job's"
       },
+      {
+        name: 'external-agent',
+        value: '<ext_id>',
+        about:
+          "an external agent registered in Settings, Agents (an ACP agent such as OpenCode) that works it in the run folder instead of accounts; give it or --account and --agent-profile, not both. Its permission requests follow Astera's permission mode"
+      },
       { name: 'title', value: '<text>', about: "a short name (default: the spec's first line)" },
       { name: 'deps', value: '<json array>', about: 'the task ids this one waits for' },
       { name: 'parent', value: '<taskId>', about: 'the task this one was split out of' },
