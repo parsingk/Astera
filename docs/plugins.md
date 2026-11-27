@@ -927,3 +927,11 @@ version.
 
 - The `github` and `how-it-works` commands for plugins, which their permissions are already named for.
 - A folder for each plugin's own data.
+- Further extension points, deferred until there is demand for each and the means to maintain it, each in a release of
+  its own: custom editors (a file type or URI opened in an isolated view, with open, save, dirty and undo), debug
+  adapters (DAP launch and attach, breakpoints, stepping, variables), workflow triggers (a signed, idempotent outside
+  event that makes an approved Job), lifecycle hooks (before and after steps that cannot bypass a required approval or
+  check), and a remote editor inside a Remote Runtime's file permissions.
+- A plugin that adds a kind of worker. An agent that speaks ACP already works a Task without one: register it in
+  Settings, Agents, and give the Task `--external-agent` ([jobs.md](jobs.md)). `astera agents capabilities` says what
+  such a worker can do.
