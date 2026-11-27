@@ -1174,7 +1174,7 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .settings-history { display: flex; flex-direction: column; gap: 8px; }
 /* ---------- 모양 탭: 테마 카드 ---------- */
 .settings-theme { display: flex; flex-direction: column; gap: 8px; }
-.theme-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 /* 카드는 자기 테마의 값으로 그린다(인라인 스타일) — 앱 토큰을 쓰면 일곱 장이 전부 같아 보인다.
    그래서 여기서는 색을 정하지 않고 배치만 정한다. */
 .theme-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
