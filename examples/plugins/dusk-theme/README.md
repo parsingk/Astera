@@ -17,7 +17,7 @@ Settings, Plugins, Install from a folder.
 
 ## Use it
 
-Open Settings, General, Theme. **Dusk** is under Plugin themes, named with this plugin. Turning the plugin off shows the
+Open Settings, Appearance. **Dusk** is under Plugin themes, named with this plugin. Turning the plugin off shows the
 default theme and keeps your choice, so turning it on again brings Dusk back.
 
 ## Change it

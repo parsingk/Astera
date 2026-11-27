@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { themeCssVars } from '../../../core/theme/apply'
 import { DEFAULT_THEME_ID, themeById, type Theme } from '../../../core/theme/themes'
-import { isStoredThemeId, paletteMirror, readPaletteMirror, resolveTheme, type PluginTheme } from '../../../core/plugins/pluginThemes'
+import { isStoredThemeId, mirrorChange, readPaletteMirror, resolveTheme, type PluginTheme } from '../../../core/plugins/pluginThemes'
 
 /** 첫 페인트용 미러. IPC 는 비동기라 응답을 기다리면 기본 테마로 한 프레임 그려진 뒤 바뀐다.
  *  localStorage 는 동기라 그것이 없다 — cm.md.viewMode 와 같은 패턴. */
@@ -23,6 +23,13 @@ const write = (key: string, value: string): void => {
     localStorage.setItem(key, value)
   } catch {
     // a window without storage still shows the theme; only the first frame of the next start may differ
+  }
+}
+const remove = (key: string): void => {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // as above
   }
 }
 
@@ -68,7 +75,12 @@ export const ThemeContext = createContext<ThemeValue>({
 
 export function ThemeProvider({ children }: { children: ReactNode }): ReactNode {
   const [id, setId] = useState<string>(readMirror)
-  const [pluginThemes, setPluginThemes] = useState<readonly PluginTheme[] | null>(null)
+  const [pluginThemes, setPluginThemesState] = useState<readonly PluginTheme[] | null>(null)
+  // A list read again with the same themes keeps the array it had, so a plugin theme is not applied again (and every
+  // terminal re-themed) on each plugin list change
+  const setPluginThemes = useCallback((next: readonly PluginTheme[] | null) => {
+    setPluginThemesState((prev) => (prev !== null && next !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+  }, [])
 
   useEffect(() => {
     // 정본은 main 이다. 미러와 다르면 정본으로 바꾸고 미러를 갱신한다.
@@ -86,9 +98,10 @@ export function ThemeProvider({ children }: { children: ReactNode }): ReactNode 
 
   useEffect(() => {
     applyTheme(theme)
-    // The palette of a plugin theme the list holds, for the next start's first frame
-    const offered = pluginThemes?.find((t) => t.id === id)
-    if (offered) write(PALETTE_KEY, paletteMirror(offered))
+    // The palette of a plugin theme the list holds, for the next start's first frame; gone once no plugin offers it
+    const change = mirrorChange(id, pluginThemes)
+    if (change === 'clear') remove(PALETTE_KEY)
+    else if (change !== null) write(PALETTE_KEY, change.write)
   }, [theme, id, pluginThemes])
 
   const setThemeId = useCallback((next: string) => {

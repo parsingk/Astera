@@ -102,6 +102,15 @@ export function readPaletteMirror(raw: string | null, id: string): Theme | null 
   return { ...base, colors: { ...base.colors, ...(v.colors as Partial<ThemeColors>) } }
 }
 
+/** What the first-paint mirror should become: the palette of a plugin theme the list offers, cleared once a read list
+ *  does not offer the stored one or a built-in one is stored (final review M5), untouched while the list is not read. */
+export function mirrorChange(storedId: string, pluginThemes: readonly PluginTheme[] | null): { write: string } | 'clear' | null {
+  if (isThemeId(storedId)) return 'clear'
+  if (pluginThemes === null) return null
+  const offered = pluginThemes.find((t) => t.id === storedId)
+  return offered ? { write: paletteMirror(offered) } : 'clear'
+}
+
 /** The theme to show for a stored id: a built-in one as itself; a plugin's from the list (null while not read yet, when
  *  the mirror stands in); the default when no plugin offers it now, the stored id kept for when one does again. */
 export function resolveTheme(storedId: string, pluginThemes: readonly PluginTheme[] | null, mirror: Theme | null): Theme {

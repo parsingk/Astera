@@ -44,6 +44,15 @@ export interface SidebarState {
   understanding: boolean
   /** The plugin view chosen, by its contribution key; absent or null when none is. */
   plugin?: string | null
+  /** Whether the chosen plugin view's plugin offers it now; absent counts as offered. While it does not, the session list
+   *  is what shows (final review M2). */
+  pluginOffered?: boolean
+}
+
+/** The state a layout's sidebar names (a preset, a saved layout, the layout memory reset): one view on, the rest off
+ *  (final review I1: the plugin view was left as it was). */
+export function sidebarStateOf(open: boolean, view: SidebarView): Required<Pick<SidebarState, 'open' | 'explorer' | 'jobs' | 'understanding' | 'plugin'>> {
+  return { open, explorer: view === 'explorer', jobs: view === 'jobs', understanding: view === 'understanding', plugin: pluginKeyOf(view) }
 }
 
 const VIEWS: FlagView[] = ['explorer', 'jobs', 'understanding']
@@ -67,12 +76,14 @@ export function toggleSidebarView(s: SidebarState, view: SidebarView): SidebarSt
   // this reads the same for it as for the other three: pressing what you see collapses, pressing
   // what you do not see shows it.
   const plugin = s.plugin ?? null
+  const offered = s.pluginOffered !== false
   const key = pluginKeyOf(view)
+  // What shows is judged by what is drawn: a plugin view its plugin does not offer now leaves the session list showing
   const showing =
     view === 'sessions'
-      ? s.open && VIEWS.every((v) => !s[v]) && plugin === null
+      ? s.open && VIEWS.every((v) => !s[v]) && (plugin === null || !offered)
       : key !== null
-        ? s.open && plugin === key && VIEWS.every((v) => !s[v])
+        ? s.open && plugin === key && offered && VIEWS.every((v) => !s[v])
         : s.open && s[view as FlagView]
   if (showing)
     return view === 'sessions' ? { ...s, open: false } : key !== null ? { ...s, open: false, plugin: null } : { ...s, open: false, [view]: false }

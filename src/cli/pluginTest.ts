@@ -255,6 +255,11 @@ export async function testPlugin(a: {
       ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {})
     })
 
+    if (m.entry === undefined && m.ui === undefined) {
+      // A themes-only plugin runs no code and shows no page: its themes passed the theme rules to get here (final review M4)
+      const n = m.contributes.themes?.length ?? 0
+      return done([{ name: 'themes', ok: true, detail: `${n} ${n === 1 ? 'theme keeps' : 'themes keep'} the theme rules: it runs no code and shows no page` }])
+    }
     if (m.entry === undefined) return done(m.ui !== undefined ? [await pageCheck(copy, m.ui)] : [])
 
     const settings = settingsOf(m, a.settings ?? {})

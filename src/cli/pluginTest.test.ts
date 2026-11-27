@@ -72,6 +72,14 @@ describe('testPlugin', () => {
     }, 60_000)
   }
 
+  // Phase 2 remaining, final review M4: a themes-only plugin runs nothing, and says what was checked
+  it('checks a themes-only sample’s themes, starting nothing', async () => {
+    const r = await testPlugin({ folder: path.join(examples, 'dusk-theme'), version: '1.6.0', launcher, timings: fast })
+    if (!('checks' in r)) throw new Error(JSON.stringify(r))
+    expect(r.checks).toEqual([{ name: 'themes', ok: true, detail: '1 theme keeps the theme rules: it runs no code and shows no page' }])
+    expect(r.ok).toBe(true)
+  })
+
   it('passes the debug-leftovers sample', async () => {
     const r = await testPlugin({ folder: path.join(examples, 'debug-leftovers'), version: '1.6.0', launcher, timings: fast })
     if (!('checks' in r)) throw new Error(JSON.stringify(r))

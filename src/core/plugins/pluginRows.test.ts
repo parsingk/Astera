@@ -155,3 +155,39 @@ describe('statusItemsOf', () => {
     expect(statusItemsOf(rows).map((i) => i.text)).toEqual(['a1', 'a2', 'b1', 'b2', 'c1', 'c2'])
   })
 })
+
+// Phase 2 remaining, final review M6: a theme is data the app applies, so a trusted plugin's process starting, stopped or
+// failed does not take it away; turned off or incompatible does
+describe('pluginThemesOf while a trusted plugin is not running', () => {
+  const dusk = { id: 'dusk', title: 'Dusk', base: 'vega' as const, colors: { accent: '#3fa7d6' } }
+  const trusted = (status: string): PluginRow =>
+    row({ id: 'both', status, permissions: ['themes.register'], contributes: { commands: [], panels: [], themes: [dusk] } })
+  it('keeps the themes of a plugin starting, stopped or failed, and drops an incompatible one', () => {
+    for (const s of ['starting', 'stopped', 'failed', 'running']) expect(pluginThemesOf([trusted(s)]), s).toHaveLength(1)
+    expect(pluginThemesOf([trusted('incompatible')])).toEqual([])
+    expect(pluginThemesOf([trusted('disabled')])).toEqual([])
+  })
+})
+
+// Final review M7: the renderer re-checks the shape of what the Host listed, not only a theme's colours
+describe('pluginRowsOf with a malformed contribution', () => {
+  const listed = (contributes: unknown): PluginRow[] => pluginRowsOf({ plugins: [{ id: 'x', dir: '/x', status: 'ready', enabled: true, contributes }] })
+  it('drops a list that is not one, and an item whose fields are not text', () => {
+    const [p] = listed({
+      commands: [{ id: 'open', title: 'Open', panel: 'main' }, { id: 7, title: 'x', panel: 'main' }],
+      panels: [{ id: 'main', title: { evil: true } }, { id: 'side', title: 'Side' }],
+      sidebar: 'nope',
+      statusBar: [null, { id: 'hi', text: 'Hi', command: 'open' }],
+      themes: [{ id: 'd', title: 'D', base: 'vega', colors: { accent: '#3fa7d6' } }, 5]
+    })
+    expect(p.contributes).toEqual({
+      commands: [{ id: 'open', title: 'Open', panel: 'main' }],
+      panels: [{ id: 'side', title: 'Side' }],
+      statusBar: [{ id: 'hi', text: 'Hi', command: 'open' }],
+      themes: [{ id: 'd', title: 'D', base: 'vega', colors: { accent: '#3fa7d6' } }]
+    })
+  })
+  it('keeps no contributions when panels or commands are not lists', () => {
+    expect(listed({ commands: 'x', panels: [] })[0].contributes).toBeUndefined()
+  })
+})

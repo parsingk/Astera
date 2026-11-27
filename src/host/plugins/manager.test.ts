@@ -1376,6 +1376,9 @@ describe('a UI-only plugin: final review fixes', () => {
         astera: { apiVersion: '2', permissions: ['themes.register'], contributes: { themes: [{ id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } }] } }
       })
     )
+    // Final review M3: a folder shown as restricted UI that turned themes only is named for what it is now
+    const shownAsUi = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'restricted-ui' } })
+    expect(body(shownAsUi).error).toBe('the folder changed after it was shown: it now holds dusk-theme@1.0.0 as themes only; run the install again')
     const bad = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'sandboxed' } })
     expect(bad.status).toBe(400)
     expect(body(bad).error).toBe('expect.trust must be trusted, restricted-ui or declarative')

@@ -5264,18 +5264,19 @@ export function registerIpc(
     // A Host that cannot answer is not a Host saying the plugin is gone (plugin panels review M3)
     return r.ok ? pluginRowsOf(r.body) : null
   })
-  // A plugin turned off or removed outside this app (the CLI) is caught here while anything of it is served or open
-  setInterval(() => {
-    if (panelGuests.active()) void panelGuests.refresh()
-  }, PANEL_WATCH_MS).unref()
-  // The renderer's sidebar views, status items and themes follow the plugin list (Phase 2 remaining): read on a timer,
-  // and at once after a change made here, since the Host's list has no change event
+  // The plugin list, read on a timer and at once after a change made here, since the Host's list has no change event
+  // (Phase 2 remaining). A difference tells the renderer, whose sidebar views, status items and themes follow it, and
+  // refreshes the panel guests while anything is served or open: a plugin turned off or removed outside this app (the
+  // CLI) is caught here. One timed read for both (final review M14).
   const pluginListWatch = createPluginListWatch({
     list: async () => {
       const r = await plugins.list()
       return r.ok ? pluginRowsOf(r.body) : null
     },
-    send: () => send('plugins:changed', null)
+    send: () => {
+      send('plugins:changed', null)
+      if (panelGuests.active()) void panelGuests.refresh()
+    }
   })
   setInterval(() => void pluginListWatch.check(), PANEL_WATCH_MS).unref()
   const afterChange = <T,>(answer: Promise<T>): Promise<T> => answer.finally(() => void pluginListWatch.check())

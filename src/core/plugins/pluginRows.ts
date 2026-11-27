@@ -2,7 +2,7 @@
 // (which lists the commands and keeps the tabs): which plugins are installed, which can show a panel now, and why not.
 // node: no imports, the renderer imports this.
 import { INVISIBLE, contributionKey, type ContributionKey, type PluginContributions } from './manifest'
-import { pluginThemeOf, pluginThemeProblem, type PluginTheme } from './pluginThemes'
+import { pluginThemeOf, pluginThemeProblem, type PluginTheme, type PluginThemeDecl } from './pluginThemes'
 
 /** One installed plugin as the Host lists it, the fields a panel needs. */
 export interface PluginRow {
@@ -22,6 +22,33 @@ export interface PluginRow {
   contributes?: PluginContributions
 }
 
+const isText = (v: unknown): v is string => typeof v === 'string'
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+/** The items of a listed contribution whose named fields are all text, each copied with those fields only. */
+const itemsOf = <K extends string>(v: unknown, fields: readonly K[]): Record<K, string>[] =>
+  Array.isArray(v)
+    ? v.filter((x): x is Record<string, unknown> => isRecord(x) && fields.every((f) => isText(x[f]))).map((x) => Object.fromEntries(fields.map((f) => [f, x[f]])) as Record<K, string>)
+    : []
+
+/** A listed row's contributions, their shape checked again here (final review M7): a list that is not one and an item
+ *  whose fields are not text are dropped, so nothing malformed reaches an effect or a render; a theme's colours are
+ *  checked again where it is used (pluginThemesOf). Undefined when panels and commands are not lists. */
+function contributionsOf(v: unknown): PluginContributions | undefined {
+  if (!isRecord(v) || !Array.isArray(v.panels) || !Array.isArray(v.commands)) return undefined
+  const out: PluginContributions = { commands: itemsOf(v.commands, ['id', 'title', 'panel'] as const), panels: itemsOf(v.panels, ['id', 'title'] as const) }
+  const sidebar = itemsOf(v.sidebar, ['id', 'title', 'panel'] as const)
+  if (sidebar.length > 0) out.sidebar = sidebar
+  const statusBar = itemsOf(v.statusBar, ['id', 'text', 'command'] as const)
+  if (statusBar.length > 0) out.statusBar = statusBar
+  const themes = Array.isArray(v.themes)
+    ? v.themes
+        .filter((t): t is Record<string, unknown> => isRecord(t) && isText(t.id) && isText(t.title) && isText(t.base) && isRecord(t.colors))
+        .map((t) => ({ id: t.id as string, title: t.title as string, base: t.base as PluginThemeDecl['base'], colors: { ...(t.colors as PluginThemeDecl['colors']) } }))
+    : []
+  if (themes.length > 0) out.themes = themes
+  return out
+}
+
 /** The rows of the Host's `plugins-list` answer a panel needs; a malformed row is left out. */
 export function pluginRowsOf(body: unknown): PluginRow[] {
   const list = typeof body === 'object' && body !== null ? (body as { plugins?: unknown }).plugins : undefined
@@ -32,7 +59,7 @@ export function pluginRowsOf(body: unknown): PluginRow[] {
     if (typeof r !== 'object' || r === null) continue
     const o = r as Record<string, unknown>
     if (typeof o.id !== 'string' || typeof o.dir !== 'string' || typeof o.status !== 'string') continue
-    const c = o.contributes as PluginRow['contributes'] | undefined
+    const c = contributionsOf(o.contributes)
     rows.push({
       id: o.id,
       enabled: o.enabled === true,
@@ -43,7 +70,7 @@ export function pluginRowsOf(body: unknown): PluginRow[] {
       ...(typeof o.displayName === 'string' ? { displayName: o.displayName } : {}),
       ...(typeof o.installedAt === 'number' ? { installedAt: o.installedAt } : {}),
       ...(typeof o.installId === 'string' ? { installId: o.installId } : {}),
-      ...(c && Array.isArray(c.panels) && Array.isArray(c.commands) ? { contributes: c } : {})
+      ...(c ? { contributes: c } : {})
     })
   }
   return rows
@@ -107,7 +134,9 @@ export function panelInfo(rows: readonly PluginRow[], pluginId: string, panelId:
  *  checked again by the theme rules, since what reaches a CSS variable must be a colour whatever a Host listed. */
 export function pluginThemesOf(rows: readonly PluginRow[]): PluginTheme[] {
   return rows.flatMap((p) => {
-    if (!p.enabled || (p.status !== 'ready' && p.status !== 'running') || !p.permissions.includes('themes.register')) return []
+    // A theme is data the app applies itself: a trusted plugin's process starting, stopped or failed does not take it
+    // away; turned off or incompatible does (final review M6)
+    if (!p.enabled || p.status === 'incompatible' || p.status === 'disabled' || !p.permissions.includes('themes.register')) return []
     return (p.contributes?.themes ?? []).filter((d) => pluginThemeProblem(d) === null).map((d) => pluginThemeOf(p.id, shownName(p), d))
   })
 }

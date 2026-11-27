@@ -239,6 +239,7 @@ describe('humanFor', () => {
 
   // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted
   it('plugins validate names the plugin, its version and trust when nothing is wrong', () => {
+    expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'dusk', name: 'dusk', version: '1.0.0', trust: 'declarative' }, problems: [] })).toBe('dusk 1.0.0, themes only: no problem found')
     expect(humanFor('plugins-validate', { valid: true, plugin: { id: 'hello', name: 'hello', version: '0.1.0', trust: 'restricted-ui' }, problems: [] })).toBe(
       'hello 0.1.0, restricted UI: no problem found'
     )

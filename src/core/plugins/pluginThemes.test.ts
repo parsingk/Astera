@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { themeById } from '../theme/themes'
 import { THEME_CONTRAST_CHECKS } from '../theme/contrastChecks'
-import { isStoredThemeId, paletteMirror, parsePluginThemeId, pluginThemeId, pluginThemeOf, pluginThemeProblem, readPaletteMirror, resolveTheme } from './pluginThemes'
+import { isStoredThemeId, mirrorChange, paletteMirror, parsePluginThemeId, pluginThemeId, pluginThemeOf, pluginThemeProblem, readPaletteMirror, resolveTheme } from './pluginThemes'
 
 describe('pluginThemeProblem', () => {
   it('takes a dark palette over a built-in base that keeps every contrast floor', () => {
@@ -32,6 +32,11 @@ describe('pluginThemeProblem', () => {
 
   it('refuses a surface brighter than the brightest built-in one: the shared colours are tuned for dark surfaces', () => {
     expect(pluginThemeProblem({ base: 'vega', colors: { panel: '#f4f4f4' } })).toBe('panel #f4f4f4 is brighter than #303236: Astera’s shared colours need a dark surface')
+  })
+
+  // Final review M10: dim text on the main surface, which a darker elevated surface used to hide
+  it('refuses dim text that reads poorly on bg though it reads on elevated', () => {
+    expect(pluginThemeProblem({ base: 'vega', colors: { bg: '#303236', elevated: '#000000', textDim: '#777777', text: '#ffffff', panel: '#000000', textFaint: '#9a9a9a', mdLink: '#9ec5ff', accent: '#5aa9e6' } })).toMatch(/^text-dim on bg is \d\.\d:1; at least 3:1$/)
   })
 
   it('applies the same checks as the built-in themes', () => {
@@ -105,5 +110,20 @@ describe('the palette mirror', () => {
     expect(readPaletteMirror(JSON.stringify({ id: dusk.id, base: 'vega', colors: { accent: 'url(x)' } }), dusk.id)).toBeNull()
     expect(readPaletteMirror('not json', dusk.id)).toBeNull()
     expect(readPaletteMirror(null, dusk.id)).toBeNull()
+  })
+})
+
+// Final review M5: a plugin theme no longer offered does not paint the first frames of every start
+describe('mirrorChange', () => {
+  const dusk = pluginThemeOf('dusk-theme', 'Dusk', { id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } })
+  it('writes the palette of a plugin theme the list offers', () => {
+    expect(mirrorChange(dusk.id, [dusk])).toEqual({ write: paletteMirror(dusk) })
+  })
+  it('clears it once a read list does not offer the stored theme, or a built-in one is stored', () => {
+    expect(mirrorChange(dusk.id, [])).toBe('clear')
+    expect(mirrorChange('vega', [dusk])).toBe('clear')
+  })
+  it('leaves it while the list is not read yet', () => {
+    expect(mirrorChange(dusk.id, null)).toBeNull()
   })
 })

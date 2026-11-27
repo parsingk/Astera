@@ -257,7 +257,8 @@ through a flow, and read console and network errors. This browser is restricted 
 ## Adjust appearance, language, and shortcuts
 
 - **Settings → Appearance:** choose a theme and terminal font. Theme changes apply to open
-  terminals without clearing their scrollback.
+  terminals without clearing their scrollback. Installed plugin themes are listed under Plugin themes; turning their
+  plugin off shows the default theme and keeps your choice.
 - **Settings → General → Language:** choose English, Korean, Japanese, Spanish, or System.
 - **Settings → Shortcuts:** inspect and remap the controls. The defaults use Cmd on macOS and
   Ctrl on other systems.

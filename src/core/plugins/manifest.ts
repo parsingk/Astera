@@ -90,6 +90,9 @@ export const PLUGIN_RESTRICTED_UI_NOTICE =
 export const PLUGIN_DECLARATIVE_NOTICE =
   'This plugin only adds themes: it runs no code and shows no page, and Astera applies its colours itself.'
 
+/** A trust level in the CLI's and the Host's words (final review M3): an unknown one as trusted code. */
+export const trustWords = (trust: unknown): string => (trust === 'restricted-ui' ? 'restricted UI' : trust === 'declarative' ? 'themes only' : 'trusted code')
+
 /** Derived, never declared (ADR-008): a host entry is native code with the person's rights; a UI alone is restricted;
  *  neither is declarative, colours the app applies itself (Phase 2 remaining). */
 export type PluginTrust = 'trusted' | 'restricted-ui' | 'declarative'

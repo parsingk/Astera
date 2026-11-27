@@ -48,6 +48,8 @@ describe('checkPluginFolder', () => {
     expect(ui).toMatchObject({ plugin: { id: 'astera-hello-panel', name: 'astera-hello-panel', version: '0.1.0', trust: 'restricted-ui' }, problems: [] })
     const trusted = await checkPluginFolder(path.join(examples, 'debug-leftovers'), host)
     expect(trusted).toMatchObject({ plugin: { id: 'astera-debug-leftovers', trust: 'trusted' }, problems: [] })
+    // Phase 2 remaining: a themes-only plugin is declarative
+    expect(await checkPluginFolder(path.join(examples, 'dusk-theme'), host)).toMatchObject({ plugin: { id: 'astera-dusk-theme', trust: 'declarative' }, problems: [] })
   })
 
   it('says a path that is no folder is not one', async () => {

@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
-import { permissionLabel, statusLabel, trustLabel } from './pluginsText'
+import { failureLine, permissionLabel, reasonLine, statusLabel, trustLabel } from './pluginsText'
 
 /** How many recent records the Inspector asks for. */
 const AUDIT_LINES = 50
@@ -46,7 +46,7 @@ export function PluginInspectorView({ data }: { data: InspectorData }): React.JS
         <dt>{t('settings.plugins.inspector.state')}</dt>
         <dd>
           {statusLabel(String(g.status ?? ''), t)}
-          {typeof g.reason === 'string' && <span className="plugin-inspector-dim"> · {g.reason}</span>}
+          {typeof g.reason === 'string' && <span className="plugin-inspector-dim"> · {reasonLine(g.reason, t)}</span>}
         </dd>
         <dt>{t('settings.plugins.inspector.version')}</dt>
         <dd>{String(g.version ?? '')}</dd>
@@ -126,6 +126,7 @@ export function PluginInspectorView({ data }: { data: InspectorData }): React.JS
 
 /** Reads one plugin for the Inspector when it opens, and again when asked. */
 export function PluginInspector({ id, nonce }: { id: string; nonce: number }): React.JSX.Element {
+  const { t } = useI18n()
   const [data, setData] = useState<InspectorData>({ get: null, doctor: null, audit: null })
   useEffect(() => {
     let current = true
@@ -135,7 +136,7 @@ export function PluginInspector({ id, nonce }: { id: string; nonce: number }): R
         setData(
           g.ok
             ? { get: g.body, doctor: d.ok ? d.body : null, audit: a.ok ? a.body : null }
-            : { get: null, doctor: null, audit: null, error: g.message }
+            : { get: null, doctor: null, audit: null, error: failureLine(g, t, { read: true }) }
         )
       })
       .catch((e: unknown) => {
@@ -144,6 +145,8 @@ export function PluginInspector({ id, nonce }: { id: string; nonce: number }): R
     return () => {
       current = false
     }
+    // t is the language's, stable while it is one
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, nonce])
   return <PluginInspectorView data={data} />
 }

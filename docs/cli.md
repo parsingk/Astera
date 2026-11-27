@@ -629,7 +629,8 @@ astera plugins test --path ./my-plugin               runs it against a fake Host
 `plugins test` runs a copy of the folder in Astera's plugin runtime against a fake Host, without the app, and checks that
 it starts, answers its capability (a job source lists, reads and builds a Job; a completion check answers; an event or
 notification plugin keeps running after one), keeps running when the calls it was not granted are refused, and stops
-within 5 seconds of being asked. A restricted UI plugin's page is checked against what a panel allows. `--set
+within 5 seconds of being asked. A restricted UI plugin's page is checked against what a panel allows, and a themes
+only plugin's themes are said to keep the theme rules. `--set
 key=value` gives the settings it needs. It runs the plugin's code on this machine, as an install would.
 
 `plugins dev` installs a folder as `install` does, with your approval, then watches it: once a change has settled it
@@ -659,7 +660,8 @@ packages, keys and certificates, and answers its sha256 and npm integrity.
 
 **A plugin with a host entry runs trusted code on this machine.** It can do anything you can, and its permissions
 limit only what it asks Astera for: they are not a sandbox. Install plugins you trust, as you would any program. A
-restricted UI plugin (Plugin API 2, a `ui` page and no entry) starts no program, and its install says so instead.
+restricted UI plugin (Plugin API 2, a `ui` page and no entry) starts no program, and its install says so instead; a
+themes only plugin (neither) runs no code and shows no page.
 
 Without --yes or --grant, `install` installs nothing and exits 2, printing what the plugin is, what it asks for and
 what it would replace. `--grant ""` grants no permission at all.

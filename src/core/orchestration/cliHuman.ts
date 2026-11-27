@@ -17,6 +17,7 @@ import { observeNote, unreadLine } from '../findings/note'
 import type { FindingSource, ObserveHistory } from '../findings/types'
 import type { RuntimeDetail } from '../types'
 import type { ComparisonRow, ComparisonState } from '../controlPlane/compare'
+import { trustWords } from '../plugins/manifest'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -666,7 +667,7 @@ export function humanFor(
     // Phase 2 step 4a: a folder that would install says which plugin it is and how it is trusted; problems are the error's
     case 'plugins-validate': {
       const p = (typeof data.plugin === 'object' && data.plugin !== null ? data.plugin : {}) as Record<string, unknown>
-      return [`${str(p.id)} ${str(p.version)}, ${p.trust === 'trusted' ? 'trusted code' : 'restricted UI'}: no problem found`, ...warningLines(data)].join('\n')
+      return [`${str(p.id)} ${str(p.version)}, ${trustWords(p.trust)}: no problem found`, ...warningLines(data)].join('\n')
     }
     // A new plugin folder: where it is, then what to run next
     case 'plugins-init':

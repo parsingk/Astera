@@ -78,6 +78,11 @@ describe('PluginInspectorView', () => {
     expect(render()).not.toContain('sk-should-never-show')
   })
 
+  // Final review M8: the reason in the tab's own words, as the card says it
+  it('says a plugin waiting for its settings in the app’s words', () => {
+    expect(render({ get: { ...GET, status: 'stopped', reason: 'needs settings: token; set them with astera plugins configure --id hello-panel' } })).toContain(en('settings.plugins.needsSettings', { keys: 'token' }))
+  })
+
   it('says why it could not read the plugin', () => {
     expect(render({ get: null, error: 'the Host is not running' })).toContain('the Host is not running')
   })

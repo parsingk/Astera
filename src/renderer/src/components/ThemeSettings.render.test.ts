@@ -35,9 +35,10 @@ describe('ThemeSettings with plugin themes', () => {
     expect(render(dusk.id, [dusk])).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Dusk/)
   })
 
-  it('says a stored plugin theme no plugin offers now is not shown, and keeps the default marked as what is shown', () => {
+  it('says a stored plugin theme no plugin offers now is not shown, and marks no card', () => {
     const html = render(dusk.id, [])
     expect(html).toContain(translate('en', 'settings.theme.pluginGone'))
     expect(html).not.toContain('Plugin themes')
+    expect(html).not.toContain('aria-pressed="true"')
   })
 })

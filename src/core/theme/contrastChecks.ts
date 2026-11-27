@@ -13,7 +13,11 @@ export const THEME_CONTRAST_CHECKS: readonly { label: string; fg: keyof ThemeCol
   { label: 'accent on bg', fg: 'accent', bg: 'bg', min: 3 },
   { label: 'accent-ink on accent', fg: 'accentInk', bg: 'accent', min: 4.5 },
   { label: 'status-ink on status-bg', fg: 'statusInk', bg: 'statusBg', min: 4.5 },
-  { label: 'md-link on bg', fg: 'mdLink', bg: 'bg', min: 4.5 }
+  { label: 'md-link on bg', fg: 'mdLink', bg: 'bg', min: 4.5 },
+  // Dim text on the main surfaces too: a plugin palette with an elevated surface darker than bg passed the elevated
+  // check while its dim text read poorly where most of it sits (plugin themes final review M10)
+  { label: 'text-dim on bg', fg: 'textDim', bg: 'bg', min: 3 },
+  { label: 'text-dim on panel', fg: 'textDim', bg: 'panel', min: 3 }
 ]
 
 /** The brightest surface of the built-in themes, Orion's --elevated. The shared colours (file icons, git, danger) are

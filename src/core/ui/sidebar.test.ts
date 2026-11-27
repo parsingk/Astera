@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { toggleSidebarView, type SidebarState } from './sidebar'
-import { pluginKeyOf, pluginSidebarView } from './sidebar'
+import { pluginKeyOf, pluginSidebarView, sidebarStateOf } from './sidebar'
 
 const closed: SidebarState = { open: false, explorer: false, jobs: false, understanding: false }
 
@@ -126,5 +126,25 @@ describe('pluginKeyOf', () => {
   it('reads the contribution key a plugin view names, and nothing from another view', () => {
     expect(pluginKeyOf(pluginSidebarView('@acme/x:side'))).toBe('@acme/x:side')
     for (const v of ['explorer', 'sessions', 'plugin:', 'plugin:nokey', 'plugin::x', 'plugin:x:']) expect(pluginKeyOf(v), v).toBeNull()
+  })
+})
+
+// Final review I1: a layout preset or the layout memory reset chooses the plugin view too
+describe('sidebarStateOf', () => {
+  it('sets one flag, or the plugin key, for the view a layout names', () => {
+    expect(sidebarStateOf(true, 'explorer')).toEqual({ open: true, explorer: true, jobs: false, understanding: false, plugin: null })
+    expect(sidebarStateOf(false, 'sessions')).toEqual({ open: false, explorer: false, jobs: false, understanding: false, plugin: null })
+    expect(sidebarStateOf(true, pluginSidebarView('hello-panel:side'))).toEqual({ open: true, explorer: false, jobs: false, understanding: false, plugin: 'hello-panel:side' })
+  })
+})
+
+// Final review M2: while the chosen plugin is off, the session list is what shows, and pressing it folds as any view does
+describe('toggleSidebarView with a plugin choice its plugin does not offer now', () => {
+  const kept = { open: true, explorer: false, jobs: false, understanding: false, plugin: 'hello-panel:side', pluginOffered: false }
+  it('folds on the sessions press, keeping the choice for when the plugin is back', () => {
+    expect(toggleSidebarView(kept, 'sessions')).toEqual({ ...kept, open: false })
+  })
+  it('shows the plugin view when its own button is pressed again once it is offered', () => {
+    expect(toggleSidebarView({ ...kept, open: false, pluginOffered: true }, pluginSidebarView('hello-panel:side')).open).toBe(true)
   })
 })

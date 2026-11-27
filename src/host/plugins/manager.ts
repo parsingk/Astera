@@ -4,7 +4,7 @@
 import { promises as fs } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES } from '../../core/plugins/manifest'
+import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES, trustWords } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
 import { readPackage } from './packageFile'
 import type { PluginCalls } from '../../core/plugins/pluginCalls'
@@ -480,7 +480,7 @@ export function createPluginManager(d: {
     // A folder that gained a host entry while a restricted UI prompt was open must not install as trusted code (final review
     // M7); an expect without a trust level, from an older caller, is checked as before
     if (expected?.trust !== undefined && expected.trust !== m.trust)
-      throw new Refused(409, `the folder changed after it was shown: it now holds ${m.name}@${m.version} as ${m.trust === 'trusted' ? 'trusted code' : 'restricted UI'}; run the install again`)
+      throw new Refused(409, `the folder changed after it was shown: it now holds ${m.name}@${m.version} as ${trustWords(m.trust)}; run the install again`)
     const granted: (PluginPermission | PluginUiPermission)[] = []
     for (const g of grant) {
       if (!(m.permissions as string[]).includes(g))

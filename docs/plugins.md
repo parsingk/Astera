@@ -533,8 +533,8 @@ Settings, Plugins, **Inspect** on a plugin shows what it is doing: its state and
 and when it was installed; the permissions granted, and the ones it asked for that were not; how many commands, panels,
 sidebar views, status bar items and themes it adds; how many times it called each Host command since the Host started,
 and how many of those were refused; the checks `astera plugins doctor` runs; and its last 50 audit records. It shows no
-setting value and nothing a call carried, only names and counts; its log is under **Logs**, with its secret settings
-hidden.
+secret and nothing a call carried, only names, counts and what the doctor says; its log is under **Logs**, with its
+secret settings hidden.
 
 ## Settings and secrets
 
@@ -865,7 +865,7 @@ cannot change it while it runs.
 
 `astera.contributes.themes` lists `{ "id", "title", "base", "colors" }`: a colour theme over one of Astera's own
 (`vega`, `orion`, `umbra`, `aurora`, `antares`, `quasar` or `sirius`). At most 4 a plugin, and they need
-`themes.register`, which needs no `ui`. A theme is picked in Settings, General, Theme, under Plugin themes, named with
+`themes.register`, which needs no `ui`. A theme is picked in Settings, Appearance, under Plugin themes, named with
 its plugin.
 
 `colors` sets any of `bg`, `rail`, `panel`, `elevated`, `surfaceHover`, `termBg`, `line`, `lineSoft`, `text`,
@@ -877,7 +877,7 @@ Astera refuses a theme, at install and again before it applies it, when:
   colours every theme shares (file icons, git, warnings) are made for dark surfaces;
 - its colours read under the floors Astera's own themes keep: text on bg 7:1, text on panel 4.5:1, text on elevated
   4.5:1, text-dim on elevated 4.5:1, text-faint on elevated 3:1, rail-icon on rail 4.5:1, accent on bg 3:1, accent-ink
-  on accent 4.5:1, status-ink on status-bg 4.5:1, md-link on bg 4.5:1.
+  on accent 4.5:1, status-ink on status-bg 4.5:1, md-link on bg 4.5:1, text-dim on bg 3:1, text-dim on panel 3:1.
 
 Turning the plugin off or removing it shows the default theme and keeps the choice, so turning it on again brings the
 theme back. [Dusk theme](../examples/plugins/dusk-theme) is a themes-only plugin to start from.

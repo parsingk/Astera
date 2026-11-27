@@ -49,6 +49,13 @@ describe('packFolder', () => {
     expect(packed.files).toEqual(['README.md', 'package.json', 'ui/index.html', 'ui/panel.css', 'ui/panel.js'])
   })
 
+  // Phase 2 remaining: a themes-only plugin packs as its manifest and README
+  it('packs a themes-only plugin as its manifest and README', async () => {
+    const copy = path.join(dir, 'dusk')
+    await copyPluginFolder(path.join(examples, 'dusk-theme'), copy)
+    expect((await packFolder(copy)).files).toEqual(['README.md', 'package.json'])
+  })
+
   it('gives the same bytes twice, and after only file times changed', async () => {
     const copy = path.join(dir, 'copy')
     await write(copy, { 'package.json': '{}', 'b.js': 'b', 'a/z.js': 'z', 'a/y.js': 'y' })

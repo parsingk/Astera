@@ -515,12 +515,18 @@ describe('docs/plugins.md', () => {
     for (const c of THEME_CONTRAST_CHECKS) expect(themes, c.label).toContain(`${c.label} ${c.min}:1`)
     for (const k of Object.keys(themeById('vega').colors)) expect(themes, k).toContain(`\`${k}\``)
     expect(guide).toContain('](../examples/plugins/dusk-theme)')
+    // Final review M11, M12: where the picker is, and the other guides
+    expect(themes).toContain('Settings, Appearance')
+    expect(guide).not.toContain('Settings, General, Theme')
+    expect(read('examples/plugins/dusk-theme/README.md')).toContain('Settings, Appearance')
+    expect(prose(read('docs/cli.md'))).toContain('themes only')
+    expect(prose(read('docs/usage-guide.md'))).toContain('plugin themes')
   })
 
   it('says what the Plugin Inspector shows, and that it shows no setting value', () => {
     const inspector = prose(section(guide, '## Inspector'))
     expect(inspector).toContain('since the Host started')
-    expect(inspector).toContain('no setting value')
+    expect(inspector).toContain('no secret')
   })
 
   // 2f final review m1: the quick start's commands need the astera command

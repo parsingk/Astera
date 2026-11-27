@@ -139,7 +139,7 @@ import { announceSettingsRecovery } from './lib/settingsRecoveryNotice'
 import { confirmModal, confirmModalWithChoices, confirmModalWithInput, isConfirmOpen } from './lib/confirm'
 import { offerCopyInstall } from './lib/copyInstallOffer'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
-import { pluginKeyOf, pluginSidebarView, toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
+import { pluginKeyOf, pluginSidebarView, sidebarStateOf, toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { isCancelled as isWorktreeCancelled } from './lib/worktreeErrors'
@@ -933,6 +933,8 @@ export default function App(): React.JSX.Element {
   const [pluginSidebar, setPluginSidebar] = useState<string | null>(() => pluginKeyOf(savedAtStart?.panels.sidebar.view ?? ''))
   const pluginSidebarRef = useRef(pluginSidebar) // see jobsOpenRef
   pluginSidebarRef.current = pluginSidebar
+  /** Whether the chosen plugin view's plugin offers it now: set where the plugin list is read below (final review M2). */
+  const pluginOfferedRef = useRef(false)
   // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
   // here — that effect depends on currentProject, declared much later, and a dependency array is
   // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
@@ -2588,7 +2590,8 @@ export default function App(): React.JSX.Element {
         explorer: explorerOpenRef.current,
         jobs: jobsOpenRef.current,
         understanding: hiwOpenRef.current,
-        plugin: pluginSidebarRef.current
+        plugin: pluginSidebarRef.current,
+        pluginOffered: pluginOfferedRef.current
       },
       view
     )
@@ -2900,7 +2903,7 @@ export default function App(): React.JSX.Element {
       if (workspaceFeaturesRef.current?.layoutMemory === true) writeLayout(layoutRecordRef.current())
     }, 300)
     return () => clearTimeout(timer)
-  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs])
+  }, [workspaceFeatures?.layoutMemory, layout, activePaneId, sidebarOpen, explorerOpen, jobsOpen, hiwOpen, pluginSidebar, runPanelOpen, bottomTab, fileTabs, recordTabs, browserTabs, pluginTabs])
   // ...and at once when the window goes, so a change in the last 300 ms is not lost
   useEffect(() => {
     const flush = (): void => {
@@ -4084,6 +4087,7 @@ export default function App(): React.JSX.Element {
   // A plugin's status items (Phase 2 remaining): text that runs one of its commands, at most six in all
   const statusItems = useMemo(() => (pluginRows === null ? [] : statusItemsOf(pluginRows)), [pluginRows])
   const shownPluginView = pluginSidebar === null ? undefined : sidebarViews.find((v) => v.key === pluginSidebar)
+  pluginOfferedRef.current = shownPluginView !== undefined
   const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'plugin' | 'sessions' = explorerOpen
     ? 'explorer'
     : jobsOpen
@@ -5080,10 +5084,12 @@ export default function App(): React.JSX.Element {
   /** Shows the panels a layout asks for (spec W3): one sidebar view, as the rail shows one, and the bottom panel on its
    *  tab (shownBottomTab falls back while that tab is not available). */
   const applyPanels = (p: SavedPanels): void => {
-    setSidebarOpen(p.sidebar.open)
-    setExplorerOpen(p.sidebar.view === 'explorer')
-    setJobsOpen(p.sidebar.view === 'jobs')
-    setHiwOpen(p.sidebar.view === 'understanding')
+    const s = sidebarStateOf(p.sidebar.open, p.sidebar.view)
+    setSidebarOpen(s.open)
+    setExplorerOpen(s.explorer)
+    setJobsOpen(s.jobs)
+    setHiwOpen(s.understanding)
+    setPluginSidebar(s.plugin ?? null)
     setRunPanelOpen(p.bottom.open)
     setBottomTab(p.bottom.tab)
     // A preset that shows the cluster view is the person asking for it
@@ -6327,17 +6333,6 @@ export default function App(): React.JSX.Element {
             <span className="sp">{t('session.statusbar.accountCount', { count: accounts.length })}</span>
           </>
         )}
-        {/* The Host outlived an update and still runs the previous build. It replaces itself the first
-            moment it holds nothing (host-replacement design §4), which for someone who keeps sessions
-            open never comes — and until then 대화 sessions cannot be started at all, because the old
-            Host does not speak proc-*. That was only ever said in Settings > Info, a place nobody
-            visits to find out why a feature they were not told about is missing.
-
-            Outside the `active` branches above on purpose: the Host's state is the same fact whether or
-            not a session is showing, and the two branches would otherwise each need their own copy. */}
-        {/* The Host's own runtime being put in place after an update (stage 3 task 2): the copy used to
-            freeze the window with nothing on screen. Beside the other Host notices, for the same reason
-            they are outside the session branches. */}
         {/* Plugins' status items (Phase 2 remaining): beyond the session count, before the Host's notices. Text only;
             clicking runs the plugin's command, which opens its panel as the palette does */}
         {statusItems.map((item) => (
@@ -6351,6 +6346,17 @@ export default function App(): React.JSX.Element {
             {item.text}
           </button>
         ))}
+        {/* The Host outlived an update and still runs the previous build. It replaces itself the first
+            moment it holds nothing (host-replacement design §4), which for someone who keeps sessions
+            open never comes — and until then 대화 sessions cannot be started at all, because the old
+            Host does not speak proc-*. That was only ever said in Settings > Info, a place nobody
+            visits to find out why a feature they were not told about is missing.
+
+            Outside the `active` branches above on purpose: the Host's state is the same fact whether or
+            not a session is showing, and the two branches would otherwise each need their own copy. */}
+        {/* The Host's own runtime being put in place after an update (stage 3 task 2): the copy used to
+            freeze the window with nothing on screen. Beside the other Host notices, for the same reason
+            they are outside the session branches. */}
         <HostRuntimeNotice state={hostRuntime} nowMs={hostRuntimeNow} />
         {hostStatus?.connected && hostStatus.outdated && (
           <button
