@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Diagnostic } from '../../../core/problems/diagnostic'
 import { CATALOGS, LANGS } from '../../../core/i18n'
-import { dismissGroups, findingChipKey, findingStateKey, findingWhoKey } from './findingStates'
+import { chipKeyOf, dismissGroups, findingChipKey, findingStateKey, findingWhoKey } from './findingStates'
 
 // Phase 3 Part 1b: how a row says where its finding stands, who changed it, and which Task a dismissal goes to
 const row = (over: Partial<Diagnostic> = {}): Diagnostic => ({
@@ -32,6 +32,14 @@ describe('finding chips', () => {
     ]
     expect(findingChipKey(row({ finding: { state: 'open', history } }))).toBeNull()
     expect(findingStateKey('resolved-pending-verification')).toBe('problems.finding.resolved-pending-verification')
+  })
+
+  // Found on the Part 4 screen check: the diff showed "still there" on a finding no one had acted on
+  it('gives a finding’s chip from its state and history alone, the diff’s way, by the same rule', () => {
+    expect(chipKeyOf('open', [])).toBeNull()
+    expect(chipKeyOf('open', [{ at: 'T', by: 'person', from: 'open', to: 'dismissed' }, { at: 'T', by: 'person', from: 'dismissed', to: 'open' }])).toBeNull()
+    expect(chipKeyOf('open', [{ at: 'T', by: 'person', from: 'open', to: 'repair-requested' }, { at: 'T', by: 'astera', from: 'repair-requested', to: 'open' }])).toBe(findingStateKey('open'))
+    expect(chipKeyOf('dismissed', [{ at: 'T', by: 'person', from: 'open', to: 'dismissed' }])).toBe(findingStateKey('dismissed'))
   })
 
   it('names who changed it', () => {

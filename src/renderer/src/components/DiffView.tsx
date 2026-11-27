@@ -9,7 +9,7 @@ import { Fragment, useMemo, useState } from 'react'
 import type { DiffFinding } from '../../../core/review/types'
 import { DIFF_ROWS_STEP, diffLines } from '../lib/diffLines'
 import { findingsByLine, shortSha } from '../lib/agentReview'
-import { findingStateKey, findingWhoKey } from '../lib/findingStates'
+import { chipKeyOf, findingStateKey, findingWhoKey } from '../lib/findingStates'
 import { useI18n } from '../i18n/I18nProvider'
 import { localTime } from './findingsText'
 
@@ -17,12 +17,13 @@ import { localTime } from './findingsText'
 function FindingItem({ f, label, onFix }: { f: DiffFinding; label?: string; onFix?: (f: DiffFinding) => void }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const chip = chipKeyOf(f.state, f.history)
   return (
     <div className={`diff-finding is-${f.state}`}>
       {label !== undefined && <span className="diff-finding-where">{label}</span>}
       <span className={`diff-finding-severity is-${f.severity}`}>{f.severity}</span>
       <span className="diff-finding-title">{f.title}</span>
-      <span className="diff-finding-state">{t(findingStateKey(f.state))}</span>
+      {chip !== null && <span className="diff-finding-state">{t(chip)}</span>}
       {f.history.length > 0 && (
         <button type="button" className="diff-finding-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           {t('agentReview.finding.history')}

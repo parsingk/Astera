@@ -1,5 +1,5 @@
 import type { MessageKey } from '../../../core/i18n'
-import type { ActorGroup, FindingState } from '../../../core/orchestration/types'
+import type { ActorGroup, FindingChange, FindingState } from '../../../core/orchestration/types'
 import type { Diagnostic } from '../../../core/problems/diagnostic'
 
 /** Each finding state as the Problems row says it (Phase 3 Part 1b): a new state does not compile until it has words. */
@@ -25,13 +25,16 @@ export const findingWhoKey = (by: ActorGroup): MessageKey => WHO_KEY[by]
 /** The states that mean a repair or a round went over the finding: only after one does "still there" say something. */
 const WORKED_ON: ReadonlySet<FindingState> = new Set(['repair-requested', 'resolved-pending-verification', 'verified'])
 
-/** The chip a row shows: its finding's state when a person acted on it, else none. An open finding that was only
- *  dismissed and taken back is plainly open, with no chip: "still there" would say a repair was tried. */
-export const findingChipKey = (d: Diagnostic): MessageKey | null => {
-  if (!d.finding) return null
-  if (d.finding.state === 'open' && !d.finding.history.some((c) => WORKED_ON.has(c.to))) return null
-  return STATE_KEY[d.finding.state]
+/** The chip a finding shows from its state and history: its state once a person acted on it, else none. An open finding
+ *  that was only dismissed and taken back is plainly open, with no chip: "still there" would say a repair was tried. The
+ *  diff's findings (Phase 3 Part 4) and the Problems rows share it. */
+export const chipKeyOf = (state: FindingState, history: readonly FindingChange[]): MessageKey | null => {
+  if (state === 'open' && !history.some((c) => WORKED_ON.has(c.to))) return null
+  return STATE_KEY[state]
 }
+
+/** The chip a row shows: its finding's, by chipKeyOf; none for a row with no record. */
+export const findingChipKey = (d: Diagnostic): MessageKey | null => (d.finding ? chipKeyOf(d.finding.state, d.finding.history) : null)
 
 /**
  * The chosen rows as dismissals, one per Task in the rows' order, each reference once; null when there are none, or when

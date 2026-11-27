@@ -15,7 +15,9 @@ describe('review findings on the diff (Phase 3 Part 4)', () => {
   it('shows a finding under its line with its state, history and fix button, and none for a dismissed or verified one', () => {
     expect(src).toMatch(/const grouped = useMemo\(\(\) => findingsByLine\(findings \?\? \[\]\), \[findings\]\)/)
     expect(src).toMatch(/grouped\.inline\.get\(r\.newNo\)/)
-    expect(src).toMatch(/t\(findingStateKey\(f\.state\)\)/)
+    // The chip by Problems' rule: none for a finding no one acted on
+    expect(src).toMatch(/const chip = chipKeyOf\(f\.state, f\.history\)/)
+    expect(src).toMatch(/\{chip !== null && <span className="diff-finding-state">\{t\(chip\)\}<\/span>\}/)
     expect(src).toMatch(/t\('agentReview\.finding\.history'\)/)
     expect(src).toMatch(/onFix !== undefined && f\.state !== 'dismissed' && f\.state !== 'verified'/)
     expect(src).toMatch(/t\('agentReview\.finding\.fix'\)/)
