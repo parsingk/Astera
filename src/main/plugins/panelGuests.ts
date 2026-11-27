@@ -357,14 +357,21 @@ export function createPanelGuests(d: {
       // A key pressed in the page never reaches the app's document (test matrix T17, finding A1). Electron hands main the
       // guest's real key presses before the page sees them (a page's own synthetic events never come here), so a press of
       // one of the app's keys is kept from the page and handed to the app, which runs it as it would from a text field.
-      // A held key stays the app's without running again, as in the window's own listener.
+      // A held key stays the app's without running again, as in the window's own listener. Its key coming up is kept from
+      // the page too, which would otherwise learn that an app key, and which, was pressed.
+      const taken = new Set<string>()
       guest.on('before-input-event', (e, input) => {
+        if (input.type === 'keyUp') {
+          if (taken.delete(input.code)) e.preventDefault()
+          return
+        }
         if (input.type !== 'keyDown') return
         const chord = appKeys.find(
           (c) => c.code === input.code && c.ctrl === input.control && c.shift === input.shift && c.alt === input.alt && c.meta === input.meta
         )
         if (!chord) return
         e.preventDefault()
+        taken.add(input.code)
         if (!input.isAutoRepeat) sendKey(chord)
       })
       guest.once('destroyed', () => guests.delete(guest.id))

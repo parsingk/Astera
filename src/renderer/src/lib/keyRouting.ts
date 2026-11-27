@@ -76,11 +76,22 @@ export const PANEL_FOCUS: KeyFocus = { inXterm: false, inConversation: false, ed
 /**
  * The keys main takes from a plugin panel's page for the app, right now: those the app would run or keep with the focus
  * in a text field. A key the app would pass on (a field keeps it, or its action has nothing to do and does not keep its
- * key) stays the page's, as it stays a focused field's in the window.
+ * key) stays the page's, as it stays a focused field's in the window. A key bound to two actions is decided by the first,
+ * the one the window's listener runs (findActionForEvent); an action with no key is not asked.
  */
 export function panelChords(bindings: Bindings, actions: readonly ActionSpec[], runnable: (id: ActionId) => boolean): Chord[] {
-  return actions.flatMap((a) => (keyDecision(a, PANEL_FOCUS, runnable(a.id)) === 'pass' ? [] : (bindings[a.id] ?? [])))
+  const claimed = new Set<string>()
+  const chords: Chord[] = []
+  for (const a of actions) {
+    const own = (bindings[a.id] ?? []).filter((c) => !claimed.has(chordKey(c)))
+    if (own.length === 0) continue
+    for (const c of own) claimed.add(chordKey(c))
+    if (keyDecision(a, PANEL_FOCUS, runnable(a.id)) !== 'pass') chords.push(...own)
+  }
+  return chords
 }
+
+const chordKey = (c: Chord): string => `${c.ctrl}|${c.shift}|${c.alt}|${c.meta}|${c.code}`
 
 /** The action a key handed over from a plugin panel is bound to now, or null. */
 export function panelKeyAction(bindings: Bindings, chord: Chord, actions: readonly ActionSpec[]): ActionSpec | null {

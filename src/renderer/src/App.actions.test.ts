@@ -11,6 +11,7 @@ import path from 'node:path'
 // this fails.
 const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'App.tsx'), 'utf8')
 const listener = src.slice(src.indexOf('  // The global shortcuts: one capture listener'), src.indexOf('  // One delegate per action'))
+const panelKeys = src.slice(src.indexOf('  // A key pressed in a plugin panel never reaches this document'), src.indexOf("  // The Host's plugin list, kept current"))
 
 describe('App.tsx runs shortcuts through the action registry', () => {
   it('has a keydown listener that routes keys and never branches on an action id', () => {
@@ -25,11 +26,16 @@ describe('App.tsx runs shortcuts through the action registry', () => {
   // Test matrix T17, finding A1: a key pressed in a plugin panel reaches the app only through main, which takes the keys
   // this says are the app's right now and hands each press back; it then runs as from a text field
   it('tells main after each render which keys it takes from a plugin panel, and runs a key handed back as from a field', () => {
-    expect(listener).toMatch(/modalOpenRef\.current \|\| isConfirmOpen\(\)\s*\? \[\]\s*: panelChords\(bindingsRef\.current, ACTIONS, \(id\) => actionRegistry\.state\(id\)\.ok\)/)
-    expect(listener).toContain('window.api.plugins.panelKeys(chords)')
-    expect(listener).toMatch(/window\.api\.on\('plugins:panelKey', \(chord\) => \{\s*if \(modalOpenRef\.current \|\| isConfirmOpen\(\)\) return/)
-    expect(listener).toContain('const spec = panelKeyAction(bindingsRef.current, chord, ACTIONS)')
-    expect(listener).toContain("if (spec && keyDecision(spec, PANEL_FOCUS, actionRegistry.state(spec.id).ok) === 'run') actionRegistry.run(spec.id)")
+    // After the delegates are registered, so the first list sent knows which actions can run (review finding 5)
+    expect(src.indexOf('  // A key pressed in a plugin panel never reaches this document')).toBeGreaterThan(src.indexOf('  // One delegate per action'))
+    // A confirm dialog renders nothing here, so it is asked at the press only, never kept in the list (review finding 3)
+    expect(panelKeys).toMatch(/const chords = modalOpenRef\.current \? \[\] : panelChords\(bindingsRef\.current, ACTIONS, \(id\) => actionRegistry\.state\(id\)\.ok\)/)
+    // After every render, and sent only when it differs
+    expect(panelKeys).toMatch(/if \(text === panelKeysSent\.current\) return\s*panelKeysSent\.current = text\s*window\.api\.plugins\.panelKeys\(chords\)\s*\}\)\n/)
+    expect(panelKeys).toMatch(/window\.api\.on\('plugins:panelKey', \(chord\) => \{\s*if \(modalOpenRef\.current \|\| isConfirmOpen\(\)\) return/)
+    expect(panelKeys).toContain('const spec = panelKeyAction(bindingsRef.current, chord, ACTIONS)')
+    expect(panelKeys).toContain("if (spec && keyDecision(spec, PANEL_FOCUS, actionRegistry.state(spec.id).ok) === 'run') actionRegistry.run(spec.id)")
+    expect(panelKeys).not.toMatch(/action === '/)
   })
 
   it('registers a delegate for every action in ACTIONS under the core owner', () => {

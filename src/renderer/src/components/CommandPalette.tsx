@@ -3,6 +3,7 @@ import type { MessageKey } from '../../../core/i18n'
 import type { RegistryId } from '../lib/actionRegistry'
 import { useI18n } from '../i18n/I18nProvider'
 import { backdropProps } from '../lib/backdrop'
+import { giveFocus } from '../lib/focusHold'
 import { paletteKey } from '../lib/paletteKey'
 import { rankActions } from '../lib/paletteMatch'
 import { displayPath, enterAction, markSegments, paletteMode, rowsWaiting, settleEnter } from '../lib/quickOpen'
@@ -104,9 +105,14 @@ export function CommandPalette({
     // After the `>` an action search opens with, so typing goes on from it
     box?.setSelectionRange(box.value.length, box.value.length)
     return () => {
-      // Only when nothing else took focus as the palette closed: an action that opened a dialog keeps its focus.
-      const now = document.activeElement
-      if ((now === null || now === document.body) && restoreTo?.isConnected) restoreTo.focus()
+      // Only when nothing else took focus as the palette closed: an action that opened a dialog keeps its focus. A
+      // microtask later, after the effects of what was picked, so a tab it activated has taken the focus by then: giving
+      // it back to a plugin panel first made Electron hand that panel the focus again a moment later, over the tab's
+      // (review of the A1 fix). Given as the app's, so a panel taking it does not read as the person moving there.
+      queueMicrotask(() => {
+        const now = document.activeElement
+        if ((now === null || now === document.body) && restoreTo?.isConnected) giveFocus(restoreTo)
+      })
     }
   }, [restoreTo])
 

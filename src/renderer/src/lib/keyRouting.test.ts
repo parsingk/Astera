@@ -116,6 +116,20 @@ describe('panelChords', () => {
     expect(k).toContain('Shift+F10')
   })
 
+  // The window's listener runs the first action a key is bound to (findActionForEvent); a key bound to two by hand is
+  // decided by that first action here too, or the page would lose it with nothing run
+  it('decides a key bound to two actions by the first, as the window does', () => {
+    const k = keys({ 'explorer.cyclePreview': ['Ctrl+Shift+J'] }, (id) => id !== 'explorer.cyclePreview')
+    expect(k).not.toContain('Ctrl+Shift+J')
+  })
+
+  it('asks only the actions that have a key whether they can run', () => {
+    const asked: ActionId[] = []
+    panelChords(resolveBindings({}, actions), actions, (id) => (asked.push(id), true))
+    expect(asked).toContain('palette.open')
+    expect(asked).not.toContain('session.new')
+  })
+
   it('follows a key the person rebound and an action they turned off', () => {
     const k = keys({ 'palette.open': ['Ctrl+Alt+K'], 'explorer.closeFileTab': [] })
     expect(k).toContain('Ctrl+Alt+K')
@@ -139,5 +153,7 @@ describe('panelKeyAction', () => {
   it('finds nothing for a key no action is bound to now', () => {
     expect(panelKeyAction(bindings, chord(true, true, false, 'KeyP'), actions)).toBeNull()
     expect(panelKeyAction(bindings, { ...chord(true, false, true, 'KeyK'), meta: true }, actions)).toBeNull()
+    expect(panelKeyAction(bindings, chord(false, false, true, 'KeyK'), actions)).toBeNull()
+    expect(panelKeyAction(bindings, chord(true, false, false, 'KeyK'), actions)).toBeNull()
   })
 })

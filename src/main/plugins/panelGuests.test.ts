@@ -620,8 +620,11 @@ describe('the app’s keys in a panel', () => {
     expect(key(g, sent, { code: 'KeyW', key: 'w', shift: false })).toEqual({ pageSees: false, handed: [close] })
     // Held down: still the app's, but not handed again, as the window's own listener runs no repeat
     expect(key(g, sent, { isAutoRepeat: true })).toEqual({ pageSees: false, handed: [] })
-    // The key coming up is the page's
+    // Its key coming up is kept from the page too, which would otherwise learn an app key was pressed; once
+    expect(key(g, sent, { type: 'keyUp' })).toEqual({ pageSees: false, handed: [] })
     expect(key(g, sent, { type: 'keyUp' })).toEqual({ pageSees: true, handed: [] })
+    // Another key coming up is the page's
+    expect(key(g, sent, { type: 'keyUp', code: 'KeyA', key: 'a', control: false, shift: false })).toEqual({ pageSees: true, handed: [] })
   })
 
   it('leaves the page every other key: typing, the same key with other modifiers', async () => {
@@ -632,6 +635,7 @@ describe('the app’s keys in a panel', () => {
     const g = await opened(m, 52)
     expect(key(g, sent, { code: 'KeyA', key: 'a', control: false, shift: false })).toEqual({ pageSees: true, handed: [] })
     expect(key(g, sent, { shift: false })).toEqual({ pageSees: true, handed: [] })
+    expect(key(g, sent, { control: false })).toEqual({ pageSees: true, handed: [] })
     expect(key(g, sent, { alt: true })).toEqual({ pageSees: true, handed: [] })
     expect(key(g, sent, { meta: true })).toEqual({ pageSees: true, handed: [] })
   })

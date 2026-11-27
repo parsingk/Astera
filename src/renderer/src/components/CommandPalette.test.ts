@@ -14,7 +14,7 @@ describe('CommandPalette wiring', () => {
   it('gives focus back to the element App read as the palette opened', () => {
     expect(src).toMatch(/restoreTo: HTMLElement \| null/)
     expect(src).not.toMatch(/useState\(\(\) => document\.activeElement/)
-    expect(src).toMatch(/restoreTo\?\.isConnected\) restoreTo\.focus\(\)/)
+    expect(src).toMatch(/queueMicrotask\(\(\) => \{\s*const now = document\.activeElement\s*if \(\(now === null \|\| now === document\.body\) && restoreTo\?\.isConnected\) giveFocus\(restoreTo\)\s*\}\)/)
   })
 
   // A menu left open behind the palette (the run configuration menu, a tab's context menu) listens on document in the

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { PluginPanelView } from './PluginPanelTab'
+import { PluginPanelView, focusIsFree } from './PluginPanelTab'
 
 vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({ lang: 'en', t: (key: string) => key, tm: (m: unknown) => String(m) })
@@ -89,7 +89,7 @@ describe('the panel tab’s words', () => {
 // shown asks main again; a page already showing is not reloaded.
 describe('running the command again', () => {
   it('asks again only when the tab is refused or its guest is gone', () => {
-    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(nonce === 0\) return\s*const phase = stateRef\.current\.phase\s*if \(phase === 'refused' \|\| phase === 'gone'\) \{\s*auto\.current = false\s*setAttempt\(\(n\) => n \+ 1\)\s*\}\s*\}, \[nonce\]\)/)
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(nonce === 0\) return\s*noteAsk\(\)\s*const phase = stateRef\.current\.phase\s*if \(phase === 'refused' \|\| phase === 'gone'\) \{\s*auto\.current = false\s*setAttempt\(\(n\) => n \+ 1\)\s*\}\s*\}, \[nonce\]\)/)
   })
 })
 
@@ -99,7 +99,7 @@ describe('running the command again', () => {
 describe('a guest main ended', () => {
   it('asks main again on destroyed, at most three times without a page loading, and not after the tab closed', () => {
     expect(src).toMatch(/const AUTO_REOPEN_MAX = 3/)
-    expect(src).toMatch(/onEnded=\{\(\) => \{\s*if \(!mounted\.current\) return\s*if \(autoReopens\.current < AUTO_REOPEN_MAX\) \{\s*autoReopens\.current \+= 1\s*auto\.current = true\s*setAttempt\(\(n\) => n \+ 1\)\s*\} else setState\(\{ phase: 'gone' \}\)/)
+    expect(src).toMatch(/onEnded=\{\(\) => \{\s*if \(!mounted\.current\) return\s*askedFrom\.current = null\s*if \(autoReopens\.current < AUTO_REOPEN_MAX\) \{\s*autoReopens\.current \+= 1\s*auto\.current = true\s*setAttempt\(\(n\) => n \+ 1\)\s*\} else setState\(\{ phase: 'gone' \}\)/)
     expect(src).toMatch(/onLoaded=\{\(\) => \{\s*autoReopens\.current = 0\s*auto\.current = false\s*\}\}/)
     expect(src).toMatch(/view\.addEventListener\('destroyed', ended\)/)
     expect(src).toMatch(/view\.addEventListener\('render-process-gone', gone\)/)
@@ -126,7 +126,7 @@ describe('a guest main ended, final review', () => {
 describe('the focus', () => {
   it('moves into the guest when the tab is active and its page is ready, or the command asks for it again', () => {
     expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(active && ready\.current && !activationFocusHeld\(\)\) viewRef\.current\?\.focus\(\)\s*\}, \[active, nonce\]\)/)
-    expect(src).toMatch(/const loaded = \(\): void => \{\s*if \(!ready\.current\) \{\s*ready\.current = true\s*if \(latest\.current\.active && !activationFocusHeld\(\)\) view\.focus\(\)\s*\}\s*latest\.current\.onLoaded\(\)\s*\}/)
+    expect(src).toMatch(/const loaded = \(\): void => \{\s*if \(!ready\.current\) \{\s*ready\.current = true\s*const free = focusIsFree\(document\.activeElement, document\.body, view, latest\.current\.askedFrom\.current\)\s*if \(latest\.current\.active && free && !activationFocusHeld\(\)\) view\.focus\(\)\s*\}\s*latest\.current\.onLoaded\(\)\s*\}/)
     expect(src).toMatch(/<PluginGuest key=\{state\.url\}[^>]*active=\{active\}[^>]*nonce=\{nonce\}/)
   })
 
@@ -136,5 +136,40 @@ describe('the focus', () => {
     const app = readFileSync(path.join(here, '..', 'App.tsx'), 'utf8')
     const sidebar = app.slice(app.indexOf("sidebarPane === 'plugin' && shownPluginView ?"))
     expect(sidebar.slice(0, sidebar.indexOf('/>'))).not.toContain('active=')
+  })
+})
+
+// Review of the A1 fix, finding 1: a page that came back by itself (its plugin installed again from Settings) took the
+// focus out of the Settings dialog. A page that is ready takes the focus only from where nobody put it since the ask.
+describe('the focus a page takes once ready', () => {
+  const body = { n: 'body' } as unknown as Element
+  const view = { n: 'view' } as unknown as Element
+  const terminal = { n: 'terminal' } as unknown as Element
+  const settings = { n: 'settings' } as unknown as Element
+
+  it('takes it when it is nowhere, already the panel, or still where it was when the person asked', () => {
+    expect(focusIsFree(null, body, view, null)).toBe(true)
+    expect(focusIsFree(body, body, view, null)).toBe(true)
+    expect(focusIsFree(view, body, view, null)).toBe(true)
+    expect(focusIsFree(terminal, body, view, terminal)).toBe(true)
+  })
+
+  it('leaves it where the person moved it since, and where it is after an ask the tab made by itself', () => {
+    expect(focusIsFree(settings, body, view, terminal)).toBe(false)
+    expect(focusIsFree(settings, body, view, null)).toBe(false)
+  })
+
+  it('notes where the focus was at each ask of the person’s, and forgets it at an ask of its own', () => {
+    // A microtask after the ask, as the palette gives the focus back a microtask after it closes: what it gives back is
+    // where the person was, not a move since
+    expect(src).toMatch(/const noteAsk = \(\): void => queueMicrotask\(\(\) => \{\s*askedFrom\.current = document\.activeElement\s*\}\)/)
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*noteAsk\(\)\s*\}, \[\]\)/)
+    expect(src).toMatch(/if \(nonce === 0\) return\s*noteAsk\(\)/)
+    expect(src).toMatch(/onEnded=\{\(\) => \{\s*if \(!mounted\.current\) return\s*askedFrom\.current = null/)
+  })
+
+  // Finding 2: focus the palette gives back as it closes is not the person moving into the panel
+  it('switches the pane on the guest’s focus only when the app did not give it', () => {
+    expect(src).toMatch(/const focus = \(\): void => \{\s*if \(!focusGivenByApp\(view\)\) latest\.current\.onFocus\(\)\s*\}/)
   })
 })

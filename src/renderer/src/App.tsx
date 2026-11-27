@@ -1702,16 +1702,27 @@ export default function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [actionRegistry])
 
+  // One delegate per action under the 'core' owner, registered once. Each reads this render's handler from
+  // actionImplRef, so it acts on the latest state without registering again.
+  useEffect(() => {
+    const disposers = ACTIONS.map((a) =>
+      actionRegistry.register('core', a.id, {
+        blockedBy: () => (actionImplRef.current ? (actionImplRef.current[a.id].blockedBy?.() ?? null) : 'action.blocked.noHandler'),
+        run: () => actionImplRef.current?.[a.id].run()
+      })
+    )
+    return () => disposers.forEach((dispose) => dispose())
+  }, [actionRegistry])
+
   // A key pressed in a plugin panel never reaches this document: the panel's page is another renderer (test matrix T17,
   // finding A1). Main sees its real key presses first and keeps from the page the keys this says are the app's right now,
   // the ones the listener above would run or keep with the focus in a text field; told again after each render, when
   // they differ, so a key the app would pass on stays the page's. A press of one comes back here and runs as from a field.
+  // After the delegates above are registered, so the first list knows what can run. A confirm dialog renders nothing
+  // here, so it is asked at the press only: kept in the list it could outlast the dialog.
   const panelKeysSent = useRef('')
   useEffect(() => {
-    const chords =
-      modalOpenRef.current || isConfirmOpen()
-        ? []
-        : panelChords(bindingsRef.current, ACTIONS, (id) => actionRegistry.state(id).ok)
+    const chords = modalOpenRef.current ? [] : panelChords(bindingsRef.current, ACTIONS, (id) => actionRegistry.state(id).ok)
     const text = JSON.stringify(chords)
     if (text === panelKeysSent.current) return
     panelKeysSent.current = text
@@ -1726,18 +1737,6 @@ export default function App(): React.JSX.Element {
       }),
     [actionRegistry]
   )
-
-  // One delegate per action under the 'core' owner, registered once. Each reads this render's handler from
-  // actionImplRef, so it acts on the latest state without registering again.
-  useEffect(() => {
-    const disposers = ACTIONS.map((a) =>
-      actionRegistry.register('core', a.id, {
-        blockedBy: () => (actionImplRef.current ? (actionImplRef.current[a.id].blockedBy?.() ?? null) : 'action.blocked.noHandler'),
-        run: () => actionImplRef.current?.[a.id].run()
-      })
-    )
-    return () => disposers.forEach((dispose) => dispose())
-  }, [actionRegistry])
 
   // The Host's plugin list, kept current (Phase 2 remaining): the themes, sidebar views and status items plugins offer
   const pluginRows = usePluginRows()
