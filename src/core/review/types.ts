@@ -5,7 +5,7 @@ import type { FindingChange, FindingState, ReviewSeverity } from '../orchestrati
 import type { Provider } from '../providers/meta'
 
 export type AttributionKind = 'agent' | 'mixed' | 'unknown'
-export type AttributionWhy = 'no-range' | 'not-fast-forward' | 'shared-folder-live' | 'overlap'
+export type AttributionWhy = 'no-range' | 'unread' | 'not-fast-forward' | 'shared-folder-live' | 'overlap'
 export type EvidenceLevel = 'recorded-range' | 'observe-audit'
 
 export interface AttemptEvidence {

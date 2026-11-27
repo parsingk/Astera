@@ -17,3 +17,14 @@ export function repoPathOf(file: string, repo: string, platform: string = proces
 export function sameRepoPath(a: string, b: string, platform: string = process.platform): boolean {
   return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
+
+/** A review issue's file names the diff's path: the same path, or, for a project in a subfolder of its repository
+ *  (where the reviewer names files from the folder and git from the repository), the diff's path ending in it at a
+ *  folder boundary (final review M13). */
+export function repoPathMatches(file: string, diffPath: string, repo: string, platform: string = process.platform): boolean {
+  const rel = repoPathOf(file, repo, platform)
+  if (sameRepoPath(rel, diffPath, platform)) return true
+  if (/^[A-Za-z]:\//.test(rel) || rel.startsWith('/') || rel === '') return false
+  const fold = (x: string): string => (platform === 'win32' ? x.toLowerCase() : x)
+  return fold(diffPath).endsWith(`/${fold(rel)}`)
+}

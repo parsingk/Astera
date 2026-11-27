@@ -66,4 +66,18 @@ describe('diffFindings', () => {
     expect(place(s).map((f) => f.taskId)).toEqual(['t1'])
     expect(place(s, { taskIds: ['t1', 't2'] }).map((f) => f.taskId)).toEqual(['t1', 't2'])
   })
+
+  // Final review M1: a hunk only partly inside a cut diff places nothing on a line the diff does not show
+  it('lists a finding on the file when its hunk is cut short, even with the same partial fingerprint', () => {
+    const cut = HEADER + '@@ -1,2 +1,3 @@\n const a = 1\n'
+    const partial = parseHunks(cut)[0].fingerprint
+    expect(place(stateWith({ anchor: { hunk: partial } }), { diff: cut, truncated: true })[0].placement).toBe('file')
+  })
+
+  // Final review M13: a project in a subfolder of its repository names files from the folder, git from the repository
+  it('matches an issue’s file named from a subfolder project to the repository’s path', () => {
+    const s = stateWith({ issueFile: 'src/a.ts', anchor: null })
+    expect(place(s, { path: 'pkg/src/a.ts' })).toHaveLength(1)
+    expect(place(s, { path: 'pkg/src/other.ts' })).toHaveLength(0)
+  })
 })

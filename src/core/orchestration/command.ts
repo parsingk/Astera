@@ -3560,14 +3560,15 @@ export async function handleCommand(
       for (const [ref, raw] of Object.entries(given as Record<string, unknown>)) {
         const a = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
         const review = str(a.review)
+        const issue = str(a.issue)
         const head = str(a.head)
         const file = str(a.file)
         // Handed to git and compared later: a commit id, a fingerprint, a bounded name and a line number, nothing else
-        if (!review || !head || !/^[0-9a-f]{7,64}$/i.test(head)) return bad(`tasks-anchors-record: ${ref} needs a review and a head commit id`)
+        if (!review || !issue || !head || !/^[0-9a-f]{7,64}$/i.test(head)) return bad(`tasks-anchors-record: ${ref} needs a review, an issue and a head commit id`)
         if (!file || file.length > 1024) return bad(`tasks-anchors-record: ${ref} needs a file name of at most 1024 characters`)
         if (a.line !== undefined && (typeof a.line !== 'number' || !Number.isInteger(a.line) || a.line < 1)) return bad(`tasks-anchors-record: ${ref}'s line is a positive integer`)
         if (a.hunk !== undefined && (typeof a.hunk !== 'string' || !/^[0-9a-f]{8}$/.test(a.hunk))) return bad(`tasks-anchors-record: ${ref}'s hunk is 8 hex characters`)
-        anchors[ref] = { review, head, file, ...(a.line !== undefined ? { line: a.line as number } : {}), ...(a.hunk !== undefined ? { hunk: a.hunk as string } : {}) }
+        anchors[ref] = { review, issue, head, file, ...(a.line !== undefined ? { line: a.line as number } : {}), ...(a.hunk !== undefined ? { hunk: a.hunk as string } : {}) }
       }
       return commit(recordFindingAnchors(s, taskId, anchors, now))
     }

@@ -91,13 +91,13 @@ export function attemptRanges(s: OrchState, runId: string, dispatchId: string): 
 
 /** The attempts a list's attribution reads (Phase 3 Part 4): one attempt, a Task's, or every Task's of the Run; review
  *  attempts left out, oldest first, the newest ATTRIBUTION_ATTEMPTS_MAX. */
-export function scopeAttempts(s: OrchState, runId: string, taskId?: string, dispatchId?: string): Dispatch[] {
+export function scopeAttempts(s: OrchState, runId: string, taskId?: string, dispatchId?: string, max: number = ATTRIBUTION_ATTEMPTS_MAX): Dispatch[] {
   const taskIds = new Set(s.tasks.filter((t) => t.runId === runId && (taskId === undefined || t.id === taskId)).map((t) => t.id))
   const all = [...taskIds]
     .flatMap((id) => attemptsOfTask(s, id))
     .filter((d) => dispatchId === undefined || d.id === dispatchId)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-  return all.slice(-ATTRIBUTION_ATTEMPTS_MAX)
+  return all.slice(-max)
 }
 
 /** Null for an unknown Run, or a Task that is not the Run's. `parts` is empty when nothing was recorded (the work

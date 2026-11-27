@@ -14,6 +14,9 @@ export interface DiffHunk {
   /** contentRevision of the hunk's content lines (prefix kept, CR dropped, the "\ No newline" marker left out), joined
    *  by "\n". The header is not part of it, so a hunk moved by edits above it keeps its fingerprint. */
   fingerprint: string
+  /** All the lines its header counts are there; false for a hunk cut short (a diff truncated at its byte bound), whose
+   *  fingerprint names no real hunk and whose later lines the diff does not show (final review M1). */
+  complete: boolean
 }
 
 const HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
@@ -56,7 +59,7 @@ export function parseHunks(diff: string): DiffHunk[] {
       content.push(l)
       i++
     }
-    out.push({ header: m[0], oldStart, newStart, newEnd: newStart + newCount - 1, fingerprint: contentRevision(content.join('\n')) })
+    out.push({ header: m[0], oldStart, newStart, newEnd: newStart + newCount - 1, fingerprint: contentRevision(content.join('\n')), complete: oldLeft <= 0 && newLeft <= 0 })
   }
   return out
 }

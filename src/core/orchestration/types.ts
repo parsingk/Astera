@@ -144,12 +144,15 @@ export interface FindingRecord {
   note?: string
   history: FindingChange[]
 }
-/** The newest changes a finding keeps, the records a Task keeps (verified ones go first), and a note's length. */
 /** Where a review finding was made (Phase 3 Part 4): the diff shows it on its line only when the diff is of this head and
- *  the hunk holding its line has this fingerprint; a finding whose head is no longer the Task's is stale by revision. */
+ *  the hunk holding its line has this fingerprint; once a later attempt of its Task records another head, it is stale by
+ *  revision. */
 export interface FindingAnchor {
   /** The review attempt it came from. */
   review: string
+  /** The issue that made it (ReviewIssue.id, new every round): a finding is anchored again only when a new round reissued
+   *  it (final review I2). */
+  issue: string
   /** The head the review began at: that attempt's recorded git.base. */
   head: string
   /** As the issue named it. */
@@ -160,8 +163,10 @@ export interface FindingAnchor {
   hunk?: string
   at: string
 }
+/** The anchors a Task keeps, the newest. */
 export const TASK_FINDING_ANCHORS_MAX = 100
 
+/** The newest changes a finding keeps, the records a Task keeps (verified ones go first), and a note's length. */
 export const FINDING_HISTORY_MAX = 20
 export const TASK_FINDING_STATES_MAX = 100
 export const FINDING_NOTE_MAX = 300

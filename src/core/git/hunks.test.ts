@@ -57,4 +57,10 @@ describe('parseHunks', () => {
     expect([h[0].newStart, h[0].newEnd]).toEqual([5, 5])
     expect(h[0].fingerprint).toBe(parseHunks(HEADER + '@@ -5 +5 @@\n-x\n+y\n')[0].fingerprint)
   })
+
+  // Final review M1: a hunk whose counted lines run out (a diff cut at its byte bound) is marked incomplete
+  it('marks a hunk cut short as incomplete, and a whole one as complete', () => {
+    expect(parseHunks(HEADER + FIRST)[0].complete).toBe(true)
+    expect(parseHunks(HEADER + '@@ -1,3 +1,4 @@\n import x from "x"\n+const a = 1\n')[0].complete).toBe(false)
+  })
 })

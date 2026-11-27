@@ -211,6 +211,45 @@ describe('agent-aware review', () => {
     ])
   })
 
+  // Final review I1: once a merge reaps an attempt's worktree, its range is read in the project folder, as the list is
+  it('attributes an attempt whose worktree is gone over its range in the project folder', async () => {
+    const m = makeDeps({
+      state: {
+        ...emptyState(),
+        jobs: [{ id: 'job1', cwd: 'P' }],
+        runs: [{ id: 'run1', jobId: 'job1', worktree: 'W', git: { base: 'aaaaaaa', head: 'bbbbbbb' } }],
+        tasks: [{ id: 't1', runId: 'run1' }],
+        dispatches: [{ id: 'd1', taskId: 't1', provider: 'claude', accountId: 'acc', sessionId: 's1', cwd: 'W', startedAt: T(0), endedAt: T(10), git: { base: 'aaaaaaa', head: 'bbbbbbb' } }]
+      } as unknown as OrchState,
+      answers: { 'P aaaaaaa..bbbbbbb': [A] }
+    })
+    const repos: string[] = []
+    const deps = m.deps as unknown as { changes: Record<string, unknown> }
+    deps.changes.isAncestor = async (repo: string) => {
+      repos.push(repo)
+      return true
+    }
+    const got = (await call(m.deps, 'runs-changed-files', { runId: 'run1', taskId: 't1', attribution: true })).body as { attribution: Record<string, { kind: string }> }
+    expect(got.attribution['fa~t1'].kind).toBe('agent')
+    expect(repos).toEqual(['P'])
+  })
+
+  // Review focus 3 with reads: the repair's base was recorded after its first commit, so that commit's file is in no
+  // attempt's range and is credited to no one
+  it('credits a commit made before a late base to no attempt', async () => {
+    const late = withReview()
+    const s = late.deps.getState()
+    late.deps.setState({ ...s, dispatches: s.dispatches.map((x) => (x.id === 'd2' ? { ...x, git: { base: 'bbbbbb2', head: 'ccccccc' } } : x)) } as OrchState)
+    const answers2 = late.asked
+    void answers2
+    const m = makeDeps({ state: late.deps.getState(), answers: { 'P aaaaaaa..ccccccc': [A, B], 'P aaaaaaa..bbbbbbb': [A], 'P bbbbbb2..ccccccc': [A] } })
+    const deps2 = m.deps as unknown as { changes: Record<string, unknown> }
+    deps2.changes.isAncestor = async () => true
+    const got = (await call(m.deps, 'runs-changed-files', { runId: 'run1', taskId: 't1', attribution: true })).body as { attribution: Record<string, { kind: string; why?: string }> }
+    expect(got.attribution['fb~t1']).toMatchObject({ kind: 'unknown', why: 'no-range' })
+    expect(got.attribution['fa~t1'].kind).toBe('agent')
+  })
+
   it('answers no attribution where git ancestry cannot be asked', async () => {
     const { deps } = withReview({ ancestry: false })
     const body = (await call(deps, 'runs-changed-files', { runId: 'run1', taskId: 't1', attribution: true })).body as Record<string, unknown>

@@ -7,7 +7,7 @@ import { hunkAt, parseHunks } from '../git/hunks'
 import type { OrchState } from '../orchestration/state'
 import { taskFindings, taskFoldersOf } from '../problems/completionProblems'
 import { findingRef } from '../problems/findingRef'
-import { repoPathOf, sameRepoPath } from './repoPath'
+import { repoPathMatches } from './repoPath'
 import type { DiffFinding, FindingPlacement } from './types'
 
 export type { DiffFinding, FindingPlacement } from './types'
@@ -25,7 +25,7 @@ export function diffFindings(
     const folders = taskFoldersOf(s, task)
     const texts = new Map(taskFindings(task, folders).map((f) => [f.ref, f.text]))
     for (const issue of task.reviewIssues ?? []) {
-      if (issue.file === undefined || !sameRepoPath(repoPathOf(issue.file, a.repo, platform), a.path, platform)) continue
+      if (issue.file === undefined || !repoPathMatches(issue.file, a.path, a.repo, platform)) continue
       const ref = findingRef({ kind: 'review', taskId, file: issue.file, base: folders, message: issue.title })
       const rec = task.findingStates?.[ref]
       const anchor = task.findingAnchors?.[ref]
@@ -33,7 +33,9 @@ export function diffFindings(
       if (anchor && anchor.head !== a.head) placement = 'other-revision'
       else if (anchor?.hunk !== undefined && anchor.line !== undefined) {
         hunks ??= parseHunks(a.diff)
-        if (hunkAt(hunks, anchor.line)?.fingerprint === anchor.hunk) placement = { line: anchor.line }
+        // A hunk cut short by the diff's byte bound has rows the diff does not show (final review M1)
+        const hunk = hunkAt(hunks, anchor.line)
+        if (hunk?.complete === true && hunk.fingerprint === anchor.hunk) placement = { line: anchor.line }
       }
       out.push({
         ref,
