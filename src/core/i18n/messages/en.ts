@@ -1183,6 +1183,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.theme.hint':
     'Changes colours, corners and typeface together. The terminal font is chosen separately below.',
   'settings.theme.saveFailed': 'Could not save the theme: {detail}',
+  'settings.theme.plugins': 'Plugin themes',
+  'settings.theme.pluginGone': 'No plugin offers the plugin theme you chose right now, so the default theme is shown. It comes back when that plugin is on again.',
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'Session resume strategy',
   'settings.resumeStrategy.smart.label': 'Smart Resume',

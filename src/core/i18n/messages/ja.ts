@@ -1114,6 +1114,8 @@ export const ja: Catalog = {
   'settings.theme.label': 'テーマ',
   'settings.theme.hint': '色・角丸・書体がまとめて変わります。ターミナルのフォントは下で個別に選びます。',
   'settings.theme.saveFailed': 'テーマを保存できませんでした: {detail}',
+  'settings.theme.plugins': 'プラグインのテーマ',
+  'settings.theme.pluginGone': '選んだプラグインのテーマを今提供しているプラグインがないため、既定のテーマで表示しています。そのプラグインを再びオンにすると戻ります。',
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'セッション再開方法',
   'settings.resumeStrategy.smart.label': 'スマート再開',

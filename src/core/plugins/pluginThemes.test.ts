@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { themeById } from '../theme/themes'
 import { THEME_CONTRAST_CHECKS } from '../theme/contrastChecks'
-import { parsePluginThemeId, pluginThemeId, pluginThemeOf, pluginThemeProblem } from './pluginThemes'
+import { isStoredThemeId, paletteMirror, parsePluginThemeId, pluginThemeId, pluginThemeOf, pluginThemeProblem, readPaletteMirror, resolveTheme } from './pluginThemes'
 
 describe('pluginThemeProblem', () => {
   it('takes a dark palette over a built-in base that keeps every contrast floor', () => {
@@ -65,5 +65,45 @@ describe('plugin theme ids', () => {
     for (const v of ['vega', 'plugin:', 'plugin:a', 'plugin::b', 'plugin:a:', 'plugin:A:b', 'plugin:a:B', 'plugin:a:b:c', `plugin:a:${'x'.repeat(65)}`, 7, null]) {
       expect(parsePluginThemeId(v), String(v)).toBeNull()
     }
+  })
+})
+
+describe('isStoredThemeId', () => {
+  it('takes a built-in id and a plugin theme id, nothing else', () => {
+    expect(isStoredThemeId('vega')).toBe(true)
+    expect(isStoredThemeId('plugin:dusk-theme:dusk')).toBe(true)
+    for (const v of ['darcula', 'plugin:dusk-theme', '', null, 7]) expect(isStoredThemeId(v), String(v)).toBe(false)
+  })
+})
+
+describe('resolveTheme', () => {
+  const dusk = pluginThemeOf('dusk-theme', 'Dusk', { id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } })
+
+  it('shows a built-in id as that theme, whatever the plugins are', () => {
+    expect(resolveTheme('orion', null, null).colors).toEqual(themeById('orion').colors)
+  })
+
+  it('shows a plugin theme the plugin list holds', () => {
+    expect(resolveTheme(dusk.id, [dusk], null).colors.accent).toBe('#3fa7d6')
+  })
+
+  it('shows the mirrored palette until the plugin list is read, then the default when the plugin no longer offers it', () => {
+    const mirror = readPaletteMirror(paletteMirror(dusk), dusk.id)
+    expect(resolveTheme(dusk.id, null, mirror).colors.accent).toBe('#3fa7d6')
+    expect(resolveTheme(dusk.id, [], mirror).colors).toEqual(themeById('umbra').colors)
+    expect(resolveTheme(dusk.id, null, null).colors).toEqual(themeById('umbra').colors)
+  })
+})
+
+describe('the palette mirror', () => {
+  const dusk = pluginThemeOf('dusk-theme', 'Dusk', { id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } })
+
+  it('reads back only for the id it was written for, and only colours the theme rules take', () => {
+    const raw = paletteMirror(dusk)
+    expect(readPaletteMirror(raw, dusk.id)?.colors.accent).toBe('#3fa7d6')
+    expect(readPaletteMirror(raw, 'plugin:other:dusk')).toBeNull()
+    expect(readPaletteMirror(JSON.stringify({ id: dusk.id, base: 'vega', colors: { accent: 'url(x)' } }), dusk.id)).toBeNull()
+    expect(readPaletteMirror('not json', dusk.id)).toBeNull()
+    expect(readPaletteMirror(null, dusk.id)).toBeNull()
   })
 })

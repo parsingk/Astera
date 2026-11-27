@@ -3,7 +3,8 @@ import path from 'node:path'
 import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
-import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
+import { DEFAULT_THEME_ID } from '../core/theme/themes'
+import { isStoredThemeId } from '../core/plugins/pluginThemes'
 import type { AgentPermissionMode, McpAccess, ResumeStrategy, SessionKind } from '../core/types'
 import { applyContinuityToggle } from '../core/continuity/settings'
 import {
@@ -149,7 +150,8 @@ export class AppSettingsStore {
    *  review; written only while it is not empty. The Host reads the file (readReviewerSettings). */
   private reviewerSettings: ReviewerSettings = { ...EMPTY_REVIEWER_SETTINGS }
   private terminalFont: TerminalFont = { latin: null, hangul: null }
-  private theme: ThemeId = DEFAULT_THEME_ID
+  /** A built-in theme id, or a plugin theme's (`plugin:<id>:<theme>`), kept while its plugin is off. */
+  private theme: string = DEFAULT_THEME_ID
   /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
    *  seeds the dialog's own selection and nothing more: changing the kind inside the dialog applies
    *  to that session alone and is not written back here.
@@ -253,7 +255,7 @@ export class AppSettingsStore {
             }
           : { latin: null, hangul: null }
       const theme = (parsed as { theme?: unknown }).theme
-      this.theme = isThemeId(theme) ? theme : DEFAULT_THEME_ID
+      this.theme = isStoredThemeId(theme) ? theme : DEFAULT_THEME_ID
       // Narrowed to === 'chat' — the file is user-editable, so anything else reads as the default
       // 'terminal', the same one-sided narrowing agentPermissionMode uses above. With the new key
       // absent the old one it replaced is read instead: its 'conversation' meant "open on the
@@ -644,12 +646,12 @@ export class AppSettingsStore {
     await this.persist()
   }
 
-  getTheme(): ThemeId {
+  getTheme(): string {
     return this.theme
   }
 
-  async setTheme(id: ThemeId): Promise<void> {
-    this.theme = isThemeId(id) ? id : DEFAULT_THEME_ID
+  async setTheme(id: string): Promise<void> {
+    this.theme = isStoredThemeId(id) ? id : DEFAULT_THEME_ID
     await this.persist()
   }
 
@@ -719,7 +721,7 @@ export class AppSettingsStore {
       externalReviewers?: ReviewerSettings['reviewers']
       reviewBy?: string
       terminalFont?: TerminalFont
-      theme?: ThemeId
+      theme?: string
       defaultSessionKind?: SessionKind
       firstRunAsked?: false
     } = {}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { panelCommands, panelInfo, pluginRowsOf, unusablePlugin, type PluginRow } from './pluginRows'
+import { panelCommands, panelInfo, pluginRowsOf, pluginThemesOf, unusablePlugin, type PluginRow } from './pluginRows'
 
 const row = (over: Partial<PluginRow> = {}): PluginRow => ({
   id: 'hello-panel',
@@ -79,5 +79,32 @@ describe('a plugin’s name where it is shown', () => {
     const spoof = row({ displayName: 'Hello\u202epanel' })
     expect(panelCommands([spoof])[0].pluginName).toBe('hello-panel')
     expect(panelInfo([spoof], 'hello-panel', 'hello')?.pluginName).toBe('hello-panel')
+  })
+})
+
+// Phase 2 remaining: the themes plugins offer
+describe('pluginThemesOf', () => {
+  const dusk = { id: 'dusk', title: 'Dusk', base: 'vega' as const, colors: { accent: '#3fa7d6' } }
+  const themes = (over: Partial<PluginRow> = {}): PluginRow =>
+    row({ id: 'dusk-theme', displayName: 'Dusk pack', ui: undefined, permissions: ['themes.register'], contributes: { commands: [], panels: [], themes: [dusk] }, ...over })
+
+  it('lists each theme of an enabled, ready plugin, merged over its base and named by plugin', () => {
+    const [t] = pluginThemesOf([themes()])
+    expect(t).toMatchObject({ id: 'plugin:dusk-theme:dusk', name: 'Dusk', pluginId: 'dusk-theme', pluginName: 'Dusk pack', base: 'vega' })
+    expect(t.theme.colors.accent).toBe('#3fa7d6')
+  })
+
+  it('needs no page: a themes-only plugin has none', () => {
+    expect(pluginThemesOf([themes({ ui: undefined })])).toHaveLength(1)
+  })
+
+  it('leaves out a plugin turned off or not ready, and a theme the rules refuse though a Host listed it', () => {
+    expect(pluginThemesOf([themes({ enabled: false })])).toEqual([])
+    expect(pluginThemesOf([themes({ status: 'incompatible' })])).toEqual([])
+    expect(pluginThemesOf([themes({ contributes: { commands: [], panels: [], themes: [{ ...dusk, colors: { accent: 'url(x)' } }] } })])).toEqual([])
+  })
+
+  it('leaves out a plugin the person did not grant themes.register', () => {
+    expect(pluginThemesOf([themes({ permissions: [] })])).toEqual([])
   })
 })

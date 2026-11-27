@@ -1,7 +1,8 @@
 // The Host's plugin list as panels need it, read the same way in main (which prepares a panel) and in the renderer
 // (which lists the commands and keeps the tabs): which plugins are installed, which can show a panel now, and why not.
 // node: no imports, the renderer imports this.
-import { INVISIBLE, contributionKey, type ContributionKey } from './manifest'
+import { INVISIBLE, contributionKey, type ContributionKey, type PluginContributions } from './manifest'
+import { pluginThemeOf, pluginThemeProblem, type PluginTheme } from './pluginThemes'
 
 /** One installed plugin as the Host lists it, the fields a panel needs. */
 export interface PluginRow {
@@ -18,7 +19,7 @@ export interface PluginRow {
   installedAt?: number
   /** Which install this is: an update keeps it, a removal and install again does not (final review I2). */
   installId?: string
-  contributes?: { commands: { id: string; title: string; panel: string }[]; panels: { id: string; title: string }[] }
+  contributes?: PluginContributions
 }
 
 /** The rows of the Host's `plugins-list` answer a panel needs; a malformed row is left out. */
@@ -100,4 +101,13 @@ export function panelInfo(rows: readonly PluginRow[], pluginId: string, panelId:
   const p = rows.find((r) => r.id === pluginId)
   const panel = p?.contributes?.panels.find((x) => x.id === panelId)
   return p && panel ? { title: panel.title, pluginName: shownName(p) } : null
+}
+
+/** The themes the plugins offer now (Phase 2 remaining): an enabled, ready plugin granted themes.register, each theme
+ *  checked again by the theme rules, since what reaches a CSS variable must be a colour whatever a Host listed. */
+export function pluginThemesOf(rows: readonly PluginRow[]): PluginTheme[] {
+  return rows.flatMap((p) => {
+    if (!p.enabled || (p.status !== 'ready' && p.status !== 'running') || !p.permissions.includes('themes.register')) return []
+    return (p.contributes?.themes ?? []).filter((d) => pluginThemeProblem(d) === null).map((d) => pluginThemeOf(p.id, shownName(p), d))
+  })
 }

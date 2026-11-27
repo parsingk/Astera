@@ -590,6 +590,19 @@ describe('theme', () => {
     expect(store.getTheme()).toBe('umbra')
   })
 
+  // Phase 2 remaining: a plugin's theme is stored by its id, kept while its plugin is off
+  it('keeps a plugin theme id across a restart, and drops any other shape to the default', async () => {
+    const filePath = file()
+    const store = new AppSettingsStore(filePath)
+    await store.load()
+    await store.setTheme('plugin:dusk-theme:dusk')
+    const again = new AppSettingsStore(filePath)
+    await again.load()
+    expect(again.getTheme()).toBe('plugin:dusk-theme:dusk')
+    await again.setTheme('plugin:Dusk:x' as never)
+    expect(again.getTheme()).toBe('umbra')
+  })
+
   it('기본 테마는 파일에 쓰지 않는다 — 다른 필드의 falsy 생략 관례와 같다', async () => {
     const filePath = file()
     const store = new AppSettingsStore(filePath)

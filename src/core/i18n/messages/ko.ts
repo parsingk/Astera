@@ -1240,6 +1240,8 @@ export const ko = {
   'settings.theme.label': '테마',
   'settings.theme.hint': '색과 모서리, 서체가 함께 바뀝니다. 터미널 폰트는 아래에서 따로 고릅니다.',
   'settings.theme.saveFailed': '테마 저장 실패: {detail}',
+  'settings.theme.plugins': '플러그인 테마',
+  'settings.theme.pluginGone': '고른 플러그인 테마를 지금 주는 플러그인이 없어 기본 테마로 보입니다. 그 플러그인을 다시 켜면 돌아옵니다.',
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': '세션 재개 방식',
   'settings.resumeStrategy.smart.label': '스마트 재개',

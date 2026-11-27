@@ -168,7 +168,9 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, kubeTab, mediaTab, parseKubeTab, parsePluginTab, parseTab, pluginTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { panelCommands, pluginRowsOf, type PanelCommand } from '../../core/plugins/pluginRows'
+import { panelCommands, pluginRowsOf, pluginThemesOf, type PanelCommand } from '../../core/plugins/pluginRows'
+import { usePluginRows } from './lib/pluginRows'
+import { useTheme } from './lib/theme'
 import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { mediaTabsUnder, placeKubeTab, placeMediaTab, placePluginTab, placeTab } from '../../core/panes/place'
@@ -1704,6 +1706,13 @@ export default function App(): React.JSX.Element {
     )
     return () => disposers.forEach((dispose) => dispose())
   }, [actionRegistry])
+
+  // The Host's plugin list, kept current (Phase 2 remaining): the themes, sidebar views and status items plugins offer
+  const pluginRows = usePluginRows()
+  const { setPluginThemes } = useTheme()
+  useEffect(() => {
+    setPluginThemes(pluginRows === null ? null : pluginThemesOf(pluginRows))
+  }, [pluginRows, setPluginThemes])
 
   /** Puts the plugin commands the Host listed in the registry, under their plugin as owner and their contribution key as
    *  id (ADR-007, ADR-008), in place of the last list's: a plugin turned off or removed loses its commands. Registered

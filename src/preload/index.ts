@@ -43,6 +43,7 @@ const EVENT_CHANNELS = [
   'files:changed',
   'files:changedBatch',
   'problems:changed',
+  'plugins:changed',
   'tests:changed',
   'lsp:state',
   'files:opProgress',

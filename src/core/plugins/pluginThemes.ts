@@ -4,7 +4,7 @@
 // shares across themes (file icons, git, danger) are tuned for dark surfaces.
 import { relativeLuminance, contrastRatio } from '../theme/contrast'
 import { BRIGHTEST_SURFACE, THEME_CONTRAST_CHECKS } from '../theme/contrastChecks'
-import { THEMES, isThemeId, themeById, type Theme, type ThemeColors, type ThemeId } from '../theme/themes'
+import { DEFAULT_THEME_ID, THEMES, isThemeId, themeById, type Theme, type ThemeColors, type ThemeId } from '../theme/themes'
 
 /** A theme as a manifest declares it, read. */
 export interface PluginThemeDecl {
@@ -22,6 +22,8 @@ export interface PluginTheme {
   pluginId: string
   pluginName: string
   base: ThemeId
+  /** The colours the plugin set, which the first-paint mirror keeps (a base's own may be rgba, which a plugin's may not). */
+  overrides: Partial<ThemeColors>
   theme: Theme
 }
 
@@ -75,6 +77,35 @@ export function pluginThemeOf(pluginId: string, pluginName: string, decl: Plugin
     pluginId,
     pluginName,
     base: decl.base,
+    overrides: { ...decl.colors },
     theme: { ...base, colors: { ...base.colors, ...decl.colors } }
   }
+}
+
+/** What Settings may store as the theme: a built-in id, or a plugin theme's (kept while its plugin is off). */
+export const isStoredThemeId = (v: unknown): v is string => isThemeId(v) || parsePluginThemeId(v) !== null
+
+/** A plugin theme as the first-paint mirror keeps it: the app reads it before the plugin list arrives. */
+export const paletteMirror = (t: PluginTheme): string => JSON.stringify({ id: t.id, base: t.base, colors: t.overrides })
+
+/** The theme a mirror written for `id` holds, checked again by the theme rules; null for anything else. */
+export function readPaletteMirror(raw: string | null, id: string): Theme | null {
+  if (raw === null) return null
+  let v: unknown
+  try {
+    v = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!isObject(v) || v.id !== id || pluginThemeProblem(v) !== null) return null
+  const base = themeById(v.base as ThemeId)
+  return { ...base, colors: { ...base.colors, ...(v.colors as Partial<ThemeColors>) } }
+}
+
+/** The theme to show for a stored id: a built-in one as itself; a plugin's from the list (null while not read yet, when
+ *  the mirror stands in); the default when no plugin offers it now, the stored id kept for when one does again. */
+export function resolveTheme(storedId: string, pluginThemes: readonly PluginTheme[] | null, mirror: Theme | null): Theme {
+  if (isThemeId(storedId)) return themeById(storedId)
+  if (pluginThemes !== null) return pluginThemes.find((t) => t.id === storedId)?.theme ?? themeById(DEFAULT_THEME_ID)
+  return mirror ?? themeById(DEFAULT_THEME_ID)
 }

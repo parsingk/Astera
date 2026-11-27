@@ -1126,6 +1126,8 @@ export const es: Catalog = {
   'settings.theme.hint':
     'Cambia colores, esquinas y tipografía a la vez. La fuente del terminal se elige aparte, más abajo.',
   'settings.theme.saveFailed': 'No se pudo guardar el tema: {detail}',
+  'settings.theme.plugins': 'Temas de plugins',
+  'settings.theme.pluginGone': 'Ningún plugin ofrece ahora el tema de plugin que elegiste, así que se muestra el tema predeterminado. Vuelve cuando ese plugin se active de nuevo.',
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'Estrategia de reanudación de sesión',
   'settings.resumeStrategy.smart.label': 'Reanudación inteligente',
