@@ -32,7 +32,8 @@ const fake = (): PluginManager & { calls: string[] } => {
     catalog: vi.fn(ok('catalog', { configured: false })),
     catalogConfigure: vi.fn(ok('catalogConfigure', { configured: true, changed: true })),
     catalogInspect: vi.fn(ok('catalogInspect')),
-    catalogInstall: vi.fn(ok('catalogInstall'))
+    catalogInstall: vi.fn(ok('catalogInstall')),
+    safeMode: vi.fn(ok('safeMode', { safeMode: true, changed: true }))
   }
 }
 
@@ -43,7 +44,7 @@ const run = (o: Partial<Parameters<typeof pluginsCommand>[0]> & { cmd: string })
 }
 
 describe('pluginsCommand', () => {
-  it('names the sixteen commands', () => {
+  it('names the seventeen commands', () => {
     expect([...PLUGIN_COMMANDS]).toEqual([
       'plugins-inspect',
       'plugins-install',
@@ -60,7 +61,8 @@ describe('pluginsCommand', () => {
       'plugins-catalog',
       'plugins-catalog-configure',
       'plugins-catalog-inspect',
-      'plugins-catalog-install'
+      'plugins-catalog-install',
+      'plugins-safe-mode'
     ])
   })
 
@@ -385,5 +387,17 @@ describe('pluginsCommand and the catalog', () => {
       { plugin: 'acme.hello', event: 'installed', by: 'app', version: '1.0.0', detail: 'restricted-ui; granted panels.register; from the catalog artifacts/hello.tgz sha256 abcdef012345' },
       { plugin: 'acme.hello', event: 'disabled', by: 'catalog', detail: 'revoked by the catalog' }
     ])
+  })
+})
+
+describe('pluginsCommand and Safe Mode', () => {
+  it('hands plugins-safe-mode its switch, refuses it to an agent’s shell, and records it', async () => {
+    const manager = fake()
+    const recs: PluginAuditRecord[] = []
+    const audit: PluginAudit = { record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
+    await pluginsCommand({ manager, cmd: 'plugins-safe-mode', args: { on: true }, role: 'cli', marks: { effects: 0 }, audit })
+    expect(manager.safeMode).toHaveBeenCalledWith({ on: true })
+    expect(recs).toEqual([{ plugin: '*', event: 'disabled', by: 'cli', detail: 'Safe Mode on' }])
+    expect((await run({ cmd: 'plugins-safe-mode', args: { on: true }, agentRefusal: 'no' }).answer).status).toBe(403)
   })
 })

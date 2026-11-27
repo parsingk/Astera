@@ -69,7 +69,15 @@ export interface PluginManager {
   catalogInspect(a: { id?: unknown; version?: unknown }): Promise<PluginsAnswer>
   /** Installs that exact version, as `catalogInspect` showed it (`expect`), with `grant`. */
   catalogInstall(a: { id?: unknown; version?: unknown; grant?: unknown; expect?: unknown }): Promise<PluginsAnswer>
+  /** Phase 4 (spec M3): Safe Mode on stops every plugin and starts none until it is off; off starts the enabled ones. It
+   *  is a file in the plugins folder, so a Host that starts with it on starts nothing, and the CLI can set it with no
+   *  Host. */
+  safeMode(a: { on?: unknown }): Promise<PluginsAnswer>
 }
+
+/** The file whose presence is Safe Mode (Phase 4): `<profile>/plugins/safe-mode`. */
+export const SAFE_MODE_FILE = 'safe-mode'
+const SAFE_MODE_REASON = 'Safe Mode is on: no plugin runs'
 
 /** A plugin's settings as stored, read against its installed schema (manager's settingsState). */
 type SettingsState =
@@ -308,7 +316,9 @@ export function createPluginManager(d: {
   }
 
   /** Starts the record's plugin when it is enabled and runs here. */
+  const inSafeMode = (): Promise<boolean> => fs.stat(path.join(root, SAFE_MODE_FILE)).then(() => true, () => false)
   const startIfRunnable = async (r: PluginRecord): Promise<void> => {
+    if (await inSafeMode()) return
     if (!d.runtime) return
     const launch = await runnable(r)
     if (launch) d.runtime.start(launch)
@@ -329,6 +339,11 @@ export function createPluginManager(d: {
     if (m && r.enabled && incompatible === null && status === 'stopped') reason = ungranted(r, m) ?? heldBack(r, await settingsState(r, m)) ?? reason
     // A UI-only plugin with nothing missing is ready: it has nothing to start
     if (uiOnly && status === 'stopped' && reason === null) status = 'ready'
+    // Safe Mode: nothing of an enabled plugin runs or draws (Phase 4)
+    if (r.enabled && incompatible === null && (await inSafeMode())) {
+      status = 'stopped'
+      reason = SAFE_MODE_REASON
+    }
     return {
       id: r.id,
       name: m?.name ?? r.id,
@@ -1049,18 +1064,40 @@ export function createPluginManager(d: {
     })
   }
 
+  /** The list's answer: every plugin, and Safe Mode when it is on. */
+  async function listBody(): Promise<Record<string, unknown>> {
+    const plugins = await Promise.all((await readRegistry(root)).map(view))
+    return { plugins, ...((await inSafeMode()) ? { safeMode: true } : {}) }
+  }
+
+  async function safeMode(a: { on?: unknown }): Promise<PluginsAnswer> {
+    if (typeof a.on !== 'boolean') throw new Refused(400, 'plugins-safe-mode needs on: true or false')
+    const was = await inSafeMode()
+    if (was === a.on) return { status: 200, body: { safeMode: a.on, changed: false } }
+    const file = path.join(root, SAFE_MODE_FILE)
+    if (a.on) {
+      await fs.mkdir(root, { recursive: true })
+      await fs.writeFile(file, '')
+      for (const r of await readRegistry(root)) if (d.runtime?.status(r.id)?.status === 'running' || d.runtime?.status(r.id)?.status === 'starting') await d.runtime.stop(r.id)
+    } else {
+      await fs.rm(file, { force: true })
+      for (const r of await readRegistry(root)) await startIfRunnable(r)
+    }
+    return { status: 200, body: { safeMode: a.on, changed: true } }
+  }
+
   return {
+    safeMode: (a) => serial(() => safeMode(a)),
     catalog: (a) => serial(() => catalogRead(a)),
     catalogConfigure: (a) => serial(() => catalogConfigure(a)),
     catalogInspect: (a) => serial(() => catalogInspect(a)),
     catalogInstall: (a) => serial(() => catalogInstall(a)),
     inspect: (p) => serial(() => inspect(p)),
     install: (a) => serial(() => install(a)),
-    list: () =>
-      serial(async () => ({ status: 200, body: { plugins: await Promise.all((await readRegistry(root)).map(view)) } })),
+    list: () => serial(async () => ({ status: 200, body: await listBody() })),
     listNow: async () => {
       try {
-        return { status: 200, body: { plugins: await Promise.all((await readRegistry(root)).map(view)) } }
+        return { status: 200, body: await listBody() }
       } catch (e) {
         return refused(500, e instanceof Error ? e.message : String(e))
       }

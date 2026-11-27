@@ -51,6 +51,8 @@ function contributionsOf(v: unknown): PluginContributions | undefined {
 
 /** The rows of the Host's `plugins-list` answer a panel needs; a malformed row is left out. */
 export function pluginRowsOf(body: unknown): PluginRow[] {
+  // Safe Mode (Phase 4): nothing of a plugin draws, so no row reaches a panel, a sidebar view, a status item or a theme
+  if (typeof body === 'object' && body !== null && (body as { safeMode?: unknown }).safeMode === true) return []
   const list = typeof body === 'object' && body !== null ? (body as { plugins?: unknown }).plugins : undefined
   if (!Array.isArray(list)) return []
   const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])

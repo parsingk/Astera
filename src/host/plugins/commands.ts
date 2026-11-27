@@ -23,7 +23,8 @@ export const PLUGIN_COMMANDS: ReadonlySet<string> = new Set([
   'plugins-catalog',
   'plugins-catalog-configure',
   'plugins-catalog-inspect',
-  'plugins-catalog-install'
+  'plugins-catalog-install',
+  'plugins-safe-mode'
 ])
 
 /** The ones that change what is installed or whether it runs. */
@@ -34,7 +35,8 @@ export const PLUGIN_CHANGES: ReadonlySet<string> = new Set([
   'plugins-remove',
   'plugins-configure',
   'plugins-catalog-configure',
-  'plugins-catalog-install'
+  'plugins-catalog-install',
+  'plugins-safe-mode'
 ])
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -84,6 +86,8 @@ function changeRecord(cmd: string, args: Record<string, unknown>, by: string, an
       const parts = [...(set.length > 0 ? [`set ${set.join(', ')}`] : []), ...(unset.length > 0 ? [`unset ${unset.join(', ')}`] : [])]
       return { plugin: str(args.id) ?? plugin, event: 'configured', by, ...(parts.length > 0 ? { detail: parts.join('; ') } : {}) }
     }
+    case 'plugins-safe-mode':
+      return { plugin: '*', event: body.safeMode === true ? 'disabled' : 'enabled', by, detail: body.safeMode === true ? 'Safe Mode on' : 'Safe Mode off' }
     default:
       return null
   }
@@ -151,6 +155,9 @@ async function answerOf(a: Omit<Parameters<typeof pluginsCommand>[0], 'audit' | 
       break
     case 'plugins-catalog-install':
       answer = await manager.catalogInstall({ id: args.id, version: args.version, grant: args.grant, expect: args.expect })
+      break
+    case 'plugins-safe-mode':
+      answer = await manager.safeMode({ on: args.on })
       break
     case 'plugins-configure':
       answer = await manager.configure(args.id, args.set, args.unset)

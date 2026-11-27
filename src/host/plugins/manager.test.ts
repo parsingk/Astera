@@ -1477,3 +1477,34 @@ describe('install from a package file, final review', () => {
     expect(await manager.inspect({ file: big })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/is larger than any plugin package/) } })
   })
 })
+
+// Phase 4 (spec M3): Safe Mode runs no third-party plugin, and turning it off brings them back as they were
+describe('Safe Mode', () => {
+  it('stops every running plugin when it goes on, starts none while it is on, and starts the enabled ones when it goes off', async () => {
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    await m.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    rt.calls.length = 0
+    expect(body(await m.safeMode({ on: true }))).toMatchObject({ safeMode: true, changed: true })
+    expect(rt.calls).toEqual(['stop @acme/astera-jira'])
+    await m.startAll()
+    expect((await m.setEnabled('@acme/astera-jira', true)).status).toBe(200)
+    expect(rt.calls).toEqual(['stop @acme/astera-jira'])
+    const listed = body(await m.list())
+    expect(listed.safeMode).toBe(true)
+    expect((listed.plugins as Record<string, unknown>[])[0]).toMatchObject({ enabled: true, status: 'stopped', reason: 'Safe Mode is on: no plugin runs' })
+    expect(body(await m.safeMode({ on: false }))).toMatchObject({ safeMode: false, changed: true })
+    expect(rt.calls).toEqual(['stop @acme/astera-jira', 'start @acme/astera-jira'])
+    expect(body(await m.list()).safeMode).toBeUndefined()
+  })
+
+  it('reads Safe Mode from the profile, so a Host that starts with it on starts nothing', async () => {
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    await m.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    await fs.writeFile(path.join(pluginsRoot(profile), 'safe-mode'), '')
+    rt.calls.length = 0
+    await createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime }).startAll()
+    expect(rt.calls).toEqual([])
+  })
+})

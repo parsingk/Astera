@@ -191,3 +191,10 @@ describe('pluginRowsOf with a malformed contribution', () => {
     expect(listed({ commands: 'x', panels: [] })[0].contributes).toBeUndefined()
   })
 })
+
+// Phase 4: in Safe Mode nothing of a plugin draws: no panel, sidebar view, status item or theme
+describe('pluginRowsOf in Safe Mode', () => {
+  it('lists no row when the Host says Safe Mode is on', () => {
+    expect(pluginRowsOf({ safeMode: true, plugins: [{ id: 'x', dir: '/x', status: 'stopped', enabled: true }] })).toEqual([])
+  })
+})
