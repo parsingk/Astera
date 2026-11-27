@@ -262,12 +262,27 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     const l = await g.connect()
     await l.auth('t', {})
     await until(() => g.seen.filter((f) => f.t === 'call').length >= 12)
-    await new Promise((r) => setTimeout(r, 300))
-    expect(((await l.call('state-get', {})).body as { big: string }).big.length).toBe(4 << 20)
+    // The kernel's socket buffers keep taking what the deaf one is sent after its last reply came in, and how much they
+    // take differs by platform: on macOS enough to bring its queue under the budget's margin before the answered call's
+    // reply is weighed (CI, 2026-11-27; replies smaller than the buffers fail the same way on Windows). So the deaf one is
+    // asked again before each answered call, its replies arriving just ahead of that call's, until the buffers are full
+    // and the budget closes it. A closing connection's calls are not passed on, which ends the loop too.
+    let asked = 12
+    for (let round = 0; round < 20 && !g.seen.some((f) => f.t === 'conn-closed'); round++) {
+      if (round > 0) {
+        for (let i = 0; i < 2; i++) d.write(`${JSON.stringify({ t: 'call', id: `t${round}-${i}`, cmd: 'state-get', args: {} })}
+`)
+        asked += 2
+        const passedOn = await until(() => g.seen.filter((f) => f.t === 'call').length >= asked, 1000).then(() => true, () => false)
+        if (!passedOn) break
+      }
+      expect(((await l.call('state-get', {})).body as { big: string }).big.length).toBe(4 << 20)
+      asked += 1
+    }
     // The Gateway closed the deaf one (a paused socket hears no close of its own): the Host was told.
     await until(() => g.seen.some((f) => f.t === 'conn-closed'), 5000)
     d.destroy()
-  })
+  }, 60_000)
   it('a connection whose output has not moved for silenceMs is closed, though it still pings', async () => {
     const g = await start({ pingMs: 50, silenceMs: 400 }, bigHost)
     const d = await deaf(g.gw.port, 4)
