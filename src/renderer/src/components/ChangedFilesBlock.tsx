@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangedFile } from '../../../core/git/changedFile'
 import type { Dispatch } from '../../../core/orchestration/types'
+import type { DiffFinding } from '../../../core/review/types'
 import type { OrchDoor } from '../lib/orchDoor'
 import { changesView, type ChangesView } from '../lib/changesView'
 import { attemptLabel, attributionBadge, attributionTitle, rangeLabel } from '../lib/agentReview'
@@ -17,14 +18,18 @@ import { Select } from './Select'
 
 const errorOf = (r: { status: number; body: unknown }): string => String((r.body as { error?: unknown } | null)?.error ?? r.status)
 
-type Diff = { fileId: string; state: 'loading' } | { fileId: string; state: 'shown'; diff: string; truncated: boolean } | { fileId: string; state: 'failed'; message: string }
+type Diff =
+  | { fileId: string; state: 'loading' }
+  | { fileId: string; state: 'shown'; diff: string; truncated: boolean; findings?: DiffFinding[] }
+  | { fileId: string; state: 'failed'; message: string }
 
 export function ChangedFilesBlock({
   door,
   runId,
   taskId,
   reviewOn,
-  onDraftRepair
+  onDraftRepair,
+  onFixFinding
 }: {
   door: OrchDoor
   runId: string
@@ -33,6 +38,8 @@ export function ChangedFilesBlock({
   reviewOn: boolean
   /** A hunk of a shown diff to a repair Job draft (spec W4): the file's path, its diff, and the hunk's row. */
   onDraftRepair?: (file: string, diff: string, rowIndex: number) => void
+  /** A review finding's fix button (Phase 3 Part 4): Part 1's repair request on its Task. Absent: no buttons. */
+  onFixFinding?: (f: DiffFinding) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -102,13 +109,21 @@ export function ChangedFilesBlock({
     setDiff({ fileId: f.id, state: 'loading' })
     const asked = scope
     const mine = (cur: Diff | null): boolean => cur?.fileId === f.id && scopeRef.current === asked
-    void doorRef.current.command('runs-diff', { runId, fileId: f.id, ...(taskId ? { taskId } : {}), ...(reviewOn && attempt !== null ? { dispatchId: attempt } : {}) }).then(
+    void doorRef.current
+      .command('runs-diff', {
+        runId,
+        fileId: f.id,
+        ...(taskId ? { taskId } : {}),
+        ...(reviewOn && attempt !== null ? { dispatchId: attempt } : {}),
+        ...(reviewOn ? { findings: true } : {})
+      })
+      .then(
       (r) =>
         setDiff((cur) =>
           !mine(cur)
             ? cur
             : r.status === 200
-              ? { fileId: f.id, state: 'shown', ...(r.body as { diff: string; truncated: boolean }) }
+              ? { fileId: f.id, state: 'shown', ...(r.body as { diff: string; truncated: boolean; findings?: DiffFinding[] }) }
               : { fileId: f.id, state: 'failed', message: errorOf(r) }
         ),
       (e) => setDiff((cur) => (!mine(cur) ? cur : { fileId: f.id, state: 'failed', message: String(e) }))
@@ -200,6 +215,8 @@ export function ChangedFilesBlock({
                             truncated={diff.truncated}
                             binary={f.binary === true}
                             onDraftRepair={onDraftRepair ? (i) => onDraftRepair(f.path, diff.diff, i) : undefined}
+                            findings={diff.findings}
+                            onFixFinding={onFixFinding}
                           />
                         )}
                       </div>

@@ -1270,7 +1270,7 @@ describe('workspaceFeatures', () => {
     const f = file()
     const s = new AppSettingsStore(f)
     await s.load()
-    await s.setWorkspaceFeatures({ layoutMemory: false, problemsTab: false, contextBridge: false, testsTab: false, languageServers: false })
+    await s.setWorkspaceFeatures({ layoutMemory: false, problemsTab: false, contextBridge: false, testsTab: false, languageServers: false, agentReview: false })
     await fs.writeFile(f, '{ not json', 'utf8')
     expect((await s.load()).recovered).toBe(true)
     expect(s.getWorkspaceFeatures()).toEqual(WORKSPACE_FEATURES_DEFAULTS)

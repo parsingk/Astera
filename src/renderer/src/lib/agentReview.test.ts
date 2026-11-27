@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { t as translate, type MessageKey, type MessageParams } from '../../../core/i18n'
 import type { Dispatch } from '../../../core/orchestration/types'
 import type { FileAttribution } from '../../../core/review/types'
-import { attemptLabel, attributionBadge, attributionTitle, rangeLabel, shortSha } from './agentReview'
+import { attemptLabel, attributionBadge, attributionTitle, findingsByLine, rangeLabel, shortSha } from './agentReview'
+import type { DiffFinding } from '../../../core/review/types'
 
 // Phase 3 Part 4: the words of the changed-files block's attempt selector, named range and attribution badges
 const en = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
@@ -46,5 +47,18 @@ describe('agentReview words', () => {
     expect(agent).toContain(en('agentReview.limit'))
     expect(attributionTitle(en, { kind: 'unknown', why: 'shared-folder-live', evidence: [] })).toContain(en('agentReview.why.shared-folder-live'))
     expect(attributionTitle(en, { kind: 'mixed', why: 'overlap', evidence: [evidence] })).toContain(en('agentReview.why.overlap'))
+  })
+})
+
+describe('findingsByLine', () => {
+  const f = (ref: string, placement: DiffFinding['placement']): DiffFinding => ({ ref, taskId: 't1', title: ref, text: ref, severity: 'high', state: 'open', history: [], placement })
+  it('groups findings by their line, other revision and file, in order', () => {
+    const got = findingsByLine([f('a', { line: 3 }), f('b', 'other-revision'), f('c', { line: 3 }), f('d', 'file'), f('e', { line: 9 })])
+    expect([...got.inline.entries()].map(([line, xs]) => [line, xs.map((x) => x.ref)])).toEqual([
+      [3, ['a', 'c']],
+      [9, ['e']]
+    ])
+    expect(got.otherRevision.map((x) => x.ref)).toEqual(['b'])
+    expect(got.file.map((x) => x.ref)).toEqual(['d'])
   })
 })

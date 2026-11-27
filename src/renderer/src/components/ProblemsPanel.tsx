@@ -284,6 +284,7 @@ export function ProblemsPanel({
                           from: c.from !== null ? t(findingStateKey(c.from)) : t('problems.finding.new'),
                           to: t(findingStateKey(c.to))
                         })}
+                        {c.revision !== undefined && <span className="problem-history-revision">{t('agentReview.finding.revision', { sha: c.revision.slice(0, 7) })}</span>}
                         {c.note !== undefined && <span className="problem-history-note">{c.note}</span>}
                       </li>
                     ))}

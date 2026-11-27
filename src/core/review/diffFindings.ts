@@ -5,7 +5,7 @@
 // truncated cut, or a scope whose hunks differ). Each carries its state and history from the finding store. Pure.
 import { hunkAt, parseHunks } from '../git/hunks'
 import type { OrchState } from '../orchestration/state'
-import { taskFoldersOf } from '../problems/completionProblems'
+import { taskFindings, taskFoldersOf } from '../problems/completionProblems'
 import { findingRef } from '../problems/findingRef'
 import { repoPathOf, sameRepoPath } from './repoPath'
 import type { DiffFinding, FindingPlacement } from './types'
@@ -23,6 +23,7 @@ export function diffFindings(
     const task = s.tasks.find((t) => t.id === taskId)
     if (!task) continue
     const folders = taskFoldersOf(s, task)
+    const texts = new Map(taskFindings(task, folders).map((f) => [f.ref, f.text]))
     for (const issue of task.reviewIssues ?? []) {
       if (issue.file === undefined || !sameRepoPath(repoPathOf(issue.file, a.repo, platform), a.path, platform)) continue
       const ref = findingRef({ kind: 'review', taskId, file: issue.file, base: folders, message: issue.title })
@@ -38,6 +39,7 @@ export function diffFindings(
         ref,
         taskId,
         title: issue.title,
+        text: texts.get(ref) ?? issue.title,
         severity: issue.severity,
         ...(issue.line !== undefined ? { line: issue.line } : {}),
         state: rec?.state ?? 'open',

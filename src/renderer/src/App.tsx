@@ -36,7 +36,8 @@ import { ContextPreview, type AttachOutcome } from './components/ContextPreview'
 import { contentRevision, contextText, isUnder, sessionFits, type ContextRef } from '../../core/context/contextRef'
 import { logContext, problemsContext, selectionContext } from './lib/contextSources'
 import { problemsObjective } from './lib/problemsDraft'
-import { repairAnswer, repairRequestOf } from './lib/problemsRepair'
+import { repairAnswer, repairRequestOf, type RepairRequest } from './lib/problemsRepair'
+import type { DiffFinding } from '../../core/review/types'
 import { dismissGroups } from './lib/findingStates'
 import { readRunConsole } from './lib/runConsoleText'
 import { hunkAt, repairObjective } from './lib/hunks'
@@ -4965,14 +4966,22 @@ export default function App(): React.JSX.Element {
     const request = repairRequestOf(rows, root)
     const origin = rows[0].origin
     if (!request || !origin) return openProblemsDraft(rows)
-    /** A failed call is an answer like any other, said as one. */
-    const failedCall = (e: unknown): { status: number; body: unknown } => ({ status: 0, body: { error: e instanceof Error ? e.message : String(e) } })
     const offerDraft = async (key: MessageKey): Promise<void> => {
       const ok = await confirmModal({ title: t('problems.fix.cannotTitle'), body: `${t(key)} ${t('problems.fix.offerDraft')}`, confirmLabel: t('problems.fix.draft') })
       if (ok) openProblemsDraft(rows)
     }
-    const dry = repairAnswer(await window.api.orch.command(root, 'tasks-repair', { ...request, dryRun: true }).catch(failedCall))
-    if (dry.kind === 'refused') return offerDraft(dry.key)
+    await requestRepair(root, request, { job: origin.job ?? origin.runId, task: origin.task, count: rows.length }, offerDraft)
+  }
+  /** A repair request to one Task (Phase 3 Part 1; the diff's review findings use it too, Part 4): the Host is asked
+   *  first whether the Task takes one (a dry run, which changes nothing), then the person confirms with the Job and Task
+   *  named and, past the bound, how many go, then the request goes. A refusal, from the dry run or from the real call
+   *  after the state moved, goes to `onRefused` in its own words (final review M10). */
+  const requestRepair = async (root: string, request: RepairRequest, names: { job: string; task: string; count: number }, onRefused: (key: MessageKey) => Promise<void>): Promise<void> => {
+    /** A failed call is an answer like any other, said as one. */
+    const failedCall = (e: unknown): { status: number; body: unknown } => ({ status: 0, body: { error: e instanceof Error ? e.message : String(e) } })
+    const call = (args: Record<string, unknown>) => window.api.orch.command(root, 'tasks-repair', args).catch(failedCall)
+    const dry = repairAnswer(await call({ ...request, dryRun: true }))
+    if (dry.kind === 'refused') return onRefused(dry.key)
     if (dry.kind === 'failed') {
       toast.error(t('problems.fix.failed', { error: dry.error }))
       return
@@ -4981,13 +4990,13 @@ export default function App(): React.JSX.Element {
     const capped = dry.asked !== undefined && dry.asked < request.finding.length ? ` ${t('problems.fix.capped', { kept: dry.asked })}` : ''
     const ok = await confirmModal({
       title: t('problems.fix.title'),
-      body: `${t('problems.fix.body', { job: origin.job ?? origin.runId, task: origin.task, count: rows.length })}${capped}`,
+      body: `${t('problems.fix.body', { job: names.job, task: names.task, count: names.count })}${capped}`,
       confirmLabel: t('problems.fix.confirm')
     })
     if (!ok) return
-    const asked = repairAnswer(await window.api.orch.command(root, 'tasks-repair', request).catch(failedCall))
-    if (asked.kind === 'ok') toast.info(t('problems.fix.asked', { task: origin.task }))
-    else if (asked.kind === 'refused') await offerDraft(asked.key)
+    const asked = repairAnswer(await call(request))
+    if (asked.kind === 'ok') toast.info(t('problems.fix.asked', { task: names.task }))
+    else if (asked.kind === 'refused') await onRefused(asked.key)
     else toast.error(t('problems.fix.failed', { error: asked.error }))
   }
   /** One dismissal command per Task (Phase 3 Part 1b), then one line for all of them: how many changed, or the first
@@ -7112,6 +7121,19 @@ export default function App(): React.JSX.Element {
                 ...(contextOn
                   ? {
                       onDraftRepair: (file: string, diff: string, rowIndex: number) => openRepairDraft(openRun, file, diff, rowIndex)
+                    }
+                  : {}),
+                // A review finding on the diff fixed through its Task's repair request (Phase 3 Part 4), with sending to an
+                // agent on as well; a refusal is said in its own words
+                ...(contextOn && workspaceFeatures?.agentReview === true
+                  ? {
+                      onFixFinding: (f: DiffFinding, names: { job: string; task: string }) =>
+                        void requestRepair(
+                          openRun.projectPath,
+                          { task: f.taskId, finding: [f.ref], texts: { [f.ref]: f.text } },
+                          { ...names, count: 1 },
+                          async (key) => void toast.error(t(key))
+                        )
                     }
                   : {})
               }

@@ -37,6 +37,8 @@ export interface DiffFinding {
   ref: string
   taskId: string
   title: string
+  /** Its words as a repair request carries them, the Problems rows' form (taskFindings). */
+  text: string
   severity: ReviewSeverity
   line?: number
   state: FindingState

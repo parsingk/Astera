@@ -4,7 +4,7 @@
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { Dispatch } from '../../../core/orchestration/types'
 import { PROVIDER_META } from '../../../core/providers/meta'
-import type { AttributionKind, FileAttribution } from '../../../core/review/types'
+import type { AttributionKind, DiffFinding, FileAttribution } from '../../../core/review/types'
 
 type T = (key: MessageKey, params?: MessageParams) => string
 
@@ -52,4 +52,17 @@ export function attributionTitle(t: T, a: FileAttribution): string {
   if (a.why !== undefined) lines.push(t(WHY_KEY[a.why]))
   lines.push(t('agentReview.limit'))
   return lines.join('\n')
+}
+
+/** A diff's findings by where they show: under a new-side line, found on another revision, or on the file. */
+export function findingsByLine(findings: readonly DiffFinding[]): { inline: Map<number, DiffFinding[]>; otherRevision: DiffFinding[]; file: DiffFinding[] } {
+  const inline = new Map<number, DiffFinding[]>()
+  const otherRevision: DiffFinding[] = []
+  const file: DiffFinding[] = []
+  for (const f of findings) {
+    if (f.placement === 'other-revision') otherRevision.push(f)
+    else if (f.placement === 'file') file.push(f)
+    else inline.set(f.placement.line, [...(inline.get(f.placement.line) ?? []), f])
+  }
+  return { inline, otherRevision, file }
 }

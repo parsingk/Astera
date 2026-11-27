@@ -35,6 +35,8 @@ describe('diffFindings', () => {
   it('places a finding on its line when the diff is of the reviewed head and its hunk is there, even moved', () => {
     const [f] = place(stateWith({ state: 'repair-requested' }))
     expect(f).toMatchObject({ taskId: 't1', title: 'b is wrong', severity: 'high', line: 2, state: 'repair-requested', head: 'bbbbbbb', placement: { line: 2 } })
+    // The words a repair request carries, as the Problems rows give them (taskFindings)
+    expect(f.text).toBe('error src/a.ts:2 Review: b is wrong')
     expect(f.history).toHaveLength(1)
     const moved = HEADER + '@@ -1,2 +5,3 @@\n const a = 1\n+const b = 2\n const c = 3\n'
     expect(place(stateWith({ anchor: { line: 6 } }), { diff: moved })[0].placement).toEqual({ line: 6 })

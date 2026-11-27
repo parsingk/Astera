@@ -2289,6 +2289,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .problem-history { margin: 0 0 4px 32px; padding: 0; list-style: none; font-size: 11px; color: var(--text-dim); }
 .problem-history li { padding: 1px 0; }
 .problem-history-note { margin-left: 8px; color: var(--text); }
+.problem-history-revision { margin-left: 8px; color: var(--text-dim); font-family: var(--font-mono, monospace); }
 /* Quick Open's search scope under the box: the project's folder name, and a note when a large one is cut */
 .palette-scope { flex: none; padding: 0 9px 4px; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-empty { padding: 10px 8px; font-size: 12px; color: var(--text-faint); }
@@ -2843,6 +2844,20 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .diff-del { background: rgba(248, 81, 73, 0.15); }
 .diff-hunk td { color: var(--accent); background: var(--elevated); }
 /* A hunk header's repair draft (spec W4): small, at the row's end, in the sans face so it reads as a control, not code */
+/* Phase 3 Part 4: review findings under their line, and above the rows when found elsewhere */
+.diff-findings-above { display: flex; flex-direction: column; gap: 4px; padding: 6px; border-bottom: 1px solid var(--line-soft); }
+.diff-finding-row td { padding: 2px 6px 4px 48px; background: var(--elevated); }
+.diff-finding { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-family: var(--sans); font-size: 12px; color: var(--text); }
+.diff-finding.is-dismissed { opacity: 0.6; }
+.diff-finding-where { color: var(--text-dim); }
+.diff-finding-severity { padding: 0 5px; border-radius: 6px; border: 1px solid var(--line-soft); font-size: 11px; color: var(--text-dim); }
+.diff-finding-severity.is-critical, .diff-finding-severity.is-high { color: var(--danger); border-color: var(--danger); }
+.diff-finding-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diff-finding-state { color: var(--text-dim); }
+.diff-finding-toggle, .diff-finding-fix { padding: 0 6px; font-size: 11px; line-height: 1.5; }
+.diff-finding-history { flex-basis: 100%; margin: 2px 0 0; padding-left: 18px; color: var(--text-dim); }
+.diff-finding-revision, .diff-finding-note { margin-left: 8px; }
+.diff-finding-revision { font-family: var(--font-mono, monospace); }
 .diff-draft { float: right; margin-left: 8px; padding: 0 6px; font-family: var(--sans); font-size: 11px; line-height: 1.5; white-space: nowrap; }
 .diff-meta td { color: var(--text-dim); }
 .detail-completion-checks, .detail-completion-issues, .detail-completion-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
