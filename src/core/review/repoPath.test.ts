@@ -9,6 +9,12 @@ describe('repoPathOf', () => {
     expect(repoPathOf('F:\\Proj\\src\\한글 폴더\\a.ts', 'f:\\proj', 'win32')).toBe('src/한글 폴더/a.ts')
     expect(repoPathOf('/home/u/p/src/a.ts', '/home/u/p', 'linux')).toBe('src/a.ts')
   })
+  // develop CI on Linux and macOS: the platform named decides the path rules, not the one the test runs on
+  it('reads a win32 path by win32 rules and a POSIX path by POSIX rules, whatever the Host runs on', () => {
+    expect(repoPathOf('F:\\Proj\\src\\a.ts', 'f:\\proj\\', 'win32')).toBe('src/a.ts')
+    expect(repoPathOf('/home/u/Proj/src/a.ts', '/home/u/proj', 'linux')).toBe('/home/u/Proj/src/a.ts')
+    expect(repoPathOf('/Users/u/Proj/src/a.ts', '/Users/u/proj', 'darwin')).toBe('src/a.ts')
+  })
   it('leaves an absolute path outside the repo as it is', () => {
     expect(repoPathOf('F:\\other\\a.ts', 'F:\\proj', 'win32')).toBe('F:/other/a.ts')
   })

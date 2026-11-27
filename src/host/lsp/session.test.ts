@@ -247,7 +247,9 @@ describe('startLspSession', () => {
 describe('lspLaunch', () => {
   const base = (over: Partial<Parameters<typeof lspLaunch>[0]> = {}): Parameters<typeof lspLaunch>[0] => ({
     server: 'python',
-    root: path.resolve('proj'),
+    // A win32 project, as `platform` says: a POSIX path is not one a win32 server can be pointed at (develop CI on Linux
+    // and macOS, where path.resolve gave /home/... and every launch was refused)
+    root: 'C:\\work\\proj',
     profileDir: path.resolve('prof'),
     exec: path.resolve('electron.exe'),
     env: { PATH: 'p', ASTERA_SESSION: 's', ELECTRON_RUN_AS_NODE: '1' },
