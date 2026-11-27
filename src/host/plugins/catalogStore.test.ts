@@ -169,3 +169,90 @@ describe('createCatalogStore', () => {
     await expect(store.download({ version: '0.1.0', asteraRange: '>=1.0.0', artifactUrl: '../outside.tgz', sha256: SHA, sizeBytes: 1, permissions: [] })).rejects.toThrow('is not beside the index')
   })
 })
+
+// Phase 4 final review: I2, I3, m1, m2, m18
+describe('createCatalogStore, final review fixes', () => {
+  const other = generateCatalogKey()
+
+  it('drops the rollback floor of a kept index whose key was removed, so a new key’s lower index is taken (I2)', async () => {
+    const store = createCatalogStore({ root, now: () => 0 })
+    await store.setSource(SOURCE(await publish(indexText({ sequence: 9 }))))
+    await store.refresh()
+    await publish(indexText({ sequence: 2 }), (b) => signIndex(b, 'next', other.privateKeyPem))
+    await store.setSource({ url: path.join(registry, 'index.json'), keys: [{ id: 'next', publicKey: other.publicKey }] })
+    expect(await store.refresh()).toEqual({ ok: true })
+    const c = await store.current()
+    expect(c.configured && c.catalog?.sequence).toBe(2)
+  })
+
+  it('reads artifacts beside a local index named with forward slashes or . and .. parts (I3)', async () => {
+    const store = createCatalogStore({ root, now: () => 0 })
+    await publish(indexText())
+    for (const url of [path.join(registry, 'index.json').split(path.sep).join('/'), path.join(registry, 'sub', '..', 'index.json'), `${registry}${path.sep}.${path.sep}index.json`]) {
+      await store.setSource(SOURCE(url))
+      expect(await store.refresh(), url).toEqual({ ok: true })
+      const c = await store.current()
+      if (!c.configured || !c.catalog) throw new Error(url)
+      await fs.rm(path.join(root, '.downloads'), { recursive: true, force: true })
+      expect(await fs.readFile(await store.download(c.catalog.plugins[0].versions[0])), url).toEqual(ARTIFACT)
+      await store.clearSource()
+    }
+  })
+
+  it('follows a redirect only to https, hop by hop (m1)', async () => {
+    const text = indexText({}, { artifactUrl: 'https://a.invalid/hello.tgz' })
+    const answers: Record<string, () => Response> = {
+      'https://example.invalid/index.json': () => new Response(text, { status: 200 }),
+      'https://example.invalid/index.json.sig': () => new Response(signIndex(Buffer.from(text), 'main', key.privateKeyPem), { status: 200 }),
+      'https://a.invalid/hello.tgz': () => new Response(null, { status: 302, headers: { location: 'http://b.invalid/hello.tgz' } }),
+      'http://b.invalid/hello.tgz': () => new Response(null, { status: 302, headers: { location: 'https://c.invalid/hello.tgz' } }),
+      'https://c.invalid/hello.tgz': () => new Response(new Uint8Array(ARTIFACT), { status: 200 })
+    }
+    const seen: string[] = []
+    const fetchFake = (async (url: string) => {
+      seen.push(url)
+      return answers[url]?.() ?? new Response('no', { status: 404 })
+    }) as unknown as typeof fetch
+    const store = createCatalogStore({ root, now: () => 0, fetch: fetchFake })
+    await store.setSource(SOURCE('https://example.invalid/index.json'))
+    await store.refresh()
+    const c = await store.current()
+    if (!c.configured || !c.catalog) throw new Error('no catalog')
+    await expect(store.download(c.catalog.plugins[0].versions[0])).rejects.toThrow('https://a.invalid/hello.tgz redirects to http://b.invalid/hello.tgz, not an https address')
+    expect(seen).not.toContain('http://b.invalid/hello.tgz')
+    answers['https://a.invalid/hello.tgz'] = () => new Response(null, { status: 302, headers: { location: 'https://c.invalid/hello.tgz' } })
+    expect(await fs.readFile(await store.download(c.catalog.plugins[0].versions[0]))).toEqual(ARTIFACT)
+  })
+
+  it('gives up on a download that stops sending, however large it is (m2)', async () => {
+    const stalled = (async () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array([1, 2, 3]))
+          }
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch
+    const store = createCatalogStore({ root, now: () => 0, fetch: stalled, idleMs: 50 })
+    await store.setSource(SOURCE('https://example.invalid/index.json'))
+    await expect(store.download({ version: '0.1.0', asteraRange: '>=1.0.0', artifactUrl: 'https://a.invalid/x.tgz', sha256: SHA, sizeBytes: 100, permissions: [] })).rejects.toThrow(
+      'https://a.invalid/x.tgz stopped sending for 50 ms'
+    )
+  })
+
+  it('asks for the signature beside an index address with a query (m18)', async () => {
+    const text = indexText()
+    const seen: string[] = []
+    const fetchFake = (async (url: string) => {
+      seen.push(url)
+      if (url === 'https://example.invalid/index.json?ref=main') return new Response(text, { status: 200 })
+      if (url === 'https://example.invalid/index.json.sig?ref=main') return new Response(signIndex(Buffer.from(text), 'main', key.privateKeyPem), { status: 200 })
+      return new Response('no', { status: 404 })
+    }) as unknown as typeof fetch
+    const store = createCatalogStore({ root, now: () => 0, fetch: fetchFake })
+    await store.setSource(SOURCE('https://example.invalid/index.json?ref=main'))
+    expect(await store.refresh()).toEqual({ ok: true })
+    expect(seen).toEqual(['https://example.invalid/index.json?ref=main', 'https://example.invalid/index.json.sig?ref=main'])
+  })
+})

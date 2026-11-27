@@ -3,6 +3,7 @@
 // and turning every plugin off. Each Host call goes through `call`, as `plugins install` does (cli/plugins.ts).
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { AUDIT_FILE, createPluginAudit } from '../core/plugins/pluginAudit'
 import { grantOf, type PluginCall } from './plugins'
 
 /** `plugins catalog-configure`'s flags as the Host takes them: `--url` with `--key id=publicKey[,id=publicKey]`, or `--clear`. */
@@ -65,13 +66,17 @@ export async function setSafeModeOffline(profileDir: string, on: boolean): Promi
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, '')
   } else await fs.rm(file, { force: true })
+  // Recorded where the Host records Safe Mode, so the history has it whoever set it (final review m9)
+  const audit = createPluginAudit({ file: path.join(profileDir, 'plugins', AUDIT_FILE) })
+  audit.record({ plugin: '*', event: on ? 'disabled' : 'enabled', by: 'cli', detail: `Safe Mode ${on ? 'on' : 'off'}, set with no Host running` })
+  await audit.drain()
   return { safeMode: on, changed: true, offline: true }
 }
 
 /** `plugins disable --all`: every enabled plugin turned off, one call each, so each is recorded as its own change. */
 export async function disableAll<R extends PluginCall>(a: {
   call: (cmd: string, args: Record<string, unknown>, request: string | undefined) => Promise<R>
-}): Promise<R | { status: number; body: { disabled: string[]; failed: { id: string; error: string }[] } }> {
+}): Promise<R | { status: number; body: { error?: string; disabled: string[]; failed: { id: string; error: string }[] } }> {
   const listed = await a.call('plugins-list', {}, undefined)
   if (!('status' in listed) || listed.status !== 200) return listed
   const plugins = (listed.body as { plugins?: unknown }).plugins
@@ -83,5 +88,11 @@ export async function disableAll<R extends PluginCall>(a: {
     if ('status' in r && r.status === 200) disabled.push(p.id)
     else failed.push({ id: p.id, error: 'status' in r ? String((r.body as { error?: unknown }).error ?? r.status) : 'unreachable' in r ? r.unreachable : r.stuck })
   }
+  // Each plugin it could not turn off fails the command, named (final review m8)
+  if (failed.length > 0)
+    return {
+      status: 409,
+      body: { error: `${failed.length} ${failed.length === 1 ? 'plugin' : 'plugins'} could not be turned off: ${failed.map((f) => `${f.id} (${f.error})`).join(', ')}`, disabled, failed }
+    }
   return { status: 200, body: { disabled, failed } }
 }

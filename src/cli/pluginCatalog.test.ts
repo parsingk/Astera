@@ -109,3 +109,28 @@ describe('disableAll', () => {
     expect(h.sent.map((s) => `${s.cmd} ${String(s.args.id ?? '')}`)).toEqual(['plugins-list ', 'plugins-disable a', 'plugins-disable c'])
   })
 })
+
+// Phase 4 final review m8, m9
+describe('disableAll and setSafeModeOffline, final review fixes', () => {
+  it('fails, naming each plugin it could not turn off', async () => {
+    const h = host({
+      'plugins-list': () => ({ status: 200, body: { plugins: [{ id: 'a', enabled: true }, { id: 'b', enabled: true }] } }),
+      'plugins-disable': (args) => (args.id === 'a' ? { status: 200, body: {} } : { status: 403, body: { error: 'not from an agent' } })
+    })
+    expect(await disableAll({ call: h.call })).toEqual({
+      status: 409,
+      body: { error: '1 plugin could not be turned off: b (not from an agent)', disabled: ['a'], failed: [{ id: 'b', error: 'not from an agent' }] }
+    })
+  })
+
+  it('records Safe Mode set with no Host in the profile’s audit log', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'safe-audit-'))
+    try {
+      await setSafeModeOffline(dir, true)
+      const lines = (await fs.readFile(path.join(dir, 'plugins', 'audit.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
+      expect(lines).toEqual([expect.objectContaining({ plugin: '*', event: 'disabled', by: 'cli', detail: 'Safe Mode on, set with no Host running' })])
+    } finally {
+      await removeFixture(dir)
+    }
+  })
+})

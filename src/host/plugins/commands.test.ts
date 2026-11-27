@@ -401,3 +401,21 @@ describe('pluginsCommand and Safe Mode', () => {
     expect((await run({ cmd: 'plugins-safe-mode', args: { on: true }, agentRefusal: 'no' }).answer).status).toBe(403)
   })
 })
+
+// Phase 4 final review I7: setting or forgetting the catalog and its keys is recorded, names only
+describe('pluginsCommand records the catalog source', () => {
+  it('records the address and key ids it was set with, and its forgetting', async () => {
+    const manager = fake()
+    const recs: PluginAuditRecord[] = []
+    const audit: PluginAudit = { record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
+    manager.catalogConfigure = vi.fn(async () => ({ status: 200, body: { configured: true, url: '/r/index.json', keys: ['main', 'next'], changed: true } }))
+    await pluginsCommand({ manager, cmd: 'plugins-catalog-configure', args: { url: '/r/index.json', keys: [{ id: 'main', publicKey: 'SECRETISH' }] }, role: 'app', marks: { effects: 0 }, audit })
+    manager.catalogConfigure = vi.fn(async () => ({ status: 200, body: { configured: false, changed: true } }))
+    await pluginsCommand({ manager, cmd: 'plugins-catalog-configure', args: { clear: true }, role: 'cli', marks: { effects: 0 }, audit })
+    expect(recs).toEqual([
+      { plugin: '*', event: 'configured', by: 'app', detail: 'catalog set: /r/index.json, keys main, next' },
+      { plugin: '*', event: 'configured', by: 'cli', detail: 'catalog forgotten' }
+    ])
+    expect(JSON.stringify(recs)).not.toContain('SECRETISH')
+  })
+})

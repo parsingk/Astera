@@ -391,6 +391,9 @@ export function PluginCard({
         {id} · {t('settings.plugins.version', { version: str(plugin.version) })}
       </span>
       {str(plugin.description) !== '' && <span className="settings-hint">{str(plugin.description)}</span>}
+      {/* Phase 4: where it came from, and a version the catalog revoked */}
+      {(plugin.source as { kind?: unknown } | undefined)?.kind === 'catalog' && <span className="settings-hint">{t('settings.plugins.fromCatalog')}</span>}
+      {typeof plugin.revoked === 'string' && <span className="settings-hint is-warning">{t('settings.plugins.catalog.revoked', { reason: plugin.revoked })}</span>}
       {reason !== '' && <span className={`settings-hint${status === 'failed' || status === 'incompatible' ? ' is-warning' : ''}`}>{reasonLine(reason, t)}</span>}
       {capabilities.length > 0 && (
         <div className="plugin-facts">

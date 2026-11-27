@@ -73,3 +73,24 @@ describe('filterCatalog', () => {
     expect(filterCatalog([HELLO, DUSK], '', 'themes').map((p) => p.id)).toEqual(['astera-dusk-theme'])
   })
 })
+
+// Phase 4 final review I5, m14 and the index's own expiry
+describe('PluginCatalogView, final review fixes', () => {
+  it('says why the catalog could not be read and offers to read it again, instead of reading for ever (I5)', () => {
+    const html = render(null, { failure: 'The Host is not running.' })
+    expect(html).toContain('The Host is not running.')
+    expect(html).toContain(en('settings.plugins.catalog.retry'))
+    expect(html).not.toContain(en('settings.plugins.catalog.reading'))
+  })
+
+  it('offers no update to an older version than the one installed (m14)', () => {
+    const html = render({ configured: true, url: 'u', sequence: 1, plugins: [{ ...HELLO, latest: { version: '1.0.0', permissions: [] }, installed: { version: '2.0.0', enabled: true, fromCatalog: false }, newPermissions: [] }] })
+    expect(html).not.toContain(en('settings.plugins.catalog.update', { version: '1.0.0' }))
+    expect(html).toContain(en('settings.plugins.catalog.newerInstalled'))
+  })
+
+  it('shows when the index stops being good to install from', () => {
+    const html = render({ configured: true, url: 'u', sequence: 1, fetchedAt: Date.UTC(2026, 10, 27), expires: Date.UTC(2027, 0, 1), plugins: [] })
+    expect(html).toContain(en('settings.plugins.catalog.expires', { when: new Date(Date.UTC(2027, 0, 1)).toLocaleDateString() }))
+  })
+})

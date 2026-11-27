@@ -224,3 +224,16 @@ describe('the plugin audit log', () => {
     expect((await readPluginAudit([file], { lines: 10 })).map((e) => e.at)).toEqual([1, 4])
   })
 })
+
+// Phase 4 final review m10: a record about every plugin (Safe Mode, the catalog source) shows in one plugin's history too
+describe('readPluginAudit and records about every plugin', () => {
+  it('includes the * records when one plugin is asked for', async () => {
+    const file = path.join(dir, 'plugins', 'audit.jsonl')
+    const audit = createPluginAudit({ file, now: () => 1000 })
+    audit.record({ plugin: 'acme.hello', event: 'enabled' })
+    audit.record({ plugin: '*', event: 'disabled', by: 'cli', detail: 'Safe Mode on' })
+    audit.record({ plugin: 'other', event: 'enabled' })
+    await audit.flushed()
+    expect((await readPluginAudit([file], { plugin: 'acme.hello', lines: 10 })).map((e) => e.plugin)).toEqual(['acme.hello', '*'])
+  })
+})

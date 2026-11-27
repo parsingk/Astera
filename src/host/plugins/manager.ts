@@ -78,6 +78,7 @@ export interface PluginManager {
 /** The file whose presence is Safe Mode (Phase 4): `<profile>/plugins/safe-mode`. */
 export const SAFE_MODE_FILE = 'safe-mode'
 const SAFE_MODE_REASON = 'Safe Mode is on: no plugin runs'
+const SAFE_MODE_STILL_RUNNING = 'Safe Mode is on, but this plugin was already running: turn Safe Mode off and on again, or restart the Host, to stop it'
 
 /** A plugin's settings as stored, read against its installed schema (manager's settingsState). */
 type SettingsState =
@@ -325,8 +326,9 @@ export function createPluginManager(d: {
   }
 
   /** A record as a person sees it, read with its installed copy's manifest and, while it runs, the runtime's word. */
-  async function view(r: PluginRecord): Promise<Record<string, unknown>> {
-    const revoked = await revokedReason(r)
+  /** `revokedOf` lets a list read the catalog once for every row (final review m3). */
+  async function view(r: PluginRecord, revokedOf?: (r: PluginRecord) => string | null): Promise<Record<string, unknown>> {
+    const revoked = revokedOf ? revokedOf(r) : await revokedReason(r)
     const dir = path.join(installed, r.folder)
     const read = await readManifest(dir)
     const m = read.ok ? read.manifest : null
@@ -339,10 +341,14 @@ export function createPluginManager(d: {
     if (m && r.enabled && incompatible === null && status === 'stopped') reason = ungranted(r, m) ?? heldBack(r, await settingsState(r, m)) ?? reason
     // A UI-only plugin with nothing missing is ready: it has nothing to start
     if (uiOnly && status === 'stopped' && reason === null) status = 'ready'
-    // Safe Mode: nothing of an enabled plugin runs or draws (Phase 4)
+    // Safe Mode: nothing of an enabled plugin runs or draws (Phase 4). One still running (Safe Mode set with no Host
+    // answering) is said to be running, and how to stop it (final review m9)
     if (r.enabled && incompatible === null && (await inSafeMode())) {
-      status = 'stopped'
-      reason = SAFE_MODE_REASON
+      if (run?.status === 'running' || run?.status === 'starting') reason = SAFE_MODE_STILL_RUNNING
+      else {
+        status = 'stopped'
+        reason = SAFE_MODE_REASON
+      }
     }
     return {
       id: r.id,
@@ -663,6 +669,8 @@ export function createPluginManager(d: {
     const revoked = enabled ? await revokedReason(r) : null
     if (revoked !== null) throw new Refused(409, `${r.id} ${r.version} was revoked by the catalog (${revoked}); update or remove it`)
     if (r.enabled === enabled) {
+      // Safe Mode has one door: nothing starts again while it is on, a failed plugin included (Phase 4 final review I1)
+      if (enabled && (await inSafeMode())) return { status: 200, body: { ...(await view(r)), changed: false, reason: SAFE_MODE_REASON } }
       // Enabling a plugin that failed starts it again (design P11): a change, though the flag stays as it was.
       const launch = enabled && d.runtime?.status(r.id)?.status === 'failed' ? await runnable(r) : null
       if (launch && d.runtime) {
@@ -894,6 +902,7 @@ export function createPluginManager(d: {
     // a line still buffered cannot write it again.
     await d.runtime?.forget(r.folder)
     d.calls?.forget(r.id)
+    if (r.source.kind === 'catalog') await pruneDownloads()
     const log = pluginLogFile(d.profileDir, r.folder)
     await Promise.all([fs.rm(log, { force: true }), fs.rm(`${log}.1`, { force: true })]).catch(() => {})
     // And its settings and secrets (spec §23: a plugin's secrets are its own, and go with it). What cannot be deleted is
@@ -915,6 +924,24 @@ export function createPluginManager(d: {
     }
   }
 
+  /** `fn` with refusals answered as the queue answers them, without waiting in it: for network work (m4). */
+  async function besideQueue<T>(fn: () => Promise<T>): Promise<T | PluginsAnswer> {
+    try {
+      return await fn()
+    } catch (e) {
+      if (e instanceof Refused) return refused(e.status, e.message, e.code, e.reason)
+      return refused(500, e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** Downloads the package an inspect or install names before it waits in the queue; the queued step finds it in
+   *  `.downloads` by its sha256 and checks it again. */
+  async function catalogPrefetch(cmd: string, a: { id?: unknown; version?: unknown }): Promise<{ ready: true }> {
+    const { entry, version } = await catalogPick(cmd, a)
+    await catalogFile(entry, version)
+    return { ready: true }
+  }
+
   /** Why the catalog revoked `r`'s version, for a plugin installed from it, or null. The last verified index decides,
    *  expired or not: an expired index still knows what it revoked. */
   async function revokedReason(r: PluginRecord): Promise<string | null> {
@@ -923,10 +950,9 @@ export function createPluginManager(d: {
     return c.configured && c.catalog ? isRevoked(c.catalog, r.id, r.version) : null
   }
 
-  async function catalogRead(a: { refresh?: unknown }): Promise<PluginsAnswer> {
+  async function catalogRead(fetched: { ok: true } | { ok: false; problem: string } | null): Promise<PluginsAnswer> {
     const source = await catalogStore.source()
     if (source === null) return { status: 200, body: { configured: false } }
-    const fetched = a.refresh === true ? await catalogStore.refresh() : null
     const c = await catalogStore.current()
     if (!c.configured) return { status: 200, body: { configured: false } }
     const records = await readRegistry(root)
@@ -1016,6 +1042,9 @@ export function createPluginManager(d: {
     if (!read.ok) throw new Refused(400, `${entry.id} ${version.version} from the catalog: ${read.error.split(folder).join('the package')}`)
     const mismatch = entryMismatch(read.manifest, entry, version)
     if (mismatch !== null) throw new Refused(400, `${entry.id} ${version.version} from the catalog: ${mismatch}`)
+    // The package's own range and capabilities too: one this Astera will not run is refused, not installed idle (m15)
+    const wontRun = incompatibility(read.manifest, host)
+    if (wontRun !== null) throw new Refused(409, `${entry.id} ${version.version} from the catalog will not run here: ${wontRun}`)
   }
 
   async function catalogInspect(a: { id?: unknown; version?: unknown }): Promise<PluginsAnswer> {
@@ -1064,12 +1093,22 @@ export function createPluginManager(d: {
       const shownAs = `${entry.id} ${version.version} from the catalog`
       await installable(folder, shownAs, grant as string[], expected)
       return place(folder, shownAs, grant as string[], expected, records, { kind: 'catalog', id: entry.id, version: version.version, sha256: got, url: version.artifactUrl })
-    })
+    }).finally(pruneDownloads)
+  }
+
+  /** Keeps in `.downloads` only the packages catalog installs name (final review m5). */
+  async function pruneDownloads(): Promise<void> {
+    const keep = (await readRegistry(root).catch(() => [] as PluginRecord[])).flatMap((r) => (r.source.kind === 'catalog' ? [r.source.sha256] : []))
+    await catalogStore.prune(keep)
   }
 
   /** The list's answer: every plugin, and Safe Mode when it is on. */
   async function listBody(): Promise<Record<string, unknown>> {
-    const plugins = await Promise.all((await readRegistry(root)).map(view))
+    const records = await readRegistry(root)
+    // The catalog read once, only when a catalog install is listed: its verification is not repeated per row (m3)
+    const c = records.some((r) => r.source.kind === 'catalog') ? await catalogStore.current() : null
+    const revokedOf = (r: PluginRecord): string | null => (r.source.kind === 'catalog' && c?.configured && c.catalog ? isRevoked(c.catalog, r.id, r.version) : null)
+    const plugins = await Promise.all(records.map((r) => view(r, revokedOf)))
     return { plugins, ...((await inSafeMode()) ? { safeMode: true } : {}) }
   }
 
@@ -1091,10 +1130,16 @@ export function createPluginManager(d: {
 
   return {
     safeMode: (a) => serial(() => safeMode(a)),
-    catalog: (a) => serial(() => catalogRead(a)),
+    // The network work (a refresh's fetch, a package's download) runs beside the queue, so the plugin list the app and
+    // the panels read every few seconds does not wait on it; what reads or changes the registry runs in the queue
+    // (final review m4)
+    catalog: async (a) => {
+      const fetched = a.refresh === true && (await catalogStore.source()) !== null ? await catalogStore.refresh() : null
+      return serial(() => catalogRead(fetched))
+    },
     catalogConfigure: (a) => serial(() => catalogConfigure(a)),
-    catalogInspect: (a) => serial(() => catalogInspect(a)),
-    catalogInstall: (a) => serial(() => catalogInstall(a)),
+    catalogInspect: (a) => besideQueue(() => catalogPrefetch('plugins-catalog-inspect', a)).then((pre) => ('status' in pre ? pre : serial(() => catalogInspect(a)))),
+    catalogInstall: (a) => besideQueue(() => catalogPrefetch('plugins-catalog-install', a)).then((pre) => ('status' in pre ? pre : serial(() => catalogInstall(a)))),
     inspect: (p) => serial(() => inspect(p)),
     install: (a) => serial(() => install(a)),
     list: () => serial(async () => ({ status: 200, body: await listBody() })),

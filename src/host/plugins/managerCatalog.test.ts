@@ -193,3 +193,63 @@ describe('the plugin catalog in the manager', () => {
     expect(body(await manager.catalogConfigure({ url: 'http://x.invalid/index.json', keys: [] })).error).toBe('url must be an https address or the absolute path of a .json index on this computer')
   })
 })
+
+// Phase 4 final review m4, m5, m15
+describe('the plugin catalog in the manager, final review fixes', () => {
+  it('keeps only the packages installed versions need in .downloads (m5)', async () => {
+    const p1 = await pack('0.1.0', ['commands.register', 'panels.register'])
+    const p2 = await pack('0.2.0', ['commands.register', 'panels.register'])
+    await publish(1, [versionEntry('0.1.0', p1, ['commands.register', 'panels.register']), versionEntry('0.2.0', p2, ['commands.register', 'panels.register'])])
+    await configure()
+    await manager.catalog({ refresh: true })
+    await manager.catalogInstall({ id: 'astera-hello-panel', version: '0.1.0', grant: ['commands.register', 'panels.register'], expect: await expectOf('0.1.0') })
+    await manager.catalogInstall({ id: 'astera-hello-panel', version: '0.2.0', grant: ['commands.register', 'panels.register'], expect: await expectOf('0.2.0') })
+    const downloads = path.join(pluginsRoot(profile), '.downloads')
+    expect(await fs.readdir(downloads)).toEqual([`${p2.sha256}.tgz`])
+    await manager.remove('astera-hello-panel')
+    expect(await fs.readdir(downloads)).toEqual([])
+  })
+
+  it('refuses a package whose own manifest says it does not run on this Astera (m15)', async () => {
+    const p = await pack('0.1.0')
+    await publish(1, [versionEntry('0.1.0', p)])
+    await configure()
+    await manager.catalog({ refresh: true })
+    // The same package with an engines range this Astera does not satisfy
+    const copy = path.join(dir, 'src-engines')
+    await copyPluginFolder(path.join(examples, 'hello-panel'), copy)
+    const pj = JSON.parse(await fs.readFile(path.join(copy, 'package.json'), 'utf8'))
+    pj.engines = { astera: '>=9.0.0' }
+    await fs.writeFile(path.join(copy, 'package.json'), JSON.stringify(pj))
+    const { tgz } = await packFolder(copy)
+    await fs.writeFile(path.join(registry, 'artifacts', 'engines.tgz'), tgz)
+    await publish(2, [{ ...versionEntry('0.1.0', p), artifactUrl: 'artifacts/engines.tgz', sha256: createHash('sha256').update(tgz).digest('hex'), sizeBytes: tgz.length }])
+    await manager.catalog({ refresh: true })
+    const r = await manager.catalogInspect({ id: 'astera-hello-panel', version: '0.1.0' })
+    expect(r.status).toBe(409)
+    expect(body(r).error).toMatch(/^astera-hello-panel 0\.1\.0 from the catalog will not run here: /)
+  })
+
+  it('answers the plugin list while a catalog refresh waits on the network (m4)', async () => {
+    let release: () => void = () => {}
+    let fetching: () => void = () => {}
+    const asked = new Promise<void>((r) => {
+      fetching = r
+    })
+    const slow = (async () => {
+      fetching()
+      await new Promise<void>((r) => {
+        release = r
+      })
+      return new Response('no', { status: 404 })
+    }) as unknown as typeof fetch
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.5', now: () => clock, fetch: slow })
+    await m.catalogConfigure({ url: 'https://example.invalid/index.json', keys: [{ id: 'main', publicKey: key.publicKey }] })
+    const refreshing = m.catalog({ refresh: true })
+    await asked
+    const listed = await Promise.race([m.list().then(() => 'listed'), new Promise((r) => setTimeout(() => r('blocked'), 1000))])
+    release()
+    await refreshing
+    expect(listed).toBe('listed')
+  })
+})

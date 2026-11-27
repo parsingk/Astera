@@ -58,11 +58,12 @@ describe('plugins registry-keygen and registry-sign', () => {
     const k = await okBody('plugins-registry-keygen', { out: 'keys', keyId: 'main' })
     const pem = path.join(dir, 'keys', 'main.pem')
     expect(k).toMatchObject({ keyId: 'main', privateKeyFile: pem })
-    await fs.writeFile(path.join(dir, 'index.json'), '{"schemaVersion":1}')
+    const index = '{"schemaVersion":1,"sequence":1,"expires":"2099-01-01T00:00:00Z","plugins":[]}'
+    await fs.writeFile(path.join(dir, 'index.json'), index)
     const s = await okBody('plugins-registry-sign', { path: 'index.json', keyFile: 'keys/main.pem', keyId: 'main' })
     expect(s.signature).toBe(path.join(dir, 'index.json.sig'))
     const sig = await fs.readFile(path.join(dir, 'index.json.sig'), 'utf8')
-    expect(verifyIndex(Buffer.from('{"schemaVersion":1}'), sig, [{ id: 'main', publicKey: k.publicKey as string }])).toEqual({ ok: true, keyId: 'main' })
+    expect(verifyIndex(Buffer.from(index), sig, [{ id: 'main', publicKey: k.publicKey as string }])).toEqual({ ok: true, keyId: 'main' })
   })
 
   it('never writes over a key file', async () => {
@@ -88,5 +89,28 @@ describe('plugins registry-validate', () => {
     await fs.writeFile(path.join(dir, 'index.json'), JSON.stringify({ schemaVersion: 1, sequence: 0, expires: 'x', plugins: [] }))
     const r = await run('plugins-registry-validate', { path: 'index.json' })
     expect(r.ok === false && r.error.message).toBe('index.json has problems: sequence must be a whole number of 1 or more; expires must be a date and time')
+  })
+})
+
+// Phase 4 final review m11: the maintainer learns what an install would refuse before signing
+describe('plugins registry-validate and registry-sign, final review fixes', () => {
+  async function registryWith(entryOver: (e: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
+    await copyPluginFolder(path.join(examples, 'hello-panel'), path.join(dir, 'hello'))
+    const b = await okBody('plugins-publish', { path: 'hello', artifactUrl: 'artifacts/hello.tgz', publisher: 'example', category: 'development', out: 'registry/artifacts/hello.tgz' })
+    await fs.writeFile(path.join(dir, 'registry', 'index.json'), JSON.stringify({ schemaVersion: 1, sequence: 1, expires: '2099-01-01T00:00:00Z', plugins: [entryOver(b.entry as Record<string, unknown>)] }))
+  }
+
+  it('opens each package beside the index and refuses one that is not its entry', async () => {
+    await registryWith((e) => ({ ...e, versions: (e.versions as Record<string, unknown>[]).map((v) => ({ ...v, permissions: ['commands.register'] })) }))
+    const r = await run('plugins-registry-validate', { path: 'registry/index.json' })
+    expect(r.ok === false && r.error.message).toContain('astera-hello-panel 0.1.0: the package asks for panels.register, workspace.read, which the catalog does not list')
+  })
+
+  it('refuses to sign an index that does not validate', async () => {
+    await registryWith((e) => ({ ...e, trustLevel: 'trusted' }))
+    await okBody('plugins-registry-keygen', { out: 'keys', keyId: 'main' })
+    const r = await run('plugins-registry-sign', { path: 'registry/index.json', keyFile: 'keys/main.pem', keyId: 'main' })
+    expect(r.ok === false && r.error.message).toMatch(/^registry\/index\.json does not validate, so it was not signed: /)
+    await expect(fs.stat(path.join(dir, 'registry', 'index.json.sig'))).rejects.toThrow()
   })
 })

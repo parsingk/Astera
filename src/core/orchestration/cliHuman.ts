@@ -718,8 +718,11 @@ export function humanFor(
             granted.length > 0 ? granted.join(',') : '-',
             offers.length > 0 ? offers.join(',') : '-'
           ]
+          // Phase 4: a catalog install, and a version the catalog revoked, before why it does not run
+          const source = p.source as { kind?: unknown } | undefined
+          const marks = [...(source?.kind === 'catalog' ? ['from the catalog'] : []), ...(typeof p.revoked === 'string' ? [`revoked: ${p.revoked}`] : [])]
           // Why it does not run, as docs/cli.md promises the list says.
-          return typeof p.reason === 'string' ? [...row, p.reason] : row
+          return typeof p.reason === 'string' ? [...row, ...marks, p.reason] : [...row, ...marks]
         })
       )
     // Plugin Phase 4 J21. Four cells on every row, the reason empty when there is none, so the names line up.

@@ -1508,3 +1508,27 @@ describe('Safe Mode', () => {
     expect(rt.calls).toEqual([])
   })
 })
+
+// Phase 4 final review I1, m9: Safe Mode has one door, and says only what is true
+describe('Safe Mode, final review fixes', () => {
+  it('does not start a failed plugin again when it is enabled while Safe Mode is on', async () => {
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    await m.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    await m.safeMode({ on: true })
+    rt.statuses.set('@acme/astera-jira', { status: 'failed', reason: 'it kept crashing' })
+    rt.calls.length = 0
+    const r = await m.setEnabled('@acme/astera-jira', true)
+    expect(rt.calls).toEqual([])
+    expect(body(r)).toMatchObject({ changed: false, reason: 'Safe Mode is on: no plugin runs' })
+  })
+
+  it('says a plugin still running when Safe Mode was set with no Host answering is running, and why', async () => {
+    const rt = fakeRuntime()
+    const m = createPluginManager({ profileDir: profile, hostVersion: '1.5.0', runtime: rt.runtime })
+    await m.install({ path: await plugin(FOLDER), grant: ['jobs.read'] })
+    await fs.writeFile(path.join(pluginsRoot(profile), 'safe-mode'), '')
+    const listed = (body(await m.list()).plugins as Record<string, unknown>[])[0]
+    expect(listed).toMatchObject({ status: 'running', reason: 'Safe Mode is on, but this plugin was already running: turn Safe Mode off and on again, or restart the Host, to stop it' })
+  })
+})

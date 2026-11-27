@@ -73,6 +73,14 @@ describe('plugin panels: final review wiring', () => {
   })
 
   // Phase 2 gate: a plugin the app removed starts with nothing when installed again, and only once the Host agreed
+  // Phase 4 final review m19: Safe Mode closes panels by the list it changes, not before the Host has agreed
+  it('closes no panel before the Host turns Safe Mode on', () => {
+    const ipc = read('ipc.ts')
+    const handler = ipc.slice(ipc.indexOf("ipcMain.handle('plugins.safeMode'"), ipc.indexOf("ipcMain.handle('plugins.safeMode'") + 400)
+    expect(handler).toMatch(/afterChange\(plugins\.safeMode\(on === true\)\)/)
+    expect(handler.split('afterChange')[0]).not.toMatch(/panelGuests\.forget/)
+  })
+
   it('wipes a plugin’s panel storage only once the Host has removed it', () => {
     const ipc = read('ipc.ts')
     const handler = ipc.slice(ipc.indexOf("ipcMain.handle('plugins.remove'"), ipc.indexOf("ipcMain.handle('plugins.logs'"))

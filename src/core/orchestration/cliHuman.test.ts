@@ -1395,3 +1395,18 @@ describe('humanFor the catalog changes', () => {
     expect(humanFor('plugins-catalog-configure', { configured: false, changed: true })).toBe('catalog forgotten')
   })
 })
+
+// Phase 4 final review I6: the list says a catalog install and a revoked version
+describe('plugins list and the catalog', () => {
+  it('marks a catalog install and a revoked version, before the reason it does not run', () => {
+    const out = humanFor('plugins-list', {
+      plugins: [
+        { id: 'a', version: '1.0.0', status: 'stopped', trust: 'restricted-ui', permissions: [], source: { kind: 'catalog' }, revoked: 'leaks a token', reason: 'disabled' },
+        { id: 'b', version: '1.0.0', status: 'ready', trust: 'restricted-ui', permissions: [], source: { kind: 'folder', path: '/b' } }
+      ]
+    }) as string
+    const [a, b] = out.split('\n')
+    expect(a).toMatch(/from the catalog\s+revoked: leaks a token\s+disabled$/)
+    expect(b).not.toContain('catalog')
+  })
+})

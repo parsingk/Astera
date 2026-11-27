@@ -25,7 +25,9 @@ const BESIDE = /^(?![./])(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._\-/]{1,512}$/
 export const isBesideIndex = (v: string): boolean => BESIDE.test(v) && !/^[A-Za-z]:/.test(v)
 const PUBLISHER = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** Control characters other than a tab, and the invisible or direction-changing ones a name could hide behind. */
-const UNSAFE_TEXT = /[\x00-\x08\x0a-\x1f\x7f-\x9f​-‏‪-‮⁠-⁤⁦-⁩﻿]/
+const UNSAFE_TEXT = /[\x00-\x08\x0a-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
+/** The same, but a line break is kept: release notes are several lines (final review m7). */
+const UNSAFE_NOTES = /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
 
 export interface CatalogVersion {
   version: string
@@ -96,8 +98,9 @@ function versionOf(v: unknown, at: string, problems: string[]): CatalogVersion |
     problems.push(`${where}: sizeBytes must be a whole number from 1 to ${CATALOG_ARTIFACT_MAX_BYTES}`)
   if (!Array.isArray(v.permissions) || !v.permissions.every((p) => typeof p === 'string' && /^[a-z][a-z.-]{0,63}$/.test(p)))
     problems.push(`${where}: permissions must be a list of names`)
-  const notes = v.releaseNotes === undefined ? undefined : typeof v.releaseNotes === 'string' && v.releaseNotes.length <= NOTES_MAX ? v.releaseNotes : null
-  if (notes === null) problems.push(`${where}: releaseNotes must be text of at most ${NOTES_MAX} characters`)
+  const notes =
+    v.releaseNotes === undefined ? undefined : typeof v.releaseNotes === 'string' && v.releaseNotes.length <= NOTES_MAX && !UNSAFE_NOTES.test(v.releaseNotes) ? v.releaseNotes : null
+  if (notes === null) problems.push(`${where}: releaseNotes must be text of at most ${NOTES_MAX} characters, with no control or direction-changing character`)
   if (problems.length > before) return null
   return {
     version: v.version,
@@ -174,7 +177,8 @@ export function parseCatalog(source: string): { ok: true; catalog: Catalog } | {
   if (!isObject(raw)) return { ok: false, problems: ['the index is not a JSON object'] }
   const problems: string[] = []
   if (raw.schemaVersion !== CATALOG_SCHEMA_VERSION) problems.push(`schemaVersion ${String(raw.schemaVersion)} is not one this Astera reads (${CATALOG_SCHEMA_VERSION})`)
-  if (typeof raw.sequence !== 'number' || !Number.isInteger(raw.sequence) || raw.sequence < 1) problems.push('sequence must be a whole number of 1 or more')
+  // A safe whole number: a sequence of 1e300 would set a floor no later index could pass (final review I2)
+  if (typeof raw.sequence !== 'number' || !Number.isSafeInteger(raw.sequence) || raw.sequence < 1) problems.push('sequence must be a whole number of 1 or more')
   const expires = typeof raw.expires === 'string' ? Date.parse(raw.expires) : NaN
   if (!Number.isFinite(expires)) problems.push('expires must be a date and time')
   const plugins: CatalogEntry[] = []
@@ -219,19 +223,28 @@ export function isRevoked(c: Pick<Catalog, 'revoked'>, id: string, version: stri
 
 export const isExpired = (c: Pick<Catalog, 'expires'>, now: number): boolean => now > c.expires
 
-/** -1, 0 or 1 by release, then a prerelease before its release. */
+/** -1, 0 or 1 by release, then a prerelease before its release, its dot parts compared as semver does: numbers by
+ *  value and below words, words by text, a shorter run of equal parts first (final review m6). */
 export function compareVersions(a: string, b: string): number {
-  const parse = (v: string): [number[], string] => {
+  const parse = (v: string): [number[], string[]] => {
     const [core, pre = ''] = v.split('+')[0].split(/-(.*)/s)
-    return [core.split('.').map(Number), pre]
+    return [core.split('.').map(Number), pre === '' ? [] : pre.split('.')]
   }
   const [ca, pa] = parse(a)
   const [cb, pb] = parse(b)
   for (let i = 0; i < 3; i++) if (ca[i] !== cb[i]) return ca[i] < cb[i] ? -1 : 1
-  if (pa === pb) return 0
-  if (pa === '') return 1
-  if (pb === '') return -1
-  return pa < pb ? -1 : 1
+  if (pa.length === 0 || pb.length === 0) return pa.length === pb.length ? 0 : pa.length === 0 ? 1 : -1
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    const x = pa[i]
+    const y = pb[i]
+    if (x === y) continue
+    const nx = /^\d+$/.test(x)
+    const ny = /^\d+$/.test(y)
+    if (nx && ny) return Number(x) < Number(y) ? -1 : 1
+    if (nx !== ny) return nx ? -1 : 1
+    return x < y ? -1 : 1
+  }
+  return pa.length === pb.length ? 0 : pa.length < pb.length ? -1 : 1
 }
 
 /** The highest version of `entry` this Astera runs that is not revoked, or null. */

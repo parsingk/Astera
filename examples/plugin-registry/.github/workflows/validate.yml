@@ -9,6 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The astera command, at a version you pinned (docs/cli.md says how it is installed)
+      # Placeholder: this skeleton does not install the astera command. Add a step that installs it at a version you
+      # pinned (docs/cli.md says how); until then this step stops the run rather than pass without checking.
+      - name: Need the astera command
+        run: command -v astera || { echo "install the astera command at a pinned version first (docs/cli.md)"; exit 1; }
       - name: Check the index and every package beside it
         run: astera plugins registry-validate --path index.json

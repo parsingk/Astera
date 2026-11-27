@@ -309,7 +309,8 @@ export async function readPluginAudit(files: readonly string[], o: { plugin?: st
           continue
         }
         const e = entryOf(parsed)
-        if (e && (o.plugin === undefined || e.plugin === o.plugin)) all.push(e)
+        // A record about every plugin (Safe Mode, the catalog source) belongs to each one's history too (Phase 4 m10)
+        if (e && (o.plugin === undefined || e.plugin === o.plugin || e.plugin === '*')) all.push(e)
       }
     }
   }

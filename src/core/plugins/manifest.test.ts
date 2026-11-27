@@ -496,7 +496,7 @@ describe('Plugin API 2: sidebar, status bar and themes', () => {
       'astera.contributes.statusBar: hi needs a text of 1 to 24 characters'
     )
     expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'a\nb', command: 'open' }] }))).toContain('astera.contributes.statusBar: hi’s text holds a control character')
-    expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'a‮b', command: 'open' }] }))).toContain(
+    expect(problemsOf(base({}, { statusBar: [{ id: 'hi', text: 'a\u202eb', command: 'open' }] }))).toContain(
       'astera.contributes.statusBar: hi’s text holds an invisible or direction-changing character'
     )
     const three = [1, 2, 3].map((n) => ({ id: `s${n}`, text: `S${n}`, command: 'open' }))

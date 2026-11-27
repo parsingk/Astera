@@ -21,7 +21,8 @@ artifacts/            the packages, each as `astera plugins pack` made it
 ```
 
 `artifactUrl` may be an https address or a path beside the index (`artifacts/x-1.0.0.tgz`), resolved against the
-index's own address; a path never leaves the index's folder.
+index's own address; a path never leaves the index's folder. Every redirect on the way must stay https, and a package
+may take its time as long as it keeps arriving.
 
 ## The index
 
@@ -72,8 +73,10 @@ index's own address; a path never leaves the index's folder.
   catalog is turned off when a verified index names it, cannot be turned on, and is not deleted.
 
 `astera plugins publish --path <folder> --artifact-url <url> --publisher <name>` packs a plugin and prints its entry.
-`astera plugins registry-validate --path index.json` checks the index as Astera reads it, and every package beside it
-against its sha256 and size.
+`astera plugins registry-validate --path index.json` checks the index as Astera reads it, and opens every package
+beside it as an install would: its sha256 and size, the archive's limits, and that its manifest is the entry (the same
+id, version and trust level, asking for no more than listed). A version asking for more than the one before it is
+named for a maintainer to review. `registry-sign` signs only an index that validates.
 
 ## Signing and keys
 
@@ -89,7 +92,13 @@ A package is trusted for its sha256 in a signed index, never for where it was do
 **Rotation:** publish the new public key beside the old one (people set both, `--key old=…,new=…`), sign with the new
 key, and drop the old one from the instructions once people have moved. **Compromise:** stop signing with the key, sign
 an index with the next key that revokes what the compromised key published, and tell people to set the catalog again
-without the old key; Astera stops trusting a kept index the moment its key is removed.
+with only the new key. A kept index that no key set now verifies stops counting at once: it is no longer shown, and
+its number no longer holds back a lower one, so the new key's index is taken whatever its `sequence`.
+
+**Moving the catalog:** the floor Astera keeps belongs to the address it was read from. Pointing a catalog at a new
+address (a mirror) starts again from that address's index, so an older index still before its `expires` could be taken
+there; keep `expires` short enough that this window is small, and raise `sequence` past the old address's when you
+move.
 
 ## Review
 

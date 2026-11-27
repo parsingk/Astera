@@ -48,7 +48,9 @@ export async function checkSavedTabs(saved: SavedLayout | null): Promise<Set<str
         listed ??= Promise.resolve()
           .then(() => window.api.plugins.list())
           .then(
-            (r) => (r.ok ? pluginRowsOf(r.body) : null),
+            // Safe Mode hides plugins, it does not remove them: their tabs are kept, as for a Host that cannot say
+            // (Phase 4 final review I4)
+            (r) => (r.ok && (r.body as { safeMode?: unknown }).safeMode !== true ? pluginRowsOf(r.body) : null),
             () => null
           )
         const rows = listed

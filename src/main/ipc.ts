@@ -5314,7 +5314,7 @@ export function registerIpc(
   ipcMain.handle('plugins.doctor', (_e, id: unknown) => plugins.doctor(id as string))
   ipcMain.handle('plugins.audit', (_e, id: unknown, lines: unknown) => plugins.audit(id as string, lines as number))
   // Phase 4: the catalog and Safe Mode. A catalog install changes what is installed, as an install does: the list watch
-  // reads it after; Safe Mode on closes every plugin panel first, as turning each off would
+  // reads it after
   ipcMain.handle('plugins.catalog', (_e, refresh: unknown) => afterChange(plugins.catalog(refresh === true)))
   ipcMain.handle('plugins.catalogInspect', (_e, a: unknown) => plugins.catalogInspect(a as Parameters<typeof plugins.catalogInspect>[0]))
   ipcMain.handle('plugins.catalogConfigure', (_e, a: unknown) => plugins.catalogConfigure(a as Parameters<typeof plugins.catalogConfigure>[0]))
@@ -5323,10 +5323,9 @@ export function registerIpc(
     if (typeof id === 'string') panelGuests.forget(id)
     return afterChange(typeof id === 'string' ? panelGuests.hold(id, plugins.catalogInstall(a as Parameters<typeof plugins.catalogInstall>[0])) : plugins.catalogInstall(a as Parameters<typeof plugins.catalogInstall>[0]))
   })
-  ipcMain.handle('plugins.safeMode', async (_e, on: unknown) => {
-    if (on === true) for (const row of await plugins.list().then((r) => (r.ok ? pluginRowsOf(r.body) : []))) panelGuests.forget(row.id)
-    return afterChange(plugins.safeMode(on === true))
-  })
+  // Safe Mode's panels close by the list it changes: once the Host agreed, the list watch finds no plugin and the panel
+  // guests forget every one (final review m19)
+  ipcMain.handle('plugins.safeMode', (_e, on: unknown) => afterChange(plugins.safeMode(on === true)))
   ipcMain.handle('plugins.settings', (_e, id: unknown) => plugins.settings(id as string))
   ipcMain.handle('plugins.configure', (_e, id: unknown, set: unknown, unset: unknown) =>
     plugins.configure(id as string, set as Record<string, string | boolean>, unset as string[])

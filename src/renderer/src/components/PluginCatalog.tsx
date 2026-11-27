@@ -4,7 +4,7 @@
 // shown: none is measured. The Host fetches, verifies and installs; this only shows and asks.
 import { useEffect, useState } from 'react'
 import type { MessageKey } from '../../../core/i18n'
-import { CATALOG_CATEGORIES } from '../../../core/plugins/catalog'
+import { CATALOG_CATEGORIES, compareVersions } from '../../../core/plugins/catalog'
 import { useI18n } from '../i18n/I18nProvider'
 import { confirmModalWithChoices } from '../lib/confirm'
 import { toast } from '../lib/toast'
@@ -34,10 +34,15 @@ export function PluginCatalogView({
   onRefresh,
   onInstall,
   onConfigure,
-  onClear
+  onClear,
+  failure,
+  onRetry
 }: {
   /** The Host's `plugins-catalog` answer; null while it is read. */
   catalog: Row | null
+  /** Why the catalog could not be read (no Host, no answer); absent while it is being read. */
+  failure?: string
+  onRetry?: () => void
   query: string
   category: string
   /** The plugin an install is under way for, or `refresh`, or null. */
@@ -52,6 +57,18 @@ export function PluginCatalogView({
   const { t } = useI18n()
   const [url, setUrl] = useState('')
   const [keys, setKeys] = useState('')
+  // Not read: why, and a way to read it again, never a reading line that never ends (final review I5)
+  if (catalog === null && failure !== undefined)
+    return (
+      <div className="plugin-catalog">
+        <p className="settings-hint is-warning">{failure}</p>
+        <div className="remote-actions">
+          <button className="settings-gen-refresh" onClick={onRetry}>
+            {t('settings.plugins.catalog.retry')}
+          </button>
+        </div>
+      </div>
+    )
   if (catalog === null) return <p className="settings-hint">{t('settings.plugins.catalog.reading')}</p>
   if (catalog.configured !== true)
     return (
@@ -85,6 +102,7 @@ export function PluginCatalogView({
           {t('settings.plugins.catalog.clear')}
         </button>
       </div>
+      {typeof catalog.expires === 'number' && <p className="settings-hint">{t('settings.plugins.catalog.expires', { when: new Date(catalog.expires).toLocaleDateString() })}</p>}
       {expired && <p className="settings-hint is-warning">{t('settings.plugins.catalog.expired')}</p>}
       {typeof catalog.problem === 'string' && <p className="settings-hint is-warning">{t('settings.plugins.catalog.problem', { problem: catalog.problem })}</p>}
       <div className="settings-row plugin-catalog-filter">
@@ -101,7 +119,9 @@ export function PluginCatalogView({
         const id = str(p.id)
         const latest = isRow(p.latest) ? p.latest : null
         const installed = isRow(p.installed) ? p.installed : null
-        const canInstall = latest !== null && !expired && (installed === null || str(installed.version) !== str(latest.version))
+        // An update only to a newer version: a newer one installed by hand is not offered an older one (final review m14)
+        const newer = latest !== null && installed !== null && compareVersions(str(installed.version), str(latest.version)) > 0
+        const canInstall = latest !== null && !expired && (installed === null || compareVersions(str(latest.version), str(installed.version)) > 0)
         const fresh = strings(p.newPermissions)
         return (
           <div key={id} className="plugin-catalog-card">
@@ -124,6 +144,7 @@ export function PluginCatalogView({
             {str(p.sourceUrl) !== '' && <p className="plugin-catalog-link">{t('settings.plugins.catalog.source', { url: str(p.sourceUrl) })}</p>}
             {str(p.issuesUrl) !== '' && <p className="plugin-catalog-link">{t('settings.plugins.catalog.report', { url: str(p.issuesUrl) })}</p>}
             {typeof p.installedRevoked === 'string' && <p className="settings-hint is-warning">{t('settings.plugins.catalog.revoked', { reason: p.installedRevoked })}</p>}
+            {newer && <p className="settings-hint">{t('settings.plugins.catalog.newerInstalled')}</p>}
             {fresh.length > 0 && <p className="settings-hint">{t('settings.plugins.catalog.newPermissions', { list: fresh.map((x) => permissionLabel(x, t)).join(', ') })}</p>}
             {canInstall && latest && (
               <button className="settings-gen-refresh" disabled={busy !== null} onClick={() => onInstall(id, str(latest.version))}>
@@ -148,10 +169,16 @@ export function PluginCatalog({ installed, onChanged }: { installed: Row[] | nul
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string | undefined>(undefined)
   const failed = (e: unknown) => ({ ok: false as const, code: 'HOST_LOST', message: e instanceof Error ? e.message : String(e) })
   const read = async (refresh: boolean): Promise<void> => {
     const r = await window.api.plugins.catalog(refresh).catch(failed)
-    if (!r.ok) return void toast.error(failureLine(r, t, { read: true }))
+    if (!r.ok) {
+      // Kept on screen with a way to read again (final review I5); a catalog shown before stays shown
+      setFailure(failureLine(r, t, { read: true }))
+      return
+    }
+    setFailure(undefined)
     setCatalog(r.body)
   }
   useEffect(() => {
@@ -198,6 +225,8 @@ export function PluginCatalog({ installed, onChanged }: { installed: Row[] | nul
   return (
     <PluginCatalogView
       catalog={catalog}
+      failure={failure}
+      onRetry={() => void read(false)}
       query={query}
       category={category}
       busy={busy}

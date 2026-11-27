@@ -86,6 +86,14 @@ function changeRecord(cmd: string, args: Record<string, unknown>, by: string, an
       const parts = [...(set.length > 0 ? [`set ${set.join(', ')}`] : []), ...(unset.length > 0 ? [`unset ${unset.join(', ')}`] : [])]
       return { plugin: str(args.id) ?? plugin, event: 'configured', by, ...(parts.length > 0 ? { detail: parts.join('; ') } : {}) }
     }
+    case 'plugins-catalog-configure':
+      // Names only: the address and the key ids, never a key (Phase 4 final review I7)
+      return {
+        plugin: '*',
+        event: 'configured',
+        by,
+        detail: body.configured === true ? `catalog set: ${str(body.url) ?? '?'}, keys ${list(body.keys).join(', ')}` : 'catalog forgotten'
+      }
     case 'plugins-safe-mode':
       return { plugin: '*', event: body.safeMode === true ? 'disabled' : 'enabled', by, detail: body.safeMode === true ? 'Safe Mode on' : 'Safe Mode off' }
     default:

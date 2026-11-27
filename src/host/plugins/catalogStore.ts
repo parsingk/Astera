@@ -4,7 +4,7 @@
 // read and accepted only if it does not go back; the copy kept is verified again with the keys set now each time it is
 // read, so changing the keys takes effect at once. A network failure keeps the copy it had. Artifacts are downloaded
 // once into `.downloads`, by the sha256 the index names, and are never trusted for any other reason than those bytes.
-import { createHash, createPublicKey } from 'node:crypto'
+import { createHash, createPublicKey, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { CATALOG_INDEX_MAX_BYTES, isBesideIndex, isExpired, parseCatalog, type Catalog, type CatalogVersion } from '../../core/plugins/catalog'
@@ -13,7 +13,11 @@ import { acceptIndex, verifyIndex, type CatalogKey } from './catalogVerify'
 export const CATALOG_SOURCE_FILE = 'catalog-source.json'
 export const CATALOG_CACHE_FILE = 'catalog-cache.json'
 export const CATALOG_DOWNLOADS = '.downloads'
+/** How long an answer may take to start, and then how long it may go without sending anything: a large package on a slow
+ *  link is fine as long as it keeps coming (final review m2). */
 const FETCH_TIMEOUT_MS = 20_000
+const IDLE_MS = 30_000
+const MAX_REDIRECTS = 5
 const MAX_KEYS = 8
 
 export interface CatalogSource {
@@ -74,9 +78,19 @@ export interface CatalogStore {
   current(): Promise<CatalogView>
   /** The artifact's file in `.downloads`, its bytes checked against the index. */
   download(v: CatalogVersion): Promise<string>
+  /** Removes every downloaded package but those named by `keep` (sha256s), and any left half written (final review m5). */
+  prune(keep: readonly string[]): Promise<void>
 }
 
-export function createCatalogStore(d: { root: string; now: () => number; fetch?: typeof fetch }): CatalogStore {
+/** The signature's address beside an index's: `.sig` after the path, a query kept (final review m18). */
+export function signatureUrl(indexUrl: string): string {
+  if (!isHttpsUrl(indexUrl)) return `${indexUrl}.sig`
+  const u = new URL(indexUrl)
+  u.pathname = `${u.pathname}.sig`
+  return u.href
+}
+
+export function createCatalogStore(d: { root: string; now: () => number; fetch?: typeof fetch; idleMs?: number }): CatalogStore {
   const sourceFile = path.join(d.root, CATALOG_SOURCE_FILE)
   const cacheFile = path.join(d.root, CATALOG_CACHE_FILE)
   const downloads = path.join(d.root, CATALOG_DOWNLOADS)
@@ -101,9 +115,23 @@ export function createCatalogStore(d: { root: string; now: () => number; fetch?:
     return catalogSourceProblem(v) === null ? (v as CatalogSource) : null
   }
 
-  /** At most `max` bytes from an https address, refusing one answered from elsewhere than https. */
+  const idleMs = d.idleMs ?? IDLE_MS
+
+  /** At most `max` bytes from an https address. Each redirect is followed by hand and must stay https (final review
+   *  m1); the answer may take FETCH_TIMEOUT_MS to start, then must keep coming (`idleMs` with nothing is too long). */
   async function fetchBytes(url: string, max: number, what: string): Promise<Buffer> {
-    const res = await doFetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), redirect: 'follow' })
+    let at = url
+    let res: Response | null = null
+    for (let hop = 0; ; hop++) {
+      res = await doFetch(at, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), redirect: 'manual' })
+      if (res.status < 300 || res.status >= 400) break
+      const location = res.headers.get('location')
+      if (location === null) throw new Error(`${what} answered ${res.status} with no address to go to`)
+      const next = new URL(location, at).href
+      if (!isHttpsUrl(next)) throw new Error(`${at} redirects to ${next}, not an https address`)
+      if (hop >= MAX_REDIRECTS) throw new Error(`${what} redirects more than ${MAX_REDIRECTS} times`)
+      at = next
+    }
     if (res.url && !isHttpsUrl(res.url)) throw new Error(`${what} was answered from ${res.url}, not an https address`)
     if (!res.ok) throw new Error(`${what} answered ${res.status}`)
     if (!res.body) return Buffer.alloc(0)
@@ -111,7 +139,16 @@ export function createCatalogStore(d: { root: string; now: () => number; fetch?:
     const parts: Buffer[] = []
     let size = 0
     for (;;) {
-      const { done, value } = await reader.read()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const idle = new Promise<'idle'>((resolve) => {
+        timer = setTimeout(() => resolve('idle'), idleMs)
+      })
+      const next = await Promise.race([reader.read(), idle]).finally(() => clearTimeout(timer))
+      if (next === 'idle') {
+        await reader.cancel().catch(() => {})
+        throw new Error(`${what} stopped sending for ${idleMs} ms`)
+      }
+      const { done, value } = next
       if (done) break
       size += value.byteLength
       if (size > max) {
@@ -138,12 +175,22 @@ export function createCatalogStore(d: { root: string; now: () => number; fetch?:
     return isObject(v) && v.url === url && typeof v.index === 'string' && typeof v.sig === 'string' ? (v as unknown as Kept) : null
   }
 
+  /** The kept index's number and sha256, only when it verifies with `s`'s keys and reads as an index. */
+  async function verifiedKept(s: CatalogSource): Promise<{ sequence: number; sha256: string } | null> {
+    const k = await kept(s.url)
+    if (k === null || !verifyIndex(Buffer.from(k.index, 'utf8'), k.sig, s.keys).ok) return null
+    const parsed = parseCatalog(k.index)
+    return parsed.ok ? { sequence: parsed.catalog.sequence, sha256: sha256Of(Buffer.from(k.index, 'utf8')) } : null
+  }
+
   return {
     source,
     async setSource(s) {
       const problem = catalogSourceProblem(s)
       if (problem !== null) throw new Error(problem)
-      await writeJson(sourceFile, { url: s.url, keys: s.keys.map((k) => ({ id: k.id, publicKey: k.publicKey })) })
+      // A local index is kept as one resolved path, so every later comparison reads the same form (final review I3)
+      const url = isHttpsUrl(s.url) ? s.url : path.resolve(s.url)
+      await writeJson(sourceFile, { url, keys: s.keys.map((k) => ({ id: k.id, publicKey: k.publicKey })) })
     },
     async clearSource() {
       await fs.rm(sourceFile, { force: true })
@@ -154,13 +201,15 @@ export function createCatalogStore(d: { root: string; now: () => number; fetch?:
       if (s === null) return { ok: false, problem: 'no catalog is set' }
       try {
         const bytes = await read(s.url, CATALOG_INDEX_MAX_BYTES, 'the index')
-        const sig = (await read(`${s.url}.sig`, 4096, 'the index signature')).toString('utf8')
+        const sig = (await read(signatureUrl(s.url), 4096, 'the index signature')).toString('utf8')
         const verified = verifyIndex(bytes, sig, s.keys)
         if (!verified.ok) return { ok: false, problem: verified.problem }
         const parsed = parseCatalog(bytes.toString('utf8'))
         if (!parsed.ok) return { ok: false, problem: `the index cannot be read: ${parsed.problems.slice(0, 3).join('; ')}` }
         const sha256 = sha256Of(bytes)
-        const before = await kept(s.url)
+        // The floor is the kept index only while it still verifies with the keys set now, its number read from it: a
+        // kept index whose key was taken away stops counting, so a new key can start again (final review I2)
+        const before = await verifiedKept(s)
         const refused = acceptIndex(before, { sequence: parsed.catalog.sequence, sha256 })
         if (refused !== null) return { ok: false, problem: refused }
         await writeJson(cacheFile, { url: s.url, fetchedAt: d.now(), sequence: parsed.catalog.sequence, sha256, index: bytes.toString('utf8'), sig })
@@ -189,9 +238,12 @@ export function createCatalogStore(d: { root: string; now: () => number; fetch?:
       else if (!isBesideIndex(v.artifactUrl)) throw new Error(`${v.artifactUrl} is not beside the index`)
       else if (isHttpsUrl(s.url)) at = new URL(v.artifactUrl, s.url).href
       else {
-        const base = path.dirname(s.url)
+        // Compared as a relative path from the index's own folder, both resolved: forward slashes, a drive root, a UNC
+        // path or . and .. parts all read the same (final review I3)
+        const base = path.dirname(path.resolve(s.url))
         at = path.resolve(base, v.artifactUrl)
-        if (!at.startsWith(base + path.sep)) throw new Error(`${v.artifactUrl} is not beside the index`)
+        const rel = path.relative(base, at)
+        if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`${v.artifactUrl} is not beside the index`)
       }
       const file = path.join(downloads, `${v.sha256}.tgz`)
       const have = await fs.readFile(file).catch(() => null)
@@ -200,10 +252,15 @@ export function createCatalogStore(d: { root: string; now: () => number; fetch?:
       if (bytes.length !== v.sizeBytes) throw new Error(`${v.artifactUrl} is not the package the catalog names: it is ${bytes.length} bytes, not ${v.sizeBytes}`)
       if (sha256Of(bytes) !== v.sha256) throw new Error(`${v.artifactUrl} is not the package the catalog names: its sha256 differs`)
       await fs.mkdir(downloads, { recursive: true })
-      const tmp = `${file}.${process.pid}.tmp`
+      // Its own temporary name: two downloads of one package at once must not write into one file
+      const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
       await fs.writeFile(tmp, bytes)
       await fs.rename(tmp, file)
       return file
+    },
+    async prune(keep) {
+      const names = await fs.readdir(downloads).catch(() => [] as string[])
+      for (const name of names) if (!keep.some((sha) => name === `${sha}.tgz`)) await fs.rm(path.join(downloads, name), { force: true }).catch(() => {})
     }
   }
 }

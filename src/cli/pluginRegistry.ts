@@ -7,11 +7,13 @@
 //   plugins registry-keygen    writes a new maintainer key, and prints the public half a catalog source is set with
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { CliError } from '../core/orchestration/cliOutput'
-import { CATALOG_CATEGORIES, isBesideIndex, parseCatalog } from '../core/plugins/catalog'
+import { CATALOG_CATEGORIES, entryMismatch, isBesideIndex, parseCatalog } from '../core/plugins/catalog'
 import { parseManifest } from '../core/plugins/manifest'
 import { generateCatalogKey, signIndex } from '../host/plugins/catalogVerify'
+import { PackageRefused, extractPackage } from '../host/plugins/tarball'
 import { pluginDevCommand } from './pluginDev'
 
 type Outcome = { ok: true; body: Record<string, unknown> } | { ok: false; error: CliError }
@@ -85,27 +87,60 @@ async function validate(a: { args: Record<string, unknown>; cwd: string }): Prom
   if (text === null) return invalid(`${a.args.path} cannot be read`)
   const parsed = parseCatalog(text)
   if (!parsed.ok) return failed(`${a.args.path} has problems: ${parsed.problems.join('; ')}`, { problems: parsed.problems })
-  // Every artifact beside the index is the bytes it names; an https one is checked when it is installed
+  // Every package beside the index is the bytes it names, extracts within the Host's limits, and is its entry (the same
+  // id, version and trust level, asking for no more than listed), as an install will check (final review m11); an https
+  // one is checked when it is installed
   const problems: string[] = []
+  const warnings: string[] = []
   let checked = 0
   const base = path.dirname(file)
-  for (const e of parsed.catalog.plugins)
-    for (const v of e.versions) {
-      if (isHttps(v.artifactUrl)) continue
-      const at = path.resolve(base, v.artifactUrl)
-      const bytes = await fs.readFile(at).catch(() => null)
-      checked += 1
-      if (bytes === null) problems.push(`${e.id} ${v.version}: ${v.artifactUrl} is missing`)
-      else if (bytes.length !== v.sizeBytes) problems.push(`${e.id} ${v.version}: ${v.artifactUrl} is ${bytes.length} bytes, not ${v.sizeBytes}`)
-      else if (createHash('sha256').update(bytes).digest('hex') !== v.sha256) problems.push(`${e.id} ${v.version}: ${v.artifactUrl} does not have the sha256 the index names`)
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-registry-'))
+  try {
+    for (const e of parsed.catalog.plugins) {
+      let before: string[] | null = null
+      for (const v of e.versions) {
+        // A version asking for more than the one before it is for a maintainer to read by hand
+        if (before !== null) {
+          const more = v.permissions.filter((x) => !(before as string[]).includes(x))
+          if (more.length > 0) warnings.push(`${e.id} ${v.version} asks for ${more.join(', ')} beyond the version before it: review it by hand`)
+        }
+        before = v.permissions
+        if (isHttps(v.artifactUrl)) continue
+        const at = path.resolve(base, v.artifactUrl)
+        const bytes = await fs.readFile(at).catch(() => null)
+        checked += 1
+        if (bytes === null) problems.push(`${e.id} ${v.version}: ${v.artifactUrl} is missing`)
+        else if (bytes.length !== v.sizeBytes) problems.push(`${e.id} ${v.version}: ${v.artifactUrl} is ${bytes.length} bytes, not ${v.sizeBytes}`)
+        else if (createHash('sha256').update(bytes).digest('hex') !== v.sha256) problems.push(`${e.id} ${v.version}: ${v.artifactUrl} does not have the sha256 the index names`)
+        else {
+          const out = path.join(work, `${checked}`)
+          try {
+            await extractPackage(at, out)
+            const read = parseManifest(JSON.parse(await fs.readFile(path.join(out, 'package.json'), 'utf8')))
+            if (!read.ok) problems.push(`${e.id} ${v.version}: its package.json has problems: ${read.problems.join('; ')}`)
+            else {
+              const mismatch = entryMismatch(read.manifest, e, v)
+              if (mismatch !== null) problems.push(`${e.id} ${v.version}: ${mismatch}`)
+            }
+          } catch (err) {
+            problems.push(`${e.id} ${v.version}: ${err instanceof PackageRefused ? err.message : `the package cannot be read: ${err instanceof Error ? err.message : String(err)}`}`)
+          }
+        }
+      }
     }
-  if (problems.length > 0) return failed(`${a.args.path} has problems: ${problems.join('; ')}`, { problems })
-  return { ok: true, body: { valid: true, sequence: parsed.catalog.sequence, plugins: parsed.catalog.plugins.length, artifactsChecked: checked, problems: [] } }
+  } finally {
+    await fs.rm(work, { recursive: true, force: true }).catch(() => {})
+  }
+  if (problems.length > 0) return failed(`${a.args.path} has problems: ${problems.join('; ')}`, { problems, ...(warnings.length > 0 ? { warnings } : {}) })
+  return { ok: true, body: { valid: true, sequence: parsed.catalog.sequence, plugins: parsed.catalog.plugins.length, artifactsChecked: checked, problems: [], ...(warnings.length > 0 ? { warnings } : {}) } }
 }
 
 async function signFile(a: { args: Record<string, unknown>; cwd: string }): Promise<Outcome> {
   const { path: index, keyFile, keyId } = a.args
   if (typeof index !== 'string' || typeof keyFile !== 'string' || typeof keyId !== 'string') return invalid('plugins registry-sign needs --path <index.json>, --key-file <pem> and --key-id <id>')
+  // Only an index that validates is signed: a maintainer never signs what an install would refuse (final review m11)
+  const checked = await validate({ args: { path: index }, cwd: a.cwd })
+  if (!checked.ok) return failed(`${index} does not validate, so it was not signed: ${checked.error.message}`, checked.error.details)
   const file = path.resolve(a.cwd, index)
   const bytes = await fs.readFile(file)
   const pem = await fs.readFile(path.resolve(a.cwd, keyFile), 'utf8')

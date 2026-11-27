@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { CATALOG_ARTIFACT_MAX_BYTES, entryMismatch, isExpired, isRevoked, latestCompatible, parseCatalog, type Catalog, type CatalogEntry } from './catalog'
+import { CATALOG_ARTIFACT_MAX_BYTES, compareVersions, entryMismatch, isExpired, isRevoked, latestCompatible, parseCatalog, type Catalog, type CatalogEntry } from './catalog'
 import type { PluginManifest } from './manifest'
 
 const SHA = 'a'.repeat(64)
@@ -125,5 +125,27 @@ describe('entryMismatch', () => {
     expect(entryMismatch(manifest({ version: '0.1.1' }), e, v)).toBe('the package is version 0.1.1, the catalog lists 0.1.0')
     expect(entryMismatch(manifest({ trust: 'trusted' }), e, v)).toBe('the package is trusted, the catalog lists it as restricted-ui')
     expect(entryMismatch(manifest({ permissions: ['commands.register', 'workspace.read'] }), e, v)).toBe('the package asks for workspace.read, which the catalog does not list')
+  })
+})
+
+// Phase 4 final review m6, m7
+describe('catalog final review fixes', () => {
+  it('orders prereleases by their numeric parts, as semver does', () => {
+    expect(compareVersions('1.0.0-beta.10', '1.0.0-beta.2')).toBe(1)
+    expect(compareVersions('1.0.0-beta.2', '1.0.0-beta.10')).toBe(-1)
+    expect(compareVersions('1.0.0-alpha', '1.0.0-alpha.1')).toBe(-1)
+    expect(compareVersions('1.0.0-rc.1', '1.0.0')).toBe(-1)
+    expect(compareVersions('1.0.0-beta', '1.0.0-alpha')).toBe(1)
+  })
+
+  it('refuses release notes holding a control or direction-changing character, keeping line breaks', () => {
+    expect(ok(index({ plugins: [plugin({ versions: [version({ releaseNotes: 'Fixes\n- a\n- b' })] })] })).plugins[0].versions[0].releaseNotes).toBe('Fixes\n- a\n- b')
+    expect(problems(index({ plugins: [plugin({ versions: [version({ releaseNotes: 'safe\u202eevil' })] })] }))).toContain(
+      'plugins: astera-hello-panel 0.1.0: releaseNotes must be text of at most 2000 characters, with no control or direction-changing character'
+    )
+  })
+
+  it('refuses a sequence past the safest whole number', () => {
+    expect(problems(index({ sequence: 1e300 }))).toContain('sequence must be a whole number of 1 or more')
   })
 })

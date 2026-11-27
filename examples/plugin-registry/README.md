@@ -11,7 +11,8 @@ private or team catalog.
 
 - `index.json`: the index, with no plugin yet. Raise `sequence` with every published change, and keep `expires` ahead.
 - `artifacts/`: the packages, as `astera plugins publish` made them.
-- `.github/workflows/validate.yml`: checks every pull request with `astera plugins registry-validate`.
+- `.github/workflows/validate.yml`: checks every pull request with `astera plugins registry-validate`. Both workflows
+  need a step that installs the astera command at a version you pinned; until you add it they stop with that message.
 - `.github/workflows/sign.yml`: signs the merged index with the key in the `REGISTRY_SIGNING_KEY` secret.
 - `.github/ISSUE_TEMPLATE/plugin-submission.yml` and `.github/PULL_REQUEST_TEMPLATE.md`: what a submission states.
 

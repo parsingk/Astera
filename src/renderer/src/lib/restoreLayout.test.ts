@@ -120,6 +120,12 @@ describe('plugin panel tabs in a saved layout', () => {
     expect([...(await pending)]).toEqual(['plugin:gone:main'])
   })
 
+  // Phase 4 final review I4: Safe Mode hides plugins, it does not remove them; a restore keeps their tabs
+  it('keeps every plugin tab while Safe Mode is on', async () => {
+    stubPlugins(async () => ({ ok: true, body: { ...listed.body, safeMode: true } }))
+    expect([...(await checkSavedTabs(layout(['plugin:gone:main', 'plugin:hello-panel:hello'])))].sort()).toEqual(['plugin:gone:main', 'plugin:hello-panel:hello'])
+  })
+
   it('brings back a plugin tab only when it was checked', () => {
     const keep = keepSavedTab(layout([]), new Set(['plugin:hello-panel:hello']), new Set())
     expect(keep('plugin:hello-panel:hello')).toBe(true)
