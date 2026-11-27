@@ -527,6 +527,15 @@ A record holds names only, never a setting value or what a call carried; a `fail
 words, with its secret settings hidden as in its log. The same refusal or exit again within 1 minute is not written
 again: the line after it says how many more times it came.
 
+## Inspector
+
+Settings, Plugins, **Inspect** on a plugin shows what it is doing: its state and why, its version, trust level, process
+and when it was installed; the permissions granted, and the ones it asked for that were not; how many commands, panels,
+sidebar views, status bar items and themes it adds; how many times it called each Host command since the Host started,
+and how many of those were refused; the checks `astera plugins doctor` runs; and its last 50 audit records. It shows no
+setting value and nothing a call carried, only names and counts; its log is under **Logs**, with its secret settings
+hidden.
+
 ## Settings and secrets
 
 **Settings** are what a person gives the plugin: a URL, a project, a token. The manifest declares them in
@@ -793,15 +802,18 @@ Astera reads Plugin API 2 manifests (`"apiVersion": "2"`), which carry what
 - `astera.contributes.panels` lists panels, `{ "id", "title" }`, and `astera.contributes.commands` lists commands,
   `{ "id", "title", "panel" }`, each opening one of the panels. An id is lower-case letters, digits and `. _ -`, up to
   64; a title is up to 64 characters. At most 20 panels and 50 commands.
-- Three permissions are for the UI: `commands.register` and `panels.register`, which what it contributes needs, and
-  `workspace.read`.
+- `astera.contributes.sidebar`, `astera.contributes.statusBar` and `astera.contributes.themes` add
+  [sidebar views](#sidebar-views), [status bar items](#status-bar-items) and [themes](#themes).
+- Four permissions are for the UI: `commands.register` and `panels.register`, which commands, panels, sidebar views and
+  status bar items need; `themes.register`, which themes need; and `workspace.read`.
 - `engines.astera`, at the top of package.json as npm's own field, is a range of comparators such as
   `">=1.7.0 <2.0.0"` that this Astera must satisfy.
 
-A plugin with an `astera.entry` is trusted code, as every API 1 plugin is. A plugin with only a `ui` is
-**restricted UI**: it starts no program, declares no capabilities or settings, and asks only for the three UI
-permissions. Astera lists it as `ready` once it is enabled with what it needs granted, and its install prompt says it
-starts no program instead of the trusted code warning.
+A plugin with an `astera.entry` is trusted code, as every API 1 plugin is. A plugin with a `ui` and no entry is
+**restricted UI**: it starts no program, declares no capabilities or settings, and asks only for the UI permissions. A
+plugin with neither, only themes, is **declarative**: it runs no code and shows no page, and asks only for
+`themes.register`. Astera lists either as `ready` once it is enabled with what it needs granted, and its install prompt
+says what it is instead of the trusted code warning.
 
 ### Panels
 
@@ -829,6 +841,46 @@ within a few seconds; each tab then asks again by itself, so a plugin installed 
 off or removed says so. Removing the plugin, from the app or the CLI, also clears what its pages stored, so it starts
 with nothing when installed again; turning it off or updating it keeps that. A page that crashes is not opened again by itself: its tab says it stopped and offers to open
 it. [Hello panel](../examples/plugins/hello-panel) is a plugin with one panel to start from.
+
+### Sidebar views
+
+`astera.contributes.sidebar` lists `{ "id", "title", "panel" }`: each shows one of the plugin's panels in the sidebar.
+At most 2 a plugin, and they need `panels.register`. Each gets a button on the left rail, after How It Works, with one
+puzzle icon for every plugin and its title and plugin as the tooltip; a plugin's own icon is never drawn. Pressing it
+shows the panel in the sidebar, and pressing it again folds the sidebar, as the rail's other views do.
+
+The view is the same sandboxed guest as the panel's tab, with the same page, rules and `window.astera.context()`. Its
+choice is remembered with the window's layout; while the plugin is off, removed or not ready the sidebar shows the
+session list, and the view comes back when the plugin does.
+
+### Status bar items
+
+`astera.contributes.statusBar` lists `{ "id", "text", "command" }`: a text in the status bar that runs one of the
+plugin's contributed commands, which opens its panel. The text is up to 24 characters, with no control, invisible or
+direction-changing character. At most 2 a plugin, and they need `commands.register`. The bar shows them after the
+session count, in plugin id order, at most 6 in all, while the plugin can open its panel. The text is fixed: a plugin
+cannot change it while it runs.
+
+### Themes
+
+`astera.contributes.themes` lists `{ "id", "title", "base", "colors" }`: a colour theme over one of Astera's own
+(`vega`, `orion`, `umbra`, `aurora`, `antares`, `quasar` or `sirius`). At most 4 a plugin, and they need
+`themes.register`, which needs no `ui`. A theme is picked in Settings, General, Theme, under Plugin themes, named with
+its plugin.
+
+`colors` sets any of `bg`, `rail`, `panel`, `elevated`, `surfaceHover`, `termBg`, `line`, `lineSoft`, `text`,
+`textDim`, `textFaint`, `railIcon`, `accent`, `accentInk`, `statusBg`, `statusInk` and `mdLink`, each a `#rrggbb`
+colour; the rest are the base's. Nothing else reaches the app: no `url()`, no variable, no font or corner, no CSS.
+Astera refuses a theme, at install and again before it applies it, when:
+
+- a surface it sets (`bg`, `rail`, `panel`, `elevated`, `surfaceHover`, `termBg`) is brighter than #303236, since the
+  colours every theme shares (file icons, git, warnings) are made for dark surfaces;
+- its colours read under the floors Astera's own themes keep: text on bg 7:1, text on panel 4.5:1, text on elevated
+  4.5:1, text-dim on elevated 4.5:1, text-faint on elevated 3:1, rail-icon on rail 4.5:1, accent on bg 3:1, accent-ink
+  on accent 4.5:1, status-ink on status-bg 4.5:1, md-link on bg 4.5:1.
+
+Turning the plugin off or removing it shows the default theme and keeps the choice, so turning it on again brings the
+theme back. [Dusk theme](../examples/plugins/dusk-theme) is a themes-only plugin to start from.
 
 ## Not yet
 

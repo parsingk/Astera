@@ -10,7 +10,9 @@
     "permissions": ["commands.register", "panels.register", "workspace.read"],
     "contributes": {
       "panels": [{ "id": "hello", "title": "Hello" }],
-      "commands": [{ "id": "open", "title": "Open Hello panel", "panel": "hello" }]
+      "commands": [{ "id": "open", "title": "Open Hello panel", "panel": "hello" }],
+      "sidebar": [{ "id": "side", "title": "Hello", "panel": "hello" }],
+      "statusBar": [{ "id": "hi", "text": "Hello", "command": "open" }]
     }
   }
 }

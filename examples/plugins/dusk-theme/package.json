@@ -1,0 +1,27 @@
+{
+  "name": "astera-dusk-theme",
+  "version": "0.1.0",
+  "displayName": "Dusk theme",
+  "description": "A themes-only plugin: one colour theme over Vega, with a blue accent and a deeper status bar.",
+  "license": "Apache-2.0",
+  "astera": {
+    "apiVersion": "2",
+    "permissions": ["themes.register"],
+    "contributes": {
+      "themes": [
+        {
+          "id": "dusk",
+          "title": "Dusk",
+          "base": "vega",
+          "colors": {
+            "accent": "#5aa9e6",
+            "accentInk": "#0b2236",
+            "statusBg": "#1d4f7a",
+            "statusInk": "#e3f0fb",
+            "mdLink": "#6cb6f0"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -12,7 +12,7 @@ const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'hello-panel
 const read = (file: string): string => readFileSync(path.join(dir, file), 'utf8')
 
 describe('the Hello panel sample', () => {
-  it('is a restricted UI plugin with one command opening its one panel', () => {
+  it('is a restricted UI plugin with one command opening its one panel, shown in the sidebar too, with a status item', () => {
     const parsed = parseManifest(JSON.parse(read('package.json')))
     if (!parsed.ok) throw new Error(parsed.problems.join('; '))
     const m = parsed.manifest
@@ -22,7 +22,9 @@ describe('the Hello panel sample', () => {
     expect(m.permissions).toEqual(['commands.register', 'panels.register', 'workspace.read'])
     expect(m.contributes).toEqual({
       panels: [{ id: 'hello', title: 'Hello' }],
-      commands: [{ id: 'open', title: 'Open Hello panel', panel: 'hello' }]
+      commands: [{ id: 'open', title: 'Open Hello panel', panel: 'hello' }],
+      sidebar: [{ id: 'side', title: 'Hello', panel: 'hello' }],
+      statusBar: [{ id: 'hi', text: 'Hello', command: 'open' }]
     })
   })
 

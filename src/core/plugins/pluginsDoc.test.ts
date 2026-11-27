@@ -10,7 +10,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PLUGIN_CAPABILITIES, PLUGIN_PERMISSIONS, PLUGIN_TRUST_WARNING, capabilityPermissionProblem, parseManifest } from './manifest'
+import { PLUGIN_CAPABILITIES, PLUGIN_CONTRIBUTION_LIMITS, PLUGIN_PERMISSIONS, PLUGIN_TRUST_WARNING, capabilityPermissionProblem, parseManifest } from './manifest'
+import { STATUS_ITEMS_MAX } from './pluginRows'
+import { BRIGHTEST_SURFACE, THEME_CONTRAST_CHECKS } from '../theme/contrastChecks'
+import { themeById } from '../theme/themes'
 import { SETTING_KEYWORDS, SETTING_TYPES, SETTINGS_MAX, parseSettingsSchema } from './settings'
 import { PLUGIN_COMMAND_PERMISSIONS, PLUGIN_SENSITIVE_COMMANDS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from '../host/pluginGate'
 import { AUDIT_COALESCE_MS, AUDIT_EVENTS, AUDIT_SEGMENT_BYTES } from './pluginAudit'
@@ -491,6 +494,33 @@ describe('docs/plugins.md', () => {
     expect(panels).not.toContain('not shown yet')
     expect(guide).toContain('](../examples/plugins/hello-panel)')
     expect(read('examples/plugins/hello-panel/README.md')).toContain('docs/plugins.md#plugin-api-2)')
+  })
+
+  // Phase 2 remaining: sidebar views, status items and themes as the manifest reads them and the app shows them
+  it('says what a sidebar view, a status item and a theme may be, as the manifest and the app enforce it', () => {
+    const api2 = prose(section(guide, '## Plugin API 2'))
+    expect(api2).toContain('**declarative**')
+    expect(api2).toContain('`themes.register`')
+    const sidebar = prose(section(guide, '### Sidebar views'))
+    expect(sidebar).toContain(`At most ${PLUGIN_CONTRIBUTION_LIMITS.sidebar}`)
+    expect(sidebar).toContain('`panels.register`')
+    const status = prose(section(guide, '### Status bar items'))
+    expect(status).toContain(`up to ${PLUGIN_CONTRIBUTION_LIMITS.statusText} characters`)
+    expect(status).toContain(`At most ${PLUGIN_CONTRIBUTION_LIMITS.statusBar}`)
+    expect(status).toContain(`${STATUS_ITEMS_MAX} in all`)
+    const themes = prose(section(guide, '### Themes'))
+    expect(themes).toContain(`At most ${PLUGIN_CONTRIBUTION_LIMITS.themes}`)
+    expect(themes).toContain('`#rrggbb`')
+    expect(themes).toContain(BRIGHTEST_SURFACE)
+    for (const c of THEME_CONTRAST_CHECKS) expect(themes, c.label).toContain(`${c.label} ${c.min}:1`)
+    for (const k of Object.keys(themeById('vega').colors)) expect(themes, k).toContain(`\`${k}\``)
+    expect(guide).toContain('](../examples/plugins/dusk-theme)')
+  })
+
+  it('says what the Plugin Inspector shows, and that it shows no setting value', () => {
+    const inspector = prose(section(guide, '## Inspector'))
+    expect(inspector).toContain('since the Host started')
+    expect(inspector).toContain('no setting value')
   })
 
   // 2f final review m1: the quick start's commands need the astera command

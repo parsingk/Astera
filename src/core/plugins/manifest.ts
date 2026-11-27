@@ -194,10 +194,12 @@ const CONTRIBUTION_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const TITLE_MAX = 64
 const MAX_COMMANDS = 50
 const MAX_PANELS = 20
-const MAX_SIDEBAR = 2
-const MAX_STATUS_ITEMS = 2
-const STATUS_TEXT_MAX = 24
-const MAX_THEMES = 4
+/** The Phase 2 remaining contributions' limits, as docs/plugins.md states them. */
+export const PLUGIN_CONTRIBUTION_LIMITS = { sidebar: 2, statusBar: 2, statusText: 24, themes: 4 } as const
+const MAX_SIDEBAR = PLUGIN_CONTRIBUTION_LIMITS.sidebar
+const MAX_STATUS_ITEMS = PLUGIN_CONTRIBUTION_LIMITS.statusBar
+const STATUS_TEXT_MAX = PLUGIN_CONTRIBUTION_LIMITS.statusText
+const MAX_THEMES = PLUGIN_CONTRIBUTION_LIMITS.themes
 
 /** `astera.contributes` (API 2), with each problem named by its field. */
 function contributionsOf(v: unknown, problems: string[]): PluginContributions {
