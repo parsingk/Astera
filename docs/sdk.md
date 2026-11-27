@@ -304,7 +304,9 @@ refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-che
 external agent a person registered in Settings, Agents (an ACP agent such as OpenCode, `ext_` and 8 hex) to work the Task
 in the Run folder instead of accounts; give it or `accountIds` and `agentProfileId`, not both. Such a Task carries
 `externalAgentId`, and its attempts in `tasks.get` carry `externalAgent` (`id`, `name`), their `provider` and `accountId`
-then placeholders (the Jobs guide's section on external agent workers says how they run). `tasks.list({ runId, status, ready, brief })` and
+then placeholders (the Jobs guide's section on external agent workers says how they run). An Astera without the
+`external-agents` feature refuses `externalAgentId` with `VERSION_MISMATCH` before anything is sent, since it would
+ignore it and run the Task on accounts. `tasks.list({ runId, status, ready, brief })` and
 `tasks.get` read them. A Task with `kind: 'lifecycle'` is the one Astera adds once every other Task of a GitHub
 lifecycle Run is completed, to carry the Run through GitHub: it has no worker, and `tasks.create` on that Run is
 refused while it is open.
