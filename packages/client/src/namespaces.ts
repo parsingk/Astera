@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { CallOptions, CallResult } from './client.js'
 import { DEFAULT_WAIT_TIMEOUT_MS, FOLLOW_WINDOW_MS, TIMEOUT_HEADROOM_MS } from './deadlines.js'
 import { AsteraError } from './errors.js'
+import { HOST_FEATURE_EXTERNAL_AGENTS } from './protocol.js'
 import { createEventsApi, stoppable, type EventsApi } from './events.js'
 import { eventKey } from './follow.js'
 import { publicEvent } from './shape.js'
@@ -347,6 +348,9 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
         throw invalid('deps is a list of Task ids, none empty')
       const profile = input.agentProfileId !== undefined ? need('agentProfileId', input.agentProfileId) : undefined
       const external = input.externalAgentId !== undefined ? need('externalAgentId', input.externalAgentId) : undefined
+      // An older Host ignores the argument and runs the Task on accounts (final review M10): refused before anything is sent
+      if (external !== undefined && !features().includes(HOST_FEATURE_EXTERNAL_AGENTS))
+        throw new AsteraError('VERSION_MISMATCH', `this Host cannot give a Task to an external agent (no '${HOST_FEATURE_EXTERNAL_AGENTS}' feature); update the Astera app`)
       let account = input.accountIds !== undefined ? idList('accountIds', input.accountIds) : undefined
       // A profile named here gives the Task its accounts, so the Host needs no account; an external agent needs none
       if (account === undefined && profile === undefined && external === undefined) {
