@@ -12,7 +12,8 @@ type Failure = Extract<PluginsCallAnswer, { ok: false }>
  *  after that one, so its answer is never older than the ask. */
 export function createPluginsPoller(d: {
   read: () => Promise<PluginsCallAnswer>
-  onList: (plugins: Record<string, unknown>[]) => void
+  /** The plugins, and the whole answer (Safe Mode rides on it, Phase 4). */
+  onList: (plugins: Record<string, unknown>[], body: Record<string, unknown>) => void
   onFailure: (r: Failure) => void
   busy: () => boolean
   everyMs: number
@@ -23,7 +24,10 @@ export function createPluginsPoller(d: {
     const r = await d.read()
     if (!r.ok) return d.onFailure(r)
     const list = Array.isArray(r.body.plugins) ? r.body.plugins : []
-    d.onList(list.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null && !Array.isArray(p)))
+    d.onList(
+      list.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null && !Array.isArray(p)),
+      r.body
+    )
   }
   const now = (): Promise<void> => {
     if (reading) {

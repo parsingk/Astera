@@ -6,6 +6,7 @@ import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
 import { Select } from './Select'
 import { PluginInspector } from './PluginInspector'
+import { PluginCatalog } from './PluginCatalog'
 import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel, trustClass, trustLabel } from './pluginsText'
 import { createPluginsPoller, installBlocked, installHolds, keepOnly } from './pluginsList'
 
@@ -41,6 +42,8 @@ const without = <V,>(o: Record<string, V>, key: string): Record<string, V> => {
 export function PluginsSettings(): React.JSX.Element {
   const { t } = useI18n()
   const [plugins, setPlugins] = useState<Plugin[] | null>(null)
+  /** Safe Mode, as the Host's list says (Phase 4). */
+  const [safeMode, setSafeMode] = useState(false)
   /** Why the last list could not be read; the list before it stays (review focus 1). */
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   /** The install button's state: a folder being read and shown, or the install itself. */
@@ -86,9 +89,10 @@ export function PluginsSettings(): React.JSX.Element {
     () =>
       createPluginsPoller({
         read: () => window.api.plugins.list().catch(failed),
-        onList: (listed) => {
+        onList: (listed, body) => {
           setListFailure(null)
           setPlugins(listed)
+          setSafeMode(body.safeMode === true)
           // A plugin removed from elsewhere (the CLI) takes its form, typing and log with it (M3).
           const ids = new Set(listed.map((p) => str(p.id)))
           setOpen((o) => keepOnly(o, ids))
@@ -319,6 +323,29 @@ export function PluginsSettings(): React.JSX.Element {
           </div>
         )
       })}
+      {/* Phase 4: Safe Mode, and the catalog */}
+      <h3 className="settings-subhead">{t('settings.plugins.safeMode.title')}</h3>
+      {safeMode && <p className="settings-hint is-warning">{t('settings.plugins.safeMode.banner')}</p>}
+      <p className="settings-hint">{t('settings.plugins.safeMode.hint')}</p>
+      <div className="remote-actions">
+        <button
+          className="settings-gen-refresh"
+          disabled={installBlocked(listFailure?.code ?? null)}
+          onClick={() =>
+            void window.api.plugins
+              .safeMode(!safeMode)
+              .catch(failed)
+              .then((r) => {
+                if (!r.ok) toast.error(failureLine(r, t))
+                reload()
+              })
+          }
+        >
+          {safeMode ? t('settings.plugins.safeMode.turnOff') : t('settings.plugins.safeMode.turnOn')}
+        </button>
+      </div>
+      <h3 className="settings-subhead">{t('settings.plugins.catalog.title')}</h3>
+      <PluginCatalog installed={plugins} onChanged={reload} />
     </div>
   )
 }
@@ -364,6 +391,9 @@ export function PluginCard({
         {id} · {t('settings.plugins.version', { version: str(plugin.version) })}
       </span>
       {str(plugin.description) !== '' && <span className="settings-hint">{str(plugin.description)}</span>}
+      {/* Phase 4: where it came from, and a version the catalog revoked */}
+      {(plugin.source as { kind?: unknown } | undefined)?.kind === 'catalog' && <span className="settings-hint">{t('settings.plugins.fromCatalog')}</span>}
+      {typeof plugin.revoked === 'string' && <span className="settings-hint is-warning">{t('settings.plugins.catalog.revoked', { reason: plugin.revoked })}</span>}
       {reason !== '' && <span className={`settings-hint${status === 'failed' || status === 'incompatible' ? ' is-warning' : ''}`}>{reasonLine(reason, t)}</span>}
       {capabilities.length > 0 && (
         <div className="plugin-facts">

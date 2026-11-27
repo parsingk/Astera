@@ -718,8 +718,11 @@ export function humanFor(
             granted.length > 0 ? granted.join(',') : '-',
             offers.length > 0 ? offers.join(',') : '-'
           ]
+          // Phase 4: a catalog install, and a version the catalog revoked, before why it does not run
+          const source = p.source as { kind?: unknown } | undefined
+          const marks = [...(source?.kind === 'catalog' ? ['from the catalog'] : []), ...(typeof p.revoked === 'string' ? [`revoked: ${p.revoked}`] : [])]
           // Why it does not run, as docs/cli.md promises the list says.
-          return typeof p.reason === 'string' ? [...row, p.reason] : row
+          return typeof p.reason === 'string' ? [...row, ...marks, p.reason] : [...row, ...marks]
         })
       )
     // Plugin Phase 4 J21. Four cells on every row, the reason empty when there is none, so the names line up.
@@ -934,6 +937,7 @@ export function humanFor(
     case 'agent-profiles-restore':
     case 'agent-profiles-delete':
     case 'plugins-install':
+    case 'plugins-catalog-install':
     case 'plugins-enable':
     case 'plugins-disable':
     case 'plugins-remove':
@@ -952,6 +956,37 @@ export function humanFor(
     case 'host-stop':
     case 'mcp-status':
       return fields(data)
+    // Phase 4: the signed catalog, Safe Mode and the registry tools
+    case 'plugins-catalog': {
+      if (data.configured !== true) return 'no catalog is set: astera plugins catalog-configure --url <index> --key <id=publicKey>'
+      const when = typeof data.fetchedAt === 'number' ? `, read ${new Date(data.fetchedAt).toISOString().slice(0, 19).replace('T', ' ')}` : ''
+      const head = `catalog ${str(data.url)}${typeof data.sequence === 'number' ? `, index ${data.sequence}` : ''}${when}`
+      const rows = asList(data, 'plugins').map((p) => {
+        const latest = (p.latest ?? null) as Record<string, unknown> | null
+        const installed = (p.installed ?? null) as Record<string, unknown> | null
+        const asks = Array.isArray(p.newPermissions) && p.newPermissions.length > 0 ? `update asks for ${(p.newPermissions as unknown[]).map(str).join(',')}` : ''
+        const revoked = typeof p.installedRevoked === 'string' ? `installed version revoked: ${p.installedRevoked}` : ''
+        return [str(p.id), latest ? str(latest.version) : '-', installed ? str(installed.version) : '-', trustWords(p.trustLevel), str(p.publisher), revoked || asks].filter((c, i) => i < 5 || c !== '')
+      })
+      return [
+        head,
+        ...(data.expired === true ? ['the index expired: it installs nothing until it is refreshed'] : []),
+        ...(typeof data.problem === 'string' ? [`the last refresh failed: ${data.problem}`] : []),
+        ...(rows.length > 0 ? [columns(rows)] : ['the index lists no plugin'])
+      ].join('\n')
+    }
+    case 'plugins-catalog-configure':
+      return data.configured === true ? `catalog set: ${str(data.url)}, checked with keys ${(Array.isArray(data.keys) ? data.keys : []).map(str).join(', ')}` : 'catalog forgotten'
+    case 'plugins-safe-mode':
+      return `${data.safeMode === true ? 'Safe Mode is on: no plugin runs' : 'Safe Mode is off: enabled plugins run'}${data.offline === true ? ' (set in the profile; no Host was running)' : ''}`
+    case 'plugins-publish':
+      return [`wrote ${str(data.file)}`, `sha256 ${str(data.sha256)}`, 'nothing was uploaded: serve the package at the artifact address, and add this entry to the registry index in a pull request', JSON.stringify(data.entry, null, 2)].join('\n')
+    case 'plugins-registry-keygen':
+      return [`key ${str(data.keyId)}`, `public key ${str(data.publicKey)}`, `private key ${str(data.privateKeyFile)} (keep it private)`].join('\n')
+    case 'plugins-registry-sign':
+      return `wrote ${str(data.signature)} (key ${str(data.keyId)}, index sha256 ${str(data.sha256)})`
+    case 'plugins-registry-validate':
+      return `index ${str(data.sequence)}: ${str(data.plugins)} plugins, ${str(data.artifactsChecked)} packages checked, no problem found`
     default:
       return null
   }

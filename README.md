@@ -448,7 +448,8 @@ and a full bundle build.
 - [The `astera` command](docs/cli.md) — driving Jobs from a shell or CI: install, commands, JSON, exit codes
 - [MCP](docs/mcp.md) — letting an MCP client create, run, and monitor Jobs: connecting, the tools, and MCP access
 - [The SDK](docs/sdk.md) — the TypeScript client for building integrations on the Host: Jobs, Runs, questions, and events
-- [Plugins](docs/plugins.md) — writing, installing, and debugging plugins: programs beside the Host, panels, sidebar views, status bar items and themes
+- [Plugins](docs/plugins.md) — writing, installing, and debugging plugins: programs beside the Host, panels, sidebar views, status bar items and themes, a signed catalog and Safe Mode
+- [Plugin registry](docs/plugin-registry.md) — laying out, signing, reviewing and revoking a plugin catalog
 - [Slack bot setup](docs/slack-bot-setup.md) — creating the app, tokens, and permissions
 - [Releasing](docs/releasing.md) — how a version gets cut and published
 - [Code signing policy](docs/code-signing.md) — who signs the releases, what is signed, and privacy

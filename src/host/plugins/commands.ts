@@ -18,11 +18,26 @@ export const PLUGIN_COMMANDS: ReadonlySet<string> = new Set([
   'plugins-doctor',
   'plugins-settings',
   'plugins-configure',
-  'plugins-audit'
+  'plugins-audit',
+  // Phase 4: the signed catalog
+  'plugins-catalog',
+  'plugins-catalog-configure',
+  'plugins-catalog-inspect',
+  'plugins-catalog-install',
+  'plugins-safe-mode'
 ])
 
 /** The ones that change what is installed or whether it runs. */
-export const PLUGIN_CHANGES: ReadonlySet<string> = new Set(['plugins-install', 'plugins-enable', 'plugins-disable', 'plugins-remove', 'plugins-configure'])
+export const PLUGIN_CHANGES: ReadonlySet<string> = new Set([
+  'plugins-install',
+  'plugins-enable',
+  'plugins-disable',
+  'plugins-remove',
+  'plugins-configure',
+  'plugins-catalog-configure',
+  'plugins-catalog-install',
+  'plugins-safe-mode'
+])
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
@@ -33,6 +48,7 @@ const sourceOf = (source: unknown): string => {
   const s = (source ?? {}) as Record<string, unknown>
   if (s.kind === 'npm') return `npm ${str(s.spec) ?? '?'} (${str(s.version) ?? '?'})`
   if (s.kind === 'file') return `${str(s.path) ?? '?'} sha256 ${(str(s.sha256) ?? '').slice(0, 12)}`
+  if (s.kind === 'catalog') return `the catalog ${str(s.url) ?? '?'} sha256 ${(str(s.sha256) ?? '').slice(0, 12)}`
   return str(s.path) ?? '?'
 }
 
@@ -50,7 +66,8 @@ function changeRecord(cmd: string, args: Record<string, unknown>, by: string, an
   const version = str(body.version)
   const at = { plugin, by, ...(version !== undefined ? { version } : {}) }
   switch (cmd) {
-    case 'plugins-install': {
+    case 'plugins-install':
+    case 'plugins-catalog-install': {
       const granted = list(body.permissions)
       const what = `${str(body.trust) ?? 'trusted'}; granted ${granted.length > 0 ? granted.join(', ') : 'nothing'}; from ${sourceOf(body.source)}`
       const replaced = str(body.replaced)
@@ -69,6 +86,16 @@ function changeRecord(cmd: string, args: Record<string, unknown>, by: string, an
       const parts = [...(set.length > 0 ? [`set ${set.join(', ')}`] : []), ...(unset.length > 0 ? [`unset ${unset.join(', ')}`] : [])]
       return { plugin: str(args.id) ?? plugin, event: 'configured', by, ...(parts.length > 0 ? { detail: parts.join('; ') } : {}) }
     }
+    case 'plugins-catalog-configure':
+      // Names only: the address and the key ids, never a key (Phase 4 final review I7)
+      return {
+        plugin: '*',
+        event: 'configured',
+        by,
+        detail: body.configured === true ? `catalog set: ${str(body.url) ?? '?'}, keys ${list(body.keys).join(', ')}` : 'catalog forgotten'
+      }
+    case 'plugins-safe-mode':
+      return { plugin: '*', event: body.safeMode === true ? 'disabled' : 'enabled', by, detail: body.safeMode === true ? 'Safe Mode on' : 'Safe Mode off' }
     default:
       return null
   }
@@ -96,6 +123,9 @@ export async function pluginsCommand(a: {
     // A change refused again and again (an agent's shell in a loop) is one line and a count (final review M11)
     if (rec) a.audit.record({ ...rec, at: asked }, rec.event === 'change-refused' ? `${rec.plugin} change-refused ${a.cmd}` : undefined)
   }
+  // A version a fetched catalog revoked was turned off by the catalog, not by whoever asked to read it (Phase 4)
+  if (a.audit && a.cmd === 'plugins-catalog' && answer.status === 200)
+    for (const id of list((answer.body as { disabled?: unknown } | undefined)?.disabled)) a.audit.record({ plugin: id, event: 'disabled', by: 'catalog', detail: 'revoked by the catalog', at: asked })
   return answer
 }
 
@@ -120,6 +150,23 @@ async function answerOf(a: Omit<Parameters<typeof pluginsCommand>[0], 'audit' | 
       return manager.settings(args.id)
     case 'plugins-audit':
       return manager.audit(args.id, args.lines)
+    case 'plugins-catalog':
+      return manager.catalog({ refresh: args.refresh })
+    case 'plugins-catalog-inspect':
+      return manager.catalogInspect({ id: args.id, version: args.version })
+    case 'plugins-catalog-configure':
+      answer = await manager.catalogConfigure({
+        ...(args.url !== undefined ? { url: args.url } : {}),
+        ...(args.keys !== undefined ? { keys: args.keys } : {}),
+        ...(args.clear !== undefined ? { clear: args.clear } : {})
+      })
+      break
+    case 'plugins-catalog-install':
+      answer = await manager.catalogInstall({ id: args.id, version: args.version, grant: args.grant, expect: args.expect })
+      break
+    case 'plugins-safe-mode':
+      answer = await manager.safeMode({ on: args.on })
+      break
     case 'plugins-configure':
       answer = await manager.configure(args.id, args.set, args.unset)
       break

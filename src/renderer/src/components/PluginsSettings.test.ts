@@ -151,6 +151,16 @@ describe('PluginLogs', () => {
   })
 })
 
+// Phase 4 final review I6: an installed plugin says where it came from and whether the catalog revoked it
+describe('PluginCard and the catalog', () => {
+  it('marks a catalog install, and a revoked version with its reason', () => {
+    const fromCatalog = card({ ...PLUGIN, source: { kind: 'catalog', id: 'x', version: '1.0.0', sha256: 'a', url: 'u' } })
+    expect(fromCatalog).toContain('From the catalog')
+    expect(card(PLUGIN)).not.toContain('From the catalog')
+    expect(card({ ...PLUGIN, revoked: 'leaks a token' })).toContain('The catalog revoked the installed version: leaks a token. Update or remove it.')
+  })
+})
+
 describe('PluginCard trust level (ADR-008)', () => {
   it('says a UI-only plugin is restricted UI, ready, and a plugin with code is trusted code', () => {
     const ui = card({ ...PLUGIN, status: 'ready', trust: 'restricted-ui' })

@@ -1,0 +1,33 @@
+# Signs the merged index. Started by hand by a maintainer on the main branch, never by a pull request; the signing key
+# is its only secret.
+name: sign
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Placeholder: this skeleton does not install the astera command. Add a step that installs it at a version you
+      # pinned (docs/cli.md says how); until then this step stops the run rather than pass without checking.
+      - name: Need the astera command
+        run: command -v astera || { echo "install the astera command at a pinned version first (docs/cli.md)"; exit 1; }
+      - name: Validate before signing
+        run: astera plugins registry-validate --path index.json
+      - name: Sign
+        env:
+          REGISTRY_SIGNING_KEY: ${{ secrets.REGISTRY_SIGNING_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$REGISTRY_SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          astera plugins registry-sign --path index.json --key-file "$RUNNER_TEMP/key.pem" --key-id main
+          rm -f "$RUNNER_TEMP/key.pem"
+      - name: Commit the signature
+        run: |
+          git config user.name "registry-signer"
+          git config user.email "registry-signer@users.noreply.github.com"
+          git add index.json.sig
+          git commit -m "chore: sign index"
+          git push

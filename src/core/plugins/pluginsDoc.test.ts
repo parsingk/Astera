@@ -12,6 +12,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PLUGIN_CAPABILITIES, PLUGIN_CONTRIBUTION_LIMITS, PLUGIN_PERMISSIONS, PLUGIN_TRUST_WARNING, capabilityPermissionProblem, parseManifest } from './manifest'
 import { STATUS_ITEMS_MAX } from './pluginRows'
+import { CATALOG_ARTIFACT_MAX_BYTES } from './catalog'
 import { BRIGHTEST_SURFACE, THEME_CONTRAST_CHECKS } from '../theme/contrastChecks'
 import { themeById } from '../theme/themes'
 import { SETTING_KEYWORDS, SETTING_TYPES, SETTINGS_MAX, parseSettingsSchema } from './settings'
@@ -523,6 +524,25 @@ describe('docs/plugins.md', () => {
     expect(prose(read('docs/usage-guide.md'))).toContain('plugin themes')
   })
 
+  // Phase 4: the catalog and Safe Mode as the Host enforces them, and the registry guide beside this one
+  it('says how a catalog install is checked and what Safe Mode does, as the Host does it', () => {
+    const market = prose(section(guide, '## Catalog'))
+    expect(market).toContain('ships with no catalog and no key')
+    expect(market).toContain('an older index, or another index of the same number, is refused')
+    expect(market).toContain(`never over ${CATALOG_ARTIFACT_MAX_BYTES / 1024 / 1024} MiB`)
+    expect(market).toContain('no automatic update')
+    expect(market).toContain('](plugin-registry.md)')
+    const safe = prose(section(guide, '## Safe Mode'))
+    expect(safe).toContain('`astera plugins safe-mode --on`')
+    expect(safe).toContain('with no Host running')
+    const registry = prose(read('docs/plugin-registry.md'))
+    for (const field of ['schemaVersion', 'sequence', 'expires', 'trustLevel', 'artifactUrl', 'sha256', 'sizeBytes', 'revoked']) expect(registry, field).toContain(`\`${field}\``)
+    expect(registry).toContain('`astera plugins registry-sign`')
+    expect(registry).toContain('not operated')
+    expect(read('examples/plugin-registry/README.md')).toContain('docs/plugin-registry.md')
+    expect(read('docs/plugin-authoring-agent.md')).toContain('astera plugins validate')
+  })
+
   it('says what the Plugin Inspector shows, and that it shows no setting value', () => {
     const inspector = prose(section(guide, '## Inspector'))
     expect(inspector).toContain('since the Host started')
@@ -540,6 +560,18 @@ describe('docs/plugins.md', () => {
     expect(section(read('docs/sdk.md'), '## Not yet')).not.toMatch(/Plugins/)
     expect(read('README.md')).toContain('](docs/plugins.md)')
     expect(read('packages/plugin-sdk/README.md')).toContain('docs/plugins.md')
+  })
+
+  it('publishes the registry guide and the agent instructions too', () => {
+    for (const f of ['docs/plugin-registry.md', 'docs/plugin-authoring-agent.md']) {
+      let status: unknown = 0
+      try {
+        execFileSync('git', ['check-ignore', '-q', f], { cwd: root, stdio: 'ignore' })
+      } catch (e) {
+        status = (e as { status?: unknown }).status
+      }
+      expect(status, f).toBe(1)
+    }
   })
 
   it('is published: docs/ is a gitignore whitelist, and the guide is on it', () => {

@@ -2230,6 +2230,13 @@ export interface PluginsApi {
   get(id: string): Promise<PluginsCallAnswer>
   doctor(id: string): Promise<PluginsCallAnswer>
   audit(id: string, lines: number): Promise<PluginsCallAnswer>
+  /** Phase 4: the catalog's plugins (fetched again first with `refresh`), what installing one would install, its source,
+   *  an exact version installed from it, and Safe Mode. */
+  catalog(refresh: boolean): Promise<PluginsCallAnswer>
+  catalogInspect(a: { id: string; version?: string }): Promise<PluginsCallAnswer>
+  catalogConfigure(a: { url: string; keys: { id: string; publicKey: string }[] } | { clear: true }): Promise<PluginsCallAnswer>
+  catalogInstall(a: { id: string; version: string; grant: string[]; expect: { name: string; version: string; sha256: string; trust?: string } }): Promise<PluginsCallAnswer>
+  safeMode(on: boolean): Promise<PluginsCallAnswer>
   settings(id: string): Promise<PluginsCallAnswer>
   configure(id: string, set: Record<string, string | boolean>, unset: string[]): Promise<PluginsCallAnswer>
 }

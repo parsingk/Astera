@@ -59,6 +59,12 @@ export function createPluginsRoute(d: { call: Call }): PluginsApi {
     get: (id) => send('plugins-get', { id }),
     doctor: (id) => send('plugins-doctor', { id }),
     audit: (id, lines) => send('plugins-audit', { id, lines }),
+    // Phase 4: the catalog. A refresh fetches, an inspect downloads, so each waits as a change does
+    catalog: (refresh) => send('plugins-catalog', { refresh: refresh === true }, true),
+    catalogInspect: (a) => send('plugins-catalog-inspect', { ...a }, true),
+    catalogConfigure: (a) => send('plugins-catalog-configure', { ...a }, true),
+    catalogInstall: (a) => send('plugins-catalog-install', { ...a }, true),
+    safeMode: (on) => send('plugins-safe-mode', { on: on === true }, true),
     settings: (id) => send('plugins-settings', { id }),
     configure: (id, set, unset) => send('plugins-configure', { id, set, unset }, true)
   }

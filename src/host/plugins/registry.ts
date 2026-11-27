@@ -22,7 +22,12 @@ export interface PluginRecord {
   installId?: string
   /** Where it was installed from: a folder, an npm package by the spec the person gave and the version it was
    *  (plugins 2e), or a package file (`plugins pack`, Phase 2 step 4a) by its path and the sha256 of the bytes installed. */
-  source: { kind: 'folder'; path: string } | { kind: 'npm'; spec: string; version: string } | { kind: 'file'; path: string; sha256: string }
+  source:
+    | { kind: 'folder'; path: string }
+    | { kind: 'npm'; spec: string; version: string }
+    | { kind: 'file'; path: string; sha256: string }
+    /** Phase 4: an exact version from a signed catalog, by the artifact's address and sha256. */
+    | { kind: 'catalog'; id: string; version: string; sha256: string; url: string }
 }
 
 const FILE = 'plugins.json'
@@ -54,7 +59,12 @@ const isRecord = (v: unknown): v is PluginRecord =>
   isObject(v.source) &&
   ((v.source.kind === 'folder' && typeof v.source.path === 'string') ||
     (v.source.kind === 'npm' && typeof v.source.spec === 'string' && typeof v.source.version === 'string') ||
-    (v.source.kind === 'file' && typeof v.source.path === 'string' && typeof v.source.sha256 === 'string'))
+    (v.source.kind === 'file' && typeof v.source.path === 'string' && typeof v.source.sha256 === 'string') ||
+    (v.source.kind === 'catalog' &&
+      typeof v.source.id === 'string' &&
+      typeof v.source.version === 'string' &&
+      typeof v.source.sha256 === 'string' &&
+      typeof v.source.url === 'string'))
 
 export async function readRegistry(root: string): Promise<PluginRecord[]> {
   const file = path.join(root, FILE)

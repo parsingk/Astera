@@ -467,6 +467,11 @@ const api = {
     get: invoke('plugins.get'),
     doctor: invoke('plugins.doctor'),
     audit: invoke('plugins.audit'),
+    catalog: invoke('plugins.catalog'),
+    catalogInspect: invoke('plugins.catalogInspect'),
+    catalogConfigure: invoke('plugins.catalogConfigure'),
+    catalogInstall: invoke('plugins.catalogInstall'),
+    safeMode: invoke('plugins.safeMode'),
     settings: invoke('plugins.settings'),
     configure: invoke('plugins.configure')
   },

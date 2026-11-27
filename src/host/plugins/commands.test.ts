@@ -28,7 +28,12 @@ const fake = (): PluginManager & { calls: string[] } => {
     doctor: vi.fn(ok('doctor', { ok: true, checks: [] })),
     settings: vi.fn(ok('settings', { fields: [] })),
     configure: vi.fn(ok('configure', { fields: [] })),
-    audit: vi.fn(ok('audit', { entries: [] }))
+    audit: vi.fn(ok('audit', { entries: [] })),
+    catalog: vi.fn(ok('catalog', { configured: false })),
+    catalogConfigure: vi.fn(ok('catalogConfigure', { configured: true, changed: true })),
+    catalogInspect: vi.fn(ok('catalogInspect')),
+    catalogInstall: vi.fn(ok('catalogInstall')),
+    safeMode: vi.fn(ok('safeMode', { safeMode: true, changed: true }))
   }
 }
 
@@ -39,7 +44,7 @@ const run = (o: Partial<Parameters<typeof pluginsCommand>[0]> & { cmd: string })
 }
 
 describe('pluginsCommand', () => {
-  it('names the twelve commands', () => {
+  it('names the seventeen commands', () => {
     expect([...PLUGIN_COMMANDS]).toEqual([
       'plugins-inspect',
       'plugins-install',
@@ -52,7 +57,12 @@ describe('pluginsCommand', () => {
       'plugins-doctor',
       'plugins-settings',
       'plugins-configure',
-      'plugins-audit'
+      'plugins-audit',
+      'plugins-catalog',
+      'plugins-catalog-configure',
+      'plugins-catalog-inspect',
+      'plugins-catalog-install',
+      'plugins-safe-mode'
     ])
   })
 
@@ -334,5 +344,78 @@ describe('index.ts gives the Host a plugin manager', () => {
     const awaited = leave.indexOf('await pluginsStopped')
     expect(awaited).toBeGreaterThan(leave.indexOf('spawner.closeAndSettle'))
     expect(awaited).toBeLessThan(leave.indexOf('await server\n        .close()'))
+  })
+})
+
+// Phase 4: the catalog's commands
+describe('pluginsCommand and the catalog', () => {
+  const recorder = (): PluginAudit & { recs: PluginAuditRecord[] } => {
+    const recs: PluginAuditRecord[] = []
+    return { recs, record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
+  }
+
+  it('hands each catalog command its arguments', async () => {
+    const manager = fake()
+    const call = (cmd: string, args: Record<string, unknown>) => pluginsCommand({ manager, cmd, args, role: 'cli', marks: { effects: 0 } })
+    await call('plugins-catalog', { refresh: true })
+    await call('plugins-catalog-configure', { url: 'https://x.invalid/index.json', keys: [{ id: 'k', publicKey: 'p' }] })
+    await call('plugins-catalog-inspect', { id: 'a', version: '1.0.0' })
+    await call('plugins-catalog-install', { id: 'a', version: '1.0.0', grant: ['jobs.read'], expect: { name: 'a' } })
+    expect(manager.catalog).toHaveBeenCalledWith({ refresh: true })
+    expect(manager.catalogConfigure).toHaveBeenCalledWith({ url: 'https://x.invalid/index.json', keys: [{ id: 'k', publicKey: 'p' }] })
+    expect(manager.catalogInspect).toHaveBeenCalledWith({ id: 'a', version: '1.0.0' })
+    expect(manager.catalogInstall).toHaveBeenCalledWith({ id: 'a', version: '1.0.0', grant: ['jobs.read'], expect: { name: 'a' } })
+  })
+
+  it('refuses the catalog’s changes to an agent’s shell and lets it read the catalog', async () => {
+    for (const cmd of ['plugins-catalog-configure', 'plugins-catalog-install'])
+      expect((await run({ cmd, agentRefusal: 'not from an agent' }).answer).status, cmd).toBe(403)
+    expect((await run({ cmd: 'plugins-catalog', agentRefusal: 'not from an agent' }).answer).status).toBe(200)
+  })
+
+  it('records a catalog install with where it came from, and a version the catalog turned off', async () => {
+    const audit = recorder()
+    const manager = fake()
+    manager.catalogInstall = vi.fn(async () => ({
+      status: 200,
+      body: { id: 'acme.hello', version: '1.0.0', trust: 'restricted-ui', permissions: ['panels.register'], source: { kind: 'catalog', id: 'acme.hello', version: '1.0.0', sha256: 'abcdef0123456789', url: 'artifacts/hello.tgz' } }
+    }))
+    await pluginsCommand({ manager, cmd: 'plugins-catalog-install', args: { id: 'acme.hello', version: '1.0.0', grant: [] }, role: 'app', marks: { effects: 0 }, audit })
+    manager.catalog = vi.fn(async () => ({ status: 200, body: { configured: true, plugins: [], disabled: ['acme.hello'] } }))
+    await pluginsCommand({ manager, cmd: 'plugins-catalog', args: { refresh: true }, role: 'cli', marks: { effects: 0 }, audit })
+    expect(audit.recs).toEqual([
+      { plugin: 'acme.hello', event: 'installed', by: 'app', version: '1.0.0', detail: 'restricted-ui; granted panels.register; from the catalog artifacts/hello.tgz sha256 abcdef012345' },
+      { plugin: 'acme.hello', event: 'disabled', by: 'catalog', detail: 'revoked by the catalog' }
+    ])
+  })
+})
+
+describe('pluginsCommand and Safe Mode', () => {
+  it('hands plugins-safe-mode its switch, refuses it to an agent’s shell, and records it', async () => {
+    const manager = fake()
+    const recs: PluginAuditRecord[] = []
+    const audit: PluginAudit = { record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
+    await pluginsCommand({ manager, cmd: 'plugins-safe-mode', args: { on: true }, role: 'cli', marks: { effects: 0 }, audit })
+    expect(manager.safeMode).toHaveBeenCalledWith({ on: true })
+    expect(recs).toEqual([{ plugin: '*', event: 'disabled', by: 'cli', detail: 'Safe Mode on' }])
+    expect((await run({ cmd: 'plugins-safe-mode', args: { on: true }, agentRefusal: 'no' }).answer).status).toBe(403)
+  })
+})
+
+// Phase 4 final review I7: setting or forgetting the catalog and its keys is recorded, names only
+describe('pluginsCommand records the catalog source', () => {
+  it('records the address and key ids it was set with, and its forgetting', async () => {
+    const manager = fake()
+    const recs: PluginAuditRecord[] = []
+    const audit: PluginAudit = { record: ({ at: _at, ...e }) => void recs.push(e), flushed: async () => {}, drain: async () => {}, drainSync: () => {} }
+    manager.catalogConfigure = vi.fn(async () => ({ status: 200, body: { configured: true, url: '/r/index.json', keys: ['main', 'next'], changed: true } }))
+    await pluginsCommand({ manager, cmd: 'plugins-catalog-configure', args: { url: '/r/index.json', keys: [{ id: 'main', publicKey: 'SECRETISH' }] }, role: 'app', marks: { effects: 0 }, audit })
+    manager.catalogConfigure = vi.fn(async () => ({ status: 200, body: { configured: false, changed: true } }))
+    await pluginsCommand({ manager, cmd: 'plugins-catalog-configure', args: { clear: true }, role: 'cli', marks: { effects: 0 }, audit })
+    expect(recs).toEqual([
+      { plugin: '*', event: 'configured', by: 'app', detail: 'catalog set: /r/index.json, keys main, next' },
+      { plugin: '*', event: 'configured', by: 'cli', detail: 'catalog forgotten' }
+    ])
+    expect(JSON.stringify(recs)).not.toContain('SECRETISH')
   })
 })
