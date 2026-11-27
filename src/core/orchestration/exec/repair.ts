@@ -54,7 +54,8 @@ function lifecycleRepairTarget(s: OrchState, task: Task, isAlive: (id: string) =
     return { kind: 'same-session', sessionId: last.sessionId, cwd: root, provider: last.provider, accountId: last.accountId }
   }
   const work = latestOrdinaryWork(s, run.id)
-  return work ? { kind: 'fresh', cwd: root, provider: work.dispatch.provider, accountId: work.dispatch.accountId } : null
+  // An external agent's provider and account are placeholders (Phase 5 A1 final review I5)
+  return work && !work.dispatch.externalAgent ? { kind: 'fresh', cwd: root, provider: work.dispatch.provider, accountId: work.dispatch.accountId } : null
 }
 
 /** 판정 직전에 배선이 부른다: 마지막 구현·수리 세션이 살아 있으면 그 세션, 아니면 새 워커(설계 D3). */
@@ -62,7 +63,9 @@ export function repairTargetFor(s: OrchState, taskId: string, isAlive: (id: stri
   const task = s.tasks.find((t) => t.id === taskId)
   if (task && isLifecycleTask(task)) return lifecycleRepairTarget(s, task, isAlive)
   const prior = latestImplDispatch(s, taskId)
-  if (!prior) return null
+  // An automatic repair needs an account worker, and an external agent's provider and account are placeholders (Phase 5
+  // A1 final review I5): no target, and the Gate says why (state.ts openRepairOrGate)
+  if (!prior || prior.externalAgent) return null
   const base = { cwd: prior.cwd, provider: prior.provider, accountId: prior.accountId }
   return !isPlaceholderSessionId(prior.sessionId) && isAlive(prior.sessionId)
     ? { kind: 'same-session', sessionId: prior.sessionId, ...base }

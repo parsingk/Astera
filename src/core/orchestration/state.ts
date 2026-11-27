@@ -1315,7 +1315,16 @@ function routeFailure(
   if (!a.repair)
     return gateOnFailure(
       s,
-      { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.repairFailed', reason: 'no repair target was supplied', lang: a.lang },
+      {
+        task: a.task,
+        kind: 'convergence-blocked',
+        key: 'jobs.convergence.gate.repairFailed',
+        // An external agent's work has no account worker to repair it (Phase 5 A1 final review I5)
+        reason: latestImplDispatch(s, a.task.id)?.externalAgent
+          ? 'an external agent worked this Task, and an automatic repair needs an account worker: fix it by hand, or make a Task that runs on an account'
+          : 'no repair target was supplied',
+        lang: a.lang
+      },
       now
     )
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }

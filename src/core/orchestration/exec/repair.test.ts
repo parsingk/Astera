@@ -66,6 +66,12 @@ describe('repairTargetFor', () => {
   it('구현 Dispatch 가 없으면 null 이다', () => {
     expect(repairTargetFor(emptyState(), 'tsk_x', () => true)).toBeNull()
   })
+  // Phase 5 A1 final review I5: its provider and account are placeholders, and an automatic repair needs an account worker
+  it('is null for work an external agent did', () => {
+    const { s, taskId, implId } = validating()
+    const ext = { ...s, dispatches: s.dispatches.map((d) => (d.id === implId ? { ...d, accountId: '', sessionId: 'acp:work-0a0b0c0d', externalAgent: { id: 'ext_1', name: 'O' } } : d)) }
+    expect(repairTargetFor(ext, taskId, () => false)).toBeNull()
+  })
 })
 
 // GitHub lifecycle G3c1 (design §3.4): a lifecycle Task has no attempt of its own; it is repaired in the Run root

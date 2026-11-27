@@ -3436,6 +3436,15 @@ describe('applyReviewResult — convergence', () => {
     expect(r.state.messages.at(-1)?.subject).toBe('Review approved (1 non-blocking note)')
   })
 
+  // Phase 5 A1 final review I5: the Gate says why no repair opened for an external agent's work
+  it('puts an external agent’s failed review to a person, saying an automatic repair needs an account worker', () => {
+    const { s, taskId, implId, reviewId } = reviewing()
+    const ext: OrchState = { ...s, dispatches: s.dispatches.map((d) => (d.id === implId ? { ...d, accountId: '', externalAgent: { id: 'ext_1', name: 'O' } } : d)) }
+    const r = unwrap(applyReviewResult(ext, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high] }, LATER) as never)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('blocked')
+    expect(r.state.gates.find((g) => g.taskId === taskId)?.question).toContain('an automatic repair needs an account worker')
+  })
+
   it('names the external reviewer in the blocking-issues message, not the provider', () => {
     const { s, taskId, reviewId } = reviewing()
     const ext: OrchState = {
