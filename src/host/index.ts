@@ -119,6 +119,7 @@ import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits, readCommitsOrNull } from '../core/github/prCreate'
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
+import { createFindingAnchorRecorder } from './findingAnchors'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
 import { armEarlyLoad } from './earlyLoad'
 import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
@@ -479,6 +480,8 @@ async function main(): Promise<void> {
   // Phase 10: the git range each Run and attempt worked over, recorded as the state moves and around every merge.
   // Made below, once `orch` exists to record through; the worktrees' merge hooks read it when a merge runs.
   let runGit: RunGitRecorder | null = null
+  // Where each review finding was made (Phase 3 Part 4), recorded as reviews end; built beside runGit
+  let findingAnchors: ReturnType<typeof createFindingAnchorRecorder> | null = null
   let githubWatch: GithubWatch | null = null
   let lifecycleCi: LifecycleCi | null = null
   /** Assigned below `createHostOrch`, which it needs: the orch hands it every Run a commit finishes (run report C2). */
@@ -1152,6 +1155,7 @@ async function main(): Promise<void> {
     onState: (state, version) => {
       server.broadcast({ t: 'orch-state', state, version })
       runGit?.onState(state)
+      findingAnchors?.onState(state)
       githubWatch?.onState(state)
       lifecycleCi?.onState(state)
     },
@@ -1269,6 +1273,7 @@ async function main(): Promise<void> {
         log.write(`the Host's after-load pass failed to start: ${String(err)}`)
       }
       runGit?.onState(orch.state())
+      findingAnchors?.onState(orch.state())
       githubWatch?.onState(orch.state())
       lifecycleCi?.onState(orch.state())
     },
@@ -1289,6 +1294,12 @@ async function main(): Promise<void> {
     slack: slackWiring,
     prefixes: [os.homedir(), profileDir],
     lang: () => (wiring ? wiring.checks.langNow() : 'en'),
+    log: (m) => log.write(m)
+  })
+  findingAnchors = createFindingAnchorRecorder({
+    record: (args) => orch.handle('tasks-anchors-record', args),
+    read: (repo, base, head) => readChanges(repo, base, head),
+    diff: (repo, base, head, f) => readFileDiff(repo, base, head, f),
     log: (m) => log.write(m)
   })
   runGit = createRunGitRecorder({

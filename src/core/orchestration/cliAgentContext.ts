@@ -172,6 +172,14 @@ const SESSION = {
       { name: 'dispatch', value: '<dispatchId>', about: 'the attempt the list was read for' }
     ]
   },
+  'tasks-anchors-record': {
+    summary: 'record where review findings were made',
+    detail: 'The Host records it itself when a review ends; anyone else is refused. Each finding reference names the review attempt, the head the review began at, the file, its line and the fingerprint of the hunk holding it.',
+    flags: [
+      { name: 'task', value: '<taskId>', required: true, about: 'the task the findings are of' },
+      { name: 'anchors', value: '<json>', required: true, about: 'by finding reference: review, head, file, line, hunk' }
+    ]
+  },
   'runs-git-record': {
     summary: 'record the git range a run or one attempt worked over',
     detail: 'The Host records it itself; anyone else is refused. One of --runId and --dispatchId, with --base or --head.',

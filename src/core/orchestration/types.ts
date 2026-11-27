@@ -145,6 +145,23 @@ export interface FindingRecord {
   history: FindingChange[]
 }
 /** The newest changes a finding keeps, the records a Task keeps (verified ones go first), and a note's length. */
+/** Where a review finding was made (Phase 3 Part 4): the diff shows it on its line only when the diff is of this head and
+ *  the hunk holding its line has this fingerprint; a finding whose head is no longer the Task's is stale by revision. */
+export interface FindingAnchor {
+  /** The review attempt it came from. */
+  review: string
+  /** The head the review began at: that attempt's recorded git.base. */
+  head: string
+  /** As the issue named it. */
+  file: string
+  line?: number
+  /** core/git/hunks.ts DiffHunk.fingerprint of the hunk holding `line` in the Task's base..head; absent when no
+   *  committed hunk holds it. */
+  hunk?: string
+  at: string
+}
+export const TASK_FINDING_ANCHORS_MAX = 100
+
 export const FINDING_HISTORY_MAX = 20
 export const TASK_FINDING_STATES_MAX = 100
 export const FINDING_NOTE_MAX = 300
@@ -505,6 +522,10 @@ export interface Task {
   /** 사람이 손댄 발견(수리 요청·무시)의 상태와 기록, 발견 참조별(Phase 3 Part 1b). 자동 변화는 Host 커밋 스탬프
    *  (core/problems/findingStates.ts stampFindings) 가 만든다. 앱이 몰아가는 장부라 공개 DTO 에는 없다(TASK_HIDDEN) */
   findingStates?: Record<string, FindingRecord>
+  /** Where each review finding was made (Phase 3 Part 4), by finding reference: the head its review began at and the
+   *  hunk holding its line. Recorded by the Host alone (`tasks-anchors-record`, host/findingAnchors.ts); kept back from
+   *  the public DTO (TASK_HIDDEN). */
+  findingAnchors?: Record<string, FindingAnchor>
   /** The last review that gave a verdict ran with Claude Code's file-tool protection only (Task K fix round 1): its work was
    *  sandboxed, and Claude Code on Windows without its shell route into Codex's sandbox has none, so its reviewer started
    *  with the deny rules only (E2), its shell unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */

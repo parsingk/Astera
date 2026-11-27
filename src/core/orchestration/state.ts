@@ -8,8 +8,10 @@ import {
   newId,
   placeholderSessionId,
   recomputeReady,
+  TASK_FINDING_ANCHORS_MAX,
   type CheckResult,
   type ConvergencePolicy,
+  type FindingAnchor,
   type JobSourceRef,
   type Delivery,
   type Dispatch,
@@ -552,6 +554,21 @@ export function recordDispatchGit(s: OrchState, dispatchId: string, patch: GitRa
   if (git === null) return ok(s, d)
   const next = { ...d, git }
   return ok({ ...s, dispatches: s.dispatches.map((x) => (x.id === dispatchId ? next : x)) }, next)
+}
+
+/** Records where review findings were made on a Task (Phase 3 Part 4), merged by reference; the newest
+ *  TASK_FINDING_ANCHORS_MAX are kept. */
+export function recordFindingAnchors(s: OrchState, taskId: string, anchors: Record<string, Omit<FindingAnchor, 'at'>>, now: string): Res<{ taskId: string }> {
+  const task = s.tasks.find((t) => t.id === taskId)
+  if (!task) return gone(`unknown task: ${taskId}`)
+  const merged: Record<string, FindingAnchor> = { ...(task.findingAnchors ?? {}) }
+  for (const [ref, a] of Object.entries(anchors)) merged[ref] = { ...a, at: now }
+  const kept = Object.entries(merged)
+    .sort(([, a], [, b]) => b.at.localeCompare(a.at))
+    .slice(0, TASK_FINDING_ANCHORS_MAX)
+  const keep = new Set(kept.map(([ref]) => ref))
+  const findingAnchors = Object.fromEntries(Object.entries(merged).filter(([ref]) => keep.has(ref)))
+  return ok({ ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, findingAnchors } : t)) }, { taskId })
 }
 
 /** Records what the Host read of a Run's pull request and CI (GitHub lifecycle G1). A read with nothing new answers the

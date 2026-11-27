@@ -56,6 +56,7 @@ import {
   reconvergeRun,
   resolveRunId,
   recordDispatchGit,
+  recordFindingAnchors,
   placedByApp,
   coordinatorStarting,
   workSandboxed,
@@ -102,6 +103,7 @@ import {
   type CheckResult,
   type ConvergencePolicy,
   type Dispatch,
+  type FindingAnchor,
   type Job,
   type JobRun,
   type JobSourceRef,
@@ -3538,6 +3540,29 @@ export async function handleCommand(
       // Nothing changed: no write, so a recorder that reads the same head twice costs no state version.
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
+    }
+    // Where each review finding was made (Phase 3 Part 4), which the diff and Problems read. **The Host's alone**: anyone
+    // else could move a finding onto another line or call it current.
+    case 'tasks-anchors-record': {
+      if (caller.sessionId !== HOST_CALLER) return denied('tasks-anchors-record is the Host’s own record')
+      const taskId = str(args.task)
+      if (!taskId) return bad('tasks-anchors-record takes a task')
+      const given = args.anchors
+      if (typeof given !== 'object' || given === null || Array.isArray(given)) return bad('tasks-anchors-record takes anchors by finding reference')
+      const anchors: Record<string, Omit<FindingAnchor, 'at'>> = {}
+      for (const [ref, raw] of Object.entries(given as Record<string, unknown>)) {
+        const a = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+        const review = str(a.review)
+        const head = str(a.head)
+        const file = str(a.file)
+        // Handed to git and compared later: a commit id, a fingerprint, a bounded name and a line number, nothing else
+        if (!review || !head || !/^[0-9a-f]{7,64}$/i.test(head)) return bad(`tasks-anchors-record: ${ref} needs a review and a head commit id`)
+        if (!file || file.length > 1024) return bad(`tasks-anchors-record: ${ref} needs a file name of at most 1024 characters`)
+        if (a.line !== undefined && (typeof a.line !== 'number' || !Number.isInteger(a.line) || a.line < 1)) return bad(`tasks-anchors-record: ${ref}'s line is a positive integer`)
+        if (a.hunk !== undefined && (typeof a.hunk !== 'string' || !/^[0-9a-f]{8}$/.test(a.hunk))) return bad(`tasks-anchors-record: ${ref}'s hunk is 8 hex characters`)
+        anchors[ref] = { review, head, file, ...(a.line !== undefined ? { line: a.line as number } : {}), ...(a.hunk !== undefined ? { hunk: a.hunk as string } : {}) }
+      }
+      return commit(recordFindingAnchors(s, taskId, anchors, now))
     }
     case 'runs-github-record': {
       if (caller.sessionId !== HOST_CALLER) return denied('runs-github-record is the Host’s own record')

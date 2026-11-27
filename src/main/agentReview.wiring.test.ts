@@ -18,4 +18,10 @@ describe('agent-aware review wiring', () => {
     expect(ipc).toContain("auditWriteTargets(app.getPath('userData'), a)")
     expect(host).toContain('auditWriteTargets(profileDir, a)')
   })
+
+  it('anchors review findings on the Host, on every commit and after the load, through its own record', () => {
+    expect(host).toMatch(/findingAnchors = createFindingAnchorRecorder\(\{\s*record: \(args\) => orch\.handle\('tasks-anchors-record', args\),/)
+    expect(host).toMatch(/runGit\?\.onState\(state\)\s*findingAnchors\?\.onState\(state\)/)
+    expect(host).toMatch(/runGit\?\.onState\(orch\.state\(\)\)\s*findingAnchors\?\.onState\(orch\.state\(\)\)/)
+  })
 })
