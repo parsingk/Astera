@@ -11444,7 +11444,12 @@ describe('external-work-start', () => {
     await vi.waitFor(() => expect(deps.getState().messages.some((m) => m.type === 'question')).toBe(true))
     const q = deps.getState().messages.find((m) => m.type === 'question')!
     expect((await call(deps, 'reply', { id: q.id, body: 'Yes' }, 'coord-session')).status).toBe(403)
-    expect((await call(deps, 'reply', { id: q.id, body: 'Yes' }, APP_CALLER)).status).toBe(200)
+    // An MCP client and a controller that is an agent are agents too (final review M9)
+    expect((await handleCommand(deps, { sessionId: '', role: 'mcp' }, 'reply', { id: q.id, body: 'Yes' })).status).toBe(403)
+    const controller = (kind: 'agent' | 'person') => ({ sessionId: '', role: 'controller' as const, principal: { clientId: 'c', name: 'n', permission: 'full-control' as const, kind } })
+    expect((await handleCommand(deps, controller('agent'), 'reply', { id: q.id, body: 'Yes' })).status).toBe(403)
+    // A person on a paired computer answers it as a person here does
+    expect((await handleCommand(deps, controller('person'), 'reply', { id: q.id, body: 'Yes' })).status).toBe(200)
     expect((await asked).body).toMatchObject({ answered: true, answer: 'Yes' })
   })
 

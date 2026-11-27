@@ -5016,7 +5016,11 @@ export async function handleCommand(
       // An agent session (a coordinator, a worker) does not answer it for them.
       const asked = s.messages.find((m) => m.id === id)
       const askedOn = asked?.dispatchId === undefined ? undefined : s.dispatches.find((d) => d.id === asked.dispatchId)
-      if (askedOn?.externalAgent && caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+      // A person: the app, the Host's own door, a shell with no session, or a paired computer's person (final review M9)
+      const person =
+        !agentCaller(caller) &&
+        (caller.sessionId === '' || caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER || caller.role === 'controller')
+      if (askedOn?.externalAgent && !person)
         return denied('a person answers an external agent’s permission request, in the app or with astera reply from their own shell')
       return commit(applyReply(s, { messageId: id, body }, now))
     }
