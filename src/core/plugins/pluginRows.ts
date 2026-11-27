@@ -111,3 +111,26 @@ export function pluginThemesOf(rows: readonly PluginRow[]): PluginTheme[] {
     return (p.contributes?.themes ?? []).filter((d) => pluginThemeProblem(d) === null).map((d) => pluginThemeOf(p.id, shownName(p), d))
   })
 }
+
+/** A plugin's sidebar view the rail offers a button for (Phase 2 remaining). */
+export interface SidebarViewEntry {
+  key: ContributionKey
+  pluginId: string
+  viewId: string
+  /** The contributed panel it shows: the same guest a panel tab draws. */
+  panelId: string
+  title: string
+  pluginName: string
+}
+
+/** The sidebar views of the plugins that can show a panel now and were granted panels.register, in the Host's order; a
+ *  view whose panel is not contributed is left out. */
+export function sidebarViewsOf(rows: readonly PluginRow[]): SidebarViewEntry[] {
+  return rows.flatMap((p) => {
+    if (unusablePlugin(p.id, p) !== null || !p.contributes || !p.permissions.includes('panels.register')) return []
+    const panels = new Set(p.contributes.panels.map((x) => x.id))
+    return (p.contributes.sidebar ?? [])
+      .filter((v) => panels.has(v.panel))
+      .map((v) => ({ key: contributionKey(p.id, v.id), pluginId: p.id, viewId: v.id, panelId: v.panel, title: v.title, pluginName: shownName(p) }))
+  })
+}

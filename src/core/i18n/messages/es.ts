@@ -1373,6 +1373,7 @@ export const es: Catalog = {
   'layout.held.title': 'Esta pestaña no se cargó al volver a abrir la aplicación',
   'layout.held.load': 'Cargar',
   'plugin.panel.preparing': 'Abriendo el panel…',
+  'plugin.sidebar.rail': '{title} (plugin {plugin})',
   'plugin.panel.gone': 'La página del panel se detuvo. Puede que su plugin se haya desactivado, eliminado o sustituido por una versión nueva.',
   'plugin.panel.reopen': 'Abrir de nuevo',
   'plugin.panel.refused.host': 'El panel no se puede abrir porque no se pudo leer la lista de plugins del Host.',

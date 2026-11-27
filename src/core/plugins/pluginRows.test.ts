@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { panelCommands, panelInfo, pluginRowsOf, pluginThemesOf, unusablePlugin, type PluginRow } from './pluginRows'
+import { panelCommands, panelInfo, pluginRowsOf, pluginThemesOf, sidebarViewsOf, unusablePlugin, type PluginRow } from './pluginRows'
 
 const row = (over: Partial<PluginRow> = {}): PluginRow => ({
   id: 'hello-panel',
@@ -106,5 +106,28 @@ describe('pluginThemesOf', () => {
 
   it('leaves out a plugin the person did not grant themes.register', () => {
     expect(pluginThemesOf([themes({ permissions: [] })])).toEqual([])
+  })
+})
+
+// Phase 2 remaining: the rail's plugin buttons
+describe('sidebarViewsOf', () => {
+  const withSide = (over: Partial<PluginRow> = {}): PluginRow =>
+    row({ contributes: { commands: [], panels: [{ id: 'hello', title: 'Hello' }], sidebar: [{ id: 'side', title: 'Hello side', panel: 'hello' }] }, ...over })
+
+  it('lists each sidebar view of a plugin that can show panels, keyed by plugin and view', () => {
+    expect(sidebarViewsOf([withSide()])).toEqual([
+      { key: 'hello-panel:side', pluginId: 'hello-panel', viewId: 'side', panelId: 'hello', title: 'Hello side', pluginName: 'Hello' }
+    ])
+  })
+
+  it('leaves out a plugin that cannot show a panel now, and a view whose panel is not contributed', () => {
+    expect(sidebarViewsOf([withSide({ enabled: false })])).toEqual([])
+    expect(sidebarViewsOf([withSide({ status: 'failed' })])).toEqual([])
+    expect(sidebarViewsOf([withSide({ ui: undefined })])).toEqual([])
+    expect(sidebarViewsOf([withSide({ contributes: { commands: [], panels: [], sidebar: [{ id: 'side', title: 'S', panel: 'hello' }] } })])).toEqual([])
+  })
+
+  it('leaves out a plugin not granted panels.register', () => {
+    expect(sidebarViewsOf([withSide({ permissions: [] })])).toEqual([])
   })
 })

@@ -1418,6 +1418,7 @@ export const en: Record<keyof typeof ko, string> = {
   'layout.held.title': 'This tab was not loaded when the app started again',
   'layout.held.load': 'Load',
   'plugin.panel.preparing': 'Opening the panel…',
+  'plugin.sidebar.rail': '{title} ({plugin} plugin)',
   'plugin.panel.gone': 'The panel’s page stopped. Its plugin may have been turned off, removed or replaced with a new version.',
   'plugin.panel.reopen': 'Open again',
   'plugin.panel.refused.host': 'The panel cannot open because the plugin list could not be read from the Host.',

@@ -1361,6 +1361,7 @@ export const ja: Catalog = {
   'layout.held.title': 'アプリを再び開いたとき、このタブは読み込んでいません',
   'layout.held.load': '読み込む',
   'plugin.panel.preparing': 'パネルを開いています…',
+  'plugin.sidebar.rail': '{title}（{plugin} プラグイン）',
   'plugin.panel.gone': 'パネルのページが停止しました。プラグインがオフにされたか、削除されたか、新しいバージョンに置き換えられた可能性があります。',
   'plugin.panel.reopen': 'もう一度開く',
   'plugin.panel.refused.host': 'Host からプラグインの一覧を読み取れないため、パネルを開けません。',

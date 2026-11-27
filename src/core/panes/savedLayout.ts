@@ -6,7 +6,7 @@
 // The record is versioned and read defensively. It lives in the person's localStorage, an older or newer app may have
 // written it, and nothing here may stop the window from opening: whatever does not read as a layout reads as none.
 // node: no imports, the renderer imports this.
-import type { SidebarView } from '../ui/sidebar'
+import { pluginKeyOf, type SidebarView } from '../ui/sidebar'
 import { MAX_PANES, createGroup, createSplit, firstLeaf, leaves, type PaneDir, type PaneLeaf, type PaneNode } from './tree'
 import { isRemoteSessionKey, parseTab, sessionTab } from './tabId'
 
@@ -124,7 +124,11 @@ export function readPanels(v: unknown): SavedPanels | null {
   if (!isObject(v) || !isObject(v.sidebar) || !isObject(v.bottom)) return null
   const { sidebar, bottom } = v
   if (typeof sidebar.open !== 'boolean' || typeof bottom.open !== 'boolean') return null
-  const view = SIDEBAR_VIEWS.includes(sidebar.view as SidebarView) ? (sidebar.view as SidebarView) : 'sessions'
+  // A plugin's view is kept by its key (Phase 2 remaining); whether the plugin still offers it is the app's to check
+  const view =
+    SIDEBAR_VIEWS.includes(sidebar.view as SidebarView) || (typeof sidebar.view === 'string' && pluginKeyOf(sidebar.view) !== null)
+      ? (sidebar.view as SidebarView)
+      : 'sessions'
   return { sidebar: { open: sidebar.open, view }, bottom: { open: bottom.open, tab: asBottomTab(bottom.tab) } }
 }
 
