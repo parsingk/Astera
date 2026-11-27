@@ -20,6 +20,9 @@ const NOTES_MAX = 2000
 const REASON_MAX = 300
 const URL_MAX = 2048
 const SHA256 = /^[0-9a-f]{64}$/
+/** An artifact beside the index: forward slashes, no scheme, no root, no `..` part (resolved against the index's address). */
+const BESIDE = /^(?![./])(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._\-/]{1,512}$/
+export const isBesideIndex = (v: string): boolean => BESIDE.test(v) && !/^[A-Za-z]:/.test(v)
 const PUBLISHER = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** Control characters other than a tab, and the invisible or direction-changing ones a name could hide behind. */
 const UNSAFE_TEXT = /[\x00-\x08\x0a-\x1f\x7f-\x9f​-‏‪-‮⁠-⁤⁦-⁩﻿]/
@@ -86,7 +89,8 @@ function versionOf(v: unknown, at: string, problems: string[]): CatalogVersion |
   const before = problems.length
   if (typeof v.asteraRange !== 'string' || satisfiesRange('0.0.0', v.asteraRange) === null)
     problems.push(`${where}: asteraRange ${String(v.asteraRange)} is not a range Astera reads`)
-  if (!isHttps(v.artifactUrl)) problems.push(`${where}: artifactUrl must be an https address`)
+  if (!isHttps(v.artifactUrl) && !(typeof v.artifactUrl === 'string' && isBesideIndex(v.artifactUrl)))
+    problems.push(`${where}: artifactUrl must be an https address or a path beside the index`)
   if (typeof v.sha256 !== 'string' || !SHA256.test(v.sha256)) problems.push(`${where}: sha256 must be 64 lower-case hex characters`)
   if (typeof v.sizeBytes !== 'number' || !Number.isInteger(v.sizeBytes) || v.sizeBytes < 1 || v.sizeBytes > CATALOG_ARTIFACT_MAX_BYTES)
     problems.push(`${where}: sizeBytes must be a whole number from 1 to ${CATALOG_ARTIFACT_MAX_BYTES}`)

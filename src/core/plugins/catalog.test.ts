@@ -66,12 +66,19 @@ describe('parseCatalog', () => {
   it('refuses a version that is not an exact, https, hashed and sized artifact, and a repeated version', () => {
     const at = (v: Record<string, unknown>): string[] => problems(index({ plugins: [plugin({ versions: [version(v)] })] }))
     expect(at({ version: 'latest' })).toContain('plugins: astera-hello-panel: version latest is not a semver version')
-    expect(at({ artifactUrl: 'http://example.invalid/x.tgz' })).toContain('plugins: astera-hello-panel 0.1.0: artifactUrl must be an https address')
+    expect(at({ artifactUrl: 'http://example.invalid/x.tgz' })).toContain('plugins: astera-hello-panel 0.1.0: artifactUrl must be an https address or a path beside the index')
+    for (const bad of ['../x.tgz', 'a/../../x.tgz', '/abs/x.tgz', 'C:/x.tgz', 'file:///x.tgz', 'a\\x.tgz'])
+      expect(at({ artifactUrl: bad }), bad).toContain('plugins: astera-hello-panel 0.1.0: artifactUrl must be an https address or a path beside the index')
     expect(at({ sha256: 'abc' })).toContain('plugins: astera-hello-panel 0.1.0: sha256 must be 64 lower-case hex characters')
     expect(at({ sizeBytes: CATALOG_ARTIFACT_MAX_BYTES + 1 })).toContain(`plugins: astera-hello-panel 0.1.0: sizeBytes must be a whole number from 1 to ${CATALOG_ARTIFACT_MAX_BYTES}`)
     expect(at({ asteraRange: '^1.5.0' })).toContain('plugins: astera-hello-panel 0.1.0: asteraRange ^1.5.0 is not a range Astera reads')
     expect(at({ permissions: 'all' })).toContain('plugins: astera-hello-panel 0.1.0: permissions must be a list of names')
     expect(problems(index({ plugins: [plugin({ versions: [version(), version()] })] }))).toContain('plugins: astera-hello-panel names version 0.1.0 twice')
+  })
+
+  // A static registry keeps its artifacts beside its index: a path resolved against the index's own address
+  it('takes an artifact path beside the index', () => {
+    expect(ok(index({ plugins: [plugin({ versions: [version({ artifactUrl: 'artifacts/hello-0.1.0.tgz' })] })] })).plugins[0].versions[0].artifactUrl).toBe('artifacts/hello-0.1.0.tgz')
   })
 
   it('reads revocations of one version or of every version', () => {
