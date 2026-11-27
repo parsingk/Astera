@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { MAX_EXTERNAL_REVIEWERS, REVIEWER_PRESETS, type ReviewerSettings as Settings } from '../../../core/settings/externalReviewers'
+import { capabilityGaps, EXTERNAL_AGENT_CAPABILITIES } from '../../../core/providers/capabilities'
+import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import {
   fieldsOfLine,
@@ -149,6 +151,15 @@ export function ReviewerSettings(): React.JSX.Element {
       </div>
       <span className="settings-hint">{t('settings.reviewer.hint')}</span>
       <span className="settings-hint">{t('settings.reviewer.externalHint')}</span>
+      {/* Phase 5 A1: the same agents can work a Task, and what such a worker does not have is said from the contract,
+          never guessed (core/providers/capabilities.ts) */}
+      <span className="settings-hint">
+        {t('settings.reviewer.workerHint', {
+          missing: capabilityGaps(EXTERNAL_AGENT_CAPABILITIES)
+            .map((g) => t(`settings.reviewer.gap.${g}` as MessageKey))
+            .join(', ')
+        })}
+      </span>
       <div className="settings-reviewer-list">
         {(settings?.reviewers ?? []).map((r) =>
           editing === r.id ? (
