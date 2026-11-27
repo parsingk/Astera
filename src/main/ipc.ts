@@ -134,6 +134,7 @@ import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchest
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
 import { readChanges, readFileDiff, readRangeDiff, trackedTreeState } from '../core/git/changes'
+import { auditWriteTargets } from '../core/review/auditWrites'
 import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
@@ -3567,7 +3568,14 @@ export function registerIpc(
       completionChecks: createAppCompletionChecks({ call: (m) => orchCall(m) }),
       // A local Run's changed files and diffs (remote runtime design Phase 10), from this machine's git, as the Host
       // reads them for a remote one.
-      changes: { read: (repo, base, head) => readChanges(repo, base, head), diff: (repo, base, head, f) => readFileDiff(repo, base, head, f) },
+      changes: {
+        read: (repo, base, head) => readChanges(repo, base, head),
+        diff: (repo, base, head, f) => readFileDiff(repo, base, head, f),
+        // Phase 3 Part 4: a range that is not a fast-forward is attributed to no one
+        isAncestor: (repo, base, head) => isAncestorOf(repo, base, head)
+      },
+      // The files this profile's observe audit saw a Task write (Phase 3 Part 4): "confirmed by observe audit"
+      auditWrites: (a) => auditWriteTargets(app.getPath('userData'), a),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
       // now serialises writes too, but what that prevents is inversion when two flows overlap; within a
       // single flow, waiting for the previous write before re-reading is still the caller's

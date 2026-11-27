@@ -3,7 +3,7 @@ import { WORKSPACE_FEATURES_DEFAULTS, readWorkspaceFeatures, writableWorkspaceFe
 
 describe('workspace feature switches', () => {
   it('are all on by default', () => {
-    expect(WORKSPACE_FEATURES_DEFAULTS).toEqual({ layoutMemory: true, problemsTab: true, contextBridge: true, testsTab: true, languageServers: true })
+    expect(WORKSPACE_FEATURES_DEFAULTS).toEqual({ layoutMemory: true, problemsTab: true, contextBridge: true, testsTab: true, languageServers: true, agentReview: true })
   })
 
   it('read as the defaults from anything that is not an object', () => {
@@ -11,10 +11,12 @@ describe('workspace feature switches', () => {
   })
 
   it('turn one off only on an explicit false', () => {
-    expect(readWorkspaceFeatures({ problemsTab: false })).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true, languageServers: true })
+    expect(readWorkspaceFeatures({ problemsTab: false })).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true, languageServers: true, agentReview: true })
     // Phase 3 Part 2: the Tests tab, on unless turned off
     expect(readWorkspaceFeatures({ testsTab: false }).testsTab).toBe(false)
     expect(readWorkspaceFeatures({ languageServers: false }).languageServers).toBe(false)
+    // Phase 3 Part 4: the agent-aware review
+    expect(readWorkspaceFeatures({ agentReview: false }).agentReview).toBe(false)
   })
 
   // A hand-edited file: 'no' and 0 are not an explicit false, so the feature stays on
@@ -29,7 +31,8 @@ describe('workspace feature switches', () => {
       problemsTab: true,
       contextBridge: true,
       testsTab: true,
-      languageServers: true
+      languageServers: true,
+      agentReview: true
     })
   })
 })

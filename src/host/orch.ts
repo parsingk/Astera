@@ -444,7 +444,7 @@ const REVOKE_PAUSE_RETRY_MARGIN_MS = 5_000
 /** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle),
  *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
  *  names itself the Host's caller is refused them. */
-const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin', 'lifecycle-ci-wait', 'lifecycle-gate'])
+const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'tasks-anchors-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin', 'lifecycle-ci-wait', 'lifecycle-gate'])
 /** Under the app's caller id, taken only from the app's connection: the app's own dispatch-loop step, and a send, which
  *  from the app is a person's prompt and ends what a finished Run's or an ended attempt's session still holds (observe
  *  final review). */
@@ -599,6 +599,8 @@ export function createHostOrch(a: {
   readUnderstanding?: OrchServerDeps['readUnderstanding']
   /** A Run's changed files and diffs from this Host's git (remote runtime design Phase 10). */
   changes?: OrchServerDeps['changes']
+  /** The files this Host's observe audit saw a Task write (Phase 3 Part 4). */
+  auditWrites?: OrchServerDeps['auditWrites']
   /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
    *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
   journal?: (Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> & Partial<Pick<HostJournal, 'busy'>>) | null
@@ -946,6 +948,7 @@ export function createHostOrch(a: {
       // starts work as a profile that runs without permission checks (Agent Profiles final review)
       appWideYolo: async () => (await readAgentPermissionMode(path.join(a.profileDir, 'app-settings.json'))) === 'yolo',
       ...(a.changes ? { changes: a.changes } : {}),
+      ...(a.auditWrites ? { auditWrites: a.auditWrites } : {}),
       ...(a.jobSources ? { jobSources: a.jobSources } : {}),
       ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),
       ...(a.spentTokens ? { spentTokens: a.spentTokens } : {}),

@@ -106,7 +106,9 @@ const TASK_HIDDEN = [
   // Who forced the completion, for the Host's run report: not a script's to read or send
   'completionOverrideBy',
   // A person's findings and their states (Phase 3 Part 1b): `tasks findings` says them, the DTO does not carry them
-  'findingStates'
+  'findingStates',
+  // Where each review finding was made (Phase 3 Part 4): the Host's own record, read by the diff and Problems
+  'findingAnchors'
 ] as const
 
 /** A question's field kept back on purpose: who answered it, the Host's own record for its run report. */

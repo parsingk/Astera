@@ -18,6 +18,9 @@ describe('the workspace feature switches in Settings (Phase 1 gate)', () => {
     expect(src.indexOf("key: 'contextBridge'")).toBeLessThan(src.indexOf("key: 'testsTab'"))
     expect(src).toMatch(/key: 'languageServers',\s*label: 'settings\.workspace\.languageServers',\s*hint: 'settings\.workspace\.languageServersHint'/)
     expect(src.indexOf("key: 'testsTab'")).toBeLessThan(src.indexOf("key: 'languageServers'"))
+    // Phase 3 Part 4: the agent-aware review, last
+    expect(src).toMatch(/key: 'agentReview',\s*label: 'settings\.workspace\.agentReview',\s*hint: 'settings\.workspace\.agentReviewHint'/)
+    expect(src.indexOf("key: 'languageServers'")).toBeLessThan(src.indexOf("key: 'agentReview'"))
     expect(src).toMatch(/<label className="settings-row">/)
     expect(src).toMatch(/<span className="settings-hint">\{t\(hint\)\}<\/span>/)
   })

@@ -3,7 +3,7 @@
 // without passing through the Run's root). Each part's ranges come in the order to try them: the folder's working tree
 // first while an attempt is open there, the recorded range after; a finished part reads its recorded range first.
 import { describe, it, expect } from 'vitest'
-import { rangesFor } from './changedFiles'
+import { attemptRanges, collectChanges, rangesFor, scopeAttempts, ATTRIBUTION_ATTEMPTS_MAX } from './changedFiles'
 import type { OrchState } from './state'
 
 type Rec = Record<string, unknown>
@@ -76,5 +76,70 @@ describe('rangesFor a Task', () => {
       ]
     })
     expect(rangesFor(s, 'run1', 't1')!.parts[0].ranges).toEqual([{ repo: 'T2', base: 'b2', head: null }])
+  })
+})
+
+// Phase 3 Part 4: one attempt's own range, the attempts a scope holds, and the range each part was read over
+describe('attemptRanges', () => {
+  const s = state({
+    dispatches: [
+      { id: 'd1', taskId: 't1', cwd: 'W1', startedAt: '1', endedAt: '2', git: { base: 'b1', head: 'h1' } },
+      { id: 'd2', taskId: 't1', cwd: 'P', startedAt: '3', git: { base: 'b2' } },
+      { id: 'd3', taskId: 't1', cwd: 'W1', startedAt: '4', endedAt: '5', git: { base: 'b3' } },
+      { id: 'd4', taskId: 't1', cwd: 'W1', startedAt: '6', endedAt: '7' },
+      { id: 'r1', taskId: 't1', cwd: 'W1', startedAt: '8', endedAt: '9', review: true, git: { base: 'h1', head: 'h1' } }
+    ]
+  })
+  it('an ended attempt: its own base..head in its folder, then in the project', () => {
+    expect(attemptRanges(s, 'run1', 'd1')).toMatchObject({
+      parts: [{ taskId: 't1', ranges: [{ repo: 'W1', base: 'b1', head: 'h1' }, { repo: 'P', base: 'b1', head: 'h1' }] }],
+      reported: ['a.ts'],
+      dispatch: { id: 'd1' }
+    })
+  })
+  it('an open attempt reads its folder’s working tree; one that ended with no head reads its folder as it is', () => {
+    expect(attemptRanges(s, 'run1', 'd2')!.parts[0].ranges).toEqual([{ repo: 'P', base: 'b2', head: null }])
+    expect(attemptRanges(s, 'run1', 'd3')!.parts[0].ranges).toEqual([{ repo: 'W1', base: 'b3', head: null }])
+  })
+  it('an attempt with no recorded base has no part', () => {
+    expect(attemptRanges(s, 'run1', 'd4')!.parts).toEqual([])
+  })
+  it('an unknown attempt, a review attempt, or one of another Run is null', () => {
+    expect(attemptRanges(s, 'run1', 'nope')).toBeNull()
+    expect(attemptRanges(s, 'run1', 'r1')).toBeNull()
+    expect(attemptRanges(s, 'run2', 'd1')).toBeNull()
+  })
+})
+
+describe('scopeAttempts', () => {
+  it('the attempts of a Run, a Task or one attempt, oldest first, review attempts left out', () => {
+    const s = state({
+      dispatches: [
+        { id: 'd2', taskId: 't2', cwd: 'P', startedAt: '2' },
+        { id: 'd1', taskId: 't1', cwd: 'P', startedAt: '1' },
+        { id: 'r1', taskId: 't1', cwd: 'P', startedAt: '3', review: true },
+        { id: 'x1', taskId: 'other', cwd: 'P', startedAt: '0' }
+      ]
+    })
+    expect(scopeAttempts(s, 'run1').map((d) => d.id)).toEqual(['d1', 'd2'])
+    expect(scopeAttempts(s, 'run1', 't2').map((d) => d.id)).toEqual(['d2'])
+    expect(scopeAttempts(s, 'run1', undefined, 'd1').map((d) => d.id)).toEqual(['d1'])
+  })
+  it('keeps the newest ones past its bound', () => {
+    const many = Array.from({ length: ATTRIBUTION_ATTEMPTS_MAX + 5 }, (_, i) => ({ id: `d${i}`, taskId: 't1', cwd: 'P', startedAt: String(1000 + i) }))
+    const got = scopeAttempts(state({ dispatches: many }), 'run1', 't1')
+    expect(got).toHaveLength(ATTRIBUTION_ATTEMPTS_MAX)
+    expect(got[0].id).toBe('d5')
+  })
+})
+
+describe('collectChanges', () => {
+  it('answers the range each part was read over, a part with no files too', async () => {
+    const parts = [{ ranges: [{ repo: 'P', base: 'b', head: 'h' }] }, { taskId: 't1', ranges: [{ repo: 'X', base: 'x', head: 'y' }, { repo: 'T1', base: 'c', head: null }] }]
+    const got = await collectChanges(parts, async (repo) => (repo === 'P' ? [{ id: 'f', path: 'a.ts', status: 'modified' as const }] : repo === 'T1' ? [] : null))
+    expect(got.used).toEqual([
+      { range: { repo: 'P', base: 'b', head: 'h' } },
+      { taskId: 't1', range: { repo: 'T1', base: 'c', head: null } }
+    ])
   })
 })

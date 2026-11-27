@@ -20,6 +20,7 @@ import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { canStopConvergence, nodeMetaOf, retryingCheckOf } from '../../../core/orchestration/nodeMeta'
 import { DEFAULT_CONCURRENCY, isGitHubGateKind, type Dispatch } from '../../../core/orchestration/types'
+import type { DiffFinding } from '../../../core/review/types'
 import { runningCount } from '../../../core/orchestration/running'
 import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
@@ -227,7 +228,9 @@ export function RunDetail({
   runtimeId,
   door,
   onOpenAuditLogs,
-  onDraftRepair
+  onDraftRepair,
+  reviewOn,
+  onFixFinding
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
@@ -255,6 +258,11 @@ export function RunDetail({
   /** A hunk of this Run's diff to a repair Job draft (spec W4). This computer's Runs only, as the form it opens makes a
    *  Job in the explorer's project. */
   onDraftRepair?: (file: string, diff: string, rowIndex: number) => void
+  /** The agent-aware review's switch (Phase 3 Part 4, workspaceFeatures.agentReview). */
+  reviewOn: boolean
+  /** A review finding's fix button on the diff (Phase 3 Part 4), with the Job and Task named for the confirmation. This
+   *  computer's Runs only, with sending to an agent on. */
+  onFixFinding?: (f: DiffFinding, path: string, names: { job: string; task: string }) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   /** Why the controls are off: a read-only pairing (Phase 7). They are drawn disabled with it as their title, and it
@@ -1242,7 +1250,7 @@ export function RunDetail({
                 )}
                 {/* What the Task, or with none chosen the whole Run, changed (Phase 10): from git where the Run lives,
                     beside what its workers reported. */}
-                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} onDraftRepair={onDraftRepair} />
+                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} reviewOn={reviewOn} onDraftRepair={onDraftRepair} taskTitleOf={(id) => tasks.find((tk) => tk.id === id)?.title} onFixFinding={onFixFinding ? (f, path) => onFixFinding(f, path, { job: run ? jobName(run) : runId, task: tasks.find((tk) => tk.id === f.taskId)?.title ?? f.taskId }) : undefined} />
                 <JournalBusy journal={detail?.journal} />
                 <div className="detail-list">
                   {/* 목록은 오래된 것이 위다 — 더 오래된 저널 줄을 부르는 자리도 맨 위다 */}

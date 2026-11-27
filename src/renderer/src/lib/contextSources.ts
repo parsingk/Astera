@@ -85,7 +85,8 @@ const PROBLEM_CONTEXT_LINES = 3
  *  now, so they may not be the lines it was about. */
 const STALE_NOTE: Record<NonNullable<Diagnostic['stale']>, string> = {
   changed: ' (the file changed since this was found)',
-  missing: ' (the file is not there now)'
+  missing: ' (the file is not there now)',
+  revision: ' (the Task moved to another revision since this was found)'
 }
 
 /** What a problem says, as one line: its severity, its place (relative to the folder its file was found in, else to

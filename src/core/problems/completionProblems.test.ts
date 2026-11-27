@@ -241,3 +241,54 @@ describe('problemsKeyOf', () => {
     expect(problemsKeyOf(e)).not.toBe(base)
   })
 })
+
+// Phase 3 Part 4: an anchored review finding is current while the Task's head is the one it was found on
+describe('a review finding stale by revision', () => {
+  /** An attempt, a review that began at 'bbbbbbb', and, when `later` says, an attempt of the Task after the review. */
+  const anchored = (head: string, later?: { head?: string }): OrchState => {
+    const issue = { id: 'i1', severity: 'high', blocking: true, title: 'off by one', description: 'd', file: 'src/a.ts', line: 2 }
+    const s = {
+      jobs: [job('j1', 'D:\\repo')],
+      runs: [run('r1', 'j1', 1)],
+      tasks: [{ id: 't1', runId: 'r1', jobId: 'j1', title: 't', updatedAt: '2026-11-25T03:00:00Z', reviewIssues: [issue] }],
+      dispatches: [
+        { id: 'd1', taskId: 't1', cwd: 'D:\\repo', startedAt: '2026-11-25T01:00:00Z', endedAt: '2026-11-25T01:10:00Z', git: { base: 'aaaaaaa', head: 'a0a0a0a' } },
+        { id: 'rv', taskId: 't1', cwd: 'D:\\repo', startedAt: '2026-11-25T01:20:00Z', endedAt: '2026-11-25T01:30:00Z', review: true, git: { base: 'bbbbbbb', head: 'fffffff' } },
+        ...(later ? [{ id: 'd2', taskId: 't1', cwd: 'D:\\repo', startedAt: '2026-11-25T01:40:00Z', git: { base: 'bbbbbbb', ...(later.head ? { head: later.head } : {}) } }] : [])
+      ]
+    } as unknown as OrchState
+    const ref = findingRef({ kind: 'review', taskId: 't1', file: 'src/a.ts', base: taskFoldersOf(s, s.tasks[0]), message: 'off by one' })
+    ;(s.tasks[0] as { findingAnchors?: unknown }).findingAnchors = { [ref]: { review: 'rv', issue: 'i1', head, file: 'src/a.ts', line: 2, at: 'x' } }
+    return s
+  }
+  const row = (s: OrchState) => completionProblemsOf(s, new Set(['r1'])).find((d) => d.id === 'review:t1:i1')!
+
+  it('marks an anchored review finding stale by revision once a later attempt of the Task moved its head', () => {
+    expect(row(anchored('bbbbbbb')).stale).toBeUndefined()
+    expect(row(anchored('bbbbbbb', { head: 'ccccccc' })).stale).toBe('revision')
+    expect(row(anchored('bbbbbbb', { head: 'bbbbbbb' })).stale).toBeUndefined()
+  })
+
+  // Final review M6: another Task's or a person's commit between the work and its review is not the Task moving on
+  it('does not call stale a review that began after someone else’s commit, while the Task did not move', () => {
+    expect(row(anchored('bbbbbbb')).stale).toBeUndefined()
+  })
+
+  // Final review I4: the file's own time still marks an anchored row, which main reads from producedAt
+  it('keeps the file time on an anchored row', () => {
+    expect(row(anchored('bbbbbbb')).producedAt).toBe('2026-11-25T01:30:00Z')
+  })
+
+  it('does not call a head that is not recorded yet a change', () => {
+    expect(row(anchored('bbbbbbb', {})).stale).toBeUndefined()
+  })
+
+  // Final review M2: the list is asked again when an anchor or an attempt's head is recorded
+  it('moves the Problems key when an anchor or an attempt head is recorded', () => {
+    const before = anchored('bbbbbbb', {})
+    const headed = anchored('bbbbbbb', { head: 'ccccccc' })
+    expect(problemsKeyOf(headed)).not.toBe(problemsKeyOf(before))
+    const unanchored = { ...before, tasks: before.tasks.map((t) => ({ ...t, findingAnchors: undefined })) } as OrchState
+    expect(problemsKeyOf(unanchored)).not.toBe(problemsKeyOf(before))
+  })
+})

@@ -81,17 +81,27 @@ describe('ProblemsPanel', () => {
     expect(app).toMatch(/problemActions=\{contextOn \? \{ send: sendProblems, fix: fixProblems, dismiss: dismissProblems, undismiss: undismissProblems \} : undefined\}/)
     expect(app).toMatch(/const made = problemsContext\(\{ rows, root, files \}\)/)
     expect(app).toMatch(/openContextPreview\(made\.ref, contextText\(made\.ref, made\.excerpt, made\.language\)\)/)
-    expect(app).toMatch(/'tasks-repair', \{ \.\.\.request, dryRun: true \}\)/)
+    // Phase 3 Part 4: the dry run, the confirmation and the call are one flow, requestRepair, the diff's findings use too
+    expect(app).toMatch(/const dry = repairAnswer\(await call\(\{ \.\.\.request, dryRun: true \}\)\)/)
     // A refusal offers the draft whenever it comes: from the dry run, or from the real call after the state moved (M10)
-    expect(app).toMatch(/if \(dry\.kind === 'refused'\) return offerDraft\(dry\.key\)/)
-    expect(app).toMatch(/else if \(asked\.kind === 'refused'\) await offerDraft\(asked\.key\)/)
+    expect(app).toMatch(/if \(dry\.kind === 'refused'\) return onRefused\(dry\.key\)/)
+    expect(app).toMatch(/else if \(asked\.kind === 'refused'\) await onRefused\(asked\.key\)/)
+    expect(app).toMatch(/await requestRepair\(root, request, \{ job: origin\.job \?\? origin\.runId, task: origin\.task, count: rows\.length \}, offerDraft\)/)
     expect(app).toMatch(/openProblemsDraft\(rows\)/)
     // Rows of two folders: said, nothing opens (I3)
     expect(app).toMatch(/if \(made\.reason === 'folders'\) toast\.info\(t\('problems\.send\.folders'\)\)/)
   })
 
+  // Phase 3 Part 4: the revision a change was made on shows in the history
+  it('shows a history change’s revision in Problems', () => {
+    expect(src).toMatch(/c\.revision !== undefined && <span className="problem-history-revision">\{t\('agentReview\.finding\.revision', \{ sha: c\.revision\.slice\(0, 7\) \}\)\}<\/span>/)
+  })
+
   it('marks a stale problem and says why on hover', () => {
-    expect(src).toMatch(/d\.stale !== undefined && \(\s*<span className="problem-stale" title=\{t\(d\.stale === 'changed' \? 'problems\.stale\.changedHint' : 'problems\.stale\.missingHint'\)\}>/)
+    expect(src).toMatch(/d\.stale !== undefined && \(\s*<span className="problem-stale" title=\{t\(STALE_HINT_KEY\[d\.stale\]\)\}>\s*\{t\(STALE_KEY\[d\.stale\]\)\}/)
+    // Phase 3 Part 4: a review finding whose Task moved to another revision
+    for (const key of ['problems.stale.changed', 'problems.stale.missing', 'problems.stale.revision', 'problems.stale.changedHint', 'problems.stale.missingHint', 'problems.stale.revisionHint'])
+      expect(src).toContain(`'${key}'`)
   })
 
   it('says why the list is empty, and what it is made of', () => {

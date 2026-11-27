@@ -6,7 +6,9 @@ import { findingRef } from './findingRef'
 
 /** A problem as the Job state holds it: its file as the finding wrote it (relative to wherever the check or the review
  *  ran) and the folders to look for it in, newest worker folder first and the Job's folder last. Main resolves it. */
-export type RawProblem = Omit<Diagnostic, 'path' | 'stale' | 'root'> & { file?: string; folders: string[] }
+/** A row before main looks for its file. `stale` is only a review finding's 'revision' (Phase 3 Part 4); the file's own
+ *  marks (changed, missing) are main's. */
+export type RawProblem = Omit<Diagnostic, 'path' | 'stale' | 'root'> & { file?: string; folders: string[]; stale?: 'revision' }
 
 /**
  * Where a Task's findings were made: the folders of its attempts, newest first, then its Job's folder, each once. Main
@@ -135,9 +137,22 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
           .map((d) => d.endedAt as string)
           .sort()
           .at(-1) ?? task.updatedAt
+      // Phase 3 Part 4: an anchored finding is stale by revision once an attempt of its Task after its review recorded
+      // another head: another Task's or a person's commit before the review is not the Task moving on (final review M6), and
+      // a head not recorded yet is not a change. With its review attempt gone from the record, the newest head decides.
+      const implAttempts = attempts.filter((d) => d.review !== true && d.git?.head !== undefined)
+      const movedOn = (anchor: { review: string; head: string }): boolean => {
+        const reviewedAt = attempts.find((d) => d.id === anchor.review)?.startedAt
+        if (reviewedAt === undefined) {
+          const newest = [...implAttempts].sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1)?.git?.head
+          return newest !== undefined && newest !== anchor.head
+        }
+        return implAttempts.some((d) => d.startedAt > reviewedAt && d.git!.head !== anchor.head)
+      }
       for (const issue of task.reviewIssues ?? []) {
         if (issue.file === undefined) continue
         const ref = findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title })
+        const anchor = task.findingAnchors?.[ref]
         out.push({
           schemaVersion: 1,
           id: `review:${task.id}:${issue.id}`,
@@ -148,7 +163,9 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
           message: issue.title,
           file: issue.file,
           ...(issue.line !== undefined ? { line: issue.line } : {}),
+          // Its file's time marks it too, through main, when its revision does not (final review I4)
           ...(reviewedAt !== undefined ? { producedAt: reviewedAt } : {}),
+          ...(anchor !== undefined && movedOn(anchor) ? { stale: 'revision' as const } : {}),
           origin,
           folders
         })
@@ -166,6 +183,9 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
  */
 export function problemsKeyOf(state: OrchState): string {
   const runs = state.runs.map((r) => `${r.id}:${r.jobId}:${r.ordinal}`).join(',')
+  // Each Task's attempt heads: a head recorded later can make a review finding stale by revision (final review M2)
+  const heads = new Map<string, string[]>()
+  for (const d of state.dispatches) if (d.review !== true && d.git?.head !== undefined) heads.set(d.taskId, [...(heads.get(d.taskId) ?? []), d.git.head])
   const tasks = state.tasks
     .filter((t) => t.runId !== undefined && ((t.checks?.length ?? 0) > 0 || (t.reviewIssues?.length ?? 0) > 0 || t.findingStates !== undefined))
     .map((t) => {
@@ -175,7 +195,10 @@ export function problemsKeyOf(state: OrchState): string {
         // The newest change's time too: at the history cap a new note keeps the state and the count (final review M1)
         .map(([ref, r]) => `${ref}/${r.state}/${r.history.length}/${r.history.at(-1)?.at ?? ''}`)
         .join('+')
-      return `${t.id}:${checks}:${reviews}:${states}`
+      const anchors = Object.entries(t.findingAnchors ?? {})
+        .map(([ref, a]) => `${ref}@${a.head}`)
+        .join('+')
+      return `${t.id}:${checks}:${reviews}:${states}:${anchors}:${(heads.get(t.id) ?? []).join('+')}`
     })
     .join(';')
   return `${runs}|${tasks}`

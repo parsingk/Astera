@@ -41,7 +41,7 @@ export interface Diagnostic {
    *  it, when its Job is still on record. */
   origin?: { runId: string; taskId: string; task: string; job?: string }
   /** The file changed after the finding (`changed`) or is not there (`missing`): it may no longer hold. */
-  stale?: 'changed' | 'missing'
+  stale?: 'changed' | 'missing' | 'revision'
   /** Where it stands, for a finding a person acted on (Phase 3 Part 1b, Task.findingStates): its state, a dismissal's
    *  note, and the changes, oldest first. */
   finding?: { state: FindingState; note?: string; history: FindingChange[] }

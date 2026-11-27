@@ -56,6 +56,7 @@ import {
   reconvergeRun,
   resolveRunId,
   recordDispatchGit,
+  recordFindingAnchors,
   placedByApp,
   coordinatorStarting,
   workSandboxed,
@@ -64,7 +65,9 @@ import {
   type Res
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
-import { collectChanges, rangesFor } from './changedFiles'
+import { attemptRanges, collectChanges, rangesFor, type ChangesPart } from './changedFiles'
+import { attributeChangedFiles } from '../review/changesAttribution'
+import { diffFindings } from '../review/diffFindings'
 import type { ChangedFile } from '../git/changes'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
@@ -101,6 +104,7 @@ import {
   type CheckResult,
   type ConvergencePolicy,
   type Dispatch,
+  type FindingAnchor,
   type Job,
   type JobRun,
   type JobSourceRef,
@@ -702,7 +706,13 @@ export interface OrchServerDeps {
   changes?: {
     read(repo: string, base: string, head: string | null): Promise<ChangedFile[] | null>
     diff(repo: string, base: string, head: string | null, f: ChangedFile): Promise<{ diff: string; truncated: boolean } | null>
+    /** Whether base is an ancestor of head (Phase 3 Part 4: a range that is not a fast-forward is attributed to no one);
+     *  null when git cannot tell. Absent, `runs-changed-files` answers no attribution. */
+    isAncestor?(repo: string, base: string, head: string): Promise<boolean | null>
   }
+  /** The paths the observe audit saw a Task write in a window (Phase 3 Part 4, core/review/auditWrites.ts), or null with
+   *  no records. What raises an attribution to "confirmed by observe audit". */
+  auditWrites?(a: { taskId: string; since: string; until: string }): Promise<ReadonlySet<string> | null>
   github?: {
     run: GhRunner
     worktreeOf?(path: string): WorktreeInfo | null
@@ -1935,6 +1945,27 @@ const checkNamesOf = (v: unknown): string[] | null => {
   return names.some((x) => x === '') ? null : [...new Set(names)]
 }
 
+/** The range a changed-files list or a diff is read over: a Run's, a Task's (`taskId`), or one attempt's own
+ *  (`dispatchId`, Phase 3 Part 4), which must be the named Task's when both are given. An answer to send when the scope is
+ *  unknown or contradicts itself. */
+function changesScope(
+  s: OrchState,
+  runId: string,
+  args: Record<string, unknown>
+): { found: { parts: ChangesPart[]; reported: string[] }; taskId?: string; dispatchId?: string } | Reply {
+  const taskArg = str(args.taskId) ?? str(args.task) ?? undefined
+  const dispatchId = str(args.dispatchId) ?? str(args.dispatch) ?? undefined
+  if (dispatchId !== undefined) {
+    const one = attemptRanges(s, runId, dispatchId)
+    if (!one) return notFound(`unknown attempt ${dispatchId} in run ${runId}`)
+    if (taskArg !== undefined && taskArg !== one.dispatch.taskId) return bad(`attempt ${dispatchId} is not task ${taskArg}'s`)
+    return { found: one, taskId: one.dispatch.taskId, dispatchId }
+  }
+  const found = rangesFor(s, runId, taskArg)
+  if (!found) return notFound(taskArg ? `unknown task ${taskArg} in run ${runId}` : `unknown run: ${runId}`)
+  return { found, ...(taskArg !== undefined ? { taskId: taskArg } : {}) }
+}
+
 export async function handleCommand(
   deps: OrchServerDeps,
   /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
@@ -3094,20 +3125,33 @@ export async function handleCommand(
     // **A Run's changed files from git, beside what its workers said** (remote runtime design Phase 10, D10.1): the
     // first of `rangesFor`'s ranges git answers. `unavailable` says why there is no git list: no range was recorded
     // (the work predates Phase 10), or git could not read any of them (the folder and the commits are gone).
+    // Phase 3 Part 4: `dispatchId` reads one attempt's own range and is echoed, so a caller can tell a Host that did not
+    // know it; `ranges` names the range each part was read over; `attribution: true` adds who changed each file.
     case 'runs-changed-files': {
       const asked = str(args.runId) ?? str(args.id)
       if (!asked) return bad('--id is required: the run whose changed files to read')
       // A Job id reads its latest Run, as runs-completion does: the Run detail names a Run by its Job.
       const runId = resolveRunId(s, asked) ?? asked
-      const taskId = str(args.taskId) ?? str(args.task) ?? undefined
-      const found = rangesFor(s, runId, taskId)
-      if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
+      const scoped = changesScope(s, runId, args)
+      if ('status' in scoped) return scoped
+      const { found, taskId, dispatchId } = scoped
       if (!deps.changes) return conflict('changed files are read where the run lives, and this caller cannot read git there')
-      const head = { runId, ...(taskId ? { taskId } : {}), reported: found.reported }
+      const head = { runId, ...(taskId ? { taskId } : {}), ...(dispatchId ? { dispatchId } : {}), reported: found.reported }
       if (found.parts.length === 0) return okBody({ ...head, git: null, unavailable: 'not-recorded' })
       const got = await collectChanges(found.parts, deps.changes.read)
       if (!got.read) return okBody({ ...head, git: null, unavailable: 'git-failed' })
-      return okBody({ ...head, git: { files: got.files.map((f) => f.file), live: got.live, total: got.total } })
+      const files = got.files.map((f) => f.file)
+      const ranges = got.used.map((u) => ({ ...(u.taskId !== undefined && dispatchId === undefined && taskId === undefined ? { taskId: u.taskId } : {}), base: u.range.base, head: u.range.head }))
+      const isAncestor = deps.changes.isAncestor
+      const attribution =
+        args.attribution === true && isAncestor
+          ? await attributeChangedFiles(s, { runId, ...(taskId ? { taskId } : {}), ...(dispatchId ? { dispatchId } : {}), files, now }, {
+              read: deps.changes.read,
+              isAncestor,
+              ...(deps.auditWrites ? { auditWrites: deps.auditWrites } : {})
+            })
+          : undefined
+      return okBody({ ...head, git: { files, live: got.live, total: got.total }, ranges, ...(attribution ? { attribution } : {}) })
     }
     // **One file's diff, by the id `runs-changed-files` gave it, never a path** (§4.8): the same list is read again and
     // the id looked up in it, so a caller can only ever see a file that range changed, read in the range it came from.
@@ -3117,9 +3161,9 @@ export async function handleCommand(
       const runId = resolveRunId(s, asked) ?? asked
       const fileId = str(args.fileId) ?? str(args.file)
       if (!fileId) return bad('--file is required: a file id from runs-changed-files')
-      const taskId = str(args.taskId) ?? str(args.task) ?? undefined
-      const found = rangesFor(s, runId, taskId)
-      if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
+      const scoped = changesScope(s, runId, args)
+      if ('status' in scoped) return scoped
+      const { found, taskId: scopeTask } = scoped
       if (!deps.changes) return conflict('diffs are read where the run lives, and this caller cannot read git there')
       if (found.parts.length === 0) return notFound(`run ${runId} has no recorded git range`)
       const got = await collectChanges(found.parts, deps.changes.read)
@@ -3128,7 +3172,13 @@ export async function handleCommand(
       if (!hit) return notFound(`no changed file ${fileId} in run ${runId}; read runs-changed-files again`)
       const { taskId: _part, ...asGit } = hit.file
       const d = await deps.changes.diff(hit.range.repo, hit.range.base, hit.range.head, { ...asGit, id: hit.file.id.split('~')[0] })
-      return d ? okBody({ file: hit.file, ...d }) : conflict(`git could not produce the diff of ${hit.file.path}`)
+      if (!d) return conflict(`git could not produce the diff of ${hit.file.path}`)
+      // Phase 3 Part 4: the range the diff is of, and with `findings: true` the file's review findings placed on it
+      const range = { base: hit.range.base, head: hit.range.head }
+      if (args.findings !== true) return okBody({ file: hit.file, ...d, range })
+      const taskIds = hit.file.taskId !== undefined ? [hit.file.taskId] : scopeTask !== undefined ? [scopeTask] : s.tasks.filter((t) => t.runId === runId).map((t) => t.id)
+      const findings = diffFindings(s, { taskIds, path: hit.file.path, repo: hit.range.repo, head: hit.range.head, diff: d.diff, truncated: d.truncated })
+      return okBody({ file: hit.file, ...d, range, findings })
     }
     case 'runs-completion': {
       const id = str(args.id)
@@ -3497,6 +3547,30 @@ export async function handleCommand(
       // Nothing changed: no write, so a recorder that reads the same head twice costs no state version.
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
+    }
+    // Where each review finding was made (Phase 3 Part 4), which the diff and Problems read. **The Host's alone**: anyone
+    // else could move a finding onto another line or call it current.
+    case 'tasks-anchors-record': {
+      if (caller.sessionId !== HOST_CALLER) return denied('tasks-anchors-record is the Host’s own record')
+      const taskId = str(args.task)
+      if (!taskId) return bad('tasks-anchors-record takes a task')
+      const given = args.anchors
+      if (typeof given !== 'object' || given === null || Array.isArray(given)) return bad('tasks-anchors-record takes anchors by finding reference')
+      const anchors: Record<string, Omit<FindingAnchor, 'at'>> = {}
+      for (const [ref, raw] of Object.entries(given as Record<string, unknown>)) {
+        const a = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+        const review = str(a.review)
+        const issue = str(a.issue)
+        const head = str(a.head)
+        const file = str(a.file)
+        // Handed to git and compared later: a commit id, a fingerprint, a bounded name and a line number, nothing else
+        if (!review || !issue || !head || !/^[0-9a-f]{7,64}$/i.test(head)) return bad(`tasks-anchors-record: ${ref} needs a review, an issue and a head commit id`)
+        if (!file || file.length > 1024) return bad(`tasks-anchors-record: ${ref} needs a file name of at most 1024 characters`)
+        if (a.line !== undefined && (typeof a.line !== 'number' || !Number.isInteger(a.line) || a.line < 1)) return bad(`tasks-anchors-record: ${ref}'s line is a positive integer`)
+        if (a.hunk !== undefined && (typeof a.hunk !== 'string' || !/^[0-9a-f]{8}$/.test(a.hunk))) return bad(`tasks-anchors-record: ${ref}'s hunk is 8 hex characters`)
+        anchors[ref] = { review, issue, head, file, ...(a.line !== undefined ? { line: a.line as number } : {}), ...(a.hunk !== undefined ? { hunk: a.hunk as string } : {}) }
+      }
+      return commit(recordFindingAnchors(s, taskId, anchors, now))
     }
     case 'runs-github-record': {
       if (caller.sessionId !== HOST_CALLER) return denied('runs-github-record is the Host’s own record')

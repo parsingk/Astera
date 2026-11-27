@@ -1,5 +1,6 @@
 // A changed file as `runs-changed-files` answers it (remote runtime design Phase 10). Node-free: the renderer reads it.
 // node: import 없음 — 렌더러가 import한다.
+import type { FileAttribution } from '../review/types'
 
 export interface ChangedFile {
   /** Stable for the same change in the same range: what `runs-diff` takes. */
@@ -31,4 +32,10 @@ export interface ChangedFilesReply {
    *  changed, more than `files` holds when the list was cut. */
   git: { files: ChangedFile[]; live: boolean; total: number } | null
   unavailable?: 'not-recorded' | 'git-failed'
+  /** The attempt read, echoed when one was named (Phase 3 Part 4): a Host that did not know the argument leaves it out. */
+  dispatchId?: string
+  /** The range each part was read over; head null is the working tree. */
+  ranges?: Array<{ taskId?: string; base: string; head: string | null }>
+  /** Who changed each file, by its id, when asked for (core/review/attribution.ts). */
+  attribution?: Record<string, FileAttribution>
 }
