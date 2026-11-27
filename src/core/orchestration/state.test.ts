@@ -4629,4 +4629,23 @@ describe('closeOrphanedExternalReviews and external work', () => {
     const r = closeOrphanedExternalReviews({ ...emptyState(), dispatches: [d('a'), d('b')] }, { owned: new Set(['a']) }, NOW)
     expect(r.closed).toEqual(['b'])
   })
+
+  it('puts the Task of a closed external work to a person, who answers to have it worked again', () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const t = createTask(run.state, { runId: run.value.id, title: 'T', spec: 's', deps: [], externalAgentId: 'ext_0a1b2c3d' }, NOW)
+    if (!t.ok) throw new Error(t.error)
+    const o = openDispatch(t.state, { taskId: t.value.id, provider: 'claude', accountId: '', sessionId: 'acp:work-0a0b0c0d', cwd: 'D:/p', specPath: '' }, NOW)
+    if (!o.ok) throw new Error(o.error)
+    const s = { ...o.state, dispatches: o.state.dispatches.map((x) => ({ ...x, externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } })) }
+    const r = closeOrphanedExternalReviews(s, { owned: new Set() }, NOW)
+    expect(r.closed).toEqual([o.value.id])
+    expect(r.state.tasks.find((x) => x.id === t.value.id)?.status).toBe('blocked')
+    const gate = r.state.gates.find((g) => g.taskId === t.value.id)!
+    expect(gate.status).toBe('open')
+    expect(gate.question).toContain('OpenCode')
+    expect(resolveGate(r.state, { gateId: gate.id, resolution: 'retry' }, NOW).ok).toBe(true)
+  })
 })

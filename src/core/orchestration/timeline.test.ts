@@ -396,3 +396,14 @@ describe('timelineFor: an external review', () => {
     expect(e.review).toBe(true)
   })
 })
+
+describe('timelineFor: an external agent working a Task (Phase 5 A1)', () => {
+  it('names the agent and does not show the placeholder provider', () => {
+    const d: Dispatch = { ...dispatch('d1', 't1'), externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' }, accountId: '' }
+    const s = state({ runs: [run('r1')], tasks: [task('t1', 'r1')], dispatches: [d] })
+    const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')!
+    expect(e.externalAgent).toEqual({ id: 'ext_0a1b2c3d', name: 'OpenCode' })
+    expect(e.summary).toBe('OpenCode')
+    expect(e.provider).toBeUndefined()
+  })
+})

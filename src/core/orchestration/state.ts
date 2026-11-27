@@ -1884,7 +1884,9 @@ export const endedUnproven = (d: Dispatch, now: string): Dispatch => ({
 
 /** Closes (endedUnproven) every open review Dispatch with `externalReviewer` whose id is not in `owned` and, when
  *  `startedBefore` is given, whose `startedAt` is before it. An external review lives in whichever process holds
- *  its ACP child, so a Dispatch nobody owns after a restart can never be answered. Tasks are not touched. */
+ *  its ACP child, so a Dispatch nobody owns after a restart can never be answered. Its Task is not touched: the
+ *  resume sweep starts the review again. An external agent's work (Phase 5 A1) is closed the same way, and its Task,
+ *  which nothing else would move on, is put to a person (a Gate): answered, it is ready and the agent works it again. */
 export function closeOrphanedExternalReviews(
   s: OrchState,
   a: { owned: ReadonlySet<string>; startedBefore?: number },
@@ -1898,7 +1900,22 @@ export function closeOrphanedExternalReviews(
     closed.push(d.id)
     return endedUnproven(d, now)
   })
-  return closed.length === 0 ? { state: s, closed } : { state: { ...s, dispatches }, closed }
+  if (closed.length === 0) return { state: s, closed }
+  let state: OrchState = { ...s, dispatches }
+  for (const d of s.dispatches) {
+    if (!d.externalAgent || !closed.includes(d.id)) continue
+    if (state.tasks.find((t) => t.id === d.taskId)?.status !== 'dispatched') continue
+    const gated = createGate(
+      state,
+      {
+        taskId: d.taskId,
+        question: `외부 에이전트 ${d.externalAgent.name || d.externalAgent.id}의 작업이 끊겼습니다: 그 에이전트를 돌리던 Astera 가 다시 시작되어 결과를 받을 수 없습니다.\n이 질문에 답하면 Task 가 다시 준비 상태가 되고 같은 에이전트가 다시 맡습니다. 끝난 일을 그대로 닫으려면 task-update --status completed 를 쓰세요.`
+      },
+      now
+    )
+    if (gated.ok) state = gated.state
+  }
+  return { state, closed }
 }
 
 /** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.

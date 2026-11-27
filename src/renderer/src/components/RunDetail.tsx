@@ -50,7 +50,7 @@ import { backdropProps } from '../lib/backdrop'
 import { SourceChip } from './SourceChip'
 import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
-import { reviewerChipName } from '../lib/reviewerSettingsView'
+import { externalNameOf, reviewerChipName } from '../lib/reviewerSettingsView'
 import {
   afterObserveRead,
   observeReadDue,
@@ -1299,9 +1299,9 @@ export function RunDetail({
                                   ? t(MSG_LABEL[e.messageType ?? 'status'])
                                   : t(KIND_LABEL[e.kind])}
                               </b>
-                              {e.externalReviewer ? (
-                                <span className="detail-chip" title={e.externalReviewer.name}>
-                                  {reviewerChipName(e.externalReviewer.name)}
+                              {externalNameOf(e) !== undefined ? (
+                                <span className="detail-chip" title={externalNameOf(e)}>
+                                  {reviewerChipName(externalNameOf(e) ?? '')}
                                 </span>
                               ) : (
                                 e.provider && <span className="detail-chip provider">{e.provider}</span>

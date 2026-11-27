@@ -174,8 +174,8 @@ export function buildRunReport(s: OrchState, runId: string, o: { spent?: readonl
     if (id !== undefined && !accountIds.includes(id)) accountIds.push(id)
   }
   for (const d of [...all].sort((a, b) => a.startedAt.localeCompare(b.startedAt))) {
-    // An external review's account id is the empty placeholder
-    if (d.externalReviewer) continue
+    // An external review's account id is the empty placeholder, and an external agent's work's (Phase 5 A1)
+    if (d.externalReviewer || d.externalAgent) continue
     see(d.accountId)
     for (const r of d.resumes ?? []) see(r.toAccountId)
   }

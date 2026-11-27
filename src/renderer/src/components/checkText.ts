@@ -106,6 +106,7 @@ export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
     case 'provider':
       return m.provider
     case 'external-reviewer':
+    case 'external-agent':
       return reviewerChipName(m.name)
     case 'none':
       return undefined

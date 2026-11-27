@@ -232,3 +232,10 @@ describe('nodeMetaOf: an external review', () => {
     expect(nodeMetaOf(task({ provider: 'claude' }))).toEqual({ kind: 'provider', provider: 'claude' })
   })
 })
+
+describe('nodeMetaOf: an external agent working a Task (Phase 5 A1)', () => {
+  it('names the agent in place of the provider, and its id until the run reads its name', () => {
+    expect(nodeMetaOf(task({ provider: 'claude', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } }))).toEqual({ kind: 'external-agent', name: 'OpenCode' })
+    expect(nodeMetaOf(task({ provider: 'claude', externalAgent: { id: 'ext_0a1b2c3d', name: '' } }))).toEqual({ kind: 'external-agent', name: 'ext_0a1b2c3d' })
+  })
+})

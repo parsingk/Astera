@@ -76,7 +76,7 @@ import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
 import { taskDetailOf } from './taskDetail'
 import { checkOutputSlice, tailWindow } from './taskOutput'
-import { TAIL_UNTRACKED, TAIL_EMPTY, EXTERNAL_REVIEW_NO_OUTPUT } from './exec/tail'
+import { TAIL_UNTRACKED, TAIL_EMPTY, EXTERNAL_REVIEW_NO_OUTPUT, EXTERNAL_WORK_NO_OUTPUT } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -4610,7 +4610,10 @@ export async function handleCommand(
       // An external review has no pty and no tail. Answered here, before the dep, so the app and the Host say the
       // same thing whether or not an app is attached (the Host would forward the read): an answer of the untracked
       // kind, saying where its transcript is instead (final fix wave E4).
-      if (s.dispatches.find((x) => x.id === id)?.externalReviewer) return okBody({ output: EXTERNAL_REVIEW_NO_OUTPUT })
+      // An external agent's work (Phase 5 A1) the same
+      const ext = s.dispatches.find((x) => x.id === id)
+      if (ext?.externalReviewer) return okBody({ output: EXTERNAL_REVIEW_NO_OUTPUT })
+      if (ext?.externalAgent) return okBody({ output: EXTERNAL_WORK_NO_OUTPUT })
       return okBody({
         output: await deps.readWorker({
           dispatchId: id,

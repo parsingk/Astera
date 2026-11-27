@@ -106,6 +106,14 @@ export function lineOfArgs(args: string[]): string {
     .join(' ')
 }
 
+/** The name a row or a chip shows in place of the provider: an external reviewer's, or an external agent's working the
+ *  Task (Phase 5 A1), whose id stands until the run reads its name. Undefined for a Claude or Codex worker. */
+export function externalNameOf(x: { externalReviewer?: { name: string }; externalAgent?: { id: string; name: string } }): string | undefined {
+  if (x.externalReviewer) return x.externalReviewer.name
+  if (x.externalAgent) return x.externalAgent.name || x.externalAgent.id
+  return undefined
+}
+
 /** A reviewer's name as a chip shows it */
 export function reviewerChipName(name: string): string {
   const chars = Array.from(name)

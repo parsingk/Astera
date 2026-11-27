@@ -1304,3 +1304,15 @@ describe('snapshotFor: an external review is the open Dispatch', () => {
     expect('externalReviewer' in t).toBe(false)
   })
 })
+
+describe('snapshotFor: an external agent working a Task (Phase 5 A1)', () => {
+  it('keeps provider set and adds the agent', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [{ ...dispatch('d1', 't1', 'acp:work-0a0b0c0d', '2026-08-18T01:00:00.000Z'), accountId: '', externalAgent: { id: 'ext_0a1b2c3d', name: 'OpenCode' } }]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+    expect(t.provider).toBe('claude')
+    expect(t.externalAgent).toEqual({ id: 'ext_0a1b2c3d', name: 'OpenCode' })
+  })
+})
