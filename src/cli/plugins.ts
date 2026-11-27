@@ -17,7 +17,14 @@ export function approvalMessage(inspection: Record<string, unknown>, o: { agent?
   const wontRun = inspection.compatible === false && typeof inspection.reason === 'string' ? ` It will not run here: ${inspection.reason}.` : ''
   // A package file is approved by what it is: the file, and the sha256 of the bytes that will install (final review m8)
   const shown = (typeof inspection.source === 'object' && inspection.source !== null ? inspection.source : {}) as Record<string, unknown>
-  const from = typeof shown.file === 'string' && typeof shown.sha256 === 'string' ? ` From ${shown.file}, sha256 ${shown.sha256}.` : ''
+  // From the catalog (Phase 4): who published it, and the sha256 of the bytes the signed index names
+  const catalog = (typeof inspection.catalog === 'object' && inspection.catalog !== null ? inspection.catalog : {}) as Record<string, unknown>
+  const from =
+    typeof shown.file === 'string' && typeof shown.sha256 === 'string'
+      ? ` From ${shown.file}, sha256 ${shown.sha256}.`
+      : typeof catalog.publisher === 'string' && typeof catalog.sha256 === 'string'
+        ? ` From the catalog, published by ${catalog.publisher}, sha256 ${catalog.sha256}.`
+        : ''
   const how = o.agent
     ? ' Installing it is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set): ask them to run astera plugins install with --yes.'
     : ' Approve with --yes, or name what to grant with --grant <list>.'
@@ -89,7 +96,8 @@ export function configureStdinError(wantsStdin: readonly string[]): string | nul
 }
 
 /** `--grant a,b`: the names, trimmed, with empty ones dropped. */
-const grantOf = (v: unknown): string[] | null =>
+/** `--grant a,b`: the names given; null when no list was given. */
+export const grantOf = (v: unknown): string[] | null =>
   typeof v === 'string'
     ? v
         .split(',')

@@ -4,6 +4,8 @@
 // main() does not call itself inside this file, so importing this module (as the tests do) does not
 // terminate the process.
 import { approvalMessage, configureArgs, configureStdinError, doctorEnd, installPlugin, type PluginCall } from './plugins'
+import { catalogConfigureArgs, catalogInstall, disableAll, safeModeArgs, setSafeModeOffline } from './pluginCatalog'
+import { pluginRegistryCommand } from './pluginRegistry'
 import { randomBytes, randomUUID } from 'node:crypto'
 import fsSync, { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -84,6 +86,8 @@ import { helloLine, verboseLog, type VerboseLog } from '../core/orchestration/cl
 const CLI_VERSION = typeof __ASTERA_VERSION__ === 'string' ? __ASTERA_VERSION__ : '0.0.0'
 /** The plugin author's commands, answered in this process without a Host (cli/pluginDev.ts). */
 const PLUGIN_DEV_COMMANDS: readonly string[] = ['plugins-validate', 'plugins-init', 'plugins-pack', 'plugins-test']
+/** The registry's author and maintainer tools (Phase 4, cli/pluginRegistry.ts): answered here too, with no Host. */
+const PLUGIN_REGISTRY_COMMANDS: readonly string[] = ['plugins-publish', 'plugins-registry-validate', 'plugins-registry-sign', 'plugins-registry-keygen']
 import {
   DEFAULT_WAIT_TIMEOUT_MS
 } from '../core/orchestration/types'
@@ -1250,6 +1254,17 @@ export async function main(): Promise<void> {
     if ('error' in configured) fail({ code: 'INVALID_ARGUMENTS', message: configured.error })
     args = configured.args
   }
+  // Phase 4: the catalog source and Safe Mode as the Host takes them
+  if (parsed.cmd === 'plugins-catalog-configure') {
+    const configured = catalogConfigureArgs(args)
+    if ('error' in configured) fail({ code: 'INVALID_ARGUMENTS', message: configured.error })
+    args = configured.args
+  }
+  if (parsed.cmd === 'plugins-safe-mode') {
+    const safe = safeModeArgs(args)
+    if ('error' in safe) fail({ code: 'INVALID_ARGUMENTS', message: safe.error })
+    args = { on: safe.on }
+  }
   const lifted = liftRequestId(args)
   if ('error' in lifted) fail({ code: 'INVALID_ARGUMENTS', message: lifted.error })
   args = withDefaultProject({ cmd: parsed.cmd, args: lifted.args, project: parsed.project })
@@ -1482,6 +1497,19 @@ export async function main(): Promise<void> {
     process.exit(0)
   }
 
+  // The registry's author and maintainer tools (Phase 4): answered here, from the files named, no Host
+  if (PLUGIN_REGISTRY_COMMANDS.includes(parsed.cmd)) {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await pluginRegistryCommand({ cmd: parsed.cmd, args, cwd: process.cwd(), version: CLI_VERSION })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
+    process.exit(0)
+  }
+
   // `plugins dev`: the first install with the person's approval, then a watch that installs again as the folder changes
   // (cli/pluginDevWatch.ts). Each Host call is a connection of its own: the watch may run for hours, and a Host that went
   // away and came back is found again.
@@ -1563,6 +1591,12 @@ export async function main(): Promise<void> {
     if (queueableReportProblem({ cmd: parsed.cmd, args }) !== null) {
       const found = await otherProtocolHost({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
       if (found !== null) fail(siblingHostError({ found, cliProtocol: HOST_PROTOCOL }))
+    }
+    // Safe Mode with no Host (Phase 4): set in the profile, for when the app does not start; a Host that starts reads it
+    if (parsed.cmd === 'plugins-safe-mode') {
+      if (sessionId !== '')
+        fail({ code: 'PERMISSION_DENIED', message: 'plugins safe-mode is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)' })
+      return { status: 200, body: await setSafeModeOffline(profileDir, args.on === true) }
     }
     if (!fileAnswerable(parsed.cmd)) unreachable(reason, lost)
     const stateFile = path.join(profileDir, 'orchestration.json')
@@ -1714,6 +1748,43 @@ export async function main(): Promise<void> {
       if ('stuck' in installed) fail({ code: SILENT_HOST_CODE, message: installed.stuck, details: lost })
       if ('unreachable' in installed) return withoutHost(installed.unreachable, lost)
       return installed
+    }
+    // **`plugins catalog-install` is two calls on this one connection, as install is** (Phase 4): the catalog's package is
+    // shown, and only an approval sends the install, with what was shown and this invocation's request id.
+    if (parsed.cmd === 'plugins-catalog-install') {
+      const installed = await keepaliveDuring(keepalive, () =>
+        catalogInstall({
+          args,
+          request: carried.send,
+          call: (cmd, callArgs, request) =>
+            timedCall(verbose, { conn, ...withToken, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
+        })
+      )
+      conn.close()
+      if ('approve' in installed)
+        fail({
+          code: sessionId !== '' ? 'PERMISSION_DENIED' : 'INVALID_ARGUMENTS',
+          message: approvalMessage(installed.approve, { agent: sessionId !== '' }).replace('astera plugins install', 'astera plugins catalog-install'),
+          details: { plugin: installed.approve }
+        })
+      const lost = lostAnswerDetails({ argv, request: carried.send, fromStdin: parsed.wantsStdin })
+      if ('stuck' in installed) fail({ code: SILENT_HOST_CODE, message: installed.stuck, details: lost })
+      if ('unreachable' in installed) return withoutHost(installed.unreachable, lost)
+      return installed
+    }
+    // `plugins disable --all`: every enabled plugin, one change each, so each is recorded as its own (Phase 4)
+    if (parsed.cmd === 'plugins-disable' && args.all === true) {
+      if (args.id !== undefined) fail({ code: 'INVALID_ARGUMENTS', message: 'plugins disable takes --id or --all, not both' })
+      const done = await keepaliveDuring(keepalive, () =>
+        disableAll({
+          call: (cmd, callArgs, request) =>
+            timedCall(verbose, { conn, ...withToken, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
+        })
+      )
+      conn.close()
+      if ('stuck' in done) fail({ code: SILENT_HOST_CODE, message: done.stuck })
+      if ('unreachable' in done) return withoutHost(done.unreachable)
+      return done
     }
     // **`agent-profiles` is one or two calls on this one connection** (cli/agentProfiles.ts, Agent Profiles design §6): a
     // name is resolved to the id with `agent-profiles-get` before a change, and only the change carries the request id.

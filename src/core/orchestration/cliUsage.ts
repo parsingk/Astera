@@ -299,7 +299,83 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'plugins-list': { summary: 'the plugins installed in this profile, with their status, what they were granted and what they offer' },
   'plugins-get': { summary: 'one installed plugin', flags: [ID('<pluginId>', 'the plugin (from `plugins list`)')] },
   'plugins-enable': { summary: 'let an installed plugin run', flags: [ID('<pluginId>', 'the plugin (from `plugins list`)')] },
-  'plugins-disable': { summary: 'stop a plugin from running, keeping it installed', flags: [ID('<pluginId>', 'the plugin (from `plugins list`)')] },
+  'plugins-disable': {
+    summary: 'stop a plugin from running, keeping it installed; --all for every plugin',
+    flags: [
+      { name: 'id', value: '<pluginId>', about: 'the plugin (from `plugins list`)' },
+      { name: 'all', about: 'turn off every enabled plugin, one by one' }
+    ]
+  },
+  'plugins-catalog': {
+    summary: "the plugins in the configured catalog, from its last verified index: each one's newest version this Astera runs and the one installed",
+    detail:
+      'Reads the copy of the index the Host last verified; --refresh fetches it again first, with its signature, and keeps the copy it had when that fails (offline, an older index, a bad signature), saying why. An index past its expiry is shown and installs nothing. A version the catalog revoked is never offered, and one installed from it is turned off. No catalog is set until you set one with catalog-configure.',
+    flags: [{ name: 'refresh', about: 'fetch and verify the index again first' }]
+  },
+  'plugins-catalog-configure': {
+    summary: 'set the catalog: the address of its index and the keys its index must be signed with, or forget it',
+    detail:
+      'The address is an https URL or the absolute path of an index.json on this computer, its signature beside it as index.json.sig. Each key is an Ed25519 public key (base64), named by the id the signature gives; two let a registry rotate its key. Astera ships with no catalog and no key. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+    flags: [
+      { name: 'url', value: '<index>', about: 'the index: an https address, or the absolute path of an index.json' },
+      { name: 'key', value: '<id=publicKey>', about: 'the keys the index may be signed with, comma separated' },
+      { name: 'clear', about: 'forget the catalog and its copy of the index' }
+    ]
+  },
+  'plugins-catalog-install': {
+    summary: 'install or update a plugin from the catalog: one exact version, the bytes its signed index names, after you approve what it asks for',
+    detail:
+      'Downloads the version (the newest this Astera runs, or --version) to this profile, checks its size and sha256 against the verified index and that its package is the one listed (the same id, version and trust level, asking for no more than the index lists), then shows it and installs nothing until you approve: --yes or --grant, or exit 2. A failed download or install keeps the installed version. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+    flags: [
+      { name: 'id', value: '<pluginId>', about: 'the plugin (from `plugins catalog`)', required: true },
+      { name: 'version', value: '<version>', about: 'an exact version (default: the newest this Astera runs)' },
+      { name: 'yes', about: 'approve the permissions the plugin asks for' },
+      { name: 'grant', value: '<list>', about: 'approve exactly these permissions, comma separated (empty grants none)' }
+    ]
+  },
+  'plugins-safe-mode': {
+    summary: 'Safe Mode: stop every plugin and start none, or let them run again',
+    detail:
+      'On stops every plugin and keeps them all from starting or drawing anything in the app until it is off; off starts the enabled ones again. It is kept in this profile, so a Host that starts with it on starts none. With no Host running it is set in the profile directly, for when the app does not start. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+    flags: [
+      { name: 'on', about: 'turn Safe Mode on' },
+      { name: 'off', about: 'turn Safe Mode off' }
+    ]
+  },
+  'plugins-publish': {
+    summary: 'pack a plugin and print the registry entry a pull request would add: its exact version, sha256, size and permissions',
+    detail:
+      'Starts no Host and uploads nothing: it packs the folder as `plugins pack` does and prints the entry for the registry index, with the trust level its manifest gives and the range of Astera it runs on (engines.astera, or this Astera and later). Serving the package at --artifact-url and opening the pull request are yours to do.',
+    flags: [
+      { name: 'path', value: '<folder>', about: 'the plugin folder, the one with its package.json', required: true },
+      { name: 'artifact-url', value: '<url>', about: 'where the package will be served: an https address, or a path beside the index', required: true },
+      { name: 'publisher', value: '<name>', about: 'the publisher, lower-case letters, digits and -', required: true },
+      { name: 'category', value: '<category>', about: 'development, agents, devops, themes or quality (default development)' },
+      { name: 'out', value: '<file>', about: 'where to write the package (default: beside the folder)' }
+    ]
+  },
+  'plugins-registry-validate': {
+    summary: "check a catalog index the way Astera reads it, and every package beside it against its sha256 and size",
+    detail: 'Starts no Host. Exits 1 naming each problem.',
+    flags: [{ name: 'path', value: '<index.json>', about: 'the index', required: true }]
+  },
+  'plugins-registry-sign': {
+    summary: "sign a catalog index's exact bytes with a maintainer's key, writing index.json.sig beside it",
+    detail: 'Starts no Host. Sign the index after the last change to it: a byte changed after signing makes Astera refuse it.',
+    flags: [
+      { name: 'path', value: '<index.json>', about: 'the index', required: true },
+      { name: 'key-file', value: '<pem>', about: "the maintainer's private key (from registry-keygen)", required: true },
+      { name: 'key-id', value: '<id>', about: 'the id a catalog source names this key by', required: true }
+    ]
+  },
+  'plugins-registry-keygen': {
+    summary: 'make a maintainer key: the private half written to a file, the public half printed for catalog-configure',
+    detail: 'Starts no Host. Never writes over a key file. Keep the private half off any shared machine and out of any repository.',
+    flags: [
+      { name: 'out', value: '<folder>', about: 'where to write <key-id>.pem', required: true },
+      { name: 'key-id', value: '<id>', about: 'the id the key is named by', required: true }
+    ]
+  },
   'plugins-remove': { summary: 'uninstall a plugin and delete its copy in this profile', flags: [ID('<pluginId>', 'the plugin (from `plugins list`)')] },
   'plugins-logs': {
     summary: "the last lines of a plugin's log: what it printed, and when it started, stopped or crashed",

@@ -651,6 +651,16 @@ const NOT_SWITCHED = [
   'plugins-doctor',
   'plugins-settings',
   'plugins-configure',
+  // Phase 4: the signed catalog and Safe Mode, answered by the Host's plugin manager
+  'plugins-catalog',
+  'plugins-catalog-configure',
+  'plugins-catalog-install',
+  'plugins-safe-mode',
+  // The registry's author and maintainer tools, answered in the CLI process (src/cli/pluginRegistry.ts)
+  'plugins-publish',
+  'plugins-registry-validate',
+  'plugins-registry-sign',
+  'plugins-registry-keygen',
   // The plugin author's, answered in the CLI process (src/cli/pluginDev.ts)
   'plugins-validate',
   'plugins-init',

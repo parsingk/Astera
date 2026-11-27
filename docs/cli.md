@@ -791,7 +791,7 @@ astera plugins list
 astera plugins get     --id <pluginId>
 astera plugins install [--path <folder>] [--npm <package>] [--file <package.tgz>] [--yes] [--grant <list>]
 astera plugins enable  --id <pluginId>
-astera plugins disable --id <pluginId>
+astera plugins disable [--id <pluginId>] [--all]
 astera plugins remove  --id <pluginId>
 astera plugins logs    --id <pluginId> [--lines <n>]
 astera plugins audit   [--id <pluginId>] [--lines <n>]
@@ -803,6 +803,14 @@ astera plugins init <name> --template <kind>
 astera plugins pack --path <folder> [--out <file>]
 astera plugins dev --path <folder> [--yes] [--grant <list>]
 astera plugins test --path <folder> [--set <key=value>]
+astera plugins catalog [--refresh]
+astera plugins catalog-configure [--url <index>] [--key <id=publicKey>] [--clear]
+astera plugins catalog-install --id <pluginId> [--version <version>] [--yes] [--grant <list>]
+astera plugins safe-mode [--on] [--off]
+astera plugins publish --path <folder> --artifact-url <url> --publisher <name> [--category <category>] [--out <file>]
+astera plugins registry-validate --path <index.json>
+astera plugins registry-sign --path <index.json> --key-file <pem> --key-id <id>
+astera plugins registry-keygen --out <folder> --key-id <id>
 
 astera sources list
 astera sources items --source <sourceId> [--query <text>] [--cursor <cursor>] [--project <projectId>]

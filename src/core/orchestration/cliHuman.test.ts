@@ -1340,3 +1340,47 @@ describe('runtimes get and ping', () => {
     expect(humanFor('runtimes-ping', { runtimeId: 'rt_a', answers: false, code: 'RUNTIME_OFFLINE' })).toBe('Does not answer (RUNTIME_OFFLINE)')
   })
 })
+
+// Phase 4: the catalog, Safe Mode and the registry tools as a person reads them
+describe('humanFor and the catalog', () => {
+  it('plugins catalog says where it is from and when it was read, then a row per plugin', () => {
+    const out = humanFor('plugins-catalog', {
+      configured: true,
+      url: 'https://x.invalid/index.json',
+      sequence: 4,
+      fetchedAt: Date.UTC(2026, 10, 27, 9, 0, 0),
+      expired: false,
+      plugins: [
+        { id: 'astera-hello-panel', publisher: 'example', trustLevel: 'restricted-ui', latest: { version: '0.2.0' }, installed: { version: '0.1.0', enabled: true, fromCatalog: true }, newPermissions: ['workspace.read'] },
+        { id: 'astera-dusk-theme', publisher: 'example', trustLevel: 'declarative', latest: null, installed: null }
+      ]
+    })
+    expect(out).toContain('catalog https://x.invalid/index.json, index 4')
+    expect(out).toMatch(/astera-hello-panel\s+0\.2\.0\s+0\.1\.0\s+restricted UI\s+example\s+update asks for workspace\.read/)
+    expect(out).toMatch(/astera-dusk-theme\s+-\s+-\s+themes only\s+example/)
+  })
+
+  it('says when no catalog is set, when the index expired, and why the last refresh failed', () => {
+    expect(humanFor('plugins-catalog', { configured: false })).toBe('no catalog is set: astera plugins catalog-configure --url <index> --key <id=publicKey>')
+    const out = humanFor('plugins-catalog', { configured: true, url: '/r/index.json', sequence: 1, expired: true, problem: 'the index is not a file', plugins: [] })
+    expect(out).toContain('the index expired: it installs nothing until it is refreshed')
+    expect(out).toContain('the last refresh failed: the index is not a file')
+  })
+
+  it('plugins safe-mode says what it is now', () => {
+    expect(humanFor('plugins-safe-mode', { safeMode: true, changed: true })).toBe('Safe Mode is on: no plugin runs')
+    expect(humanFor('plugins-safe-mode', { safeMode: false, changed: false })).toBe('Safe Mode is off: enabled plugins run')
+    expect(humanFor('plugins-safe-mode', { safeMode: true, changed: true, offline: true })).toBe('Safe Mode is on: no plugin runs (set in the profile; no Host was running)')
+  })
+
+  it('plugins publish prints the entry, and says nothing was uploaded', () => {
+    const out = humanFor('plugins-publish', { entry: { id: 'a' }, file: '/p/a-1.0.0.tgz', sha256: 'f'.repeat(64), uploaded: false })
+    expect(out).toContain('wrote /p/a-1.0.0.tgz')
+    expect(out).toContain('nothing was uploaded')
+    expect(out).toContain('"id": "a"')
+  })
+
+  it('plugins registry-keygen prints the public key and where the private one is', () => {
+    expect(humanFor('plugins-registry-keygen', { keyId: 'main', publicKey: 'PUB', privateKeyFile: '/k/main.pem' })).toBe('key main\npublic key PUB\nprivate key /k/main.pem (keep it private)')
+  })
+})
