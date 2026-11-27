@@ -106,6 +106,11 @@ async function runPrompt(id) {
       return reply(id, { stopReason })
     case 'no-verdict-twice':
       return finish(id, message ?? 'no verdict yet')
+    case 'asks-twice': {
+      // Two permission requests at once, as parallel tool calls make them (Phase 5 A1 final review I6)
+      const [first, second] = await Promise.all([permission('edit', 'Edit a.txt'), permission('edit', 'Edit b.txt')])
+      return finish(id, `outcomes:${outcomeOf(first)},${outcomeOf(second)}`)
+    }
     case 'narrates-then-fails':
       // As a real agent: it says what it does before a tool call, then ends with its own report (Phase 5 A1 final review C1)
       chunk('I will look at the files first.')

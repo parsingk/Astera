@@ -248,9 +248,17 @@ export function createExternalWorks(c: {
       return `the external agent ${name} could not be used: ${agentWords(e instanceof Error ? e.message : String(e))}`
     }
 
+    /** Requests are decided one at a time (final review I6): a person is asked one question at a time, which the app
+     *  shows, and the clock is stopped from the first ask to the last answer instead of restarted by the first answer. */
+    let deciding: Promise<unknown> = Promise.resolve()
+    const decide = (req: AcpPermissionRequest): Promise<string | null> => {
+      const next = deciding.then(() => decideOne(req))
+      deciding = next.catch(() => {})
+      return next
+    }
     /** One permission request, decided as the app-wide permission mode says. A Run stopped or a closed Dispatch ends the
      *  wait, and the agent is told it was cancelled. */
-    const decide = async (req: AcpPermissionRequest): Promise<string | null> => {
+    const decideOne = async (req: AcpPermissionRequest): Promise<string | null> => {
       if (stopped) return null
       let mode: AgentPermissionMode
       try {

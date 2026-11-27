@@ -164,6 +164,22 @@ describe('external agent work', () => {
     expect(r.state().messages.filter((m) => m.type === 'question')).toHaveLength(1)
   })
 
+  it('asks two requests made at once one after the other, with the clock stopped while either waits', async () => {
+    const r = rig({ mode: 'asks-twice', permission: 'manual', timeoutMs: 1500 })
+    const id = await r.start()
+    const questions = () => r.state().messages.filter((m) => m.type === 'question' && m.dispatchId === id)
+    await until(() => questions().length === 1, 'the first question')
+    await sleep(1000)
+    expect(questions()).toHaveLength(1)
+    await handleCommand(r.deps, { sessionId: APP_CALLER }, 'reply', { id: questions()[0].id, body: 'Yes' })
+    await until(() => questions().length === 2, 'the second question')
+    await sleep(1000)
+    expect(r.task().status).toBe('dispatched')
+    await handleCommand(r.deps, { sessionId: APP_CALLER }, 'reply', { id: questions()[1].id, body: 'No' })
+    await until(() => r.task().status === 'completed', 'the Task to complete')
+    expect(r.state().messages.find((m) => m.type === 'worker_done' && m.dispatchId === id)?.subject).toBe('outcomes:allow-once,reject')
+  })
+
   it('a refusal in manual reaches the agent, and its FAILED report fails the Task', async () => {
     const r = rig({ permission: 'manual' })
     const id = await r.start()
