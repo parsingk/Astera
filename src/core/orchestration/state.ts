@@ -1901,9 +1901,17 @@ export function closeOrphanedExternalReviews(
     return endedUnproven(d, now)
   })
   if (closed.length === 0) return { state: s, closed }
-  let state: OrchState = { ...s, dispatches }
+  return { state: gateCutOffExternalWork({ ...s, dispatches }, closed, now), closed }
+}
+
+/** The Tasks of the external agents' work in `closedIds` (Phase 5 A1), each still `dispatched` under a Dispatch just closed
+ *  because the process that ran its agent is gone, put to a person: nothing else would move them on, since a recovery pass
+ *  does not restart an external agent (core/recovery/candidates.ts). Answered, the Task is ready and the agent works it
+ *  again. Two callers: the orphan close above, and the restart cleanup of `OrchestrationStore.load`. */
+export function gateCutOffExternalWork(s: OrchState, closedIds: readonly string[], now: string): OrchState {
+  let state = s
   for (const d of s.dispatches) {
-    if (!d.externalAgent || !closed.includes(d.id)) continue
+    if (!d.externalAgent || !closedIds.includes(d.id)) continue
     if (state.tasks.find((t) => t.id === d.taskId)?.status !== 'dispatched') continue
     const gated = createGate(
       state,
@@ -1915,7 +1923,7 @@ export function closeOrphanedExternalReviews(
     )
     if (gated.ok) state = gated.state
   }
-  return { state, closed }
+  return state
 }
 
 /** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.

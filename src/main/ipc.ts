@@ -122,6 +122,7 @@ import { createMirrorStore, OrchStateConflict } from './orchestration/mirrorStor
 import { createResumeSweep, type ResumeSweep } from '../core/orchestration/exec/resumeSweep'
 import { createOrchCommitHook } from './orchestration/commitHook'
 import { createReviewStarter } from '../core/orchestration/exec/review'
+import { createExternalWorks } from '../core/orchestration/exec/externalWork'
 import { externalReviewIo } from '../core/orchestration/exec/externalReviewIo'
 import { probeReviewer, type ReviewerProbe } from '../core/acp/probe'
 import { nodeProcFactory } from '../core/sessions/nodeProcFactory'
@@ -3452,6 +3453,26 @@ export function registerIpc(
         treeState: trackedTreeState
       }
     })
+    // Phase 5 A1: an external agent working a Task runs as this process's own child too, beside the external reviewers,
+    // through the same door; its permission requests follow the permission mode in Settings, read at each one
+    const externalWorks = createExternalWorks({
+      getState: () => store.get(),
+      setState: (next) => deps.setState(next),
+      now: () => new Date().toISOString(),
+      log: orchLog,
+      specsDir,
+      external: {
+        settings: async () => core.appSettings.getReviewerSettings(),
+        handle: (cmd, args) => orchHandleCommand(deps, { sessionId: UI_CALLER }, cmd, args),
+        spawn: nodeProcFactory,
+        env: (cwd) => core.sessions.checkEnv(process.env, cwd).env,
+        platform: process.platform,
+        clientVersion: app.getVersion(),
+        ...externalReviewIo(orchLog),
+        treeState: trackedTreeState,
+        permissionMode: async () => core.appSettings.getAgentPermissionMode()
+      }
+    })
 
     /** What reapWorktree (core/orchestration/exec/integrateGit.ts) may close and ask in the app.
      *  `isPathInUse` is called through a wrapper: it is declared further down registerIpc, and is
@@ -3876,6 +3897,8 @@ export function registerIpc(
           orchLog(`startReview failed task=${taskId}: ${String(e)}`)
         )
       },
+      // Phase 5 A1: the run of an external agent on the Dispatch external-work-start just opened. It never throws.
+      startExternalWork: (a) => externalWorks.start(a),
       // 검토 판정이 읽는 구조화된 결과(server.ts 의 send worker_done, 검토 분기). **완성된 경로를
       // 받는다** — suffix(`.review.json`)를 붙이는 자리는 그 호출부 하나뿐이다(그쪽 주석). 여기서
       // 또 붙이면 `….md.review.json.review.json` 을 찾다가 조용히 못 찾아 구조화된 판정 기능이
@@ -4275,6 +4298,8 @@ export function registerIpc(
       stop: () => {
         // The external reviewers' agents die with the app and record nothing: their Dispatches stay open for the Host.
         startReview.disposeExternal()
+        // An external agent's work the same: its Dispatch stays open for the Host's orphan close, which puts it to a person
+        externalWorks.dispose()
         // The journal's handle goes with the server it was opened for; reopened by the next boot.
         closeContinuity()
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.

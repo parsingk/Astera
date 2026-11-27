@@ -900,7 +900,7 @@ describe('HOST_LOCAL worktree names (S3)', () => {
 describe('HOST_DRIVES (R8)', () => {
   const build = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): ReturnType<typeof hostOrchDeps> => hostOrchDeps(base(over))
   const checks = (): HostChecks => ({
-    startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
+    startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(), startExternalWork: vi.fn(),
     repairTargetFor: vi.fn(() => ({ kind: 'fresh' } as never)),
     repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'ko' as const),
     settleHandedOff: vi.fn(async () => {}),

@@ -363,6 +363,8 @@ export interface TaskAttempt {
   /** A review attempt made by an external reviewer: its id and name. `provider` and `accountId` are then the
    *  implementer's provider and an empty string, not the reviewer's. */
   readonly externalReviewer?: { readonly id: string; readonly name: string }
+  /** The external agent that worked this attempt (Phase 5 A1); `provider` and `accountId` are then placeholders. */
+  readonly externalAgent?: { readonly id: string; readonly name: string }
   readonly outcome?: Outcome
   readonly startedAt: string
   readonly endedAt?: string

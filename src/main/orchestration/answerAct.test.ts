@@ -80,7 +80,7 @@ describe('answerOrchAct', () => {
   // The m6 ruling (S4+S5 Task 13 review → Task 14): an app that yields dispatch to a Host announcing
   // it does not run the S5 starts that Host forwards to it. It leaves the Task for the Host that drives
   // next, the same way a retiring Host leaves it (Task 13).
-  it.each(['startValidation', 'startReview', 'startRepair'])(
+  it.each(['startValidation', 'startReview', 'startRepair', 'startExternalWork'])(
     'an app that yields dispatch does not run a forwarded %s, and says why',
     async (act) => {
       const start = vi.fn()
@@ -92,7 +92,7 @@ describe('answerOrchAct', () => {
   )
 
   // Mixed versions (D5): in front of an older Host the app keeps its validator, review and repair.
-  it.each(['startValidation', 'startReview', 'startRepair'])(
+  it.each(['startValidation', 'startReview', 'startRepair', 'startExternalWork'])(
     'an app that does not yield dispatch runs a forwarded %s as before',
     async (act) => {
       const start = vi.fn()

@@ -221,7 +221,7 @@ const HOST_ROLLS = ['unregisterRolling'] as const
  * The three void calls are bare statements in `handleCommand`, so each runs inside a try/catch that
  * logs: it must never throw into the command.
  */
-const HOST_DRIVES = ['startValidation', 'startReview', 'startRepair', 'repairTargetFor', 'repairOnce', 'lang'] as const satisfies readonly (keyof HostChecks)[]
+const HOST_DRIVES = ['startValidation', 'startReview', 'startRepair', 'startExternalWork', 'repairTargetFor', 'repairOnce', 'lang'] as const satisfies readonly (keyof HostChecks)[]
 type HostDrivesName = (typeof HOST_DRIVES)[number]
 
 /** The route each HOST_DRIVES name takes while the Host does not drive: the one it had before S5. */
@@ -229,6 +229,8 @@ const HOST_DRIVES_FALLBACK: Record<HostDrivesName, 'forgetful' | ((why: string) 
   startValidation: 'forgetful',
   startReview: 'forgetful',
   startRepair: 'forgetful',
+  // Phase 5 A1: as a repair's start, a void start the app runs while this Host does not drive
+  startExternalWork: 'forgetful',
   repairTargetFor: () => null,
   repairOnce: (why: string) => ({ ok: false as const, error: why }),
   lang: () => 'en'
@@ -537,6 +539,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   startValidation: true,
   startReview: true,
   startRepair: true,
+  startExternalWork: true,
   repairTargetFor: false,
   repairOnce: true,
   lang: false,
