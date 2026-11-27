@@ -2827,6 +2827,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .changed-file-from { margin-left: 6px; color: var(--text-dim); }
 .changed-file-counts { flex: 0 0 auto; color: var(--text-dim); font-family: var(--font-mono, monospace); }
 .changed-file-diff { margin: 4px 0 8px; }
+/* Phase 3 Part 4: one attempt's range, the range read, and who changed each file */
+.changed-files-scope { margin: 4px 0; max-width: 360px; }
+.changed-files-ranges { display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--font-mono, monospace); }
+.changed-file-attr { flex: 0 0 auto; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line-soft); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.changed-file-attr.is-agent { color: var(--accent); border-color: var(--accent); }
+.changed-file-attr.is-mixed { color: var(--warn, #d29922); border-color: var(--warn, #d29922); }
 .changed-files-reported-head { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); }
 .changed-files-reported { margin: 0; padding-left: 18px; font-size: 12px; font-family: var(--font-mono, monospace); color: var(--text); }
 .diff-view { max-height: 360px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg); }

@@ -1,9 +1,10 @@
 // The switches that turn the Phase 1 workspace features off (the spec's Phase 1 gate: a new feature can be turned off
 // through the existing settings). The three that act without a key: the layout the window remembers, the Problems tab,
 // and sending a piece of the workbench to an agent. The palette, go to file and find in files open only by their keys,
-// and a key is taken away in the shortcut settings. Phase 3 Part 2 adds the Tests tab, Part 3 the language servers.
+// and a key is taken away in the shortcut settings. Phase 3 Part 2 adds the Tests tab, Part 3 the language servers,
+// Part 4 the agent-aware review (who changed each file, one attempt's range, review findings on the diff).
 //
-// All five default on: the Phase 1 three passed their reviews and screen checks (spec 9.3), and the Tests tab and the
+// All six default on: the Phase 1 three passed their reviews and screen checks (spec 9.3), and the Tests tab and the
 // language servers follow them (nothing runs until a server is installed). They move together as one stored
 // object, the convention core/notify/settings.ts follows, so one place knows what a missing file means.
 //
@@ -15,6 +16,7 @@ export interface WorkspaceFeatures {
   contextBridge: boolean
   testsTab: boolean
   languageServers: boolean
+  agentReview: boolean
 }
 
 export const WORKSPACE_FEATURES_DEFAULTS: WorkspaceFeatures = {
@@ -22,7 +24,8 @@ export const WORKSPACE_FEATURES_DEFAULTS: WorkspaceFeatures = {
   problemsTab: true,
   contextBridge: true,
   testsTab: true,
-  languageServers: true
+  languageServers: true,
+  agentReview: true
 }
 
 /** Read from a file a person can edit by hand. Every switch defaults on, so it reads off only on an explicit `false`:
@@ -35,7 +38,8 @@ export function readWorkspaceFeatures(v: unknown): WorkspaceFeatures {
     problemsTab: o.problemsTab !== false,
     contextBridge: o.contextBridge !== false,
     testsTab: o.testsTab !== false,
-    languageServers: o.languageServers !== false
+    languageServers: o.languageServers !== false,
+    agentReview: o.agentReview !== false
   }
 }
 

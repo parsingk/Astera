@@ -1244,7 +1244,7 @@ describe('workspaceFeatures', () => {
     await a.setWorkspaceFeatures({ ...WORKSPACE_FEATURES_DEFAULTS, problemsTab: false })
     const b = new AppSettingsStore(f)
     await b.load()
-    expect(b.getWorkspaceFeatures()).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true, languageServers: true })
+    expect(b.getWorkspaceFeatures()).toEqual({ layoutMemory: true, problemsTab: false, contextBridge: true, testsTab: true, languageServers: true, agentReview: true })
   })
 
   it('leaves the key out of the file while every switch is on', async () => {

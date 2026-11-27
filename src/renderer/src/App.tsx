@@ -7067,6 +7067,8 @@ export default function App(): React.JSX.Element {
         <KeyedRunDetail
           open={openRun}
           door={detailDoor}
+          // Who changed each file and one attempt's range (Phase 3 Part 4), while its switch is on
+          reviewOn={workspaceFeatures?.agentReview === true}
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
           // findRun 인 이유는 위 두 효과와 같다 — 예약 회차는 children 안에 있다(snapshot.ts).
