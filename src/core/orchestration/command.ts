@@ -4755,7 +4755,8 @@ export async function handleCommand(
         // 회로 차단에 한 걸음 다가가면서, 그 계정이 언제 풀리는지는 아무도 알지 못한다. 위 주석이
         // 말하는 "이 경로로만 닫히는 세션"은 검토자에게도 똑같이 있다.
         let limitResetsAt: number | null = null
-        if (outcome === 'failed' && deps.probeLimit && reporting) {
+        // An external agent (Phase 5 A1) runs on no account, so it has no limit to find
+        if (outcome === 'failed' && deps.probeLimit && reporting && !reporting.externalAgent) {
           // The probe reads files — a failure there must not block handling the worker's report.
           try {
             limitResetsAt = await deps.probeLimit(reporting)

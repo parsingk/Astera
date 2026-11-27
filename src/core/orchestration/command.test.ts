@@ -11424,6 +11424,18 @@ describe('external-work-start', () => {
     expect((await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)).status).toBe(409)
   })
 
+  it('a failed report of the external agent does not probe an account’s usage limit: it has none', async () => {
+    const { deps, taskId } = await setup()
+    const probed: string[] = []
+    Object.assign(deps, { probeLimit: async (d: { id: string }) => (probed.push(d.id), 1_700_000_000_000) })
+    const r = await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    const dispatchId = (r.body as { dispatchId: string }).dispatchId
+    const done = await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'failed', subject: 'FAILED: no', body: 'b' }, HOST_CALLER)
+    expect(done.status).toBe(200)
+    expect(probed).toEqual([])
+    expect(deps.getState().dispatches.find((d) => d.id === dispatchId)?.limitResetsAt).toBeUndefined()
+  })
+
   it('a stopped Run ends the Dispatch without asking for a worker session to be released', async () => {
     const { deps, taskId, released, runId } = await setup()
     await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)

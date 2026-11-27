@@ -5,7 +5,7 @@
 // `--echo-env <NAME>` also appends `env <NAME>=<value>` there, once, when the first prompt arrives.
 // `--error-message <text>` replaces the error text of 'auth-required' and 'new-session-error'; `--title <text>` the tool
 // call's title in 'edits-without-asking'; `--stop-reason <text>` the stop reason of 'stop-reason'.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const argv = process.argv.slice(2)
@@ -106,6 +106,19 @@ async function runPrompt(id) {
       return reply(id, { stopReason })
     case 'no-verdict-twice':
       return finish(id, message ?? 'no verdict yet')
+    case 'works': {
+      // A worker (Phase 5 A1): asks before it writes work.txt in its folder, writes it only when allowed
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'edit', status: 'pending', title: 'Edit work.txt' })
+      const r = await permission('edit', 'Edit work.txt')
+      if (outcomeOf(r) !== 'allow-once') {
+        update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' })
+        return finish(id, `FAILED: the edit was not allowed (${outcomeOf(r)})`)
+      }
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'in_progress' })
+      writeFileSync('work.txt', 'worked')
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' })
+      return finish(id, message ?? ['Wrote work.txt', 'It holds the word worked. Nothing is left.'].join(String.fromCharCode(10)))
+    }
     default:
       return fail(id, -32603, `unknown mode ${mode}`)
   }
