@@ -4,7 +4,7 @@
 import { promises as fs } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES, trustWords } from '../../core/plugins/manifest'
+import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, pluginFolderName, type PluginManifest, type PluginPermission, contributionPermissionProblem, type PluginUiPermission, PLUGIN_SERVED_CAPABILITIES, satisfiesRange, trustWords } from '../../core/plugins/manifest'
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
 import { readPackage } from './packageFile'
 import type { PluginCalls } from '../../core/plugins/pluginCalls'
@@ -995,6 +995,9 @@ export function createPluginManager(d: {
     if (!version) throw new Refused(404, a.version === undefined ? `the catalog has no version of ${entry.id} this Astera runs` : `the catalog lists no version ${String(a.version)} of ${entry.id}`)
     const why = revoked(version.version)
     if (why !== null) throw new Refused(409, `${entry.id} ${version.version} was revoked by the catalog (${why})`)
+    // An exact version this Astera does not run is refused, not installed to sit idle (Phase 4 gate)
+    if (satisfiesRange(host.version, version.asteraRange) !== true)
+      throw new Refused(409, `${entry.id} ${version.version} runs on Astera ${version.asteraRange}, and this is ${host.version}`)
     return { entry, version }
   }
 
