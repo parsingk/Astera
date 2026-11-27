@@ -154,7 +154,7 @@ describe('maskForAgent, the shapes a file selection holds (review I2)', () => {
   it('masks values under quoted secret keys, as JSON, YAML and Python write them', () => {
     expect(masked('{ "password": "Sup3rS3cretPassw0rd!x" }')).toBe(1)
     expect(masked('"client_secret": "Zx9Qw8Er7Ty6Ui5Op4As"')).toBe(1)
-    expect(masked('"apiKey": "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"')).toBe(1)
+    expect(masked('"apiKey": "AIzaSyDEADBEEF1234567890"')).toBe(1)
     expect(masked("{'api_key': 'Zx9Qw8Er7Ty6Ui5Op4As'}")).toBe(1)
     expect(maskForAgent('"password": "Sup3rS3cretPassw0rd!x"').text).toBe('"password": "[REDACTED]"')
   })
