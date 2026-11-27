@@ -106,7 +106,7 @@ function versionOf(v: unknown, at: string, problems: string[]): CatalogVersion |
     sha256: v.sha256 as string,
     sizeBytes: v.sizeBytes as number,
     permissions: [...(v.permissions as string[])],
-    ...(notes !== undefined ? { releaseNotes: notes } : {})
+    ...(typeof notes === 'string' ? { releaseNotes: notes } : {})
   }
 }
 

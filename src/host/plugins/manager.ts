@@ -8,6 +8,9 @@ import { capabilityPermissionProblem, incompatibility, isSemver, parseManifest, 
 import { PluginCopyRefused, copyPluginFolder, layoutProblem } from './copyFolder'
 import { readPackage } from './packageFile'
 import type { PluginCalls } from '../../core/plugins/pluginCalls'
+import { entryMismatch, isRevoked, latestCompatible, type CatalogEntry, type CatalogVersion } from '../../core/plugins/catalog'
+import { catalogSourceProblem, createCatalogStore } from './catalogStore'
+import type { CatalogKey } from './catalogVerify'
 import { parseNpmSpec } from '../../core/plugins/npmSpec'
 import { NpmFailed, NpmMissing, createNpm, installDependencies, packAndExtract, type NpmRun, type NpmRunner } from './npm'
 import { NpmUnavailable } from './ownNpm'
@@ -57,6 +60,15 @@ export interface PluginManager {
   stopNpm(): void
   /** Sets and unsets a plugin's settings, and restarts it if it runs. */
   configure(id: unknown, set: unknown, unset: unknown): Promise<PluginsAnswer>
+  /** Phase 4: the catalog's plugins from its last verified index, fetched again first with `refresh`; a revoked version
+   *  installed from it is turned off when a fetched index names it. */
+  catalog(a: { refresh?: unknown }): Promise<PluginsAnswer>
+  /** Sets the catalog source (`url`, `keys`) or forgets it (`clear`). */
+  catalogConfigure(a: { url?: unknown; keys?: unknown; clear?: unknown }): Promise<PluginsAnswer>
+  /** What installing `id` at `version` (the newest this Astera runs when absent) would install, from its artifact. */
+  catalogInspect(a: { id?: unknown; version?: unknown }): Promise<PluginsAnswer>
+  /** Installs that exact version, as `catalogInspect` showed it (`expect`), with `grant`. */
+  catalogInstall(a: { id?: unknown; version?: unknown; grant?: unknown; expect?: unknown }): Promise<PluginsAnswer>
 }
 
 /** A plugin's settings as stored, read against its installed schema (manager's settingsState). */
@@ -147,6 +159,8 @@ export function createPluginManager(d: {
   log?: (m: string) => void
   /** A plugin's Host command calls and refusals since the Host started (Phase 2 remaining, Plugin Inspector). */
   calls?: Pick<PluginCalls, 'of' | 'forget'>
+  /** For tests: how an https catalog and its artifacts are fetched (Phase 4). */
+  fetch?: typeof fetch
 }): PluginManager {
   const root = pluginsRoot(d.profileDir)
   // The copies live one level down, so no plugin name can be plugins.json or one of the folders the Host keeps for
@@ -157,6 +171,7 @@ export function createPluginManager(d: {
   // The person's npm, or where there is none Astera's own, run on the Host's own Node (plugins 2e-2).
   const npm = d.npm ?? createNpm({ profileDir: d.profileDir, env: process.env, node: process.execPath })
   const now = d.now ?? Date.now
+  const catalogStore = createCatalogStore({ root, now, ...(d.fetch ? { fetch: d.fetch } : {}) })
   let queue: Promise<unknown> = Promise.resolve()
   /** Moves a folder, trying again while the system refuses for a moment. */
   const move = (from: string, to: string): Promise<void> =>
@@ -301,6 +316,7 @@ export function createPluginManager(d: {
 
   /** A record as a person sees it, read with its installed copy's manifest and, while it runs, the runtime's word. */
   async function view(r: PluginRecord): Promise<Record<string, unknown>> {
+    const revoked = await revokedReason(r)
     const dir = path.join(installed, r.folder)
     const read = await readManifest(dir)
     const m = read.ok ? read.manifest : null
@@ -324,6 +340,7 @@ export function createPluginManager(d: {
       ...(reason !== null ? { reason } : {}),
       ...(run?.pid !== undefined ? { pid: run.pid } : {}),
       trust: m?.trust ?? 'trusted',
+      ...(revoked !== null ? { revoked } : {}),
       ...(m?.ui !== undefined ? { ui: m.ui } : {}),
       ...(m?.apiVersion === '2' ? { contributes: m.contributes } : {}),
       capabilities: m?.capabilities ?? [],
@@ -627,6 +644,9 @@ export function createPluginManager(d: {
     const want = idOf(enabled ? 'plugins-enable' : 'plugins-disable', id)
     const records = await readRegistry(root)
     const r = find(records, want)
+    // Phase 4: a version the catalog revoked is not turned on again; it is updated or removed
+    const revoked = enabled ? await revokedReason(r) : null
+    if (revoked !== null) throw new Refused(409, `${r.id} ${r.version} was revoked by the catalog (${revoked}); update or remove it`)
     if (r.enabled === enabled) {
       // Enabling a plugin that failed starts it again (design P11): a change, though the flag stays as it was.
       const launch = enabled && d.runtime?.status(r.id)?.status === 'failed' ? await runnable(r) : null
@@ -880,7 +900,160 @@ export function createPluginManager(d: {
     }
   }
 
+  /** Why the catalog revoked `r`'s version, for a plugin installed from it, or null. The last verified index decides,
+   *  expired or not: an expired index still knows what it revoked. */
+  async function revokedReason(r: PluginRecord): Promise<string | null> {
+    if (r.source.kind !== 'catalog') return null
+    const c = await catalogStore.current()
+    return c.configured && c.catalog ? isRevoked(c.catalog, r.id, r.version) : null
+  }
+
+  async function catalogRead(a: { refresh?: unknown }): Promise<PluginsAnswer> {
+    const source = await catalogStore.source()
+    if (source === null) return { status: 200, body: { configured: false } }
+    const fetched = a.refresh === true ? await catalogStore.refresh() : null
+    const c = await catalogStore.current()
+    if (!c.configured) return { status: 200, body: { configured: false } }
+    const records = await readRegistry(root)
+    // A fetched index that revokes a version installed from it turns that plugin off: it is not deleted (design call 6)
+    const disabled: string[] = []
+    if (fetched?.ok === true && c.catalog)
+      for (const r of records)
+        if (r.enabled && r.source.kind === 'catalog' && isRevoked(c.catalog, r.id, r.version) !== null) {
+          await writeRegistry(root, (await readRegistry(root)).map((x) => (x.id === r.id ? { ...x, enabled: false } : x)))
+          await d.runtime?.stop(r.id)
+          disabled.push(r.id)
+        }
+    const now = await readRegistry(root)
+    const plugins = (c.catalog?.plugins ?? []).map((e) => {
+      const rec = now.find((r) => r.id === e.id)
+      const latest = latestCompatible(e, host.version, (v) => (c.catalog ? isRevoked(c.catalog, e.id, v) : null))
+      const newPermissions = latest && rec ? latest.permissions.filter((p) => !(rec.granted as string[]).includes(p)) : []
+      return {
+        ...e,
+        latest,
+        installed: rec ? { version: rec.version, enabled: rec.enabled, fromCatalog: rec.source.kind === 'catalog' } : null,
+        ...(rec && c.catalog && isRevoked(c.catalog, e.id, rec.version) !== null ? { installedRevoked: isRevoked(c.catalog, e.id, rec.version) } : {}),
+        ...(rec && latest && newPermissions.length > 0 ? { newPermissions } : {})
+      }
+    })
+    const problem = fetched && !fetched.ok ? fetched.problem : c.problem
+    return {
+      status: 200,
+      body: {
+        configured: true,
+        url: c.url,
+        keys: source.keys.map((k) => k.id),
+        ...(c.catalog ? { sequence: c.catalog.sequence, expires: c.catalog.expires } : {}),
+        ...(c.fetchedAt !== undefined ? { fetchedAt: c.fetchedAt } : {}),
+        expired: c.expired === true,
+        ...(problem !== undefined ? { problem } : {}),
+        plugins,
+        ...(disabled.length > 0 ? { disabled } : {})
+      }
+    }
+  }
+
+  async function catalogConfigure(a: { url?: unknown; keys?: unknown; clear?: unknown }): Promise<PluginsAnswer> {
+    if (a.clear === true) {
+      await catalogStore.clearSource()
+      return { status: 200, body: { configured: false, changed: true } }
+    }
+    const problem = catalogSourceProblem({ url: a.url, keys: a.keys })
+    if (problem !== null) throw new Refused(400, problem)
+    await catalogStore.setSource({ url: a.url as string, keys: a.keys as CatalogKey[] })
+    return { status: 200, body: { configured: true, url: a.url, keys: (a.keys as CatalogKey[]).map((k) => k.id), changed: true } }
+  }
+
+  /** The catalog entry and exact version an install names, from the last verified index that has not expired. */
+  async function catalogPick(cmd: string, a: { id?: unknown; version?: unknown }): Promise<{ entry: CatalogEntry; version: CatalogVersion }> {
+    const c = await catalogStore.current()
+    if (!c.configured) throw new Refused(400, 'no catalog is set: configure one first')
+    if (!c.catalog) throw new Refused(409, `the catalog has no verified index yet${c.problem ? ` (${c.problem})` : ''}; refresh it`)
+    if (c.expired) throw new Refused(409, 'the catalog index expired; refresh it before installing')
+    if (typeof a.id !== 'string' || a.id === '') throw new Refused(400, `${cmd} needs --id`)
+    const entry = c.catalog.plugins.find((e) => e.id === a.id)
+    if (!entry) throw new Refused(404, `the catalog lists no plugin ${a.id}`)
+    const catalog = c.catalog
+    const revoked = (v: string): string | null => isRevoked(catalog, entry.id, v)
+    const version = a.version === undefined ? latestCompatible(entry, host.version, revoked) : entry.versions.find((v) => v.version === a.version)
+    if (!version) throw new Refused(404, a.version === undefined ? `the catalog has no version of ${entry.id} this Astera runs` : `the catalog lists no version ${String(a.version)} of ${entry.id}`)
+    const why = revoked(version.version)
+    if (why !== null) throw new Refused(409, `${entry.id} ${version.version} was revoked by the catalog (${why})`)
+    return { entry, version }
+  }
+
+  /** The artifact downloaded and checked against the index, refusals said as the install's. */
+  async function catalogFile(entry: CatalogEntry, version: CatalogVersion): Promise<string> {
+    try {
+      return await catalogStore.download(version)
+    } catch (e) {
+      throw new Refused(400, `${entry.id} ${version.version} from the catalog: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** The package's manifest is the entry's: id, version and trust, asking for no more than it lists. */
+  async function catalogMatch(folder: string, entry: CatalogEntry, version: CatalogVersion): Promise<void> {
+    const read = await readManifest(folder)
+    if (!read.ok) throw new Refused(400, `${entry.id} ${version.version} from the catalog: ${read.error.split(folder).join('the package')}`)
+    const mismatch = entryMismatch(read.manifest, entry, version)
+    if (mismatch !== null) throw new Refused(400, `${entry.id} ${version.version} from the catalog: ${mismatch}`)
+  }
+
+  async function catalogInspect(a: { id?: unknown; version?: unknown }): Promise<PluginsAnswer> {
+    const { entry, version } = await catalogPick('plugins-catalog-inspect', a)
+    const file = await catalogFile(entry, version)
+    return fromFile(file, async (folder, sha256) => {
+      await catalogMatch(folder, entry, version)
+      const shown = await inspection(folder, `${entry.id} ${version.version} from the catalog`)
+      return {
+        status: 200,
+        body: {
+          ...shown,
+          catalog: {
+            version: version.version,
+            sha256,
+            artifactUrl: version.artifactUrl,
+            publisher: entry.publisher,
+            ...(entry.license !== undefined ? { license: entry.license } : {}),
+            ...(entry.sourceUrl !== undefined ? { sourceUrl: entry.sourceUrl } : {}),
+            ...(version.releaseNotes !== undefined ? { releaseNotes: version.releaseNotes } : {})
+          }
+        }
+      }
+    })
+  }
+
+  async function catalogInstall(a: { id?: unknown; version?: unknown; grant?: unknown; expect?: unknown }): Promise<PluginsAnswer> {
+    const c = await catalogStore.current()
+    if (!c.configured) throw new Refused(400, 'no catalog is set: configure one first')
+    if (typeof a.version !== 'string') throw new Refused(400, 'plugins-catalog-install needs --version: the exact version its inspect showed')
+    const { entry, version } = await catalogPick('plugins-catalog-install', a)
+    const grant = a.grant
+    if (!Array.isArray(grant) || !grant.every((g) => typeof g === 'string'))
+      throw new Refused(400, 'plugins-catalog-install needs a grant: the permissions you approve, from those the plugin asks for')
+    const want = a.expect as Record<string, unknown> | undefined
+    if (typeof want !== 'object' || want === null || typeof want.name !== 'string' || typeof want.version !== 'string' || typeof want.sha256 !== 'string')
+      throw new Refused(400, 'plugins-catalog-install needs expect: the { name, version, sha256, trust } its inspect showed')
+    // What was shown is what the index names, byte for byte
+    if (want.sha256 !== version.sha256) throw new Refused(409, `the catalog's ${entry.id} ${version.version} changed after it was shown; run the install again`)
+    const expected = { name: want.name, version: want.version, ...(typeof want.trust === 'string' ? { trust: want.trust } : {}) }
+    const records = await readRegistry(root)
+    const file = await catalogFile(entry, version)
+    return fromFile(file, async (folder, got) => {
+      if (got !== version.sha256) throw new Refused(409, `${entry.id} ${version.version} from the catalog changed after it was shown; run the install again`)
+      await catalogMatch(folder, entry, version)
+      const shownAs = `${entry.id} ${version.version} from the catalog`
+      await installable(folder, shownAs, grant as string[], expected)
+      return place(folder, shownAs, grant as string[], expected, records, { kind: 'catalog', id: entry.id, version: version.version, sha256: got, url: version.artifactUrl })
+    })
+  }
+
   return {
+    catalog: (a) => serial(() => catalogRead(a)),
+    catalogConfigure: (a) => serial(() => catalogConfigure(a)),
+    catalogInspect: (a) => serial(() => catalogInspect(a)),
+    catalogInstall: (a) => serial(() => catalogInstall(a)),
     inspect: (p) => serial(() => inspect(p)),
     install: (a) => serial(() => install(a)),
     list: () =>

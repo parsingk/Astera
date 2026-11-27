@@ -145,7 +145,7 @@ describe('createCatalogStore', () => {
     }
     const fetchFake = (async (url: string) => {
       const a = answers[url]
-      return a ? new Response(a.body, { status: 200 }) : new Response('no', { status: 404 })
+      return a ? new Response(new Uint8Array(a.body), { status: 200 }) : new Response('no', { status: 404 })
     }) as unknown as typeof fetch
     const store = createCatalogStore({ root, now: () => 0, fetch: fetchFake })
     await store.setSource(SOURCE('https://example.invalid/index.json'))
@@ -157,7 +157,7 @@ describe('createCatalogStore', () => {
     answers['https://cdn.example.invalid/hello.tgz'] = { body: Buffer.concat([ARTIFACT, Buffer.from('more')]) }
     await fs.rm(path.join(root, '.downloads'), { recursive: true, force: true })
     await expect(store.download(v)).rejects.toThrow(`is larger than the ${ARTIFACT.length} bytes the catalog names`)
-    const redirected = (async () => Object.defineProperty(new Response(ARTIFACT, { status: 200 }), 'url', { value: 'http://evil.invalid/hello.tgz' })) as unknown as typeof fetch
+    const redirected = (async () => Object.defineProperty(new Response(new Uint8Array(ARTIFACT), { status: 200 }), 'url', { value: 'http://evil.invalid/hello.tgz' })) as unknown as typeof fetch
     const store2 = createCatalogStore({ root, now: () => 0, fetch: redirected })
     await expect(store2.download(v)).rejects.toThrow('was answered from http://evil.invalid/hello.tgz, not an https address')
   })
