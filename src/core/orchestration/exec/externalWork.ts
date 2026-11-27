@@ -15,7 +15,7 @@ import { agentChildEnv, resolveAgentCommand } from '../../acp/spawn'
 import { isSamePath } from '../../files/tree'
 import type { ProcLike } from '../../sessions/proc'
 import type { AgentPermissionMode } from '../../types'
-import { createGate, endedUnproven, type OrchState } from '../state'
+import { endedUnproven, gateOrFail, type OrchState } from '../state'
 import type { Dispatch } from '../types'
 import { specFileName } from './coordinator'
 import { EXTERNAL_OPEN_POLL_MS, reviewLogsDir, TRANSCRIPT_MESSAGE_MAX } from './externalReview'
@@ -220,16 +220,15 @@ export function createExternalWorks(c: {
       const x = s.dispatches.find((y) => y.id === d.id)
       if (!x || x.outcome || x.endedAt) return void c.log(`external work of task=${taskId} dispatch=${d.id} failed after its Dispatch was closed: ${reason}`)
       const closed: OrchState = { ...s, dispatches: s.dispatches.map((y) => (y.id === d.id ? endedUnproven(y, c.now()) : y)) }
-      const gated = createGate(
-        closed,
-        {
+      // A Gate that cannot be opened marks the Task failed instead (final review M7)
+      await c.setState(
+        gateOrFail(
+          closed,
           taskId,
-          question: `외부 에이전트가 이 Task 를 끝내지 못했습니다: ${reason}\n기록: ${logFile}\n이 질문에 답하면 Task 가 다시 준비 상태가 되고 같은 에이전트가 다시 맡습니다. 끝난 일을 그대로 닫으려면 task-update --status completed 를 쓰세요.`
-        },
-        c.now()
+          `외부 에이전트가 이 Task 를 끝내지 못했습니다: ${reason}\n기록: ${logFile}\n이 질문에 답하면 Task 가 다시 준비 상태가 되고 같은 에이전트가 다시 맡습니다. 끝난 일을 그대로 닫으려면 task-update --status completed 를 쓰세요.`,
+          c.now()
+        )
       )
-      await c.setState(gated.ok ? gated.state : closed)
-      if (!gated.ok) c.log(`external work of task=${taskId} dispatch=${d.id}: no Gate could be opened (${gated.error}); its Dispatch is closed as unproven`)
     }
     const reasonOf = (e: unknown): string => {
       if (timedOut) return `the external agent ${name} did not finish in ${Math.max(1, Math.round(budgetMs / 60_000))} minutes.`

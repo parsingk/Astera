@@ -1924,17 +1924,25 @@ export function gateCutOffExternalWork(s: OrchState, closedIds: readonly string[
   for (const d of s.dispatches) {
     if (!d.externalAgent || !closedIds.includes(d.id)) continue
     if (state.tasks.find((t) => t.id === d.taskId)?.status !== 'dispatched') continue
-    const gated = createGate(
+    state = gateOrFail(
       state,
-      {
-        taskId: d.taskId,
-        question: `외부 에이전트 ${d.externalAgent.name || d.externalAgent.id}의 작업이 끊겼습니다: 그 에이전트를 돌리던 Astera 가 다시 시작되어 결과를 받을 수 없습니다.\n이 질문에 답하면 Task 가 다시 준비 상태가 되고 같은 에이전트가 다시 맡습니다. 끝난 일을 그대로 닫으려면 task-update --status completed 를 쓰세요.`
-      },
+      d.taskId,
+      `외부 에이전트 ${d.externalAgent.name || d.externalAgent.id}의 작업이 끊겼습니다: 그 에이전트를 돌리던 Astera 가 다시 시작되어 결과를 받을 수 없습니다.\n이 질문에 답하면 Task 가 다시 준비 상태가 되고 같은 에이전트가 다시 맡습니다. 끝난 일을 그대로 닫으려면 task-update --status completed 를 쓰세요.`,
       now
     )
-    if (gated.ok) state = gated.state
   }
   return state
+}
+
+/** Puts a Task whose external agent's work ended to a person (Phase 5 A1). When the Gate cannot be opened, the Task is
+ *  marked failed with the question as its result instead (final review M7), as performRepair does: nothing else would
+ *  move it on, since a recovery pass does not restart an external agent. */
+export function gateOrFail(s: OrchState, taskId: string, question: string, now: string): OrchState {
+  const gated = createGate(s, { taskId, question }, now)
+  if (gated.ok) return gated.state
+  const task = s.tasks.find((t) => t.id === taskId)
+  if (!task || !canTransition(task.status, 'failed')) return s
+  return { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed', result: question, updatedAt: now } : t)) }
 }
 
 /** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.

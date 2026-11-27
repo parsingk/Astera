@@ -4639,6 +4639,24 @@ describe('closeOrphanedExternalReviews and external work', () => {
     expect(r.closed).toEqual(['b'])
   })
 
+  // Final review M7: a Gate that cannot be opened does not strand the Task, since recovery skips external agents' work
+  it('marks the Task failed when the Gate for its cut-off work cannot be opened', () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const t = createTask(run.state, { runId: run.value.id, title: 'T', spec: 's', deps: [], externalAgentId: 'ext_0a1b2c3d' }, NOW)
+    if (!t.ok) throw new Error(t.error)
+    const o = openDispatch(t.state, { taskId: t.value.id, provider: 'claude', accountId: '', sessionId: 'acp:work-0a0b0c0d', cwd: 'D:/p', specPath: '' }, NOW)
+    if (!o.ok) throw new Error(o.error)
+    const other: Dispatch = { ...o.value, id: 'dsp_other', sessionId: 'sess-other' }
+    const s = { ...o.state, dispatches: [...o.state.dispatches.map((x) => ({ ...x, externalAgent: { id: 'ext_0a1b2c3d', name: 'O' } })), other] }
+    const r = closeOrphanedExternalReviews(s, { owned: new Set() }, NOW)
+    expect(r.closed).toEqual([o.value.id])
+    expect(r.state.gates).toEqual([])
+    expect(r.state.tasks.find((x) => x.id === t.value.id)?.status).toBe('failed')
+  })
+
   it('a Run started from a Job copies the external agent of each planned Task', () => {
     const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
     if (!job.ok) throw new Error(job.error)
