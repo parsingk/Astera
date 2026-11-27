@@ -1,0 +1,14 @@
+# Checks a submission as Astera will read it. Runs the pull request's files with no secret and read-only permissions:
+# nothing here can sign, publish or write.
+name: validate
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The astera command, at a version you pinned (docs/cli.md says how it is installed)
+      - name: Check the index and every package beside it
+        run: astera plugins registry-validate --path index.json

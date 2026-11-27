@@ -1,0 +1,36 @@
+name: Plugin submission
+description: Ask for a plugin, or a new version of one, to be listed
+labels: [submission]
+body:
+  - type: input
+    id: id
+    attributes:
+      label: Package name (id)
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source repository (https)
+    validations:
+      required: true
+  - type: dropdown
+    id: trust
+    attributes:
+      label: Trust level its manifest gives
+      options: [restricted-ui, declarative, trusted]
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Each permission it asks for, and why it needs it
+    validations:
+      required: true
+  - type: textarea
+    id: entry
+    attributes:
+      label: The entry `astera plugins publish` printed
+      render: json
+    validations:
+      required: true

@@ -882,6 +882,41 @@ Astera refuses a theme, at install and again before it applies it, when:
 Turning the plugin off or removing it shows the default theme and keeps the choice, so turning it on again brings the
 theme back. [Dusk theme](../examples/plugins/dusk-theme) is a themes-only plugin to start from.
 
+## Catalog
+
+A catalog lists plugins at exact versions in a signed index, and Astera installs from it only the bytes the index
+names. Astera ships with no catalog and no key: set one you trust with `astera plugins catalog-configure --url <index>
+--key <id=publicKey>` (an https address, or the path of an index.json on this computer), or in Settings, Plugins,
+Catalog. [The registry guide](plugin-registry.md) says how a catalog is laid out, signed, reviewed and revoked.
+
+- The index is fetched with its signature and taken only if one of the keys you set signed its exact bytes. Astera
+  keeps the last one it verified: an older index, or another index of the same number, is refused, and a network
+  failure keeps the copy it had and says so. An index past its expiry is shown and installs nothing.
+- `astera plugins catalog [--refresh]` lists each plugin with the newest version this Astera runs and the one
+  installed. `astera plugins catalog-install --id <id> [--version <v>]` downloads that version (https, or a path beside
+  a local index; at most the size the index names and never over 50 MiB), checks its sha256 and size, checks that the
+  package is the one listed (the same id, version and trust level, asking for no more permissions than the index
+  lists), then shows it for your approval as any install does. A failed download or install keeps the installed
+  version. An update asking for a permission it was not granted asks you again.
+- A version the catalog revokes is never offered; one installed from the catalog is turned off when a verified index
+  names it, cannot be turned on, and is not deleted. There is no automatic update.
+- Catalog installs are told apart from folder, npm and package-file installs, which stay as they were.
+
+## Safe Mode
+
+`astera plugins safe-mode --on` stops every plugin, and none starts or draws anything in the app (no panel, sidebar
+view, status item or theme) until `astera plugins safe-mode --off`, which starts the enabled ones again. It is kept in
+the profile, so a Host that starts with it on starts none, and it can be set with no Host running, for when the app
+does not open. Settings, Plugins has the same switch. `astera plugins disable --all` turns every plugin off instead.
+
+## Compatibility and support
+
+A plugin names the Plugin API it is written for (`apiVersion`, 1 or 2) and, for API 2, the Astera versions it runs on
+(`engines.astera`). Astera keeps running every Plugin API it has shipped: an API 1 plugin runs unchanged. A change that
+would break a plugin comes as a new Plugin API, with the old one kept and its removal announced in the release notes
+at least one minor release ahead. The SDK packages follow semantic versioning on their own, apart from the app's
+version.
+
 ## Not yet
 
 - The `github` and `how-it-works` commands for plugins, which their permissions are already named for.
