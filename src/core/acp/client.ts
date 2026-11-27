@@ -31,8 +31,17 @@ export interface AcpTurn {
   text: string
 }
 
+/** A permission request as a worker's caller decides it (Phase 5 A1). */
+export interface AcpPermissionRequest {
+  kind?: string
+  title?: string
+  options: { optionId: string; kind: string; name?: string }[]
+}
+
 export interface AcpSession {
   agent: { name?: string; title?: string; version?: string }
+  /** What the agent said it can do in `initialize` (Phase 5 A1): `loadSession` is resuming a session. */
+  capabilities: { loadSession: boolean }
   prompt(text: string): Promise<AcpTurn>
   /** Marks the end intentional, then kills the process tree. Idempotent. After it, nothing rejects with 'exited'. */
   close(): void
@@ -69,6 +78,9 @@ export async function openAcpSession(a: {
   /** The transcript sink: one line per call, no payloads of unknown notifications. */
   log(line: string): void
   timeouts?: { initializeMs?: number; newSessionMs?: number; setModeMs?: number }
+  /** A worker (Phase 5 A1): the caller answers each permission request with the option id it picks (null cancels), and a
+   *  write is the agent doing its work, not a violation. Absent: the reviewer's policy (reads only, a write ends it). */
+  worker?: { decide(req: AcpPermissionRequest): Promise<string | null> }
 }): Promise<AcpSession> {
   const { proc, log } = a
   const peer = createJsonRpcPeer({ write: (l) => proc.write(l), onLine: (cb) => void proc.onLine(cb) }, { log })
@@ -126,7 +138,7 @@ export async function openAcpSession(a: {
     if (id !== undefined) calls.set(id, { kind, title })
     const status = str(u.status)
     log(`${kind ?? 'unknown'} ${status ?? 'unknown'} ${title ?? ''}`.trimEnd())
-    if (kind !== undefined && WRITE_KINDS.includes(kind) && (status === 'in_progress' || status === 'completed')) {
+    if (!a.worker && kind !== undefined && WRITE_KINDS.includes(kind) && (status === 'in_progress' || status === 'completed')) {
       end(new AcpFailure('violation', title || kind), true)
     }
   }
@@ -145,8 +157,22 @@ export async function openAcpSession(a: {
     else log(`session/update ${(kind ?? 'unknown').slice(0, 60)}`)
   })
 
-  peer.onRequest((method, params) => {
+  peer.onRequest(async (method, params) => {
     if (method !== 'session/request_permission') throw new JsonRpcError(METHOD_NOT_FOUND, `method not found: ${method}`)
+    if (a.worker) {
+      const p = obj(params)
+      const tc = obj(p?.toolCall)
+      const options = (Array.isArray(p?.options) ? p.options : [])
+        .map((o) => obj(o))
+        .filter((o): o is Record<string, unknown> => o !== undefined && typeof o.optionId === 'string' && typeof o.kind === 'string')
+        .map((o) => ({ optionId: o.optionId as string, kind: o.kind as string, ...(typeof o.name === 'string' ? { name: o.name } : {}) }))
+      const req: AcpPermissionRequest = { ...(str(tc?.kind) ? { kind: str(tc?.kind) } : {}), ...(str(tc?.title) ? { title: str(tc?.title) } : {}), options }
+      // Only an option the agent offered is ever sent back
+      const picked = p?.sessionId === sessionId ? await a.worker.decide(req) : null
+      const chosen = picked !== null && options.some((o) => o.optionId === picked) ? picked : null
+      log(`permission ${req.kind ?? 'unknown'} ${req.title ?? ''}: ${chosen ?? 'cancelled'}`)
+      return { outcome: chosen !== null ? { outcome: 'selected', optionId: chosen } : { outcome: 'cancelled' } }
+    }
     const decision = decidePermission(sessionId, params)
     const tc = obj(obj(params)?.toolCall)
     log(`permission ${str(tc?.kind) ?? 'unknown'} ${str(tc?.title) ?? ''}: ${decision.allowed ? 'allowed' : 'refused'}`)
@@ -166,6 +192,7 @@ export async function openAcpSession(a: {
     }
     const info = obj(init.agentInfo)
     const agent = { name: str(info?.name), title: str(info?.title), version: str(info?.version) }
+    const capabilities = { loadSession: obj(init.agentCapabilities)?.loadSession === true }
 
     let created: Record<string, unknown> | undefined
     try {
@@ -192,6 +219,7 @@ export async function openAcpSession(a: {
 
     return {
       agent,
+      capabilities,
       async prompt(text) {
         const collected = { parts: [] as string[], size: 0 }
         turnText = collected

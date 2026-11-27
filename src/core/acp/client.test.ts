@@ -328,3 +328,43 @@ describe('openAcpSession over the fake agent', () => {
     expect(f.kind).toBe('timeout')
   })
 })
+
+// Phase 5 A1: the same client works a Task when the caller says how permissions are answered, and writes are allowed
+describe('openAcpSession as a worker', () => {
+  const openWorker = async (mode: string, decide: (req: { kind?: string; title?: string; options: { optionId: string; kind: string; name?: string }[] }) => Promise<string | null>): Promise<{ s: AcpSession; logs: string[] }> => {
+    const proc = launch(mode)
+    const logs: string[] = []
+    const s = await bounded(openAcpSession({ proc, cwd: process.cwd(), clientVersion: '9.9.9', log: (l) => logs.push(l), worker: { decide } }))
+    sessions.push(s)
+    return { s, logs }
+  }
+
+  it('answers a permission request with the option the caller picks, asynchronously', async () => {
+    const asked: string[] = []
+    const { s, logs } = await openWorker('asks-edit', async (req) => {
+      asked.push(`${req.kind} ${req.title}`)
+      await new Promise((r) => setTimeout(r, 20))
+      return req.options.find((o) => o.kind === 'allow_once')?.optionId ?? null
+    })
+    await expect(bounded(s.prompt('x'))).resolves.toMatchObject({ stopReason: 'end_turn', text: 'outcome:allow-once' })
+    expect(asked).toEqual(['edit Edit a.txt'])
+    expect(logs).toContain('permission edit Edit a.txt: allow-once')
+  })
+
+  it('cancels the request when the caller picks nothing', async () => {
+    const { s } = await openWorker('asks-edit', async () => null)
+    await expect(bounded(s.prompt('x'))).resolves.toMatchObject({ text: 'outcome:cancelled' })
+  })
+
+  it('lets a worker write without ending the session', async () => {
+    const { s } = await openWorker('edits-without-asking', async () => null)
+    const turn = s.prompt('x')
+    const raced = await Promise.race([turn.then(() => 'ended', () => 'failed'), new Promise((r) => setTimeout(() => r('still working'), 500))])
+    expect(raced).toBe('still working')
+  })
+
+  it('says whether the agent can resume a session (loadSession)', async () => {
+    const { s } = await openWorker('approve', async () => null)
+    expect(s.capabilities).toEqual({ loadSession: false })
+  })
+})
