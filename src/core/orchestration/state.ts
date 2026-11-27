@@ -1892,7 +1892,8 @@ export function closeOrphanedExternalReviews(
 ): { state: OrchState; closed: string[] } {
   const closed: string[] = []
   const dispatches = s.dispatches.map((d) => {
-    if (!d.externalReviewer || d.outcome || d.endedAt || a.owned.has(d.id)) return d
+    // An external agent's work (Phase 5 A1) too: neither resumes after the process that ran it is gone
+    if (!(d.externalReviewer || d.externalAgent) || d.outcome || d.endedAt || a.owned.has(d.id)) return d
     if (a.startedBefore !== undefined && !(Date.parse(d.startedAt) < a.startedBefore)) return d
     closed.push(d.id)
     return endedUnproven(d, now)

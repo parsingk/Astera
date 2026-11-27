@@ -198,6 +198,11 @@ const SESSION = {
       { name: 'patch', value: '<object>', about: 'what was read; the Host passes it in-process' }
     ]
   },
+  'external-work-start': {
+    summary: 'start the external agent that works a Task, in its run’s folder',
+    detail: 'The dispatch loop starts it itself (Phase 5): it opens the Dispatch and runs the agent over ACP; anyone else is refused.',
+    flags: [req('task', '<taskId>', 'the Task an external agent works')]
+  },
   'lifecycle-start': {
     summary: "start a GitHub lifecycle Task's checks in its run's root",
     detail: 'The dispatch loop starts it itself, once every Task worktree is folded into the run root (GitHub lifecycle); anyone else is refused.',

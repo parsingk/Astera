@@ -11384,3 +11384,51 @@ describe('handleCommand — an external review Dispatch', () => {
     expect(asked).toBe(0)
   })
 })
+
+// Phase 5 A1: the dispatch loop's door for a Task an external agent works
+describe('external-work-start', () => {
+  const setup = async (over: Record<string, unknown> = {}) => {
+    const started: string[] = []
+    const released: string[] = []
+    const deps = Object.assign(makeDeps(), {
+      startExternalWork: (a: { dispatchId: string }) => void started.push(a.dispatchId),
+      releaseWorker: async (sessionId: string) => void released.push(sessionId)
+    })
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)
+    const runId = (run.body as { id: string }).id
+    const t = await call(deps, 'task-create', { runId, spec: 'do it', externalAgent: 'ext_0a1b2c3d', ...over }, APP_CALLER)
+    return { deps, taskId: (t.body as { id: string }).id, started, released, runId }
+  }
+
+  it('opens a Dispatch for the external agent in the Run folder and starts its run after the commit', async () => {
+    const { deps, taskId, started } = await setup()
+    const r = await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    expect(r.status).toBe(200)
+    const dispatchId = (r.body as { dispatchId: string }).dispatchId
+    const d = deps.getState().dispatches.find((x) => x.id === dispatchId)!
+    expect(d).toMatchObject({ taskId, accountId: '', cwd: 'D:/p', externalAgent: { id: 'ext_0a1b2c3d', name: '' } })
+    expect(d.sessionId).toMatch(/^acp:work-[0-9a-f]{8}$/)
+    expect(deps.getState().tasks.find((x) => x.id === taskId)?.status).toBe('dispatched')
+    expect(started).toEqual([dispatchId])
+  })
+
+  it('is the loop’s alone, and only for a ready Task an external agent works', async () => {
+    const { deps, taskId } = await setup()
+    expect((await call(deps, 'external-work-start', { task: taskId }, 'coordinator')).status).toBe(403)
+    const other = await call(deps, 'task-create', { runId: deps.getState().runs[0].id, spec: 's', externalAgent: 'ext_0a1b2c3d' }, APP_CALLER)
+    const otherId = (other.body as { id: string }).id
+    const s0 = deps.getState()
+    await deps.setState({ ...s0, tasks: s0.tasks.map((t) => (t.id === otherId ? { ...t, externalAgentId: undefined, accountIds: ['a1'] } : t)) })
+    expect((await call(deps, 'external-work-start', { task: otherId }, HOST_CALLER)).status).toBe(409)
+    await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    expect((await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)).status).toBe(409)
+  })
+
+  it('a stopped Run ends the Dispatch without asking for a worker session to be released', async () => {
+    const { deps, taskId, released, runId } = await setup()
+    await call(deps, 'external-work-start', { task: taskId }, HOST_CALLER)
+    await call(deps, 'runs-stop', { id: runId }, APP_CALLER)
+    expect(released).toEqual([])
+    expect(deps.getState().dispatches.every((d) => d.endedAt !== undefined)).toBe(true)
+  })
+})

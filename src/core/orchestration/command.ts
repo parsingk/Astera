@@ -111,9 +111,10 @@ import {
   type MessageType,
   type Project,
   type Task,
-  type TaskStatus
+  type TaskStatus,
+  EXTERNAL_REVIEW_SESSION_PREFIX
 } from './types'
-import { runWorktrees } from './integrate'
+import { runRootOf, runWorktrees } from './integrate'
 import { capAsked, readyForRepair, repairEligibility } from './taskRepair'
 import { taskFindings, taskFoldersOf, taskRowRefs } from '../problems/completionProblems'
 import { cleanNote, findingRevision, findingSourceOf, moveFinding } from '../problems/findingStates'
@@ -600,6 +601,9 @@ export interface OrchServerDeps {
    *  대상을 답한 뒤 이 훅 전에 떠나면, 운전이 그 사이 Host 로 넘어와 Host 가 띄운다. **두 칸을
    *  다른 묶음이나 다른 술어로 나누는 날 이 문장은 거짓이 된다.** */
   startRepair?(a: { dispatchId: string }): void
+  /** Phase 5 A1: starts the run of an external agent on a Dispatch `external-work-start` opened (exec/externalWork.ts).
+   *  Absent: the caller has no such driver, and the command refuses. */
+  startExternalWork?(a: { dispatchId: string }): void
   /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
    *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다.
    *  **비동기다 — gate-resolve 가 그 반환을 기다린다.** repairOnce 자신은 Dispatch 를 열어 커밋한
@@ -881,7 +885,7 @@ const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => 
 /** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
  *  is a start that died: no pty was ever opened for it, so there is nothing to release. An external review
  *  never had a session (its `acp:` id names no pty), so there is nothing to release either. */
-const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId) && !d.externalReviewer
+const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId) && !d.externalReviewer && !d.externalAgent
 
 /** The Job's latest Run **while it still runs**, else undefined. `jobs run` refuses on it, and a fire
  *  skips on it (`run-spawn --unless-running`; the user's ruling of 2026-09-25 on U1): the same test in
@@ -3612,6 +3616,33 @@ export async function handleCommand(
       if (!r.ok) return r.missing ? notFound(r.error) : conflict(r.error)
       await deps.setState(r.state)
       return okBody({ runId: id, taskId: r.value.id })
+    }
+    case 'external-work-start': {
+      // Phase 5 A1: the dispatch loop's door for a Task an external agent works, as worker-start is for an account's. It
+      // opens the Dispatch here and hands it to the external work driver after the commit, as worker-start opens before
+      // the session starts. The agent runs in the Run's folder (its worktree, when it has one).
+      if (caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+        return denied('external-work-start is the dispatch loop’s own step')
+      if (!deps.startExternalWork) return conflict('an external agent is run by the Astera Host or the app, and this caller runs none')
+      const id = str(args.task)
+      if (!id) return bad('--task is required')
+      const latest = deps.getState()
+      const task = latest.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      if (task.externalAgentId === undefined) return conflict(`task ${id} is not worked by an external agent`)
+      if (task.status !== 'ready') return conflict(`task ${id} is ${task.status}, not ready`)
+      if (latest.dispatches.some((d) => d.taskId === id && !d.outcome && !d.endedAt)) return conflict(`task ${id} already has an open Dispatch`)
+      const run = latest.runs.find((r) => r.id === task.runId)
+      if (!run) return conflict(`task ${id} is not in a run`)
+      const cwd = runRootOf(run, latest.jobs.find((j) => j.id === run.jobId))
+      const sessionId = `${EXTERNAL_REVIEW_SESSION_PREFIX}work-${randomBytes(4).toString('hex')}`
+      const opened = openDispatch(latest, { taskId: id, provider: 'claude', accountId: '', sessionId, cwd, specPath: '' }, now)
+      if (!opened.ok) return refused(opened)
+      const dispatchId = opened.value.id
+      const externalAgent = { id: task.externalAgentId, name: '' }
+      await deps.setState({ ...opened.state, dispatches: opened.state.dispatches.map((d) => (d.id === dispatchId ? { ...d, externalAgent } : d)) })
+      deps.startExternalWork({ dispatchId })
+      return okBody({ dispatchId, cwd })
     }
     case 'lifecycle-start': {
       // The dispatch loop's own step (GitHub lifecycle §3.3), after it folded every Task worktree into the Run root: a

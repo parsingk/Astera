@@ -4618,3 +4618,15 @@ describe('closeOrphanedExternalReviews', () => {
     expect(r.closed).toEqual(['old'])
   })
 })
+
+// Phase 5 A1: an external agent's work is an orphan as an external review is, once no run owns it
+describe('closeOrphanedExternalReviews and external work', () => {
+  it('closes an external work Dispatch no run owns, and keeps an owned one', () => {
+    const d = (id: string): Dispatch => ({
+      id, taskId: 't1', provider: 'claude', accountId: '', sessionId: `acp:work-${id}`, cwd: 'D:/p', specPath: '',
+      externalAgent: { id: 'ext_1', name: 'OpenCode' }, startedAt: '2026-01-01T00:00:00.000Z', workerState: 'ready', retained: false
+    })
+    const r = closeOrphanedExternalReviews({ ...emptyState(), dispatches: [d('a'), d('b')] }, { owned: new Set(['a']) }, NOW)
+    expect(r.closed).toEqual(['b'])
+  })
+})
