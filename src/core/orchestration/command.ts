@@ -3969,6 +3969,13 @@ export async function handleCommand(
       // 받는다. `ask --options` 가 이미 CSV 이므로 그 관례를 쓴다 — 계정 하나만 주는 기존 호출은
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
+      // Phase 5 A1: an external agent (an ACP agent registered in Settings, Agents) works the Task instead of accounts.
+      // Its id is checked here by shape; whether it is still registered is the run's to find out when it starts.
+      const externalAgentArg = str(args.externalAgent)
+      if (externalAgentArg !== null) {
+        if (accountArg !== null || str(args.agentProfileId) !== null) return bad('--external-agent works the Task instead of accounts: give one or the other')
+        if (!/^ext_[0-9a-f]{8}$/.test(externalAgentArg)) return bad('--external-agent must be an external agent id (ext_ and 8 hex, from Settings, Agents)')
+      }
       // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
       // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
       // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
@@ -3978,11 +3985,11 @@ export async function handleCommand(
       // or without accounts (drivesRun); one it names itself is asked like any agent's, and so is an outside driver.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
-      let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
-      if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
+      let agentProfileId = profileArg === null && externalAgentArg === null ? ownerJob?.agentProfileId : undefined
+      if (externalAgentArg === null && accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
       const inheritsForItsCoordinator = profileArg === null && drivesRun(s, caller, runId)
       let profile: AgentProfile | undefined
-      if (profileArg !== null || accountArg === null) {
+      if (externalAgentArg === null && (profileArg !== null || accountArg === null)) {
         const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, { held: profileArg === null, bypassOk: inheritsForItsCoordinator })
         if (!found.ok) return found.reply
         profile = found.profile
@@ -3992,8 +3999,9 @@ export async function handleCommand(
         if (refused) return refused
       }
       const known = await deps.listAccounts()
-      let accountIds: string[]
-      if (accountArg !== null) {
+      let accountIds: string[] | undefined
+      if (externalAgentArg !== null) accountIds = undefined
+      else if (accountArg !== null) {
         // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
         // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
         const parsedAccounts = parseAccountList(accountArg, known, '--account')
@@ -4039,6 +4047,7 @@ export async function handleCommand(
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
             ...(accountIds ? { accountIds } : {}),
+            ...(externalAgentArg !== null ? { externalAgentId: externalAgentArg } : {}),
             ...(agentProfileId !== undefined ? { agentProfileId } : {}),
             // Added by a sandboxed session: its workers start in the sandbox, in whichever Job (final fix pass, C3)
             ...(callerBoxed ? { sandboxed: true } : {}),
@@ -4101,7 +4110,7 @@ export async function handleCommand(
         )
       if (task.consecutiveFailures >= FAILURE_LIMIT)
         return conflict(`task ${id} has failed ${task.consecutiveFailures} times in a row (circuit break); reset it with task-update first`)
-      if ((task.accountIds?.length ?? 0) === 0)
+      if ((task.accountIds?.length ?? 0) === 0 && task.externalAgentId === undefined)
         return conflict(`task ${id} names no account to run on`)
       const limit = job?.concurrency ?? DEFAULT_CONCURRENCY
       const mine = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))

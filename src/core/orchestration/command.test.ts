@@ -2857,6 +2857,21 @@ describe('task-create --account', () => {
     expect(deps.getState().tasks).toHaveLength(0)
   })
 
+  // Phase 5 A1: an external agent works a Task instead of accounts
+  it('takes --external-agent in place of --account, and refuses both, or an id that is not one', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks[0]).toMatchObject({ externalAgentId: 'ext_0a1b2c3d' })
+    expect(deps.getState().tasks[0].accountIds).toBeUndefined()
+    const both = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'ext_0a1b2c3d', account: 'a1' })
+    expect(both).toMatchObject({ status: 400, body: { error: '--external-agent works the Task instead of accounts: give one or the other' } })
+    const bad = await call(deps, 'task-create', { runId, spec: 's', externalAgent: 'gemini' })
+    expect(bad).toMatchObject({ status: 400, body: { error: '--external-agent must be an external agent id (ext_ and 8 hex, from Settings, Agents)' } })
+  })
+
   // 섞이면 첫 계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로 갈아타려 한다 — 그것은
   // 갈아타기가 아니라 다른 프로그램을 띄우는 일이다
   it('서로 다른 provider 가 섞인 목록을 거절한다', async () => {

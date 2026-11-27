@@ -18,6 +18,8 @@ export interface Slot {
    *  **비어 있지 않다.** slotsToFill 이 계정 없는 Task 를 아예 고르지 않으므로(그런 Task 는 어느
    *  CLI 로 띄울지 알 수 없다), 이 칸은 언제나 있고 언제나 하나 이상이다. */
   accountIds: string[]
+  /** Phase 5 A1: an external agent works this Task; `accountIds` is then empty. */
+  externalAgentId?: string
 }
 
 /**
@@ -90,8 +92,9 @@ export function slotsToFill(s: OrchState): Slot[] {
         // worker-start 가 어차피 회로 차단으로 거절한다. 여기서 걸러야 같은 실패가 매 저장마다
         // 로그를 채우지 않는다 — 그 로그는 진짜 문제를 덮는다
         t.consecutiveFailures < FAILURE_LIMIT &&
-        // 계정이 없으면 provider 를 알 수 없다(이 함수 머리말) — 고르지 않는다
-        (t.accountIds?.length ?? 0) > 0 &&
+        // 계정이 없으면 provider 를 알 수 없다(이 함수 머리말) — 고르지 않는다. An external agent works a Task with
+        // none (Phase 5 A1)
+        ((t.accountIds?.length ?? 0) > 0 || t.externalAgentId !== undefined) &&
         // ready 인데 열린 Dispatch 가 있는 조합은 만들어질 수 없지만, 판정이 그 사실에 기대지
         // 않는다. 기대면 그 불변식이 깨지는 날 두 워커가 같은 Task 를 잡는다
         !open.some((d) => d.taskId === t.id) &&
@@ -99,7 +102,11 @@ export function slotsToFill(s: OrchState): Slot[] {
     )
     for (const t of candidates.slice(0, room)) {
       // accountIds 는 위 필터가 비어 있지 않음을 보장한다(Slot.accountIds 의 주석)
-      slots.push({ runId: run.id, taskId: t.id, accountIds: t.accountIds as string[] })
+      slots.push(
+        t.externalAgentId !== undefined
+          ? { runId: run.id, taskId: t.id, accountIds: [], externalAgentId: t.externalAgentId }
+          : { runId: run.id, taskId: t.id, accountIds: t.accountIds as string[] }
+      )
     }
   }
   return slots
@@ -132,6 +139,8 @@ export function tasksMissingAccounts(s: OrchState): { runId: string; taskId: str
       // A lifecycle Task has no account by design: it has no worker (lifecycleToStart below places it)
       if (isLifecycleTask(t)) continue
       if ((t.accountIds?.length ?? 0) > 0) continue
+      // An external agent works it instead of an account (Phase 5 A1)
+      if (t.externalAgentId !== undefined) continue
       if (open.some((d) => d.taskId === t.id)) continue
       out.push({ runId: run.id, taskId: t.id })
     }

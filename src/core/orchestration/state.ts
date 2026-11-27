@@ -660,6 +660,8 @@ export function createTask(
      *  core 는 계정 목록을 못 보므로 "하나 이상" 만 확인해도 그 하나가 실재하는지는 알 수 없고,
      *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
+    /** Phase 5 A1: an external agent works it instead of accounts. */
+    externalAgentId?: string
     /** The agent profile's real id (Agent Profiles design §6); the caller (task-create) has resolved it. */
     agentProfileId?: string
     /** Added by a sandboxed session (Task.sandboxed); the caller (task-create) asked. */
@@ -695,6 +697,7 @@ export function createTask(
     // 빈 배열은 **지정 없음**이다 — 그것도 실으면 Task 를 값으로 비교하는 자리에서 지정이 없는
     // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
     ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
+    ...(a.externalAgentId ? { externalAgentId: a.externalAgentId } : {}),
     ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
     ...(a.sandboxed ? { sandboxed: true as const } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
