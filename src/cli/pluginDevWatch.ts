@@ -41,7 +41,7 @@ export function devEventLine(e: DevEvent): string {
       return `not installed: ${e.problems.map((p) => `${p.code}${p.field !== undefined ? ` ${p.field}` : ''}: ${p.message}`).join('; ')}`
     case 'needsApproval': {
       const asks = [...e.asks.permissions, ...e.asks.capabilities.map((c) => `the ${c} capability`)]
-      const trust = e.asks.trust === 'trusted' ? 'trusted code' : 'restricted UI'
+      const trust = e.asks.trust === 'trusted' ? 'trusted code' : e.asks.trust === 'declarative' ? 'themes only' : 'restricted UI'
       return `not installed: it now asks for ${asks.length > 0 ? asks.join(', ') : 'nothing'} as ${trust}; stop dev and run it again to approve that`
     }
     case 'failed':

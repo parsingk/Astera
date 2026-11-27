@@ -1346,6 +1346,26 @@ describe('a UI-only plugin: final review fixes', () => {
     expect((await manager.install({ path: at, grant: ['commands.register', 'panels.register'], expect: { name: 'hello-panel', version: '1.0.0' } })).status).toBe(200)
   })
 
+  // Phase 2 remaining: a themes-only plugin is shown, and installed, as declarative
+  it('installs a themes-only plugin shown as declarative, and refuses an unknown trust level', async () => {
+    const at = path.join(dir, 'dusk')
+    await fs.mkdir(at, { recursive: true })
+    await fs.writeFile(
+      path.join(at, 'package.json'),
+      JSON.stringify({
+        name: 'dusk-theme',
+        version: '1.0.0',
+        astera: { apiVersion: '2', permissions: ['themes.register'], contributes: { themes: [{ id: 'dusk', title: 'Dusk', base: 'vega', colors: { accent: '#3fa7d6' } }] } }
+      })
+    )
+    const bad = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'sandboxed' } })
+    expect(bad.status).toBe(400)
+    expect(body(bad).error).toBe('expect.trust must be trusted, restricted-ui or declarative')
+    const r = await manager.install({ path: at, grant: ['themes.register'], expect: { name: 'dusk-theme', version: '1.0.0', trust: 'declarative' } })
+    expect(r.status).toBe(200)
+    expect(body(r)).toMatchObject({ id: 'dusk-theme', trust: 'declarative', status: 'ready' })
+  })
+
   // M9: Review Focus 4, a grant a contribution needs that the record lacks
   it('is not ready when a contribution’s permission is missing from what was granted, and says which', async () => {
     await manager.install({ path: await uiPlugin('hello'), grant: ['commands.register', 'panels.register'] })

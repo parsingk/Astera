@@ -713,7 +713,7 @@ export function humanFor(
             str(p.id),
             str(p.version),
             // ADR-008: a Host from before Plugin API 2 runs only trusted code
-            p.trust === 'restricted-ui' ? 'restricted-ui' : 'trusted',
+            p.trust === 'restricted-ui' || p.trust === 'declarative' ? p.trust : 'trusted',
             granted.length > 0 ? granted.join(',') : '-',
             offers.length > 0 ? offers.join(',') : '-'
           ]

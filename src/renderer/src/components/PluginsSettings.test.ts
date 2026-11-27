@@ -159,5 +159,8 @@ describe('PluginCard trust level (ADR-008)', () => {
     expect(ui).toContain('plugin-trust is-restricted-ui')
     expect(card({ ...PLUGIN, trust: 'trusted' })).toContain('Trusted code')
     expect(card(PLUGIN)).toContain('Trusted code')
+    const themes = card({ ...PLUGIN, status: 'ready', trust: 'declarative' })
+    expect(themes).toContain('Themes only')
+    expect(themes).toContain('plugin-trust is-declarative')
   })
 })

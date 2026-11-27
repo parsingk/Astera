@@ -5,7 +5,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
 import { Select } from './Select'
-import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel, trustLabel } from './pluginsText'
+import { configureChanges, configureDoneLine, failureLine, installFailureLine, installPrompt, npmNotice, permissionLabel, reasonLine, statusLabel, trustClass, trustLabel } from './pluginsText'
 import { createPluginsPoller, installBlocked, installHolds, keepOnly } from './pluginsList'
 
 type Plugin = Record<string, unknown>
@@ -348,7 +348,7 @@ export function PluginCard({
     <>
       <div className="plugin-head">
         <span className="plugin-name">{str(plugin.displayName) || id}</span>
-        <span className={`plugin-trust is-${plugin.trust === 'restricted-ui' ? 'restricted-ui' : 'trusted'}`}>{trustLabel(plugin.trust, t)}</span>
+        <span className={`plugin-trust is-${trustClass(plugin.trust)}`}>{trustLabel(plugin.trust, t)}</span>
         <span className={`plugin-status is-${status}`}>{statusLabel(status, t)}</span>
       </div>
       <span className="settings-hint">

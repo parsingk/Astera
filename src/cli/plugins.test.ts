@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { approvalMessage, configureArgs, configureStdinError, doctorEnd, installPlugin } from './plugins'
-import { PLUGIN_RESTRICTED_UI_NOTICE, PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
+import { PLUGIN_DECLARATIVE_NOTICE, PLUGIN_RESTRICTED_UI_NOTICE, PLUGIN_TRUST_WARNING } from '../core/plugins/manifest'
 
 const INSPECTION = {
   id: '@acme/astera-jira',
@@ -268,6 +268,14 @@ describe('approvalMessage by trust level', () => {
     expect(m).toBe(
       `Jira 1.0.0 (@acme/astera-jira) asks for: panels.register. ${PLUGIN_RESTRICTED_UI_NOTICE} Approve with --yes, or name what to grant with --grant <list>.`
     )
+    expect(m).not.toContain(PLUGIN_TRUST_WARNING)
+  })
+
+  // Phase 2 remaining: a themes-only plugin runs no code and shows no page
+  it('gives a declarative plugin its own notice, neither the restricted UI notice nor the trusted code warning', () => {
+    const m = approvalMessage({ ...INSPECTION, trust: 'declarative', permissions: ['themes.register'] })
+    expect(m).toContain(PLUGIN_DECLARATIVE_NOTICE)
+    expect(m).not.toContain(PLUGIN_RESTRICTED_UI_NOTICE)
     expect(m).not.toContain(PLUGIN_TRUST_WARNING)
   })
 

@@ -505,8 +505,8 @@ export function createPluginManager(d: {
     )
       throw new Refused(400, 'expect must be { name, version }')
     const trustShown = want !== undefined ? (want as Record<string, unknown>).trust : undefined
-    if (trustShown !== undefined && trustShown !== 'trusted' && trustShown !== 'restricted-ui')
-      throw new Refused(400, 'expect.trust must be trusted or restricted-ui')
+    if (trustShown !== undefined && trustShown !== 'trusted' && trustShown !== 'restricted-ui' && trustShown !== 'declarative')
+      throw new Refused(400, 'expect.trust must be trusted, restricted-ui or declarative')
     const expected = want as { name: string; version: string; trust?: string } | undefined
     if (source.kind === 'folder') {
       // Read before anything is copied: a registry that cannot be read refuses the change with nothing written.
