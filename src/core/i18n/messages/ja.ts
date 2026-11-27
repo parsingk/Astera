@@ -1395,6 +1395,8 @@ export const ja: Catalog = {
   'problems.stale.changedHint': 'これが見つかった後にファイルが変わったため、もう当てはまらないかもしれません',
   'problems.stale.missing': 'ファイルなし',
   'problems.stale.missingHint': 'このファイルが見つかりません',
+  'problems.stale.revision': 'リビジョンが変更',
+  'problems.stale.revisionHint': 'これが見つかった後で Task が新しいリビジョンに進んだため、もう当てはまらないかもしれません。状態はそのままです',
   'problems.source.review': 'レビュー',
   'problems.send': 'エージェントに送る',
   'problems.fix': 'エージェントで直す',

@@ -29,6 +29,10 @@ const UNCHECKED_KEY = {
   'too-large': 'problems.unchecked.too-large'
 } as const
 
+/** Why a row may no longer hold, and its hover text, written out so every key stays findable in the source. */
+const STALE_KEY = { changed: 'problems.stale.changed', missing: 'problems.stale.missing', revision: 'problems.stale.revision' } as const
+const STALE_HINT_KEY = { changed: 'problems.stale.changedHint', missing: 'problems.stale.missingHint', revision: 'problems.stale.revisionHint' } as const
+
 const ICON: Record<DiagnosticSeverity, React.ReactNode> = {
   error: <CircleX size={13} className="problem-icon error" />,
   warning: <AlertTriangle size={13} className="problem-icon warning" />,
@@ -248,8 +252,8 @@ export function ProblemsPanel({
                 )}
                 <span className="problem-source">{sourceOf(d)}</span>
                 {d.stale !== undefined && (
-                  <span className="problem-stale" title={t(d.stale === 'changed' ? 'problems.stale.changedHint' : 'problems.stale.missingHint')}>
-                    {t(d.stale === 'changed' ? 'problems.stale.changed' : 'problems.stale.missing')}
+                  <span className="problem-stale" title={t(STALE_HINT_KEY[d.stale])}>
+                    {t(STALE_KEY[d.stale])}
                   </span>
                 )}
                 {/* Where a finding a person acted on stands (Phase 3 Part 1b); it opens the changes, not the file */}

@@ -1407,6 +1407,8 @@ export const es: Catalog = {
   'problems.stale.changedHint': 'El archivo cambió después de encontrarse esto, así que puede que ya no sea así',
   'problems.stale.missing': 'archivo ausente',
   'problems.stale.missingHint': 'No se encuentra este archivo',
+  'problems.stale.revision': 'Revisión cambiada',
+  'problems.stale.revisionHint': 'La Task pasó a una nueva revisión desde que se encontró, así que puede que ya no se aplique. Su estado no cambia',
   'problems.source.review': 'Revisión',
   'problems.send': 'Enviar a un agente',
   'problems.fix': 'Arreglar con un agente',

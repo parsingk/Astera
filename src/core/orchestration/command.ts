@@ -67,6 +67,7 @@ import {
 import { CLI_PROTOCOL } from './cliOutput'
 import { attemptRanges, collectChanges, rangesFor, type ChangesPart } from './changedFiles'
 import { attributeChangedFiles } from '../review/changesAttribution'
+import { diffFindings } from '../review/diffFindings'
 import type { ChangedFile } from '../git/changes'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
@@ -3162,7 +3163,7 @@ export async function handleCommand(
       if (!fileId) return bad('--file is required: a file id from runs-changed-files')
       const scoped = changesScope(s, runId, args)
       if ('status' in scoped) return scoped
-      const { found } = scoped
+      const { found, taskId: scopeTask } = scoped
       if (!deps.changes) return conflict('diffs are read where the run lives, and this caller cannot read git there')
       if (found.parts.length === 0) return notFound(`run ${runId} has no recorded git range`)
       const got = await collectChanges(found.parts, deps.changes.read)
@@ -3171,7 +3172,13 @@ export async function handleCommand(
       if (!hit) return notFound(`no changed file ${fileId} in run ${runId}; read runs-changed-files again`)
       const { taskId: _part, ...asGit } = hit.file
       const d = await deps.changes.diff(hit.range.repo, hit.range.base, hit.range.head, { ...asGit, id: hit.file.id.split('~')[0] })
-      return d ? okBody({ file: hit.file, ...d }) : conflict(`git could not produce the diff of ${hit.file.path}`)
+      if (!d) return conflict(`git could not produce the diff of ${hit.file.path}`)
+      // Phase 3 Part 4: the range the diff is of, and with `findings: true` the file's review findings placed on it
+      const range = { base: hit.range.base, head: hit.range.head }
+      if (args.findings !== true) return okBody({ file: hit.file, ...d, range })
+      const taskIds = hit.file.taskId !== undefined ? [hit.file.taskId] : scopeTask !== undefined ? [scopeTask] : s.tasks.filter((t) => t.runId === runId).map((t) => t.id)
+      const findings = diffFindings(s, { taskIds, path: hit.file.path, repo: hit.range.repo, head: hit.range.head, diff: d.diff, truncated: d.truncated })
+      return okBody({ file: hit.file, ...d, range, findings })
     }
     case 'runs-completion': {
       const id = str(args.id)

@@ -1,6 +1,6 @@
 // A changed file as `runs-changed-files` answers it (remote runtime design Phase 10). Node-free: the renderer reads it.
 // node: import 없음 — 렌더러가 import한다.
-import type { FileAttribution } from '../review/attribution'
+import type { FileAttribution } from '../review/types'
 
 export interface ChangedFile {
   /** Stable for the same change in the same range: what `runs-diff` takes. */

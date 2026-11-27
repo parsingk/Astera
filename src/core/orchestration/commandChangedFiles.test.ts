@@ -116,7 +116,7 @@ describe('runs-diff', () => {
   it('takes a file by its id and answers its diff', async () => {
     const { deps, runId } = await seeded({ answers: { 'D:/p bbbbbbb..ccccccc': [FILE] } })
     const r = await call(deps, 'runs-diff', { runId, fileId: 'f1' })
-    expect(r).toEqual({ status: 200, body: { file: FILE, diff: 'diff of src/한글 a.ts', truncated: false } })
+    expect(r).toEqual({ status: 200, body: { file: FILE, diff: 'diff of src/한글 a.ts', truncated: false, range: { base: 'bbbbbbb', head: 'ccccccc' } } })
   })
   it('a Task part’s file is read in that Task’s range', async () => {
     const { deps, diffs } = parallel({ 'P aaaaaaa..bbbbbbb': [file('r1', 'root.ts')], 'T1 ccccccc..ddddddd': [file('t1', 'task.ts')] })
@@ -215,6 +215,17 @@ describe('agent-aware review', () => {
     const { deps } = withReview({ ancestry: false })
     const body = (await call(deps, 'runs-changed-files', { runId: 'run1', taskId: 't1', attribution: true })).body as Record<string, unknown>
     expect(body.attribution).toBeUndefined()
+  })
+
+  it('answers runs-diff’s range always and the file’s placed findings when asked', async () => {
+    const { deps } = withReview()
+    const plain = (await call(deps, 'runs-diff', { runId: 'run1', taskId: 't1', fileId: 'fa~t1' })).body as Record<string, unknown>
+    expect(plain.range).toEqual({ base: 'aaaaaaa', head: 'ccccccc' })
+    expect(plain.findings).toBeUndefined()
+    const s = deps.getState()
+    deps.setState({ ...s, tasks: s.tasks.map((t) => (t.id === 't1' ? { ...t, reviewIssues: [{ id: 'i1', severity: 'high', blocking: true, title: 'wrong', description: '', file: 'src/a.ts', line: 1 }] } : t)) } as OrchState)
+    const asked = (await call(deps, 'runs-diff', { runId: 'run1', taskId: 't1', fileId: 'fa~t1', findings: true })).body as { findings: Array<{ title: string; placement: unknown }> }
+    expect(asked.findings).toEqual([expect.objectContaining({ title: 'wrong', placement: 'file' })])
   })
 
   it('reads a file’s diff in the attempt’s own range when runs-diff names the attempt', async () => {

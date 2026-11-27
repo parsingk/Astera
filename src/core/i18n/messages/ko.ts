@@ -1534,6 +1534,8 @@ export const ko = {
   'problems.stale.changedHint': '이 문제를 찾은 뒤 파일이 바뀌어 더는 맞지 않을 수 있습니다',
   'problems.stale.missing': '파일 없음',
   'problems.stale.missingHint': '이 파일을 찾을 수 없습니다',
+  'problems.stale.revision': '리비전이 바뀜',
+  'problems.stale.revisionHint': '이 문제를 찾은 뒤 Task 가 새 리비전으로 바뀌어 더는 맞지 않을 수 있습니다. 상태는 그대로입니다',
   'problems.source.review': '검토',
   'problems.send': '에이전트에게 보내기',
   'problems.fix': '에이전트로 고치기',

@@ -1450,6 +1450,8 @@ export const en: Record<keyof typeof ko, string> = {
   'problems.stale.changedHint': 'The file changed after this was found, so it may no longer hold',
   'problems.stale.missing': 'file gone',
   'problems.stale.missingHint': 'This file cannot be found',
+  'problems.stale.revision': 'Revision changed',
+  'problems.stale.revisionHint': 'The Task moved to a new revision since this was found, so it may no longer hold. Its state is unchanged',
   'problems.source.review': 'Review',
   'problems.send': 'Send to an agent',
   'problems.fix': 'Fix with an agent',

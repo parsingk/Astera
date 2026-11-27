@@ -6,7 +6,9 @@ import { findingRef } from './findingRef'
 
 /** A problem as the Job state holds it: its file as the finding wrote it (relative to wherever the check or the review
  *  ran) and the folders to look for it in, newest worker folder first and the Job's folder last. Main resolves it. */
-export type RawProblem = Omit<Diagnostic, 'path' | 'stale' | 'root'> & { file?: string; folders: string[] }
+/** A row before main looks for its file. `stale` is only a review finding's 'revision' (Phase 3 Part 4); the file's own
+ *  marks (changed, missing) are main's. */
+export type RawProblem = Omit<Diagnostic, 'path' | 'stale' | 'root'> & { file?: string; folders: string[]; stale?: 'revision' }
 
 /**
  * Where a Task's findings were made: the folders of its attempts, newest first, then its Job's folder, each once. Main
@@ -135,9 +137,13 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
           .map((d) => d.endedAt as string)
           .sort()
           .at(-1) ?? task.updatedAt
+      // Phase 3 Part 4: an anchored finding is as fresh as its revision, not its file's time; a head not recorded yet is
+      // not a change
+      const taskHead = attempts.filter((d) => d.review !== true && d.git?.head !== undefined).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1)?.git?.head
       for (const issue of task.reviewIssues ?? []) {
         if (issue.file === undefined) continue
         const ref = findingRef({ kind: 'review', taskId: task.id, file: issue.file, base: folders, message: issue.title })
+        const anchor = task.findingAnchors?.[ref]
         out.push({
           schemaVersion: 1,
           id: `review:${task.id}:${issue.id}`,
@@ -148,7 +154,8 @@ export function completionProblemsOf(state: OrchState, runIds: ReadonlySet<strin
           message: issue.title,
           file: issue.file,
           ...(issue.line !== undefined ? { line: issue.line } : {}),
-          ...(reviewedAt !== undefined ? { producedAt: reviewedAt } : {}),
+          ...(anchor === undefined && reviewedAt !== undefined ? { producedAt: reviewedAt } : {}),
+          ...(anchor !== undefined && taskHead !== undefined && anchor.head !== taskHead ? { stale: 'revision' as const } : {}),
           origin,
           folders
         })

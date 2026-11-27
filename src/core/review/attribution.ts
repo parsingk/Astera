@@ -12,34 +12,9 @@
 // attempt are not told apart; the screen says so. Pure.
 import { isSamePath } from '../files/tree'
 import type { Dispatch } from '../orchestration/types'
-import type { Provider } from '../providers/meta'
+import type { AttemptEvidence, FileAttribution } from './types'
 
-export type AttributionKind = 'agent' | 'mixed' | 'unknown'
-export type AttributionWhy = 'no-range' | 'not-fast-forward' | 'shared-folder-live' | 'overlap'
-export type EvidenceLevel = 'recorded-range' | 'observe-audit'
-
-export interface AttemptEvidence {
-  dispatchId: string
-  taskId: string
-  provider: Provider
-  accountId: string
-  sessionId: string
-  nativeSessionId?: string
-  cwd: string
-  base: string
-  /** Null: the attempt is still open and its range runs to the working tree. */
-  head: string | null
-}
-
-export interface FileAttribution {
-  kind: AttributionKind
-  /** The attempts whose ranges changed the file, oldest first. */
-  evidence: AttemptEvidence[]
-  /** For an agent: the recorded range alone, or confirmed by the observe audit's write records. */
-  level?: EvidenceLevel
-  /** For mixed and unknown: why. */
-  why?: AttributionWhy
-}
+export type { AttemptEvidence, AttributionKind, AttributionWhy, EvidenceLevel, FileAttribution } from './types'
 
 export interface AttemptChanges {
   /** A non-review attempt with git.base. */

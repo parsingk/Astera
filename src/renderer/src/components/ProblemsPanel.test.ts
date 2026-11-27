@@ -91,7 +91,10 @@ describe('ProblemsPanel', () => {
   })
 
   it('marks a stale problem and says why on hover', () => {
-    expect(src).toMatch(/d\.stale !== undefined && \(\s*<span className="problem-stale" title=\{t\(d\.stale === 'changed' \? 'problems\.stale\.changedHint' : 'problems\.stale\.missingHint'\)\}>/)
+    expect(src).toMatch(/d\.stale !== undefined && \(\s*<span className="problem-stale" title=\{t\(STALE_HINT_KEY\[d\.stale\]\)\}>\s*\{t\(STALE_KEY\[d\.stale\]\)\}/)
+    // Phase 3 Part 4: a review finding whose Task moved to another revision
+    for (const key of ['problems.stale.changed', 'problems.stale.missing', 'problems.stale.revision', 'problems.stale.changedHint', 'problems.stale.missingHint', 'problems.stale.revisionHint'])
+      expect(src).toContain(`'${key}'`)
   })
 
   it('says why the list is empty, and what it is made of', () => {

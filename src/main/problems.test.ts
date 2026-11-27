@@ -5,6 +5,8 @@ import type { Diagnostic, DiagnosticProducer } from '../core/problems/diagnostic
 import { completionProducer, createProblems, createProblemsPing, lspProducer, testProducer } from './problems'
 import type { LspFileDiagnostics, LspServerStatus } from '../core/lsp/model'
 import type { TestRunResult } from '../core/tests/model'
+import { findingRef } from '../core/problems/findingRef'
+import { taskFoldersOf } from '../core/problems/completionProblems'
 
 const PROJECT = path.resolve('/repo')
 const WT = path.resolve('/wt/t1')
@@ -368,5 +370,31 @@ describe('lspProducer', () => {
     const rows = await lspProducer({ files: () => [many], servers: () => [], stat }).diagnostics(PROJECT)
     expect(rows).toHaveLength(50)
     expect(stat).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Phase 3 Part 4: an anchored review finding's freshness is its revision's, which the producer keeps unless the file is gone
+describe('completionProducer and a review finding anchored to a revision', () => {
+  const anchoredState = (taskHead: string): OrchState => {
+    const s = {
+      ...state('src/a.ts'),
+      tasks: [{ id: 't1', runId: 'r1', jobId: 'j1', title: 'task', reviewIssues: [{ id: 'i1', severity: 'high', blocking: true, title: 'wrong', description: '', file: 'src/a.ts', line: 2 }] }],
+      dispatches: [{ id: 'd1', taskId: 't1', cwd: WT, startedAt: '2026-11-25T09:00:00Z', endedAt: '2026-11-25T09:30:00Z', git: { base: 'aaaaaaa', head: taskHead } }]
+    } as unknown as OrchState
+    const ref = findingRef({ kind: 'review', taskId: 't1', file: 'src/a.ts', base: taskFoldersOf(s, s.tasks[0]), message: 'wrong' })
+    ;(s.tasks[0] as { findingAnchors?: unknown }).findingAnchors = { [ref]: { review: 'rv', head: 'bbbbbbb', file: 'src/a.ts', line: 2, at: 'x' } }
+    return s
+  }
+  const produce = (s: OrchState, files: Record<string, number>) =>
+    completionProducer({ state: () => s, runIdsOf: () => new Set(['j1', 'r1']), stat: async (abs) => (abs in files ? { mtimeMs: files[abs] } : null) }).diagnostics(PROJECT)
+
+  it('keeps a revision mark through the producer unless the file is missing, and no file time marks it', async () => {
+    const later = Date.parse('2026-11-26T00:00:00Z')
+    const [moved] = await produce(anchoredState('ccccccc'), { [at(WT, 'src', 'a.ts')]: later })
+    expect(moved.stale).toBe('revision')
+    const [current] = await produce(anchoredState('bbbbbbb'), { [at(WT, 'src', 'a.ts')]: later })
+    expect(current.stale).toBeUndefined()
+    const [gone] = await produce(anchoredState('ccccccc'), {})
+    expect(gone.stale).toBe('missing')
   })
 })

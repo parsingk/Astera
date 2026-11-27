@@ -241,3 +241,34 @@ describe('problemsKeyOf', () => {
     expect(problemsKeyOf(e)).not.toBe(base)
   })
 })
+
+// Phase 3 Part 4: an anchored review finding is current while the Task's head is the one it was found on
+describe('a review finding stale by revision', () => {
+  const anchored = (head: string, taskHead: string | undefined): OrchState => {
+    const issue = { id: 'i1', severity: 'high', blocking: true, title: 'off by one', description: 'd', file: 'src/a.ts', line: 2 }
+    const s = {
+      jobs: [job('j1', 'D:\\repo')],
+      runs: [run('r1', 'j1', 1)],
+      tasks: [{ id: 't1', runId: 'r1', jobId: 'j1', title: 't', updatedAt: '2026-11-25T03:00:00Z', reviewIssues: [issue] }],
+      dispatches: [
+        { id: 'd1', taskId: 't1', cwd: 'D:\\repo', startedAt: '2026-11-25T01:00:00Z', endedAt: '2026-11-25T01:10:00Z', git: { base: 'aaaaaaa', ...(taskHead ? { head: taskHead } : {}) } },
+        { id: 'rv', taskId: 't1', cwd: 'D:\\repo', startedAt: '2026-11-25T01:20:00Z', endedAt: '2026-11-25T01:30:00Z', review: true, git: { base: 'bbbbbbb', head: 'fffffff' } }
+      ]
+    } as unknown as OrchState
+    const ref = findingRef({ kind: 'review', taskId: 't1', file: 'src/a.ts', base: taskFoldersOf(s, s.tasks[0]), message: 'off by one' })
+    ;(s.tasks[0] as { findingAnchors?: unknown }).findingAnchors = { [ref]: { review: 'rv', head, file: 'src/a.ts', line: 2, at: 'x' } }
+    return s
+  }
+  const row = (s: OrchState) => completionProblemsOf(s, new Set(['r1'])).find((d) => d.id === 'review:t1:i1')!
+
+  it('marks an anchored review finding stale by revision, not by the file’s time', () => {
+    const current = row(anchored('bbbbbbb', 'bbbbbbb'))
+    expect(current.stale).toBeUndefined()
+    expect(current.producedAt).toBeUndefined()
+    expect(row(anchored('bbbbbbb', 'ccccccc')).stale).toBe('revision')
+  })
+
+  it('does not call a head that is not recorded yet a change', () => {
+    expect(row(anchored('bbbbbbb', undefined)).stale).toBeUndefined()
+  })
+})
