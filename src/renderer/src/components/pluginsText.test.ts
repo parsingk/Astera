@@ -278,6 +278,12 @@ describe('the trust level in Settings', () => {
     expect(both.footer).toContain(en('settings.plugins.install.trust'))
   })
 
+  // Phase 4: a catalog install says who published it and the sha256 of the bytes that will install
+  it('says a catalog install is from the catalog, by its publisher and sha256', () => {
+    const ui = installPrompt(INSPECTION, { catalog: { publisher: 'example', sha256: 'a'.repeat(64) } }, en)
+    expect(ui.body).toContain(en('settings.plugins.install.fromCatalog', { publisher: 'example', sha256: 'a'.repeat(64) }))
+  })
+
   it('ends a themes-only plugin’s install prompt with the declarative notice', () => {
     const themes = installPrompt({ ...INSPECTION, trust: 'declarative', permissions: ['themes.register'] }, 'D:/work/dusk', en)
     expect(themes.footer).toContain(en('settings.plugins.install.declarative'))

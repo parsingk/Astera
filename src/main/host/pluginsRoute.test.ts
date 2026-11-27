@@ -48,7 +48,43 @@ describe('the plugins route (plugin runtime design P5, slice 2d)', () => {
 
   // 2d final review M8: only the commands the tab uses (design P5), nothing a renderer could reach beyond them.
   it('offers exactly the commands Settings › Plugins uses', () => {
-    expect(Object.keys(host().route).sort()).toEqual(['audit', 'configure', 'doctor', 'get', 'inspect', 'install', 'list', 'logs', 'remove', 'setEnabled', 'settings'])
+    expect(Object.keys(host().route).sort()).toEqual([
+      'audit',
+      'catalog',
+      'catalogConfigure',
+      'catalogInspect',
+      'catalogInstall',
+      'configure',
+      'doctor',
+      'get',
+      'inspect',
+      'install',
+      'list',
+      'logs',
+      'remove',
+      'safeMode',
+      'setEnabled',
+      'settings'
+    ])
+  })
+
+  // Phase 4: the catalog's reads, and its changes on the change deadline (a download can be slow)
+  it('sends the catalog commands, its install and source on the change deadline', async () => {
+    const { route, sent } = host()
+    await route.catalog(true)
+    await route.catalogInspect({ id: 'a', version: '1.0.0' })
+    await route.catalogConfigure({ url: 'https://x.invalid/index.json', keys: [{ id: 'k', publicKey: 'p' }] })
+    await route.catalogInstall({ id: 'a', version: '1.0.0', grant: [], expect: { name: 'a', version: '1.0.0', sha256: 'f' } })
+    await route.safeMode(true)
+    expect(sent.map((m) => [m.cmd, m.timeoutMs !== undefined])).toEqual([
+      ['plugins-catalog', true],
+      ['plugins-catalog-inspect', true],
+      ['plugins-catalog-configure', true],
+      ['plugins-catalog-install', true],
+      ['plugins-safe-mode', true]
+    ])
+    expect(sent[0].args).toEqual({ refresh: true })
+    expect(sent[4].args).toEqual({ on: true })
   })
 
   // Phase 2 remaining: the Plugin Inspector reads one plugin, its checks and its recent records, as reads

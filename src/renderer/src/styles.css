@@ -4018,3 +4018,17 @@ button.primary.danger:disabled { background: var(--elevated); border-color: var(
 .plugin-inspector .is-refused { color: var(--danger); }
 .plugin-inspector .is-warn { color: var(--warn); }
 .plugin-inspector-audit { max-height: 200px; overflow-y: auto; }
+
+/* Settings, Plugins: Safe Mode and the catalog (Phase 4) */
+.settings-subhead { margin: 18px 0 2px; font-size: 13px; font-weight: 600; color: var(--text); }
+.plugin-catalog { display: flex; flex-direction: column; gap: 8px; }
+.plugin-catalog-head, .plugin-catalog-filter, .plugin-catalog-source { gap: 8px; flex-wrap: wrap; }
+.plugin-catalog-from { flex: 1; min-width: 0; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+.plugin-catalog-filter .settings-input, .plugin-catalog-source .settings-input { flex: 1; min-width: 160px; }
+.plugin-catalog-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--elevated); font-size: 12px; }
+.plugin-catalog-card > button { align-self: flex-start; margin-top: 4px; }
+.plugin-catalog-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.plugin-catalog-facts { display: flex; gap: 12px; flex-wrap: wrap; color: var(--text-dim); }
+.plugin-catalog-desc, .plugin-catalog-perms, .plugin-catalog-notes, .plugin-catalog-link { margin: 0; overflow-wrap: anywhere; }
+.plugin-catalog-notes { color: var(--text-dim); white-space: pre-wrap; }
+.plugin-catalog-link { color: var(--text-faint); }
